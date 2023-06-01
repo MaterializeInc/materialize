@@ -120,8 +120,8 @@ enum Action {
     },
     Edit {
         collection: String,
-        key: serde_json::Value,
-        value: serde_json::Value,
+        key: Vec<u8>,
+        value: Vec<u8>,
     },
     /// Checks if the specified stash could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
@@ -191,8 +191,8 @@ async fn edit(
     mut stash: Stash,
     usage: Usage,
     collection: String,
-    key: serde_json::Value,
-    value: serde_json::Value,
+    key: Vec<u8>,
+    value: Vec<u8>,
 ) -> Result<(), anyhow::Error> {
     let prev = usage.edit(&mut stash, collection, key, value).await?;
     println!("previous value: {:?}", prev);
@@ -201,7 +201,7 @@ async fn edit(
 
 async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<(), anyhow::Error> {
     let data = usage.dump(&mut stash).await?;
-    serde_json::to_writer_pretty(&mut target, &data)?;
+    write!(&mut target, "{data:#?}")?;
     write!(&mut target, "\n")?;
     Ok(())
 }
@@ -275,34 +275,35 @@ impl Usage {
     async fn dump(
         &self,
         stash: &mut Stash,
-    ) -> Result<BTreeMap<&str, serde_json::Value>, anyhow::Error> {
+    ) -> Result<BTreeMap<&str, Box<dyn std::fmt::Debug>>, anyhow::Error> {
         let mut collections = Vec::new();
         let collection_names = BTreeSet::from_iter(stash.collections().await?.into_values());
         macro_rules! dump_col {
             ($col:expr) => {
                 // Collections might not yet exist.
                 if collection_names.contains($col.name()) {
-                    collections.push(($col.name(), serde_json::to_value($col.iter(stash).await?)?));
+                    let values: Box<dyn std::fmt::Debug> = Box::new($col.iter(stash).await?);
+                    collections.push(($col.name(), values));
                 }
             };
         }
 
         match self {
             Usage::Catalog => {
-                dump_col!(catalog::COLLECTION_CONFIG);
-                dump_col!(catalog::COLLECTION_ID_ALLOC);
-                dump_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                dump_col!(catalog::COLLECTION_CLUSTERS);
-                dump_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
-                dump_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
-                dump_col!(catalog::COLLECTION_DATABASE);
-                dump_col!(catalog::COLLECTION_SCHEMA);
-                dump_col!(catalog::COLLECTION_ITEM);
-                dump_col!(catalog::COLLECTION_ROLE);
-                dump_col!(catalog::COLLECTION_TIMESTAMP);
-                dump_col!(catalog::COLLECTION_SYSTEM_CONFIGURATION);
-                dump_col!(catalog::COLLECTION_AUDIT_LOG);
-                dump_col!(catalog::COLLECTION_STORAGE_USAGE);
+                dump_col!(catalog::CONFIG_COLLECTION);
+                dump_col!(catalog::ID_ALLOCATOR_COLLECTION);
+                dump_col!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
+                dump_col!(catalog::CLUSTER_COLLECTION);
+                dump_col!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
+                dump_col!(catalog::CLUSTER_REPLICA_COLLECTION);
+                dump_col!(catalog::DATABASES_COLLECTION);
+                dump_col!(catalog::SCHEMAS_COLLECTION);
+                dump_col!(catalog::ITEM_COLLECTION);
+                dump_col!(catalog::ROLES_COLLECTION);
+                dump_col!(catalog::TIMESTAMP_COLLECTION);
+                dump_col!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
+                dump_col!(catalog::AUDIT_LOG_COLLECTION);
+                dump_col!(catalog::STORAGE_USAGE_COLLECTION);
             }
             Usage::Storage => {
                 dump_col!(storage::METADATA_COLLECTION);
@@ -328,40 +329,40 @@ impl Usage {
         &self,
         stash: &mut Stash,
         collection: String,
-        key: serde_json::Value,
-        value: serde_json::Value,
-    ) -> Result<Option<serde_json::Value>, anyhow::Error> {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> Result<(), anyhow::Error> {
         macro_rules! edit_col {
             ($col:expr) => {
                 if collection == $col.name() {
-                    let key = serde_json::from_value(key)?;
-                    let value = serde_json::from_value(value)?;
-                    let (prev, _next) = $col
+                    let key = prost::Message::decode(&key[..])?;
+                    let value = prost::Message::decode(&value[..])?;
+                    let (_prev, _next) = $col
                         .upsert_key(stash, key, move |_| {
                             Ok::<_, std::convert::Infallible>(value)
                         })
                         .await??;
-                    return Ok(prev.map(|v| serde_json::to_value(v).unwrap()));
+                    return Ok(());
                 }
             };
         }
 
         match self {
             Usage::Catalog => {
-                edit_col!(catalog::COLLECTION_CONFIG);
-                edit_col!(catalog::COLLECTION_ID_ALLOC);
-                edit_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                edit_col!(catalog::COLLECTION_CLUSTERS);
-                edit_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
-                edit_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
-                edit_col!(catalog::COLLECTION_DATABASE);
-                edit_col!(catalog::COLLECTION_SCHEMA);
-                edit_col!(catalog::COLLECTION_ITEM);
-                edit_col!(catalog::COLLECTION_ROLE);
-                edit_col!(catalog::COLLECTION_TIMESTAMP);
-                edit_col!(catalog::COLLECTION_SYSTEM_CONFIGURATION);
-                edit_col!(catalog::COLLECTION_AUDIT_LOG);
-                edit_col!(catalog::COLLECTION_STORAGE_USAGE);
+                edit_col!(catalog::CONFIG_COLLECTION);
+                edit_col!(catalog::ID_ALLOCATOR_COLLECTION);
+                edit_col!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
+                edit_col!(catalog::CLUSTER_COLLECTION);
+                edit_col!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
+                edit_col!(catalog::CLUSTER_REPLICA_COLLECTION);
+                edit_col!(catalog::DATABASES_COLLECTION);
+                edit_col!(catalog::SCHEMAS_COLLECTION);
+                edit_col!(catalog::ITEM_COLLECTION);
+                edit_col!(catalog::ROLES_COLLECTION);
+                edit_col!(catalog::TIMESTAMP_COLLECTION);
+                edit_col!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
+                edit_col!(catalog::AUDIT_LOG_COLLECTION);
+                edit_col!(catalog::STORAGE_USAGE_COLLECTION);
             }
             Usage::Storage => {
                 edit_col!(storage::METADATA_COLLECTION);

@@ -170,8 +170,8 @@ message SinkAsOf {
 }
 
 message DurableCollectionMetadata {
-    ShardId remap_shard = 1;
-    ShardId data_shard = 2;
+    StringWrapper remap_shard = 1;
+    string data_shard = 2;
 }
 
 message DurableExportMetadata {
@@ -332,10 +332,6 @@ message MzAclItem {
 
 message TimestampAntichain {
     repeated Timestamp elements = 1;
-}
-
-message ShardId {
-    bytes id = 1;
 }
 
 message AuditLogEventV1 {

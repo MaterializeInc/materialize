@@ -73,9 +73,8 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_ore::metrics::MetricsRegistry;
 use mz_stash::upgrade::json_to_proto::migrate_json_to_proto;
-use mz_stash::StashFactory;
+use mz_stash::upgrade::json_to_proto::test_helpers::initialize_json_stash;
 use rand::Rng;
 use tokio_postgres::Config;
 
@@ -88,10 +87,9 @@ use tokio_postgres::Config;
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_failures() {
     mz_ore::test::init_logging();
-    let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
-    let factory = StashFactory::new(&MetricsRegistry::new());
 
     // Connect to Cockroach.
+    let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
     let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
     let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
         .await
@@ -117,11 +115,7 @@ async fn test_failures() {
         .unwrap();
 
     // Initialize the Stash.
-    let stash = factory
-        .open(connstr.to_string(), Some(schema), tls.clone())
-        .await
-        .unwrap();
-    let epoch = stash.epoch().unwrap();
+    let epoch = initialize_json_stash(&client, schema).await;
 
     // Fail once at each point. The migration should have enough retries and recovery logic to
     // still succeed overall.
