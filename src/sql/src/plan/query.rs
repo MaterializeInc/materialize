@@ -2676,7 +2676,10 @@ fn plan_table_function_internal(
                 scope,
             )
         }
-        _ => sql_bail!("{} is not a table function", name),
+        o => sql_bail!(
+            "{} functions are not supported in functions in FROM",
+            o.class()
+        ),
     };
 
     if with_ordinality {

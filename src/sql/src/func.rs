@@ -1635,6 +1635,16 @@ impl Func {
             Func::ValueWindow(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
         }
     }
+
+    pub fn class(&self) -> &str {
+        match self {
+            Func::Scalar(..) => "scalar",
+            Func::Aggregate(..) => "aggregate",
+            Func::Table(..) => "table",
+            Func::ScalarWindow(..) => "window",
+            Func::ValueWindow(..) => "window",
+        }
+    }
 }
 
 /// Functions using this macro should be transformed/planned away before
