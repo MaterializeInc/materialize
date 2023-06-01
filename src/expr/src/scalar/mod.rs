@@ -16,6 +16,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::StrExt;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -2225,6 +2226,10 @@ pub enum EvalError {
     LetRecLimitExceeded(String),
     MultiDimensionalArraySearch,
     MustNotBeNull(String),
+    InvalidIdentifier {
+        ident: String,
+        detail: Option<String>,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -2387,6 +2392,9 @@ impl fmt::Display for EvalError {
                 "searching for elements in multidimensional arrays is not supported"
             ),
             EvalError::MustNotBeNull(v) => write!(f, "{v} must not be null"),
+            EvalError::InvalidIdentifier { ident, .. } => {
+                write!(f, "string is not a valid identifier: {}", ident.quoted())
+            }
         }
     }
 }
@@ -2404,6 +2412,7 @@ impl EvalError {
                 "Arrays of {} and {} dimensions are not compatible for concatenation.",
                 a_dims, b_dims
             )),
+            EvalError::InvalidIdentifier { detail, .. } => detail.clone(),
             _ => None,
         }
     }
@@ -2593,6 +2602,12 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
             EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
             EvalError::MustNotBeNull(v) => MustNotBeNull(v.clone()),
+            EvalError::InvalidIdentifier { ident, detail } => {
+                InvalidIdentifier(ProtoInvalidIdentifier {
+                    ident: ident.clone(),
+                    detail: detail.into_proto(),
+                })
+            }
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2694,6 +2709,10 @@ impl RustType<ProtoEvalError> for EvalError {
                 WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
                 MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
                 MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v)),
+                InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier {
+                    ident: v.ident,
+                    detail: v.detail,
+                }),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

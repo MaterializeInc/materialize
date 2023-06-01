@@ -17,6 +17,7 @@ use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
+
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;

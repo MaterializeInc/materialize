@@ -2134,6 +2134,14 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 Ok(e.call_unary(UnaryFunc::MzRowSize(func::MzRowSize)))
             }) => Int32, oid::FUNC_MZ_ROW_SIZE;
         },
+        "parse_ident" => Scalar {
+            params!(String) => Operation::unary(|_ecx, ident| {
+                Ok(ident.call_binary(HirScalarExpr::literal_true(), BinaryFunc::ParseIdent))
+            }) => ScalarType::Array(Box::new(ScalarType::String)),
+                oid::FUNC_PARSE_IDENT_DEFAULT_STRICT;
+            params!(String, Bool) => BinaryFunc::ParseIdent
+                => ScalarType::Array(Box::new(ScalarType::String)), 1268;
+        },
         "pg_encoding_to_char" => Scalar {
             // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
             // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
