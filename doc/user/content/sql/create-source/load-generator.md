@@ -168,6 +168,14 @@ create the following subsources:
     `created_at`        | [`timestamp with time zone`] | The time at which the prediction was made.
     `score`             | [`numeric`]                  | The predicted likelihood the lead will convert.
 
+  * `conversions` describes actual purchases made by customers.
+
+    Field          | Type                         | Description
+    ---------------|------------------------------|------------
+    `id`           | [`bigint`]                   | The identifier of the conversion.
+    `converted_at` | [`timestamp with time zone`] | The time at which the lead was converted.
+    `amount`       | [`bigint`]                   | The amount the lead converted for in pennies.
+
 ### TPCH
 
 The TPCH load generator implements the [TPC-H benchmark specification](https://www.tpc.org/tpch/default5.asp).

@@ -2200,8 +2200,6 @@ impl LoadGenerator {
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("customer_id", ScalarType::Int64.nullable(false))
                             .with_column("created_at", ScalarType::TimestampTz.nullable(false))
-                            .with_column("converted_at", ScalarType::TimestampTz.nullable(true))
-                            .with_column("conversion_amount", ScalarType::Int64.nullable(true))
                             .with_key(vec![0]),
                     ),
                     (
@@ -2221,6 +2219,15 @@ impl LoadGenerator {
                             .with_column("predicted_at", ScalarType::TimestampTz.nullable(false))
                             .with_column("score", ScalarType::Float64.nullable(false))
                             .without_keys(),
+                    ),
+                    (
+                        "conversions",
+                        RelationDesc::empty()
+                            .with_column("id", ScalarType::Int64.nullable(false))
+                            .with_column("customer_id", ScalarType::Int64.nullable(false))
+                            .with_column("converted_at", ScalarType::TimestampTz.nullable(true))
+                            .with_column("amount", ScalarType::Int64.nullable(true))
+                            .with_key(vec![0]),
                     ),
                 ]
             }
@@ -2345,7 +2352,7 @@ impl LoadGenerator {
                 max_cardinality: None,
             } => true,
             LoadGenerator::Counter { .. } => false,
-            LoadGenerator::Marketing => false,
+            LoadGenerator::Marketing => true,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
         }
