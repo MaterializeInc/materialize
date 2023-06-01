@@ -12,7 +12,6 @@ from typing import List, Set
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
-from materialize.output_consistency.expression.expression import LeafExpression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
