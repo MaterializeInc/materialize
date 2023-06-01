@@ -79,12 +79,12 @@ Traditional databases track cardinality data and statistics about various column
 
 A symbolic cost is a polynomial over the features of the input relations. For example, a batch query that loops over relation `R` twice and then computes its cross product with relation `Q` will have cost `2|R| + |R|*|Q|`. A traditional database typically computes cost just in terms of overall batch query time, but our costs are multi-dimensional. In priority order:
 
-| Dimension          | Input features                                               | Outputs                         | Output type                         |
-| ------------------ | ------------------------------------------------------------ | ------------------------------- | ----------------------------------- |
-| Memory             | Source cardinality, existing indices, cardinality of groups  | Arrangements and size estimates | (Vec<Arrangement>, Formula<Source>) |
-| Hydration time     | Source cardinality                                           | Time estimate                   | Formula<Source>                     |
-| Latency per update | Source cardinality, expected per-update delta on each source | Time estimate (per source)      | Map<Source, Formula<Source>>        |
-| Scalability        | Distribution of keys (e.g., cardinality of distinct keys)    | Data parallelism estimate       | Map<Source, Vec<Column>>            |
+| Dimension          | Input features                                            | Outputs                         | Output type                         |
+| ------------------ | --------------------------------------------------------- | ------------------------------- | ----------------------------------- |
+| Memory             | Cardinality, existing indices, cardinality of groups      | Arrangements and size estimates | (Vec<Arrangement>, Formula<Source>) |
+| Hydration time     | Cardinality                                               | Time estimate                   | Formula<Source>                     |
+| Latency per update | Cardinality, expected change rate per-update delta        | Time estimate (per source)      | Map<Source, Formula<Source>>        |
+| Scalability        | Distribution of keys (e.g., cardinality of distinct keys) | Data parallelism estimate       | Map<Source, Vec<Column>>            |
 
 In the output type, `Arrangement` refers to summary information about the arrangements necessary; `Formula<V>` refers to an algebraic expression with variables drawn from the type `V`.
 
@@ -113,7 +113,7 @@ The current plan is to work towards a minimally viable cost model, with the foll
 
   + Cardinality analysis can work on MIR or LIR, since cardinality ought to be constant under optimization.
 
-  + Selectivity factors will need to be just made up for now.
+  + Selectivity factors will need to be just made up for now; it may pay to set all factors to 1, i.e., to get a worst-case estimate.
 
 - Use the cardinality analysis to build the memory cost model.
 
@@ -174,10 +174,14 @@ When we have a candidate cost model, we will want to identify opportunities to u
 
 We've identified the following early candidate clients for the cost model:
 
-1. **Join ordering.** There are some trade offs here between set enumeration and more heuristic approaches---in an ideal world, we'd have an explicit "optimization budget" to determine how much of the join ordering space to explore.
+1. **Join ordering.** There are some trade offs here between set enumeration and more heuristic approaches---in an ideal world, we'd have an explicit "optimization budget" to determine how much of the join ordering space to explore. (Uses memory at joins; cardinality and predicate selectivity across MIR.)
 
-2. **CTE filter pushdown.** Pushing filters all the way down can be advantageous, depending on selectivity.
+2. **CTE filter pushdown.** Pushing filters all the way down can be advantageous, depending on selectivity. (Uses cardinality and predicate selectivity across MIR.)
 
-3. **Reduction pushdown.** Pushing reductions down is not always advantageous.
+3. **Reduction pushdown.** Pushing reductions down is not always advantageous. (Uses cardinality and predicate selectivity across MIR.)
 
-4. **Late materialization.** Given a join on a number of tables, it may be advantageous to break the join in two: a small join on a projection to set of common keys and a larger join to collect the other fields. Whether or not late materialization is worthwhile depends on which arrangements already exist.
+4. **Late materialization.** Given a join on a number of tables, it may be advantageous to break the join in two: a small join on a projection to set of common keys and a larger join to collect the other fields. Whether or not late materialization is worthwhile depends on which arrangements already exist. (Uses memory and predicate selectivity over MIR (or maybe LIR).)
+
+5. **Broadcast selection.** Using cardinality information, choose cheap broadcasts. https://materializeinc.slack.com/archives/C02PPB50ZHS/p1685614805876319?thread_ts=1685552977.381309&cid=C02PPB50ZHS
+
+6. **OR <-> UNION decomposition.** It is possible to decompose a disjunctive `WHERE` clause into a `UNION`, and this is _sometimes_ worthwhile. https://github.com/MaterializeInc/materialize/issues/4229#issuecomment-1571767817
