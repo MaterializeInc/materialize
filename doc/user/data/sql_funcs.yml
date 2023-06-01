@@ -673,7 +673,7 @@
     description: Returns the number of the current row within its partition, counting from 1.
 
 - type: System information
-  description: Functions that return information about the system
+  description: Functions that return information about the system.
   functions:
   - signature: 'mz_environment_id() -> text'
     description: Returns a string containing a `uuid` uniquely identifying the Materialize environment.
@@ -707,6 +707,16 @@
     description: Returns the number of bytes used to store a row.
   - signature: 'is_rbac_enabled() -> boolean'
     description: Reports whether RBAC is enabled for the current session.
+
+- type: Access privilege inquiry
+  description: |
+    Functions that return information about access privileges.
+  functions:
+    - signature: 'has_table_privilege([role: text or oid, ]relation: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or `oid` has the
+        specified privileges on the relation with the specified relation name
+        or `oid`. If the role is omitted, the `current_role` is assumed.
 
 - type: PostgreSQL compatibility
   description: |
@@ -773,13 +783,3 @@
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
     unmaterializable: true
-
-- type: Access privilege inquiry
-  description: |
-    Functions that allow querying object access privileges.
-  functions:
-    - signature: 'has_table_privilege([role: text or oid, ]relation: text or oid, privileges: text) -> bool'
-      description: >-
-        Reports whether the role with the specified role name or OID has the privileges on
-        the relation with the specified relation name or OID. If the role is omitted then
-        the `current_role` is assumed.
