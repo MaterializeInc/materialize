@@ -11,6 +11,13 @@ from typing import List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
+)
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class NumberDataType(DataType):
@@ -36,6 +43,14 @@ class NumberDataType(DataType):
             further_tiny_dec_values if further_tiny_dec_values is not None else set()
         )
         self.is_floating_point_type = is_floating_point_type
+
+    def resolve_return_type_spec(
+        self, characteristics: Set[ExpressionCharacteristics]
+    ) -> ReturnTypeSpec:
+        return NumericReturnTypeSpec(
+            only_integer=not self.is_decimal
+            or ExpressionCharacteristics.DECIMAL not in characteristics,
+        )
 
 
 INT2_TYPE_IDENTIFIER = "INT2"

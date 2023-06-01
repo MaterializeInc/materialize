@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
+from typing import List, Optional
 
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
@@ -30,8 +30,14 @@ from materialize.output_consistency.selection.selection import (
 class EvaluationStrategy:
     """Strategy how to execute a `QueryTemplate`"""
 
-    def __init__(self, key: str, name: str):
+    def __init__(self, key: str, simple_db_object_name: str, name: str):
+        """
+         :param key: the db object name will be derived from this key
+         :param simple_db_object_name: only used by the reproduction code printer
+        :param name: readable name
+        """
         self.key = key
+        self.simple_db_object_name = simple_db_object_name
         self.name = name
 
     def generate_sources(self, input_data: ConsistencyTestInputData) -> List[str]:
@@ -60,10 +66,18 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
+        override_db_object_name: Optional[str] = None,
     ) -> List[str]:
         raise RuntimeError("Not implemented")
 
-    def get_db_object_name(self, storage_layout: ValueStorageLayout) -> str:
+    def get_db_object_name(
+        self,
+        storage_layout: ValueStorageLayout,
+        override_db_object_name: Optional[str] = None,
+    ) -> str:
+        if override_db_object_name is not None:
+            return override_db_object_name
+
         storage_suffix = (
             "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
         )
@@ -75,7 +89,7 @@ class EvaluationStrategy:
 
 class DummyEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__("<source>", "Dummy")
+        super().__init__("<source>", "dummy", "Dummy")
 
     def generate_sources(
         self,
@@ -86,7 +100,7 @@ class DummyEvaluation(EvaluationStrategy):
 
 class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__("t_dfr", "Dataflow rendering")
+        super().__init__("t_dfr", "dataflow_rendering", "Dataflow rendering")
 
     def generate_source_for_storage_layout(
         self,
@@ -94,8 +108,12 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
+        override_db_object_name: Optional[str] = None,
     ) -> List[str]:
-        db_object_name = self.get_db_object_name(storage_layout)
+        db_object_name = self.get_db_object_name(
+            storage_layout, override_db_object_name
+        )
+
         statements = []
 
         column_specs = _create_column_specs(
@@ -116,7 +134,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
 
 class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__("v_ctf", "Constant folding")
+        super().__init__("v_ctf", "constant_folding", "Constant folding")
 
     def generate_source_for_storage_layout(
         self,
@@ -124,7 +142,12 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
+        override_db_object_name: Optional[str] = None,
     ) -> List[str]:
+        db_object_name = self.get_db_object_name(
+            storage_layout, override_db_object_name
+        )
+
         column_specs = _create_column_specs(
             input_data, storage_layout, False, table_column_selection
         )
@@ -135,7 +158,7 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         value_specification = "\n    UNION SELECT ".join(value_rows)
 
         create_view_statement = (
-            f"CREATE OR REPLACE VIEW {self.get_db_object_name(storage_layout)} ({', '.join(column_specs)})\n"
+            f"CREATE OR REPLACE VIEW {db_object_name} ({', '.join(column_specs)})\n"
             f" AS SELECT {value_specification};"
         )
 

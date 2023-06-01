@@ -15,10 +15,11 @@ from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
+from materialize.output_consistency.expression.expression import LeafExpression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -31,6 +32,10 @@ class DataColumn(LeafExpression):
             column_name, data_type, set(), ValueStorageLayout.VERTICAL, False, False
         )
         self.values = row_values_of_column
+
+    def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        # do not provide characteristics on purpose, the spec of this class is not value-specific
+        return self.data_type.resolve_return_type_spec(set())
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category

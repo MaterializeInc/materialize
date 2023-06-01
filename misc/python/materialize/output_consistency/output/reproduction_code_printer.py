@@ -15,7 +15,6 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -87,6 +86,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             query_template.storage_layout,
             query_template.row_selection,
             table_column_selection,
+            override_db_object_name=evaluation_strategy.simple_db_object_name,
         )
 
         for line in setup_code_lines:
@@ -106,6 +106,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 evaluation_strategy,
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
+                override_db_object_name=evaluation_strategy.simple_db_object_name,
             )
         )
 
@@ -122,9 +123,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
 
             leave_expressions = expression.collect_leaves()
             for leaf_expression in leave_expressions:
-                if isinstance(leaf_expression, LeafExpression):
-                    # this is always the case
-                    column_names.add(leaf_expression.column_name)
+                column_names.add(leaf_expression.column_name)
 
         return column_names
 

@@ -9,12 +9,14 @@
 
 from typing import List
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
+)
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.validators.number_args_validator import (
     MaxMinusNegMaxArgsValidator,
@@ -35,7 +37,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ + $",
         [NumericOperationParam(), NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {MultiParamValueGrowsArgsValidator()},
     )
 )
@@ -43,7 +45,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ - $",
         [NumericOperationParam(), NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {MaxMinusNegMaxArgsValidator()},
     )
 )
@@ -51,7 +53,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ * $",
         [NumericOperationParam(), NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {MultiParamValueGrowsArgsValidator()},
     )
 )
@@ -62,7 +64,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(),
             NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         relevance=OperationRelevance.HIGH,
     )
 )
@@ -73,7 +75,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(),
             NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         relevance=OperationRelevance.HIGH,
     )
 )
@@ -85,7 +87,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(only_int_type=True),
             NumericOperationParam(only_int_type=True),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         OperationRelevance.LOW,
     )
@@ -98,7 +100,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(only_int_type=True),
             NumericOperationParam(only_int_type=True),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         OperationRelevance.LOW,
     )
@@ -111,7 +113,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(only_int_type=True),
             NumericOperationParam(only_int_type=True),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         OperationRelevance.LOW,
     )
@@ -123,7 +125,7 @@ NUMERIC_OPERATION_TYPES.append(
         [
             NumericOperationParam(only_int_type=True),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         relevance=OperationRelevance.LOW,
     )
 )
@@ -135,7 +137,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(only_int_type=True),
             NumericOperationParam(only_int_type=True, no_int_type_larger_int4=True),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         OperationRelevance.LOW,
     )
@@ -148,7 +150,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(only_int_type=True),
             NumericOperationParam(only_int_type=True, no_int_type_larger_int4=True),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         OperationRelevance.LOW,
     )
@@ -162,14 +164,14 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ABS",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "CBRT",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 # CEIL == CEILING
@@ -177,14 +179,14 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "CEIL",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(only_integer=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "EXP",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {SingleParamValueGrowsArgsValidator()},
     )
 )
@@ -192,7 +194,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "FLOOR",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(only_integer=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -206,7 +208,7 @@ NUMERIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -220,7 +222,7 @@ NUMERIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -248,7 +250,7 @@ NUMERIC_OPERATION_TYPES.append(
                 },
             ),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -258,7 +260,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(),
             NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 # POW == POWER
@@ -271,7 +273,7 @@ NUMERIC_OPERATION_TYPES.append(
                 incompatibilities={ExpressionCharacteristics.MAX_VALUE}
             ),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -289,20 +291,20 @@ NUMERIC_OPERATION_TYPES.append(
                 },
             ),
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "SQRT",
         [NumericOperationParam(incompatibilities={ExpressionCharacteristics.NEGATIVE})],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "TRUNC",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(only_integer=True),
     )
 )

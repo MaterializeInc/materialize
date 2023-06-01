@@ -8,13 +8,15 @@
 # by the Apache License, Version 2.0.
 from typing import Set
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
+)
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -90,9 +92,13 @@ class InconsistencyIgnoreFilter:
     ) -> bool:
         if operation.is_aggregation:
             for arg in expression.args:
+                if arg.is_leaf():
+                    continue
+
+                arg_type_spec = arg.resolve_return_type_spec()
                 if (
-                    not arg.is_leaf()
-                    and arg.resolve_return_type_category() == DataTypeCategory.NUMERIC
+                    isinstance(arg_type_spec, NumericReturnTypeSpec)
+                    and not arg_type_spec.only_integer
                 ):
                     # tracked with https://github.com/MaterializeInc/materialize/issues/19592
                     return True

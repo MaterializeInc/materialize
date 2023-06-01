@@ -19,11 +19,13 @@ from materialize.output_consistency.data_type.data_type_with_values import (
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
-from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression import (
+    Expression,
+    LeafExpression,
+)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -71,7 +73,7 @@ class ExpressionGenerator:
                 0 if operation.is_aggregation else self.operation_weights[index]
             )
 
-            category = operation.return_type_category
+            category = operation.return_type_spec.type_category
             operations_with_return_category = (
                 self.operations_by_return_type_category.get(category, [])
             )
@@ -319,10 +321,9 @@ class ExpressionGenerator:
         if category == DataTypeCategory.ANY:
             return self.input_data.all_data_types_with_values
 
-        if category == DataTypeCategory.DYNAMIC:
-            raise RuntimeError(
-                f"Type {DataTypeCategory.DYNAMIC} not allowed for parameters"
-            )
+        assert (
+            category != DataTypeCategory.DYNAMIC
+        ), f"Type category {DataTypeCategory.DYNAMIC} not allowed for parameters"
 
         preselected_types_with_values = self.types_with_values_by_category[category]
         suitable_types_with_values = []
@@ -339,10 +340,9 @@ class ExpressionGenerator:
         if category == DataTypeCategory.ANY:
             return self.input_data.all_operation_types
 
-        if category == DataTypeCategory.DYNAMIC:
-            raise RuntimeError(
-                f"Type {DataTypeCategory.DYNAMIC} not allowed for parameters"
-            )
+        assert (
+            category != DataTypeCategory.DYNAMIC
+        ), f"Type category {DataTypeCategory.DYNAMIC} not allowed for parameters"
 
         return self.operations_by_return_type_category[category]
 

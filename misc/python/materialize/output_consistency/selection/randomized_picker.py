@@ -29,8 +29,9 @@ class RandomizedPicker:
         random.seed(self.config.random_seed)
 
     def random_boolean(self, probability_for_true: float) -> bool:
-        if probability_for_true < 0 or probability_for_true > 1:
-            raise RuntimeError(f"Invalid probability: {probability_for_true}")
+        assert (
+            0 <= probability_for_true <= 1
+        ), f"Invalid probability: {probability_for_true}"
 
         weights = [probability_for_true, 1 - probability_for_true]
         return random.choices([True, False], k=1, weights=weights)[0]
