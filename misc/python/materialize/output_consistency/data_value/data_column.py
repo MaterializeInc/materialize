@@ -15,10 +15,10 @@ from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
+from materialize.output_consistency.expression.expression import LeafExpression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 

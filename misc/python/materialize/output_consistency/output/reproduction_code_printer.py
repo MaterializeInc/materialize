@@ -12,10 +12,10 @@ from typing import List, Set
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.expression.expression import LeafExpression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )

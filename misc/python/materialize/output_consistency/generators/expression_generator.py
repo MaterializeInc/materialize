@@ -19,11 +19,13 @@ from materialize.output_consistency.data_type.data_type_with_values import (
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
-from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression import (
+    Expression,
+    LeafExpression,
+)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
