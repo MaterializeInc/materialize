@@ -48,9 +48,15 @@ class SqlExecutor:
 
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
-    def __init__(self, connection: Connection, use_autocommit: bool):
+    def __init__(
+        self,
+        connection: Connection,
+        use_autocommit: bool,
+        output_printer: OutputPrinter,
+    ):
         connection.autocommit = use_autocommit
         self.cursor = connection.cursor()
+        self.output_printer = output_printer
 
     def ddl(self, sql: str) -> None:
         try:
@@ -79,6 +85,12 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             self.cursor.execute(sql)
         except (ProgrammingError, DatabaseError) as err:
             raise SqlExecutionError(self._extract_message_from_error(err))
+        except ValueError as err:
+            self.output_printer.print_error(f"Query with value error is: {sql}")
+            raise err
+        except Exception as err:
+            self.output_printer.print_error(f"Query with unexpected error is: {sql}")
+            raise err
 
     def _extract_message_from_error(
         self, error: Union[ProgrammingError, DatabaseError]
@@ -125,4 +137,6 @@ def create_sql_executor(
     if config.dry_run:
         return DryRunSqlExecutor(output_printer)
     else:
-        return PgWireDatabaseSqlExecutor(connection, config.use_autocommit)
+        return PgWireDatabaseSqlExecutor(
+            connection, config.use_autocommit, output_printer
+        )
