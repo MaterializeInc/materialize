@@ -124,9 +124,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
 
             leave_expressions = expression.collect_leaves()
             for leaf_expression in leave_expressions:
-                if isinstance(leaf_expression, LeafExpression):
-                    # this is always the case
-                    column_names.add(leaf_expression.column_name)
+                column_names.add(leaf_expression.column_name)
 
         return column_names
 

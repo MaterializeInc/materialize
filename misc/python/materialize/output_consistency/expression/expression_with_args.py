@@ -13,7 +13,10 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
-from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression import (
+    Expression,
+    LeafExpression,
+)
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -98,7 +101,7 @@ class ExpressionWithArgs(Expression):
 
         return involved_characteristics
 
-    def collect_leaves(self) -> List[Expression]:
+    def collect_leaves(self) -> List[LeafExpression]:
         leaves = []
 
         for arg in self.args:
