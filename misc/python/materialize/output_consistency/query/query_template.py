@@ -54,11 +54,9 @@ class QueryTemplate:
         query_column_selection: QueryColumnByIndexSelection,
         override_db_object_name: Optional[str] = None,
     ) -> str:
-        if override_db_object_name is not None:
-            db_object_name = override_db_object_name
-        else:
-            db_object_name = strategy.get_db_object_name(self.storage_layout)
-
+        db_object_name = override_db_object_name or strategy.get_db_object_name(
+            self.storage_layout
+        )
         space_separator = self._get_space_separator(output_format)
 
         column_sql = self._create_column_sql(query_column_selection, space_separator)

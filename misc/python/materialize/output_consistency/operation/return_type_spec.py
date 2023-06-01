@@ -20,10 +20,9 @@ class ReturnTypeSpec:
     ):
         self.type_category = type_category
 
-        if type_category == DataTypeCategory.ANY:
-            raise RuntimeError(
-                f"{DataTypeCategory.ANY} is not allowed as return type category"
-            )
+        assert (
+            type_category != DataTypeCategory.ANY
+        ), f"{DataTypeCategory.ANY} is not allowed as return type category"
 
     def resolve_type_category(
         self, first_arg_type_category: Optional[DataTypeCategory]
