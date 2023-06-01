@@ -2028,6 +2028,7 @@ impl_display!(StartTransactionStatement);
 /// `SET TRANSACTION ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SetTransactionStatement {
+    pub local: bool,
     pub modes: Vec<TransactionMode>,
 }
 

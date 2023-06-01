@@ -44,7 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ast::{TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,7 @@ pub enum Plan {
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
+    SetTransaction(SetTransactionPlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction(CommitTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
@@ -209,7 +210,7 @@ impl Plan {
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
             StatementKind::Select => vec![PlanKind::Peek],
-            StatementKind::SetTransaction => vec![],
+            StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
                 PlanKind::Peek,
@@ -267,6 +268,7 @@ impl Plan {
             Plan::ShowVariable(_) => "show variable",
             Plan::SetVariable(_) => "set variable",
             Plan::ResetVariable(_) => "reset variable",
+            Plan::SetTransaction(_) => "set transaction",
             Plan::StartTransaction(_) => "start transaction",
             Plan::CommitTransaction(_) => "commit",
             Plan::AbortTransaction(_) => "abort",
@@ -615,6 +617,12 @@ pub enum VariableValue {
 #[derive(Debug)]
 pub struct ResetVariablePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct SetTransactionPlan {
+    pub local: bool,
+    pub modes: Vec<TransactionMode>,
 }
 
 #[derive(Clone, Debug)]

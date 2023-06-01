@@ -533,7 +533,9 @@ impl ExecuteResponse {
             PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
             RevokePrivileges => vec![RevokedPrivilege],
             RevokeRole => vec![RevokedRole],
-            PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
+            PlanKind::SetVariable | ResetVariable | PlanKind::SetTransaction => {
+                vec![ExecuteResponseKind::SetVariable]
+            }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
         }
