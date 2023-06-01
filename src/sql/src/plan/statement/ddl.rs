@@ -4181,6 +4181,31 @@ pub fn plan_alter_object_rename(
         if_exists,
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, PlanError> {
+    match (object_type, name) {
+        (
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::Source
+            | ObjectType::Index
+            | ObjectType::Sink
+            | ObjectType::Secret
+            | ObjectType::Connection,
+            UnresolvedObjectName::Item(name),
+        ) => plan_alter_item_rename(scx, object_type, name, to_item_name, if_exists),
+        (object_type, name) => {
+            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+        }
+    }
+}
+
+pub fn plan_alter_item_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    name: UnresolvedItemName,
+    to_item_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
     match resolve_item(scx, name, if_exists)? {
         Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());

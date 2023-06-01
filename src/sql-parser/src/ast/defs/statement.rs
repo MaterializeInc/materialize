@@ -1442,7 +1442,7 @@ impl_display_t!(AlterOwnerStatement);
 pub struct AlterObjectRenameStatement {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: UnresolvedItemName,
+    pub name: UnresolvedObjectName,
     pub to_item_name: Ident,
 }
 

@@ -3663,7 +3663,7 @@ impl<'a> Parser<'a> {
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_item_name()?;
+                let name = UnresolvedObjectName::Item(self.parse_item_name()?);
                 let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
                 self.expect_keyword(TO)?;
                 match action {
@@ -3681,7 +3681,7 @@ impl<'a> Parser<'a> {
                         Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
-                            name: UnresolvedObjectName::Item(name),
+                            name,
                             new_owner,
                         }))
                     }
@@ -3791,7 +3791,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3846,7 +3846,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Index,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3886,7 +3886,7 @@ impl<'a> Parser<'a> {
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type: ObjectType::Secret,
                     if_exists,
-                    name,
+                    name: UnresolvedObjectName::Item(name),
                     to_item_name,
                 })
             }
@@ -3942,7 +3942,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Sink,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -4002,9 +4002,8 @@ impl<'a> Parser<'a> {
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Connection,
-
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
