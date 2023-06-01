@@ -61,10 +61,11 @@ known_errors = [
     "list_agg on char not yet supported",
     "does not allow subqueries",
     "range constructor flags argument must not be null",  # expected after https://github.com/MaterializeInc/materialize/issues/18036 has been fixed
-    "function array_remove(",
-    "function array_cat(",
-    "function list_append(",
-    "function list_prepend(",
+    "function array_remove(",  # insufficient type system, parameter types have to match
+    "function array_cat(",  # insufficient type system, parameter types have to match
+    "function array_position(",  # insufficient type system, parameter types have to match
+    "function list_append(",  # insufficient type system, parameter types have to match
+    "function list_prepend(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
     "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
     "range lower bound must be less than or equal to range upper bound",
