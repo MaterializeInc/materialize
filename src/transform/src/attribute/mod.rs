@@ -24,6 +24,8 @@ use typemap_rev::{TypeMap, TypeMapKey};
 // Attributes should have shortened paths when exported.
 mod arity;
 pub use arity::Arity;
+mod cardinality;
+pub use cardinality::Cardinality;
 mod non_negative;
 pub use non_negative::NonNegative;
 mod relation_type;
