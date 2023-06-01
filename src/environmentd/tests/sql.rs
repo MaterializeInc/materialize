@@ -2481,7 +2481,7 @@ fn test_isolation_level_notice() {
         .unwrap();
 }
 
-#[mz_ore::test]
+#[test]
 fn test_emit_tracing_notice() {
     let config = util::Config::default().with_enable_tracing(true);
     let server = util::start_server(config).unwrap();
