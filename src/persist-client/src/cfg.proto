@@ -27,6 +27,7 @@ message ProtoPersistParameters {
     optional bool pubsub_push_diff_enabled = 11;
     mz_proto.ProtoDuration consensus_tcp_user_timeout = 12;
     optional uint64 rollup_threshold = 13;
+    optional uint64 blob_cache_mem_limit_bytes = 14;
 }
 
 message ProtoRetryParameters {
