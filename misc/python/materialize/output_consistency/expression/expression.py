@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import List, Set
+from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
@@ -41,6 +42,9 @@ class Expression:
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         raise RuntimeError("Not implemented")
+
+    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+        raise NotImplementedError
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection

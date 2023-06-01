@@ -82,12 +82,8 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ & $",
         [
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
+            NumericOperationParam(only_int_type=True),
+            NumericOperationParam(only_int_type=True),
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
@@ -99,12 +95,8 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ | $",
         [
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
+            NumericOperationParam(only_int_type=True),
+            NumericOperationParam(only_int_type=True),
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
@@ -116,12 +108,8 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ # $",
         [
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
+            NumericOperationParam(only_int_type=True),
+            NumericOperationParam(only_int_type=True),
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
@@ -133,9 +121,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "~$",
         [
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            )
+            NumericOperationParam(only_int_type=True),
         ],
         DataTypeCategory.NUMERIC,
         relevance=OperationRelevance.LOW,
@@ -146,15 +132,8 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ << $",
         [
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
-            NumericOperationParam(
-                incompatibilities={
-                    ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED,
-                }
-            ),
+            NumericOperationParam(only_int_type=True),
+            NumericOperationParam(only_int_type=True, no_int_type_larger_int4=True),
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
@@ -166,15 +145,8 @@ NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ >> $",
         [
-            NumericOperationParam(
-                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
-            ),
-            NumericOperationParam(
-                incompatibilities={
-                    ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED,
-                }
-            ),
+            NumericOperationParam(only_int_type=True),
+            NumericOperationParam(only_int_type=True, no_int_type_larger_int4=True),
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
@@ -257,20 +229,23 @@ NUMERIC_OPERATION_TYPES.append(
         [
             # first param is the base
             NumericOperationParam(
+                only_int_type=True,
+                # simplification: float would work if this was the only param
+                no_floating_point_type=True,
                 incompatibilities={
                     ExpressionCharacteristics.NEGATIVE,
                     ExpressionCharacteristics.ZERO,
                     ExpressionCharacteristics.ONE,
-                    ExpressionCharacteristics.FLOAT_TYPED,
-                }
+                },
             ),
             # not marked as optional because if not present the operation is equal to LOG10, which is separate
             NumericOperationParam(
+                only_int_type=True,
+                no_floating_point_type=True,
                 incompatibilities={
                     ExpressionCharacteristics.NEGATIVE,
                     ExpressionCharacteristics.ZERO,
-                    ExpressionCharacteristics.FLOAT_TYPED,
-                }
+                },
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -307,9 +282,9 @@ NUMERIC_OPERATION_TYPES.append(
             # negative values are allowed
             NumericOperationParam(
                 optional=True,
+                only_int_type=True,
+                no_int_type_larger_int4=True,
                 incompatibilities={
-                    ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED,
                     ExpressionCharacteristics.LARGE_VALUE,
                 },
             ),

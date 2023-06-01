@@ -111,7 +111,9 @@ class ExpressionGenerator:
             args = self._generate_args_for_operation(
                 operation, storage_layout, nesting_level + 1
             )
-        except NoSuitableExpressionFound:
+        except NoSuitableExpressionFound as ex:
+            if self.config.verbose_output:
+                print(f"No suitable expression found: {ex.message}")
             return None
 
         is_aggregate = operation.is_aggregation or self._contains_aggregate_arg(args)
@@ -234,12 +236,10 @@ class ExpressionGenerator:
         self, param: OperationParam, storage_layout: ValueStorageLayout
     ) -> LeafExpression:
         # only consider the data type category, do not check incompatibilities and other validations at this point
-        suitable_types_with_values = self._get_data_type_values_of_category(
-            param.type_category
-        )
+        suitable_types_with_values = self._get_data_type_values_of_category(param)
 
         if len(suitable_types_with_values) == 0:
-            raise NoSuitableExpressionFound()
+            raise NoSuitableExpressionFound("No suitable type")
 
         type_with_values = self.randomized_picker.random_type_with_values(
             suitable_types_with_values
@@ -249,7 +249,7 @@ class ExpressionGenerator:
             return type_with_values.create_vertical_storage_column()
         else:
             if len(type_with_values.raw_values) == 0:
-                raise NoSuitableExpressionFound()
+                raise NoSuitableExpressionFound("No value in type")
 
             return self.randomized_picker.random_value(type_with_values.raw_values)
 
@@ -260,6 +260,7 @@ class ExpressionGenerator:
         allow_aggregation: bool,
         must_use_aggregation: bool,
         nesting_level: int,
+        try_number: int = 1,
     ) -> ExpressionWithArgs:
         suitable_operations = self._get_operations_of_category(param.type_category)
 
@@ -273,7 +274,12 @@ class ExpressionGenerator:
             )
 
         if len(suitable_operations) == 0:
-            raise NoSuitableExpressionFound()
+            raise NoSuitableExpressionFound(
+                f"No suitable operation for {param}"
+                f" (layout={storage_layout},"
+                f" allow_aggregation={allow_aggregation},"
+                f" must_use_aggregation={must_use_aggregation})"
+            )
 
         weights = self._get_operation_weights(suitable_operations)
         operation = self.randomized_picker.random_operation(
@@ -285,13 +291,31 @@ class ExpressionGenerator:
         )
 
         if nested_expression is None:
-            raise NoSuitableExpressionFound()
+            raise NoSuitableExpressionFound(
+                f"No nested expression for {param} in {storage_layout}"
+            )
+
+        data_type = nested_expression.try_resolve_exact_data_type()
+
+        if data_type is not None and not param.supports_type(data_type):
+            if try_number < 5:
+                return self._generate_complex_arg_for_param(
+                    param,
+                    storage_layout,
+                    allow_aggregation,
+                    must_use_aggregation,
+                    nesting_level,
+                    try_number=try_number + 1,
+                )
+            else:
+                raise NoSuitableExpressionFound("No supported data type")
 
         return nested_expression
 
     def _get_data_type_values_of_category(
-        self, category: DataTypeCategory
+        self, param: OperationParam
     ) -> List[DataTypeWithValues]:
+        category = param.type_category
         if category == DataTypeCategory.ANY:
             return self.input_data.all_data_types_with_values
 
@@ -300,7 +324,14 @@ class ExpressionGenerator:
                 f"Type {DataTypeCategory.DYNAMIC} not allowed for parameters"
             )
 
-        return self.types_with_values_by_category[category]
+        preselected_types_with_values = self.types_with_values_by_category[category]
+        suitable_types_with_values = []
+
+        for type_with_values in preselected_types_with_values:
+            if param.supports_type(type_with_values.data_type):
+                suitable_types_with_values.append(type_with_values)
+
+        return suitable_types_with_values
 
     def _get_operations_of_category(
         self, category: DataTypeCategory
@@ -356,5 +387,6 @@ class ExpressionGenerator:
 
 
 class NoSuitableExpressionFound(Exception):
-    def __init__(self) -> None:
+    def __init__(self, message: str):
         super().__init__()
+        self.message = message

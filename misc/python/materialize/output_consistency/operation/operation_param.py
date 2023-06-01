@@ -9,6 +9,7 @@
 
 from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -46,9 +47,15 @@ class OperationParam:
             for incompatibility in incompatibilities:
                 self.incompatibility_combinations.append({incompatibility})
 
-    def supports_arg(self, arg: Expression) -> bool:
+    def supports_type(self, data_type: DataType) -> bool:
+        raise NotImplementedError
+
+    def supports_expression(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:
             if arg.has_all_characteristics(incompatibility_combination):
                 return False
 
         return True
+
+    def __str__(self) -> str:
+        return f"{type(self).__name__} (optional={self.optional})"

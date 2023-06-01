@@ -27,8 +27,9 @@ class DataColumn(LeafExpression):
 
     def __init__(self, data_type: DataType, row_values_of_column: List[DataValue]):
         column_name = f"{data_type.identifier.lower()}_val"
-        super().__init__(column_name, set(), ValueStorageLayout.VERTICAL, False, False)
-        self.data_type = data_type
+        super().__init__(
+            column_name, data_type, set(), ValueStorageLayout.VERTICAL, False, False
+        )
         self.values = row_values_of_column
 
     def resolve_return_type_category(self) -> DataTypeCategory:

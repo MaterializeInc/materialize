@@ -24,6 +24,7 @@ class NumberDataType(DataType):
         max_value: str,
         max_negative_value: Optional[str],
         further_tiny_dec_values: Optional[Set[str]] = None,
+        is_floating_point_type: bool = False,
     ):
         super().__init__(identifier, type_name, DataTypeCategory.NUMERIC)
         self.is_signed = is_signed
@@ -34,10 +35,22 @@ class NumberDataType(DataType):
         self.further_tiny_dec_values = (
             further_tiny_dec_values if further_tiny_dec_values is not None else set()
         )
+        self.is_floating_point_type = is_floating_point_type
 
+
+INT2_TYPE_IDENTIFIER = "INT2"
+INT4_TYPE_IDENTIFIER = "INT4"
+INT8_TYPE_IDENTIFIER = "INT8"
+UINT2_TYPE_IDENTIFIER = "UINT2"
+UINT4_TYPE_IDENTIFIER = "UINT4"
+UINT8_TYPE_IDENTIFIER = "UINT8"
+DECIMAL_39_0_TYPE_IDENTIFIER = "DECIMAL_39_0"
+DECIMAL_39_8_TYPE_IDENTIFIER = "DECIMAL_39_8"
+REAL_TYPE_IDENTIFIER = "REAL"
+DOUBLE_TYPE_IDENTIFIER = "DOUBLE"
 
 INT2_TYPE = NumberDataType(
-    "INT2",
+    INT2_TYPE_IDENTIFIER,
     "INT2",
     is_signed=True,
     is_decimal=False,
@@ -46,7 +59,7 @@ INT2_TYPE = NumberDataType(
     max_negative_value="-32768",
 )
 INT4_TYPE = NumberDataType(
-    "INT4",
+    INT4_TYPE_IDENTIFIER,
     "INT4",
     is_signed=True,
     is_decimal=False,
@@ -55,7 +68,7 @@ INT4_TYPE = NumberDataType(
     max_negative_value="-2147483648",
 )
 INT8_TYPE = NumberDataType(
-    "INT8",
+    INT8_TYPE_IDENTIFIER,
     "INT8",
     is_signed=True,
     is_decimal=False,
@@ -65,7 +78,7 @@ INT8_TYPE = NumberDataType(
 )
 
 UINT2_TYPE = NumberDataType(
-    "UINT2",
+    UINT2_TYPE_IDENTIFIER,
     "UINT2",
     is_signed=False,
     is_decimal=False,
@@ -74,7 +87,7 @@ UINT2_TYPE = NumberDataType(
     max_negative_value=None,
 )
 UINT4_TYPE = NumberDataType(
-    "UINT4",
+    UINT4_TYPE_IDENTIFIER,
     "UINT4",
     is_signed=False,
     is_decimal=False,
@@ -83,7 +96,7 @@ UINT4_TYPE = NumberDataType(
     max_negative_value=None,
 )
 UINT8_TYPE = NumberDataType(
-    "UINT8",
+    UINT8_TYPE_IDENTIFIER,
     "UINT8",
     is_signed=False,
     is_decimal=False,
@@ -94,7 +107,7 @@ UINT8_TYPE = NumberDataType(
 
 # configurable decimal digits
 DECIMAL39_0_TYPE = NumberDataType(
-    "DECIMAL_39_0",
+    DECIMAL_39_0_TYPE_IDENTIFIER,
     "DECIMAL(39)",
     is_signed=True,
     is_decimal=True,
@@ -103,7 +116,7 @@ DECIMAL39_0_TYPE = NumberDataType(
     max_negative_value="-999999999999999999999999999999999999999",
 )
 DECIMAL39_8_TYPE = NumberDataType(
-    "DECIMAL_39_8",
+    DECIMAL_39_8_TYPE_IDENTIFIER,
     "DECIMAL(39,8)",
     is_signed=True,
     is_decimal=True,
@@ -114,7 +127,7 @@ DECIMAL39_8_TYPE = NumberDataType(
 )
 
 REAL_TYPE = NumberDataType(
-    "REAL",
+    REAL_TYPE_IDENTIFIER,
     "REAL",
     is_signed=True,
     is_decimal=True,
@@ -127,9 +140,10 @@ REAL_TYPE = NumberDataType(
         "0.999999999999999999999999999999999999999",
         "1.000000000000000000000000000000000000001",
     },
+    is_floating_point_type=True,
 )
 DOUBLE_TYPE = NumberDataType(
-    "DOUBLE",
+    DOUBLE_TYPE_IDENTIFIER,
     "DOUBLE",
     is_signed=True,
     is_decimal=True,
@@ -142,6 +156,7 @@ DOUBLE_TYPE = NumberDataType(
         "0.999999999999999999999999999999999999999",
         "1.000000000000000000000000000000000000001",
     },
+    is_floating_point_type=True,
 )
 
 SIGNED_INT_TYPES: List[NumberDataType] = [
