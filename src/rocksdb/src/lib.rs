@@ -184,46 +184,18 @@ impl Options {
     }
 }
 
-/// The result type for `multi_get`.
-#[derive(Debug)]
-pub struct MultiGetResult {
-    /// The number of keys we fetched.
-    pub processed_gets: u64,
-}
-
-/// The result type for individual gets.
-#[derive(Debug, Default, Clone)]
-pub struct GetResult<V> {
-    /// The previous value, if there was one.
-    pub value: V,
-    /// The size of `value` as persisted, if there was one.
-    /// Useful for users keeping track of statistics.
-    pub size: u64,
-}
-
-/// The result type for `multi_put`.
-#[derive(Debug)]
-pub struct MultiPutResult {
-    /// The number of keys we put or deleted.
-    pub processed_puts: u64,
-    /// The total size of values we put into the database.
-    /// Does not contain any information about deletes.
-    pub size_written: u64,
-}
-
 #[derive(Debug)]
 enum Command<K, V> {
     MultiGet {
         batch: Vec<K>,
         // Scratch vector to return results in.
-        results_scratch: Vec<Option<GetResult<V>>>,
+        results_scratch: Vec<Option<V>>,
         response_sender: oneshot::Sender<
             Result<
                 (
-                    MultiGetResult,
                     // The batch scratch vector being given back.
                     Vec<K>,
-                    Vec<Option<GetResult<V>>>,
+                    Vec<Option<V>>,
                 ),
                 Error,
             >,
@@ -232,7 +204,7 @@ enum Command<K, V> {
     MultiPut {
         batch: Vec<(K, Option<V>)>,
         // Scratch vector to return results in.
-        response_sender: oneshot::Sender<Result<(MultiPutResult, Vec<(K, Option<V>)>), Error>>,
+        response_sender: oneshot::Sender<Result<Vec<(K, Option<V>)>, Error>>,
     },
     Shutdown {
         done_sender: oneshot::Sender<()>,
@@ -240,6 +212,7 @@ enum Command<K, V> {
 }
 
 /// An async wrapper around RocksDB.
+#[derive(Clone)]
 pub struct RocksDBInstance<K, V> {
     tx: mpsc::Sender<Command<K, V>>,
 
@@ -249,7 +222,7 @@ pub struct RocksDBInstance<K, V> {
 
     // Scratch vector to return results from the RocksDB thread
     // during `MultiGet`.
-    multi_get_results_scratch: Vec<Option<GetResult<V>>>,
+    multi_get_results_scratch: Vec<Option<V>>,
 
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiPut`.
@@ -261,24 +234,13 @@ where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    /// Start a new RocksDB instance at the path, using
-    /// the `Options` and `RocksDBTuningParameters` to
-    /// configure the instance.
-    ///
-    /// `metrics` is a set of metric types that this type will keep
-    /// up to date. `enc_opts` is the `bincode` options used to
-    /// serialize and deserialize the keys and values.
-    pub async fn new<M, O>(
+    /// Start a new RocksDB instance at the path.
+    pub async fn new<M: Deref<Target = RocksDBMetrics> + Send + 'static>(
         instance_path: &Path,
         options: Options,
         tuning_config: RocksDBTuningParameters,
         metrics: M,
-        enc_opts: O,
-    ) -> Result<Self, Error>
-    where
-        O: bincode::Options + Copy + Send + Sync + 'static,
-        M: Deref<Target = RocksDBMetrics> + Send + 'static,
-    {
+    ) -> Result<Self, Error> {
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
             mz_ore::task::spawn_blocking(
@@ -309,7 +271,6 @@ where
                 rx,
                 metrics,
                 creation_error_tx,
-                enc_opts,
             )
         });
 
@@ -328,14 +289,10 @@ where
     /// For each _unique_ key in `gets`, place the stored value (if any) in `results_out`.
     ///
     /// Panics if `gets` and `results_out` are not the same length.
-    pub async fn multi_get<'r, G, R>(
-        &mut self,
-        gets: G,
-        results_out: R,
-    ) -> Result<MultiGetResult, Error>
+    pub async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, Error>
     where
         G: IntoIterator<Item = K>,
-        R: IntoIterator<Item = &'r mut Option<GetResult<V>>>,
+        R: IntoIterator<Item = &'r mut Option<V>>,
     {
         let mut multi_get_vec = std::mem::take(&mut self.multi_get_scratch);
         let mut results_vec = std::mem::take(&mut self.multi_get_results_scratch);
@@ -346,7 +303,7 @@ where
         if multi_get_vec.is_empty() {
             self.multi_get_scratch = multi_get_vec;
             self.multi_get_results_scratch = results_vec;
-            return Ok(MultiGetResult { processed_gets: 0 });
+            return Ok(0);
         }
 
         let (tx, rx) = oneshot::channel();
@@ -361,13 +318,15 @@ where
 
         // We also unwrap all rocksdb errors here.
         match rx.await.map_err(|_| Error::RocksDBThreadGoneAway)? {
-            Ok((ret, get_scratch, mut results_scratch)) => {
-                for (place, get) in results_out.into_iter().zip_eq(results_scratch.drain(..)) {
+            Ok(mut results) => {
+                let size = u64::cast_from(results.1.len());
+
+                for (place, get) in results_out.into_iter().zip_eq(results.1.drain(..)) {
                     *place = get;
                 }
-                self.multi_get_scratch = get_scratch;
-                self.multi_get_results_scratch = results_scratch;
-                Ok(ret)
+                self.multi_get_scratch = results.0;
+                self.multi_get_results_scratch = results.1;
+                Ok(size)
             }
             Err(e) => {
                 // Note we don't attempt to preserve the scratch allocations here.
@@ -379,7 +338,7 @@ where
     /// For each key in puts, store the given value, or delete it if
     /// the value is `None`. If the same `key` appears multiple times,
     /// the last value for the key wins.
-    pub async fn multi_put<P>(&mut self, puts: P) -> Result<MultiPutResult, Error>
+    pub async fn multi_put<P>(&mut self, puts: P) -> Result<u64, Error>
     where
         P: IntoIterator<Item = (K, Option<V>)>,
     {
@@ -389,11 +348,10 @@ where
         multi_put_vec.extend(puts);
         if multi_put_vec.is_empty() {
             self.multi_put_scratch = multi_put_vec;
-            return Ok(MultiPutResult {
-                processed_puts: 0,
-                size_written: 0,
-            });
+            return Ok(0);
         }
+
+        let size = u64::cast_from(multi_put_vec.len());
 
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -406,9 +364,9 @@ where
 
         // We also unwrap all rocksdb errors here.
         match rx.await.map_err(|_| Error::RocksDBThreadGoneAway)? {
-            Ok((ret, scratch)) => {
+            Ok(scratch) => {
                 self.multi_put_scratch = scratch;
-                Ok(ret)
+                Ok(size)
             }
             Err(e) => {
                 // Note we don't attempt to preserve the allocation here.
@@ -433,23 +391,19 @@ where
 }
 
 // TODO(guswynn): retry retryable rocksdb errors.
-fn rocksdb_core_loop<K, V, M, O>(
+fn rocksdb_core_loop<K, V, M>(
     options: Options,
     tuning_config: RocksDBTuningParameters,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     metrics: M,
     creation_error_tx: oneshot::Sender<Error>,
-    enc_opts: O,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
-    O: bincode::Options + Copy + Send + Sync + 'static,
 {
-    let rocksdb_options = options.as_rocksdb_options(&tuning_config);
-
-    let db: DB = match DB::open(&rocksdb_options, &instance_path) {
+    let db: DB = match DB::open(&options.as_rocksdb_options(&tuning_config), &instance_path) {
         Ok(db) => {
             drop(creation_error_tx);
             db
@@ -487,31 +441,21 @@ fn rocksdb_core_loop<K, V, M, O>(
                     Ok(gets) => {
                         metrics.multi_get_latency.observe(latency.as_secs_f64());
                         metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
-                        let result = MultiGetResult {
-                            processed_gets: gets.len().try_into().unwrap(),
-                        };
-
                         for previous_value in gets {
-                            let get_result = match previous_value {
-                                Some(previous_value) => {
-                                    match enc_opts.deserialize(&previous_value) {
-                                        Ok(value) => Some(GetResult {
-                                            value,
-                                            size: u64::cast_from(previous_value.len()),
-                                        }),
-                                        Err(e) => {
-                                            let _ =
-                                                response_sender.send(Err(Error::DecodeError(e)));
-                                            return;
-                                        }
-                                    }
+                            let previous_value = match previous_value
+                                .map(|v| bincode::deserialize(&v))
+                                .transpose()
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    let _ = response_sender.send(Err(Error::DecodeError(e)));
+                                    return;
                                 }
-                                None => None,
                             };
-                            results_scratch.push(get_result)
+                            results_scratch.push(previous_value);
                         }
 
-                        let _ = response_sender.send(Ok((result, batch, results_scratch)));
+                        let _ = response_sender.send(Ok((batch, results_scratch)));
                     }
                     Err(e) => {
                         let _ = response_sender.send(Err(Error::RocksDB(e)));
@@ -527,21 +471,16 @@ fn rocksdb_core_loop<K, V, M, O>(
                 let mut writes = rocksdb::WriteBatch::default();
                 let mut encode_buf = Vec::new();
 
-                let mut ret = MultiPutResult {
-                    processed_puts: 0,
-                    size_written: 0,
-                };
                 // TODO(guswynn): sort by key before writing.
                 for (key, value) in batch.drain(..) {
-                    ret.processed_puts += 1;
-
                     match value {
                         Some(update) => {
                             encode_buf.clear();
-                            match enc_opts
-                                .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, &update)
-                            {
-                                Ok(()) => ret.size_written += u64::cast_from(encode_buf.len()),
+                            match bincode::serialize_into::<&mut Vec<u8>, _>(
+                                &mut encode_buf,
+                                &update,
+                            ) {
+                                Ok(()) => {}
                                 Err(e) => {
                                     let _ = response_sender.send(Err(Error::DecodeError(e)));
                                     return;
@@ -559,7 +498,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                         let latency = now.elapsed();
                         metrics.multi_put_latency.observe(latency.as_secs_f64());
                         metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
-                        let _ = response_sender.send(Ok((ret, batch)));
+                        let _ = response_sender.send(Ok(batch));
                     }
                     Err(e) => {
                         let _ = response_sender.send(Err(Error::RocksDB(e)));
