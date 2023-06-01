@@ -15,23 +15,26 @@ use std::ops::Sub;
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
 };
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{self, CastFrom};
 use mz_proto::{RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
+use proptest::arbitrary::Arbitrary;
+use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
 use crate::chrono::ProtoNaiveDateTime;
+use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
 use crate::Datum;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.date.rs"));
 
-const MONTHS_PER_YEAR: i64 = 12;
-const HOURS_PER_DAY: i64 = 24;
-const MINUTES_PER_HOUR: i64 = 60;
-const SECONDS_PER_MINUTE: i64 = 60;
+const MONTHS_PER_YEAR: i64 = cast::u16_to_i64(Interval::MONTH_PER_YEAR);
+const HOURS_PER_DAY: i64 = cast::u16_to_i64(Interval::HOUR_PER_DAY);
+const MINUTES_PER_HOUR: i64 = cast::u16_to_i64(Interval::MINUTE_PER_HOUR);
+const SECONDS_PER_MINUTE: i64 = cast::u16_to_i64(Interval::SECOND_PER_MINUTE);
 
 const NANOSECONDS_PER_HOUR: i64 = NANOSECONDS_PER_MINUTE * MINUTES_PER_HOUR;
 const NANOSECONDS_PER_MINUTE: i64 = NANOSECONDS_PER_SECOND * SECONDS_PER_MINUTE;
@@ -512,99 +515,103 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
     /// <https://github.com/postgres/postgres/blob/REL_15_3/src/backend/utils/adt/timestamp.c#L3631>
     pub fn age(&self, other: &Self) -> Result<Interval, TimestampError> {
         /// Returns the number of days in the month for which the [`CheckedTimestamp`] is in.
-        fn num_days_in_month<T: TimestampLike>(
-            dt: &CheckedTimestamp<T>,
-        ) -> Result<i64, TimestampError> {
+        fn num_days_in_month<T: TimestampLike>(dt: &CheckedTimestamp<T>) -> Option<i64> {
             // Creates a new Date in the same month and year as our original timestamp. Adds one
             // month then subtracts one day, to get the last day of our original month.
-            let last_day = NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
-                .ok_or(TimestampError::OutOfRange)?
-                .checked_add_months(Months::new(1))
-                .ok_or(TimestampError::OutOfRange)?
-                .checked_sub_days(Days::new(1))
-                .ok_or(TimestampError::OutOfRange)?
+            let last_day = NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)?
+                .checked_add_months(Months::new(1))?
+                .checked_sub_days(Days::new(1))?
                 .day();
 
-            Ok(CastFrom::cast_from(last_day))
+            Some(CastFrom::cast_from(last_day))
         }
 
-        let mut nanos = i64::cast_from(self.nanosecond()) - i64::cast_from(other.nanosecond());
-        let mut seconds = i64::cast_from(self.second()) - i64::cast_from(other.second());
-        let mut minutes = i64::cast_from(self.minute()) - i64::cast_from(other.minute());
-        let mut hours = i64::cast_from(self.hour()) - i64::cast_from(other.hour());
-        let mut days = i64::cast_from(self.day()) - i64::cast_from(other.day());
-        let mut months = i64::cast_from(self.month()) - i64::cast_from(other.month());
-        let mut years = i64::cast_from(self.year()) - i64::cast_from(other.year());
+        /// All of the `checked_*` functions return `Option<T>`, so we do all of the math in this
+        /// inner function so we can use the `?` operator, maping to a `TimestampError` at the end.
+        fn age_inner<U: TimestampLike>(
+            a: &CheckedTimestamp<U>,
+            b: &CheckedTimestamp<U>,
+        ) -> Option<Interval> {
+            let mut nanos =
+                i64::cast_from(a.nanosecond()).checked_sub(i64::cast_from(b.nanosecond()))?;
+            let mut seconds = i64::cast_from(a.second()).checked_sub(i64::cast_from(b.second()))?;
+            let mut minutes = i64::cast_from(a.minute()).checked_sub(i64::cast_from(b.minute()))?;
+            let mut hours = i64::cast_from(a.hour()).checked_sub(i64::cast_from(b.hour()))?;
+            let mut days = i64::cast_from(a.day()).checked_sub(i64::cast_from(b.day()))?;
+            let mut months = i64::cast_from(a.month()).checked_sub(i64::cast_from(b.month()))?;
+            let mut years = i64::cast_from(a.year()).checked_sub(i64::cast_from(b.year()))?;
 
-        // Flip sign if necessary.
-        if self < other {
-            nanos = -nanos;
-            seconds = -seconds;
-            minutes = -minutes;
-            hours = -hours;
-            days = -days;
-            months = -months;
-            years = -years;
-        }
-
-        // Carry negative fields into the next higher field.
-        while nanos < 0 {
-            nanos += NANOSECONDS_PER_SECOND;
-            seconds -= 1;
-        }
-        while seconds < 0 {
-            seconds += SECONDS_PER_MINUTE;
-            minutes -= 1;
-        }
-        while minutes < 0 {
-            minutes += MINUTES_PER_HOUR;
-            minutes -= 1;
-        }
-        while hours < 0 {
-            hours += HOURS_PER_DAY;
-            days -= 1;
-        }
-        while days < 0 {
-            if self < other {
-                days += num_days_in_month(self)?;
-            } else {
-                days += num_days_in_month(other)?;
+            // Flip sign if necessary.
+            if a < b {
+                nanos = -nanos;
+                seconds = -seconds;
+                minutes = -minutes;
+                hours = -hours;
+                days = -days;
+                months = -months;
+                years = -years;
             }
-            months -= 1;
-        }
-        while months < 0 {
-            months += MONTHS_PER_YEAR;
-            years -= 1;
+
+            // Carry negative fields into the next higher field.
+            while nanos < 0 {
+                nanos = nanos.checked_add(NANOSECONDS_PER_SECOND)?;
+                seconds = seconds.checked_sub(1)?;
+            }
+            while seconds < 0 {
+                seconds = seconds.checked_add(SECONDS_PER_MINUTE)?;
+                minutes = minutes.checked_sub(1)?;
+            }
+            while minutes < 0 {
+                minutes = minutes.checked_add(MINUTES_PER_HOUR)?;
+                hours = hours.checked_sub(1)?;
+            }
+            while hours < 0 {
+                hours = hours.checked_add(HOURS_PER_DAY)?;
+                days = days.checked_sub(1)?
+            }
+            while days < 0 {
+                if a < b {
+                    days = num_days_in_month(a).and_then(|x| days.checked_add(x))?;
+                } else {
+                    days = num_days_in_month(b).and_then(|x| days.checked_add(x))?;
+                }
+                months = months.checked_sub(1)?;
+            }
+            while months < 0 {
+                months = months.checked_add(MONTHS_PER_YEAR)?;
+                years = years.checked_sub(1)?;
+            }
+
+            // Revert the sign back, if we flipped it originally.
+            if a < b {
+                nanos = -nanos;
+                seconds = -seconds;
+                minutes = -minutes;
+                hours = -hours;
+                days = -days;
+                months = -months;
+                years = -years;
+            }
+
+            let months = i32::try_from(years * MONTHS_PER_YEAR + months).ok()?;
+            let days = i32::try_from(days).ok()?;
+            let micros = Duration::nanoseconds(
+                nanos
+                    + (seconds * NANOSECONDS_PER_SECOND)
+                    + (minutes * NANOSECONDS_PER_MINUTE)
+                    + (hours * NANOSECONDS_PER_HOUR),
+            )
+            .num_microseconds()?;
+
+            Some(Interval {
+                months,
+                days,
+                micros,
+            })
         }
 
-        // Revert the sign back, if we flipped it originally.
-        if self < other {
-            nanos = -nanos;
-            seconds = -seconds;
-            minutes = -minutes;
-            hours = -hours;
-            days = -days;
-            months = -months;
-            years = -years;
-        }
-
-        let months = i32::try_from(years * MONTHS_PER_YEAR + months)
-            .map_err(|_| TimestampError::OutOfRange)?;
-        let days = i32::try_from(days).map_err(|_| TimestampError::OutOfRange)?;
-        let micros = Duration::nanoseconds(
-            nanos
-                + (seconds * NANOSECONDS_PER_SECOND)
-                + (minutes * NANOSECONDS_PER_MINUTE)
-                + (hours * NANOSECONDS_PER_HOUR),
-        )
-        .num_microseconds()
-        .ok_or(TimestampError::OutOfRange)?;
-
-        Ok(Interval {
-            months,
-            days,
-            micros,
-        })
+        // If at any point we overflow, map to a TimestampError.
+        age_inner(self, other).ok_or(TimestampError::OutOfRange)
     }
 }
 
@@ -708,5 +715,67 @@ impl<T: Sub<Duration, Output = T>> Sub<Duration> for CheckedTimestamp<T> {
     #[inline]
     fn sub(self, rhs: Duration) -> T {
         self.t - rhs
+    }
+}
+
+impl Arbitrary for CheckedTimestamp<NaiveDateTime> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<CheckedTimestamp<NaiveDateTime>>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        arb_naive_date_time()
+            .prop_map(|dt| CheckedTimestamp::try_from(dt).unwrap())
+            .boxed()
+    }
+}
+
+impl Arbitrary for CheckedTimestamp<DateTime<Utc>> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<CheckedTimestamp<DateTime<Utc>>>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        arb_utc_date_time()
+            .prop_map(|dt| CheckedTimestamp::try_from(dt).unwrap())
+            .boxed()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn test_max_age() {
+        let low = CheckedTimestamp::try_from(
+            LOW_DATE.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
+        )
+        .unwrap();
+        let high = CheckedTimestamp::try_from(
+            HIGH_DATE.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
+        )
+        .unwrap();
+
+        // Test high - low.
+        let result = high.age(&low).unwrap();
+        assert_eq!(result, Interval::new(3202272, 0, 0));
+
+        // Test low - high.
+        let result = low.age(&high).unwrap();
+        assert_eq!(result, Interval::new(-3202272, 0, 0));
+    }
+
+    proptest! {
+        #[test]
+        fn test_age_naive(a: CheckedTimestamp<NaiveDateTime>, b: CheckedTimestamp<NaiveDateTime>) {
+            let result = a.age(&b);
+            prop_assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_age_utc(a: CheckedTimestamp<DateTime<Utc>>, b: CheckedTimestamp<DateTime<Utc>>) {
+            let result = a.age(&b);
+            prop_assert!(result.is_ok());
+        }
     }
 }

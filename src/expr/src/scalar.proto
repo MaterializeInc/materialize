@@ -613,7 +613,6 @@ message ProtoBinaryFunc {
         google.protobuf.Empty parse_ident = 185;
         google.protobuf.Empty age_timestamp = 186;
         google.protobuf.Empty age_timestamp_tz = 187;
-        google.protobuf.Empty age_current = 188;
     }
 }
 
