@@ -52,11 +52,11 @@ class ExpressionWithArgs(Expression):
     def has_args(self) -> bool:
         return len(self.args) > 0
 
-    def to_sql(self) -> str:
+    def to_sql(self, is_root_level: bool) -> str:
         sql: str = self.pattern
 
         for arg in self.args:
-            sql = sql.replace(EXPRESSION_PLACEHOLDER, arg.to_sql(), 1)
+            sql = sql.replace(EXPRESSION_PLACEHOLDER, arg.to_sql(False), 1)
 
         if len(self.args) != self.pattern.count(EXPRESSION_PLACEHOLDER):
             raise RuntimeError(

@@ -57,9 +57,9 @@ class EnumConstant(Expression):
         return set()
 
     def __str__(self) -> str:
-        return self.to_sql()
+        return self.to_sql(False)
 
-    def to_sql(self) -> str:
+    def to_sql(self, is_root_level: bool) -> str:
         return self.value
 
     def collect_leaves(self) -> List[LeafExpression]:
