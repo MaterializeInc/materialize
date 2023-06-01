@@ -174,3 +174,27 @@ Source materialize.public.events
   pushdown=((mz_now() < numeric_to_mz_timestamp((#2 + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 90000))))
 
 EOF
+
+statement ok
+CREATE TABLE events_timestamped (
+    content text,
+    inserted_at timestamp,
+    deleted_at timestamp
+);
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT content, inserted_at
+FROM events_timestamped
+WHERE EXTRACT(YEAR FROM inserted_at) = 2021;
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (2021 = extract_year_ts(#1))
+      Get materialize.public.events_timestamped
+
+Source materialize.public.events_timestamped
+  filter=((2021 = extract_year_ts(#1)))
+  pushdown=((2021 = extract_year_ts(#1)))
+
+EOF
