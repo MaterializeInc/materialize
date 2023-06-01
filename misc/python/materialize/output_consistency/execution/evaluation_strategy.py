@@ -189,7 +189,7 @@ def _create_column_specs(
             if table_column_selection.is_included(column_name):
                 column_specs.append(f"{column_name}{type_info}")
         else:
-            raise RuntimeError(f"Unexpected storage layout: {storage_layout}")
+            raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
     return column_specs
 
@@ -214,7 +214,7 @@ def _create_value_rows(
             table_column_selection,
         )
     else:
-        raise RuntimeError(f"Unexpected storage layout: {storage_layout}")
+        raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
 
 def __create_horizontal_value_row(
