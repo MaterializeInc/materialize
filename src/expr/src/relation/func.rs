@@ -35,6 +35,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders};
+use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
     compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
     WindowFrame, WindowFrameBound, WindowFrameUnits,
@@ -2263,6 +2264,10 @@ pub enum TableFunc {
         width: usize,
     },
     GenerateSubscriptsArray,
+    TabletizedScalar {
+        name: String,
+        relation: RelationType,
+    },
 }
 
 impl RustType<ProtoTableFunc> for TableFunc {
@@ -2288,6 +2293,12 @@ impl RustType<ProtoTableFunc> for TableFunc {
                     width: width.into_proto(),
                 }),
                 TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
+                TableFunc::TabletizedScalar { name, relation } => {
+                    Kind::TabletizedScalar(ProtoTabletizedScalar {
+                        name: name.into_proto(),
+                        relation: Some(relation.into_proto()),
+                    })
+                }
             }),
         }
     }
@@ -2321,6 +2332,12 @@ impl RustType<ProtoTableFunc> for TableFunc {
                 types: x.types.into_rust()?,
             },
             Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
+            Kind::TabletizedScalar(v) => TableFunc::TabletizedScalar {
+                name: v.name,
+                relation: v
+                    .relation
+                    .into_rust_if_some("ProtoTabletizedScalar::relation")?,
+            },
         })
     }
 }
@@ -2393,6 +2410,10 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
+            TableFunc::TabletizedScalar { .. } => {
+                let r = Row::pack_slice(datums);
+                Ok(Box::new(std::iter::once((r, 1))))
+            }
         }
     }
 
@@ -2489,6 +2510,9 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
+            TableFunc::TabletizedScalar { relation, .. } => {
+                return relation.clone();
+            }
         };
 
         if !keys.is_empty() {
@@ -2514,6 +2538,7 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
             TableFunc::Wrap { width, .. } => *width,
+            TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
         }
     }
 
@@ -2533,6 +2558,7 @@ impl TableFunc {
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
             TableFunc::Wrap { .. } => false,
+            TableFunc::TabletizedScalar { .. } => false,
         }
     }
 
@@ -2555,6 +2581,7 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::Wrap { .. } => true,
+            TableFunc::TabletizedScalar { .. } => false,
         }
     }
 }
@@ -2576,6 +2603,7 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
+            TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
         }
     }
 }
