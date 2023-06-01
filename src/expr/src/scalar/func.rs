@@ -6908,6 +6908,7 @@ impl VariadicFunc {
         temp_storage: &'a RowArena,
         exprs: &'a [MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
+        // Evaluate all non-eager functions directly
         match self {
             VariadicFunc::Coalesce => return coalesce(datums, temp_storage, exprs),
             VariadicFunc::Greatest => return greatest(datums, temp_storage, exprs),
@@ -6918,20 +6919,17 @@ impl VariadicFunc {
             _ => {}
         };
 
+        // Compute parameter to eager functions
         let ds = exprs
             .iter()
             .map(|e| e.eval(datums, temp_storage))
             .collect::<Result<Vec<_>, _>>()?;
+        // Check NULL propagation
         if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
             return Ok(Datum::Null);
         }
 
-        macro_rules! eager {
-            ($func:expr $(, $args:expr)*) => {{
-                $func(&ds $(, $args)*)
-            }}
-        }
-
+        // Evaluate eager functions
         match self {
             VariadicFunc::Coalesce
             | VariadicFunc::Greatest
@@ -6939,45 +6937,45 @@ impl VariadicFunc {
             | VariadicFunc::Or
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::Least => unreachable!(),
-            VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
-            VariadicFunc::MakeTimestamp => eager!(make_timestamp),
-            VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
-            VariadicFunc::Substr => eager!(substr),
-            VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
-            VariadicFunc::Translate => Ok(eager!(translate, temp_storage)),
-            VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
-            VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
+            VariadicFunc::Concat => Ok(text_concat_variadic(&ds, temp_storage)),
+            VariadicFunc::MakeTimestamp => make_timestamp(&ds),
+            VariadicFunc::PadLeading => pad_leading(&ds, temp_storage),
+            VariadicFunc::Substr => substr(&ds),
+            VariadicFunc::Replace => Ok(replace(&ds, temp_storage)),
+            VariadicFunc::Translate => Ok(translate(&ds, temp_storage)),
+            VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(&ds, temp_storage)),
+            VariadicFunc::JsonbBuildObject => Ok(jsonb_build_object(&ds, temp_storage)),
             VariadicFunc::ArrayCreate {
                 elem_type: ScalarType::Array(_),
-            } => eager!(array_create_multidim, temp_storage),
-            VariadicFunc::ArrayCreate { .. } => eager!(array_create_scalar, temp_storage),
+            } => array_create_multidim(&ds, temp_storage),
+            VariadicFunc::ArrayCreate { .. } => array_create_scalar(&ds, temp_storage),
             VariadicFunc::ArrayToString { elem_type } => {
-                eager!(array_to_string, elem_type, temp_storage)
+                array_to_string(&ds, elem_type, temp_storage)
             }
-            VariadicFunc::ArrayIndex { offset } => Ok(eager!(array_index, *offset)),
+            VariadicFunc::ArrayIndex { offset } => Ok(array_index(&ds, *offset)),
 
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
-                Ok(eager!(list_create, temp_storage))
+                Ok(list_create(&ds, temp_storage))
             }
-            VariadicFunc::ListIndex => Ok(eager!(list_index)),
-            VariadicFunc::ListSliceLinear => Ok(eager!(list_slice_linear, temp_storage)),
-            VariadicFunc::SplitPart => eager!(split_part),
-            VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
-            VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
-            VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
-            VariadicFunc::DateBinTimestamp => eager!(|d: &[Datum]| date_bin(
-                d[0].unwrap_interval(),
-                d[1].unwrap_timestamp(),
-                d[2].unwrap_timestamp(),
-            )),
-            VariadicFunc::DateBinTimestampTz => eager!(|d: &[Datum]| date_bin(
-                d[0].unwrap_interval(),
-                d[1].unwrap_timestamptz(),
-                d[2].unwrap_timestamptz(),
-            )),
-            VariadicFunc::RangeCreate { .. } => eager!(create_range, temp_storage),
-            VariadicFunc::MakeMzAclItem => eager!(make_mz_acl_item),
-            VariadicFunc::ArrayPosition => eager!(array_position),
+            VariadicFunc::ListIndex => Ok(list_index(&ds)),
+            VariadicFunc::ListSliceLinear => Ok(list_slice_linear(&ds, temp_storage)),
+            VariadicFunc::SplitPart => split_part(&ds),
+            VariadicFunc::RegexpMatch => regexp_match_dynamic(&ds, temp_storage),
+            VariadicFunc::HmacString => hmac_string(&ds, temp_storage),
+            VariadicFunc::HmacBytes => hmac_bytes(&ds, temp_storage),
+            VariadicFunc::DateBinTimestamp => date_bin(
+                ds[0].unwrap_interval(),
+                ds[1].unwrap_timestamp(),
+                ds[2].unwrap_timestamp(),
+            ),
+            VariadicFunc::DateBinTimestampTz => date_bin(
+                ds[0].unwrap_interval(),
+                ds[1].unwrap_timestamptz(),
+                ds[2].unwrap_timestamptz(),
+            ),
+            VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
+            VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
+            VariadicFunc::ArrayPosition => array_position(&ds),
         }
     }
 
