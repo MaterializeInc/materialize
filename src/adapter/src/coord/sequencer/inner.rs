@@ -4052,7 +4052,11 @@ impl Coordinator {
             let privileges = self
                 .catalog()
                 .get_privileges(&object_id, session.conn_id())
-                .expect("cannot grant privileges on objects without privileges");
+                // Should be unreachable since the parser will refuse to parse grant/revoke
+                // statements on objects without privileges.
+                .ok_or(AdapterError::Unsupported(
+                    "GRANTs/REVOKEs on an object type with no privileges",
+                ))?;
 
             for grantee in &grantees {
                 self.catalog().ensure_not_system_role(grantee)?;

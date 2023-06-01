@@ -647,6 +647,7 @@ message ProtoVariadicFunc {
         mz_repr.relation_and_scalar.ProtoScalarType range_create = 27;
         google.protobuf.Empty make_mz_acl_item = 28;
         google.protobuf.Empty translate = 29;
+        google.protobuf.Empty array_position = 30;
     }
 }
 
@@ -765,5 +766,7 @@ message ProtoEvalError {
         string invalid_role_id = 63;
         string invalid_privileges = 64;
         string wmr_recursion_limit_exceeded = 65;
+        google.protobuf.Empty multi_dimensional_array_search = 66;
+        string must_not_be_null = 67;
     }
 }

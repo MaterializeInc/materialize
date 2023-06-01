@@ -212,12 +212,12 @@ mod tests {
     ) {
         let mut part = PartBuilder::new(schema, &UnitSchema);
         {
-            let part_mut = part.get_mut();
+            let mut part_mut = part.get_mut();
             let mut encoder = schema.encoder(part_mut.key).unwrap();
             for datum in datums {
                 encoder.encode(datum);
-                part_mut.ts.push(1);
-                part_mut.diff.push(1);
+                part_mut.ts.push(1u64);
+                part_mut.diff.push(1i64);
             }
         }
         let part = part.finish().unwrap();

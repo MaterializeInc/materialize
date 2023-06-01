@@ -935,3 +935,98 @@ SELECT privileges::text[] FROM mz_views;
 
 query error CAST does not support casting from regproc list to text list
 SELECT (LIST[1299::regproc]::regproc list)::text list
+
+# Array position
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'sun')
+----
+1
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'sun', 1)
+----
+1
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'sun', 2)
+----
+8
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'sun', 3)
+----
+8
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'mon')
+----
+2
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'mon', 1)
+----
+2
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'mon', 2)
+----
+2
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','sun'], 'mon', 3)
+----
+NULL
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], 'mon', -3)
+----
+2
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], 'x')
+----
+NULL
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], 'x', 1)
+----
+NULL
+
+query I
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], null)
+----
+NULL
+
+query I
+SELECT array_position(null::text[], 'abc')
+----
+NULL
+
+query I
+SELECT array_position(null::text[], 'abc', null)
+----
+NULL
+
+query I
+SELECT array_position(ARRAY['sun'], null, null)
+----
+NULL
+
+query error initial position must not be null
+SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], 'mon', null)
+
+query error searching for elements in multidimensional arrays is not supported
+SELECT array_position(ARRAY[['mon']]::text[], 'mon')
+
+query error searching for elements in multidimensional arrays is not supported
+SELECT array_position(ARRAY[[null]]::text[], 'mon')
+
+query error searching for elements in multidimensional arrays is not supported
+SELECT array_position(ARRAY[['mon']]::text[], 'mon', 1)
+
+query error searching for elements in multidimensional arrays is not supported
+SELECT array_position(ARRAY[['mon']]::text[], null, 1)
+
+query error searching for elements in multidimensional arrays is not supported
+SELECT array_position(ARRAY[['mon']]::text[], 'mon', null)

@@ -17,18 +17,15 @@ use futures::{
     TryFutureExt,
 };
 use mz_ore::{cast::CastFrom, collections::CollectionExt};
-use serde_json::Value;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tokio_postgres::types::ToSql;
-use tokio_postgres::Client;
-use tracing::info;
+use tokio_postgres::{types::ToSql, Client};
 
 use crate::postgres::{ConsolidateRequest, CountedStatements};
 use crate::{
-    consolidate_kv, consolidate_updates_kv, AntichainFormatter, AppendBatch, Data, Diff, Id,
-    InternalStashError, Stash, StashCollection, StashError, Timestamp,
+    AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection,
+    StashError, Timestamp,
 };
 
 // The limit AFTER which to split an update batch (that is, we will ship an update that
@@ -212,12 +209,12 @@ impl<'a> Transaction<'a> {
         Ok(BTreeMap::from_iter(names))
     }
 
-    /// Returns the raw sealed rows as JSON, not consolidated.
+    /// Returns the raw sealed rows as serialized protobuf, not consolidated.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn peek_raw(
         &self,
         id: Id,
-    ) -> Result<impl Iterator<Item = ((Value, Value), Diff)>, StashError> {
+    ) -> Result<impl Iterator<Item = ((Vec<u8>, Vec<u8>), Diff)>, StashError> {
         let peek_timestamp = self.peek_timestamp_id(id).await?;
         Ok(self
             .iter_raw(id)
@@ -229,89 +226,6 @@ impl<'a> Transaction<'a> {
                     None
                 }
             }))
-    }
-
-    /// Fixes collections that have retractions that don't have exactly equal additions (from a JSON
-    /// perspective), but for which Rust thinks there are equivalents. Specifically, a Rust Option
-    /// is equal for a JSON object without that property (which gets deserialized into None) or a
-    /// JSON object with that property whose value is JSON null. This function will notice the
-    /// attempted retraction and "consolidate" it with the thing it was trying to retract.
-    ///
-    /// Implement by fetching the raw rows (unconsolidated) as untype JSON, making a copy of those
-    /// into a Rust struct, consolidating the Rust structs, subtracting those from the original
-    /// untyped JSON rows. The leftover rows are the failed retraction attempts which we need to
-    /// remove from on disk.
-    ///
-    /// Returns whether rows were removed.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn collection_fix_unconsolidated_rows<K, V>(
-        &self,
-        collection: StashCollection<K, V>,
-    ) -> Result<bool, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let raw_rows = self.peek_raw(collection.id).await?.collect::<Vec<_>>();
-        if raw_rows.iter().all(|((_k, _v), diff)| *diff == 1) {
-            // No retractions to even worry about.
-            return Ok(false);
-        }
-
-        // Generate the set of consolidated rows AFTER converting to a non-JSON value (i.e., a real Rust
-        // struct). This is required because it WILL consolidate things that have different JSON values, but
-        // equal Rust values (None Options).
-        let consolidated = consolidate_kv::<K, V, _>(&raw_rows);
-        // Convert to stringified-JSON (because we need an Ord impl) but with negative diffs for
-        // removal from raw_rows.
-        let consolidated = consolidated.map(|((k, v), diff)| {
-            (
-                (
-                    serde_json::to_string(&serde_json::to_value(k).expect("must serialize"))
-                        .expect("must string"),
-                    serde_json::to_string(&serde_json::to_value(v).expect("must serialize"))
-                        .expect("must string"),
-                ),
-                -diff,
-            )
-        });
-        // Convert to a comparable data structure so we can consolidate.
-        let mut to_retract = raw_rows
-            .iter()
-            .map(|((k, v), diff)| {
-                (
-                    (
-                        serde_json::to_string(k).expect("must string"),
-                        serde_json::to_string(v).expect("must string"),
-                    ),
-                    *diff,
-                )
-            })
-            .chain(consolidated)
-            .collect::<Vec<_>>();
-        // Consolidate away the expected rows. The rows leftover are the superfluous ones that we
-        // need to remove from on disk.
-        differential_dataflow::consolidation::consolidate(&mut to_retract);
-        if to_retract.is_empty() {
-            return Ok(false);
-        }
-        let to_retract = to_retract.into_iter().map(|((k, v), diff)| {
-            let k: Value = serde_json::from_str(&k).expect("must deserialize");
-            let v: Value = serde_json::from_str(&v).expect("must deserialize");
-            ((k, v), diff)
-        });
-        let mut batch = collection.make_batch_tx(self).await?;
-        for ((key, value), diff) in to_retract {
-            info!(
-                "fixing unmatched but consolidated entry from collection {}: {:?}",
-                collection.id,
-                ((&key, &value), diff)
-            );
-            batch.entries.push(((key, value), batch.timestamp, -diff));
-        }
-        // Remove the on-disk data.
-        self.append(vec![batch]).await?;
-        Ok(true)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -389,8 +303,20 @@ impl<'a> Transaction<'a> {
         K: Data,
         V: Data,
     {
-        let rows = self.iter_raw(collection.id).await?;
-        let rows = consolidate_updates_kv(rows).collect();
+        let mut rows = self.iter_raw(collection.id).await?.collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut rows);
+
+        // Deserialize the rows into the actual keys and values.
+        let rows = rows
+            .into_iter()
+            .map(|((key, val), ts, diff)| {
+                let key = K::decode(key.as_slice()).expect("serialization to roundtrip");
+                let val = V::decode(val.as_slice()).expect("serialization to roundtrip");
+
+                ((key, val), ts, diff)
+            })
+            .collect();
+
         Ok(rows)
     }
 
@@ -399,7 +325,7 @@ impl<'a> Transaction<'a> {
     pub async fn iter_raw(
         &self,
         id: Id,
-    ) -> Result<impl Iterator<Item = ((Value, Value), Timestamp, Diff)>, StashError> {
+    ) -> Result<impl Iterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>, StashError> {
         let since = match self.since(id).await?.into_option() {
             Some(since) => since,
             None => {
@@ -414,8 +340,8 @@ impl<'a> Transaction<'a> {
             .await?
             .into_iter()
             .map(move |row| {
-                let key: Value = row.get("key");
-                let value: Value = row.get("value");
+                let key = row.get("key");
+                let value = row.get("value");
                 let time = row.get("time");
                 let diff: Diff = row.get("diff");
                 ((key, value), cmp::max(time, since), diff)
@@ -434,8 +360,7 @@ impl<'a> Transaction<'a> {
         K: Data,
         V: Data,
     {
-        let key = serde_json::to_vec(key).expect("must serialize");
-        let key: Value = serde_json::from_slice(&key)?;
+        let key = key.encode_to_vec();
         let (since, rows) = future::try_join(
             self.since(collection.id),
             self.client
@@ -454,8 +379,8 @@ impl<'a> Transaction<'a> {
         let mut rows = rows
             .into_iter()
             .map(|row| {
-                let value: Value = row.try_get("value")?;
-                let value: V = serde_json::from_value(value)?;
+                let value: Vec<u8> = row.try_get("value")?;
+                let value = V::decode(value.as_slice())?;
                 let time = row.try_get("time")?;
                 let diff = row.try_get("diff")?;
                 Ok::<_, StashError>((value, cmp::max(time, since), diff))
@@ -545,7 +470,7 @@ impl<'a> Transaction<'a> {
         collection: StashCollection<K, V>,
     ) -> Result<BTreeMap<K, V>, StashError>
     where
-        K: Data + std::hash::Hash,
+        K: Data,
         V: Data,
     {
         let rows = self.peek(collection).await?;
@@ -676,14 +601,28 @@ impl<'a> Transaction<'a> {
 
     /// Like update, but starts a savepoint.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn update_savepoint(
+    pub async fn update_savepoint<K, V>(
         &self,
         collection_id: Id,
-        entries: &[((Value, Value), Timestamp, Diff)],
+        entries: &[((K, V), Timestamp, Diff)],
         upper: Option<Antichain<Timestamp>>,
-    ) -> Result<(), StashError> {
-        self.in_savepoint(|| Box::pin(async { self.update(collection_id, entries, upper).await }))
-            .await
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
+        let entries: Vec<_> = entries
+            .into_iter()
+            .map(|((key, val), time, diff)| {
+                let key = key.encode_to_vec();
+                let val = val.encode_to_vec();
+                ((key, val), *time, *diff)
+            })
+            .collect();
+        self.in_savepoint(|| {
+            Box::pin(async { self.update(collection_id, &entries[..], upper).await })
+        })
+        .await
     }
 
     /// Directly add k, v, ts, diff tuples to a collection.`upper` can be `Some`
@@ -697,7 +636,7 @@ impl<'a> Transaction<'a> {
     pub async fn update(
         &self,
         collection_id: Id,
-        entries: &[((Value, Value), Timestamp, Diff)],
+        entries: &[((Vec<u8>, Vec<u8>), Timestamp, Diff)],
         upper: Option<Antichain<Timestamp>>,
     ) -> Result<(), StashError> {
         {
@@ -729,36 +668,6 @@ impl<'a> Transaction<'a> {
             Ok(upper)
         };
 
-        /// Returns the estimated number of bytes v would take when encoded using ToSql. This is
-        /// meant to be a fast estimate that accounts for things that could be possibly large, and
-        /// isn't too worried about missing various single bytes.
-        fn estimate_json_value_size(v: &Value) -> usize {
-            match v {
-                Value::Null => 4,    // "null"
-                Value::Bool(_) => 5, // "false"
-                Value::Number(_) => 8,
-                Value::String(v) => v.len() + 2, // string bytes + double quotes; will be incorrect for strings needing escaping
-                Value::Array(v) => {
-                    let mut s = 2; // "[]"
-                    for element in v {
-                        s += estimate_json_value_size(element);
-                        s += 2; // ", "
-                    }
-                    s
-                }
-                Value::Object(v) => {
-                    let mut s = 2; // "{}"
-                    for (key, val) in v {
-                        s += key.len() + 2;
-                        s += 2; // ": "
-                        s += estimate_json_value_size(val);
-                        s += 2; // ", "
-                    }
-                    s
-                }
-            }
-        }
-
         let insert_fut = async {
             let mut entries = entries.iter();
             loop {
@@ -770,8 +679,8 @@ impl<'a> Transaction<'a> {
                 // Accumulate into a batch until the size limit is exceeded or there are no more
                 // entries.
                 while let Some(((key, value), time, diff)) = entries.next() {
-                    estimated_json_size += estimate_json_value_size(key);
-                    estimated_json_size += estimate_json_value_size(value);
+                    estimated_json_size += key.len();
+                    estimated_json_size += value.len();
                     args.push(key);
                     args.push(value);
                     args.push(time);

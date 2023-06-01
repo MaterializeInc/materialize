@@ -3462,6 +3462,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
+ "mz-proto",
+ "mz-stash",
+ "proptest",
+ "proptest-derive",
  "serde",
  "serde_json",
  "serde_plain",
@@ -4767,6 +4771,7 @@ dependencies = [
  "mz-rocksdb",
  "mz-secrets",
  "mz-sql-parser",
+ "mz-stash",
  "mz-storage-client",
  "once_cell",
  "paste",
@@ -4887,6 +4892,8 @@ dependencies = [
  "md-5",
  "mz-ore",
  "mz-postgres-util",
+ "mz-proto",
+ "mz-repr",
  "once_cell",
  "postgres-openssl",
  "prometheus",
@@ -4921,6 +4928,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "once_cell",
+ "prost",
  "serde_json",
  "tokio",
  "tokio-postgres",
@@ -7497,7 +7505,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7515,12 +7523,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7536,7 +7544,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
 dependencies = [
  "columnation",
  "serde",
@@ -7545,7 +7553,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
 
 [[package]]
 name = "tiny-keccak"

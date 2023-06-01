@@ -8,12 +8,11 @@
 # by the Apache License, Version 2.0.
 from typing import List
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
 )
-from materialize.output_consistency.input_data.params.boolean_operation_param import (
-    BooleanOperationParam,
+from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
+    BooleanReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.validators.generic_args_validator import (
     DataTypeCategoryMatchesArgsValidator,
@@ -29,16 +28,7 @@ BOOLEAN_OPERATION_TYPES.append(
     DbOperation(
         "$ = $",
         [AnyOperationParam(), AnyOperationParam()],
-        DataTypeCategory.BOOLEAN,
+        BooleanReturnTypeSpec(),
         {DataTypeCategoryMatchesArgsValidator(0, 1)},
-    )
-)
-
-BOOLEAN_OPERATION_TYPES.append(
-    DbOperation(
-        "CASE WHEN $ THEN $ ELSE $ END",
-        [BooleanOperationParam(), AnyOperationParam(), AnyOperationParam()],
-        DataTypeCategory.DYNAMIC,
-        {DataTypeCategoryMatchesArgsValidator(1, 2)},
     )
 )

@@ -88,10 +88,13 @@
 //! data structures unknown to the reader.
 
 use mz_ore::now::EpochMillis;
+use mz_proto::{IntoRustIfSome, ProtoType};
+use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 /// New version variants should be added if fields need to be added, changed, or removed.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub enum VersionedEvent {
     V1(EventV1),
 }
@@ -139,7 +142,21 @@ impl VersionedEvent {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_key::Event> for VersionedEvent {
+    fn into_proto(&self) -> proto::audit_log_key::Event {
+        match self {
+            VersionedEvent::V1(event) => proto::audit_log_key::Event::V1(event.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_key::Event) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::audit_log_key::Event::V1(event) => Ok(VersionedEvent::V1(event.into_rust()?)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 #[serde(rename_all = "kebab-case")]
 pub enum EventType {
     Create,
@@ -161,9 +178,36 @@ impl EventType {
     }
 }
 
+impl RustType<proto::audit_log_event_v1::EventType> for EventType {
+    fn into_proto(&self) -> proto::audit_log_event_v1::EventType {
+        match self {
+            EventType::Create => proto::audit_log_event_v1::EventType::Create,
+            EventType::Drop => proto::audit_log_event_v1::EventType::Drop,
+            EventType::Alter => proto::audit_log_event_v1::EventType::Alter,
+            EventType::Grant => proto::audit_log_event_v1::EventType::Grant,
+            EventType::Revoke => proto::audit_log_event_v1::EventType::Revoke,
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::EventType,
+    ) -> Result<Self, mz_stash::objects::TryFromProtoError> {
+        match proto {
+            proto::audit_log_event_v1::EventType::Create => Ok(EventType::Create),
+            proto::audit_log_event_v1::EventType::Drop => Ok(EventType::Drop),
+            proto::audit_log_event_v1::EventType::Alter => Ok(EventType::Alter),
+            proto::audit_log_event_v1::EventType::Grant => Ok(EventType::Grant),
+            proto::audit_log_event_v1::EventType::Revoke => Ok(EventType::Revoke),
+            proto::audit_log_event_v1::EventType::Unknown => Err(
+                TryFromProtoError::unknown_enum_variant("EventType::Unknown"),
+            ),
+        }
+    }
+}
+
 serde_plain::derive_display_from_serialize!(EventType);
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 #[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
     Cluster,
@@ -205,9 +249,56 @@ impl ObjectType {
     }
 }
 
+impl RustType<proto::audit_log_event_v1::ObjectType> for ObjectType {
+    fn into_proto(&self) -> proto::audit_log_event_v1::ObjectType {
+        match self {
+            ObjectType::Cluster => proto::audit_log_event_v1::ObjectType::Cluster,
+            ObjectType::ClusterReplica => proto::audit_log_event_v1::ObjectType::ClusterReplica,
+            ObjectType::Connection => proto::audit_log_event_v1::ObjectType::Connection,
+            ObjectType::Database => proto::audit_log_event_v1::ObjectType::Database,
+            ObjectType::Func => proto::audit_log_event_v1::ObjectType::Func,
+            ObjectType::Index => proto::audit_log_event_v1::ObjectType::Index,
+            ObjectType::MaterializedView => proto::audit_log_event_v1::ObjectType::MaterializedView,
+            ObjectType::Role => proto::audit_log_event_v1::ObjectType::Role,
+            ObjectType::Secret => proto::audit_log_event_v1::ObjectType::Secret,
+            ObjectType::Schema => proto::audit_log_event_v1::ObjectType::Schema,
+            ObjectType::Sink => proto::audit_log_event_v1::ObjectType::Sink,
+            ObjectType::Source => proto::audit_log_event_v1::ObjectType::Source,
+            ObjectType::Table => proto::audit_log_event_v1::ObjectType::Table,
+            ObjectType::Type => proto::audit_log_event_v1::ObjectType::Type,
+            ObjectType::View => proto::audit_log_event_v1::ObjectType::View,
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::ObjectType) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::audit_log_event_v1::ObjectType::Cluster => Ok(ObjectType::Cluster),
+            proto::audit_log_event_v1::ObjectType::ClusterReplica => Ok(ObjectType::ClusterReplica),
+            proto::audit_log_event_v1::ObjectType::Connection => Ok(ObjectType::Connection),
+            proto::audit_log_event_v1::ObjectType::Database => Ok(ObjectType::Database),
+            proto::audit_log_event_v1::ObjectType::Func => Ok(ObjectType::Func),
+            proto::audit_log_event_v1::ObjectType::Index => Ok(ObjectType::Index),
+            proto::audit_log_event_v1::ObjectType::MaterializedView => {
+                Ok(ObjectType::MaterializedView)
+            }
+            proto::audit_log_event_v1::ObjectType::Role => Ok(ObjectType::Role),
+            proto::audit_log_event_v1::ObjectType::Secret => Ok(ObjectType::Secret),
+            proto::audit_log_event_v1::ObjectType::Schema => Ok(ObjectType::Schema),
+            proto::audit_log_event_v1::ObjectType::Sink => Ok(ObjectType::Sink),
+            proto::audit_log_event_v1::ObjectType::Source => Ok(ObjectType::Source),
+            proto::audit_log_event_v1::ObjectType::Table => Ok(ObjectType::Table),
+            proto::audit_log_event_v1::ObjectType::Type => Ok(ObjectType::Type),
+            proto::audit_log_event_v1::ObjectType::View => Ok(ObjectType::View),
+            proto::audit_log_event_v1::ObjectType::Unknown => Err(
+                TryFromProtoError::unknown_enum_variant("ObjectType::Unknown"),
+            ),
+        }
+    }
+}
+
 serde_plain::derive_display_from_serialize!(ObjectType);
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub enum EventDetails {
     #[serde(rename = "CreateComputeReplicaV1")] // historical name
     CreateClusterReplicaV1(CreateClusterReplicaV1),
@@ -227,34 +318,106 @@ pub enum EventDetails {
     SchemaV2(SchemaV2),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct IdFullNameV1 {
     pub id: String,
     #[serde(flatten)]
     pub name: FullNameV1,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::IdFullNameV1> for IdFullNameV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::IdFullNameV1 {
+        proto::audit_log_event_v1::IdFullNameV1 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::IdFullNameV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(IdFullNameV1 {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("IdFullNameV1::name")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct FullNameV1 {
     pub database: String,
     pub schema: String,
     pub item: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::FullNameV1> for FullNameV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::FullNameV1 {
+        proto::audit_log_event_v1::FullNameV1 {
+            database: self.database.to_string(),
+            schema: self.schema.to_string(),
+            item: self.item.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::FullNameV1) -> Result<Self, TryFromProtoError> {
+        Ok(FullNameV1 {
+            database: proto.database,
+            schema: proto.schema,
+            item: proto.item,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct IdNameV1 {
     pub id: String,
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::IdNameV1> for IdNameV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::IdNameV1 {
+        proto::audit_log_event_v1::IdNameV1 {
+            id: self.id.to_string(),
+            name: self.name.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::IdNameV1) -> Result<Self, TryFromProtoError> {
+        Ok(IdNameV1 {
+            id: proto.id,
+            name: proto.name,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct RenameItemV1 {
     pub id: String,
     pub old_name: FullNameV1,
     pub new_name: FullNameV1,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::RenameItemV1> for RenameItemV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameItemV1 {
+        proto::audit_log_event_v1::RenameItemV1 {
+            id: self.id.to_string(),
+            old_name: Some(self.old_name.into_proto()),
+            new_name: Some(self.new_name.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameItemV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameItemV1 {
+            id: proto.id,
+            old_name: proto.old_name.into_rust_if_some("RenameItemV1::old_name")?,
+            new_name: proto.new_name.into_rust_if_some("RenameItemV1::new_name")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct DropClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -264,7 +427,31 @@ pub struct DropClusterReplicaV1 {
     pub replica_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::DropClusterReplicaV1> for DropClusterReplicaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::DropClusterReplicaV1 {
+        proto::audit_log_event_v1::DropClusterReplicaV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::DropClusterReplicaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(DropClusterReplicaV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_name: proto.replica_name,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct CreateClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -275,7 +462,33 @@ pub struct CreateClusterReplicaV1 {
     pub logical_size: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClusterReplicaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV1 {
+        proto::audit_log_event_v1::CreateClusterReplicaV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluser_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            logical_size: self.logical_size.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateClusterReplicaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateClusterReplicaV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluser_name,
+            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_name: proto.replica_name,
+            logical_size: proto.logical_size,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct CreateSourceSinkV1 {
     pub id: String,
     #[serde(flatten)]
@@ -283,7 +496,29 @@ pub struct CreateSourceSinkV1 {
     pub size: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV1> for CreateSourceSinkV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV1 {
+        proto::audit_log_event_v1::CreateSourceSinkV1 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+            size: self.size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV1 {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("CreateSourceSinkV1::name")?,
+            size: proto.size.map(|s| s.inner),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct CreateSourceSinkV2 {
     pub id: String,
     #[serde(flatten)]
@@ -293,7 +528,31 @@ pub struct CreateSourceSinkV2 {
     pub external_type: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV2> for CreateSourceSinkV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV2 {
+        proto::audit_log_event_v1::CreateSourceSinkV2 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+            size: self.size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+            external_type: self.external_type.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV2 {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("CreateSourceSinkV2::name")?,
+            size: proto.size.map(|s| s.inner),
+            external_type: proto.external_type,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct AlterSourceSinkV1 {
     pub id: String,
     #[serde(flatten)]
@@ -302,14 +561,60 @@ pub struct AlterSourceSinkV1 {
     pub new_size: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::AlterSourceSinkV1> for AlterSourceSinkV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterSourceSinkV1 {
+        proto::audit_log_event_v1::AlterSourceSinkV1 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+            old_size: self.old_size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+            new_size: self.new_size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterSourceSinkV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterSourceSinkV1 {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("AlterSourceSinkV1::name")?,
+            old_size: proto.old_size.map(|s| s.inner),
+            new_size: proto.new_size.map(|s| s.inner),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct GrantRoleV1 {
     pub role_id: String,
     pub member_id: String,
     pub grantor_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::GrantRoleV1> for GrantRoleV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::GrantRoleV1 {
+        proto::audit_log_event_v1::GrantRoleV1 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::GrantRoleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(GrantRoleV1 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+            grantor_id: proto.grantor_id,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct GrantRoleV2 {
     pub role_id: String,
     pub member_id: String,
@@ -317,13 +622,53 @@ pub struct GrantRoleV2 {
     pub executed_by: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::GrantRoleV2> for GrantRoleV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::GrantRoleV2 {
+        proto::audit_log_event_v1::GrantRoleV2 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+            executed_by: self.executed_by.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::GrantRoleV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(GrantRoleV2 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+            grantor_id: proto.grantor_id,
+            executed_by: proto.executed_by,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct RevokeRoleV1 {
     pub role_id: String,
     pub member_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::RevokeRoleV1> for RevokeRoleV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RevokeRoleV1 {
+        proto::audit_log_event_v1::RevokeRoleV1 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RevokeRoleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RevokeRoleV1 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct RevokeRoleV2 {
     pub role_id: String,
     pub member_id: String,
@@ -331,18 +676,78 @@ pub struct RevokeRoleV2 {
     pub executed_by: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::RevokeRoleV2> for RevokeRoleV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RevokeRoleV2 {
+        proto::audit_log_event_v1::RevokeRoleV2 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+            executed_by: self.executed_by.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RevokeRoleV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RevokeRoleV2 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+            grantor_id: proto.grantor_id,
+            executed_by: proto.executed_by,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SchemaV1 {
     pub id: String,
     pub name: String,
     pub database_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::SchemaV1> for SchemaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchemaV1 {
+        proto::audit_log_event_v1::SchemaV1 {
+            id: self.id.to_string(),
+            name: self.name.to_string(),
+            database_name: self.database_name.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::SchemaV1) -> Result<Self, TryFromProtoError> {
+        Ok(SchemaV1 {
+            id: proto.id,
+            name: proto.name,
+            database_name: proto.database_name,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SchemaV2 {
     pub id: String,
     pub name: String,
     pub database_name: Option<String>,
+}
+
+impl RustType<proto::audit_log_event_v1::SchemaV2> for SchemaV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchemaV2 {
+        proto::audit_log_event_v1::SchemaV2 {
+            id: self.id.to_string(),
+            name: self.name.to_string(),
+            database_name: self.database_name.as_ref().map(|d| proto::StringWrapper {
+                inner: d.to_string(),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::SchemaV2) -> Result<Self, TryFromProtoError> {
+        Ok(SchemaV2 {
+            id: proto.id,
+            name: proto.name,
+            database_name: proto.database_name.map(|d| d.inner),
+        })
+    }
 }
 
 impl EventDetails {
@@ -370,7 +775,63 @@ impl EventDetails {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
+    fn into_proto(&self) -> proto::audit_log_event_v1::Details {
+        use proto::audit_log_event_v1::Details::*;
+
+        match self {
+            EventDetails::CreateClusterReplicaV1(details) => {
+                CreateClusterReplicaV1(details.into_proto())
+            }
+            EventDetails::DropClusterReplicaV1(details) => {
+                DropClusterReplicaV1(details.into_proto())
+            }
+            EventDetails::CreateSourceSinkV1(details) => CreateSourceSinkV1(details.into_proto()),
+            EventDetails::CreateSourceSinkV2(details) => CreateSourceSinkV2(details.into_proto()),
+            EventDetails::AlterSourceSinkV1(details) => AlterSourceSinkV1(details.into_proto()),
+            EventDetails::GrantRoleV1(details) => GrantRoleV1(details.into_proto()),
+            EventDetails::GrantRoleV2(details) => GrantRoleV2(details.into_proto()),
+            EventDetails::RevokeRoleV1(details) => RevokeRoleV1(details.into_proto()),
+            EventDetails::RevokeRoleV2(details) => RevokeRoleV2(details.into_proto()),
+            EventDetails::IdFullNameV1(details) => IdFullNameV1(details.into_proto()),
+            EventDetails::RenameItemV1(details) => RenameItemV1(details.into_proto()),
+            EventDetails::IdNameV1(details) => IdNameV1(details.into_proto()),
+            EventDetails::SchemaV1(details) => SchemaV1(details.into_proto()),
+            EventDetails::SchemaV2(details) => SchemaV2(details.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::Details) -> Result<Self, TryFromProtoError> {
+        use proto::audit_log_event_v1::Details::*;
+
+        match proto {
+            CreateClusterReplicaV1(details) => {
+                Ok(EventDetails::CreateClusterReplicaV1(details.into_rust()?))
+            }
+            DropClusterReplicaV1(details) => {
+                Ok(EventDetails::DropClusterReplicaV1(details.into_rust()?))
+            }
+            CreateSourceSinkV1(details) => {
+                Ok(EventDetails::CreateSourceSinkV1(details.into_rust()?))
+            }
+            CreateSourceSinkV2(details) => {
+                Ok(EventDetails::CreateSourceSinkV2(details.into_rust()?))
+            }
+            AlterSourceSinkV1(details) => Ok(EventDetails::AlterSourceSinkV1(details.into_rust()?)),
+            GrantRoleV1(details) => Ok(EventDetails::GrantRoleV1(details.into_rust()?)),
+            GrantRoleV2(details) => Ok(EventDetails::GrantRoleV2(details.into_rust()?)),
+            RevokeRoleV1(details) => Ok(EventDetails::RevokeRoleV1(details.into_rust()?)),
+            RevokeRoleV2(details) => Ok(EventDetails::RevokeRoleV2(details.into_rust()?)),
+            IdFullNameV1(details) => Ok(EventDetails::IdFullNameV1(details.into_rust()?)),
+            RenameItemV1(details) => Ok(EventDetails::RenameItemV1(details.into_rust()?)),
+            IdNameV1(details) => Ok(EventDetails::IdNameV1(details.into_rust()?)),
+            SchemaV1(details) => Ok(EventDetails::SchemaV1(details.into_rust()?)),
+            SchemaV2(details) => Ok(EventDetails::SchemaV2(details.into_rust()?)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct EventV1 {
     pub id: u64,
     pub event_type: EventType,
@@ -400,50 +861,43 @@ impl EventV1 {
     }
 }
 
-// Test all versions of events. This test hard codes bytes so that
-// programmers are not able to change data structures here without this test
-// failing. Instead of changing data structures, add new variants.
-#[test]
-fn test_audit_log() -> Result<(), anyhow::Error> {
-    let cases: Vec<(VersionedEvent, &'static str)> = vec![(
-        VersionedEvent::V1(EventV1::new(
-            2,
-            EventType::Drop,
-            ObjectType::ClusterReplica,
-            EventDetails::IdNameV1(IdNameV1 {
-                id: "u1".to_string(),
-                name: "name".into(),
+impl RustType<proto::AuditLogEventV1> for EventV1 {
+    fn into_proto(&self) -> proto::AuditLogEventV1 {
+        proto::AuditLogEventV1 {
+            id: self.id,
+            event_type: self.event_type.into_proto().into(),
+            object_type: self.object_type.into_proto().into(),
+            user: self.user.as_ref().map(|u| proto::StringWrapper {
+                inner: u.to_string(),
             }),
-            None,
-            2,
-        )),
-        r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","details":{"IdNameV1":{"id":"u1","name":"name"}},"user":null,"occurred_at":2}}"#,
-    )];
-
-    for (event, expected_bytes) in cases {
-        let event_bytes = serde_json::to_vec(&event).unwrap();
-        assert_eq!(
-            event_bytes,
-            expected_bytes.as_bytes(),
-            "expected bytes {}, got {}",
-            expected_bytes,
-            std::str::from_utf8(&event_bytes).unwrap(),
-        );
+            occurred_at: Some(proto::EpochMillis {
+                millis: self.occurred_at,
+            }),
+            details: Some(self.details.into_proto()),
+        }
     }
 
-    Ok(())
+    fn from_proto(proto: proto::AuditLogEventV1) -> Result<Self, TryFromProtoError> {
+        let event_type = proto::audit_log_event_v1::EventType::from_i32(proto.event_type)
+            .ok_or_else(|| TryFromProtoError::unknown_enum_variant("EventType"))?;
+        let object_type = proto::audit_log_event_v1::ObjectType::from_i32(proto.object_type)
+            .ok_or_else(|| TryFromProtoError::unknown_enum_variant("ObjectType"))?;
+        Ok(EventV1 {
+            id: proto.id,
+            event_type: event_type.into_rust()?,
+            object_type: object_type.into_rust()?,
+            details: proto
+                .details
+                .into_rust_if_some("AuditLogEventV1::details")?,
+            user: proto.user.map(|u| u.inner),
+            occurred_at: proto
+                .occurred_at
+                .into_rust_if_some("AuditLogEventV1::occurred_at")?,
+        })
+    }
 }
 
-/// Describes the environment's storage usage at a point in time.
-///
-/// This type is persisted in the catalog across restarts, so any updates to the
-/// schema will require a new version.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub enum VersionedStorageUsage {
-    V1(StorageUsageV1),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct StorageUsageV1 {
     pub id: u64,
     pub shard_id: Option<String>,
@@ -465,6 +919,43 @@ impl StorageUsageV1 {
             collection_timestamp,
         }
     }
+}
+
+impl RustType<proto::storage_usage_key::StorageUsageV1> for StorageUsageV1 {
+    fn into_proto(&self) -> proto::storage_usage_key::StorageUsageV1 {
+        proto::storage_usage_key::StorageUsageV1 {
+            id: self.id,
+            shard_id: self.shard_id.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+            size_bytes: self.size_bytes,
+            collection_timestamp: Some(proto::EpochMillis {
+                millis: self.collection_timestamp,
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::storage_usage_key::StorageUsageV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(StorageUsageV1 {
+            id: proto.id,
+            shard_id: proto.shard_id.map(|s| s.inner),
+            size_bytes: proto.size_bytes,
+            collection_timestamp: proto
+                .collection_timestamp
+                .into_rust_if_some("StorageUsageKey::collection_timestamp")?,
+        })
+    }
+}
+
+/// Describes the environment's storage usage at a point in time.
+///
+/// This type is persisted in the catalog across restarts, so any updates to the
+/// schema will require a new version.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub enum VersionedStorageUsage {
+    V1(StorageUsageV1),
 }
 
 impl VersionedStorageUsage {
@@ -501,6 +992,88 @@ impl VersionedStorageUsage {
                 collection_timestamp,
                 ..
             }) => *collection_timestamp,
+        }
+    }
+}
+
+impl RustType<proto::storage_usage_key::Usage> for VersionedStorageUsage {
+    fn into_proto(&self) -> proto::storage_usage_key::Usage {
+        match self {
+            VersionedStorageUsage::V1(usage) => {
+                proto::storage_usage_key::Usage::V1(usage.into_proto())
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::storage_usage_key::Usage) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::storage_usage_key::Usage::V1(usage) => {
+                Ok(VersionedStorageUsage::V1(usage.into_rust()?))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        EventDetails, EventType, EventV1, IdNameV1, ObjectType, VersionedEvent,
+        VersionedStorageUsage,
+    };
+    use mz_stash::objects::RustType;
+    use proptest::prelude::*;
+
+    // Test all versions of events. This test hard codes bytes so that
+    // programmers are not able to change data structures here without this test
+    // failing. Instead of changing data structures, add new variants.
+    #[test]
+    fn test_audit_log() -> Result<(), anyhow::Error> {
+        let cases: Vec<(VersionedEvent, &'static str)> = vec![(
+            VersionedEvent::V1(EventV1::new(
+                2,
+                EventType::Drop,
+                ObjectType::ClusterReplica,
+                EventDetails::IdNameV1(IdNameV1 {
+                    id: "u1".to_string(),
+                    name: "name".into(),
+                }),
+                None,
+                2,
+            )),
+            r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","details":{"IdNameV1":{"id":"u1","name":"name"}},"user":null,"occurred_at":2}}"#,
+        )];
+
+        for (event, expected_bytes) in cases {
+            let event_bytes = serde_json::to_vec(&event).unwrap();
+            assert_eq!(
+                event_bytes,
+                expected_bytes.as_bytes(),
+                "expected bytes {}, got {}",
+                expected_bytes,
+                std::str::from_utf8(&event_bytes).unwrap(),
+            );
+        }
+
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_audit_log_roundtrips(event: VersionedEvent) {
+            let proto = event.into_proto();
+            let roundtrip = VersionedEvent::from_proto(proto).unwrap();
+
+            prop_assert_eq!(event, roundtrip);
+        }
+
+        #[test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_storage_usage_roundtrips(usage: VersionedStorageUsage) {
+            let proto = usage.into_proto();
+            let roundtrip = VersionedStorageUsage::from_proto(proto).unwrap();
+
+            prop_assert_eq!(usage, roundtrip);
         }
     }
 }

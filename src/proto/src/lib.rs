@@ -126,6 +126,8 @@ pub enum TryFromProtoError {
     GlobError(globset::Error),
     /// Failed to parse a serialized URL
     InvalidUrl(url::ParseError),
+    /// Failed to parse bitflags.
+    InvalidBitFlags(String),
 }
 
 impl TryFromProtoError {
@@ -214,6 +216,7 @@ impl std::fmt::Display for TryFromProtoError {
             InvalidUri(error) => error.fmt(f),
             GlobError(error) => error.fmt(f),
             InvalidUrl(error) => error.fmt(f),
+            InvalidBitFlags(error) => error.fmt(f),
         }
     }
 }
@@ -245,6 +248,7 @@ impl std::error::Error for TryFromProtoError {
             InvalidUri(error) => Some(error),
             GlobError(error) => Some(error),
             InvalidUrl(error) => Some(error),
+            InvalidBitFlags(_) => None,
         }
     }
 }
@@ -404,6 +408,23 @@ where
 
     fn from_proto(proto: Box<P>) -> Result<Self, TryFromProtoError> {
         (*proto).into_rust().map(Box::new)
+    }
+}
+
+impl<R1, R2, P1, P2> RustType<(P1, P2)> for (R1, R2)
+where
+    R1: RustType<P1>,
+    R2: RustType<P2>,
+{
+    fn into_proto(&self) -> (P1, P2) {
+        (self.0.into_proto(), self.1.into_proto())
+    }
+
+    fn from_proto(proto: (P1, P2)) -> Result<Self, TryFromProtoError> {
+        let first = proto.0.into_rust()?;
+        let second = proto.1.into_rust()?;
+
+        Ok((first, second))
     }
 }
 

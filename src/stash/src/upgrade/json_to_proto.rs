@@ -13,7 +13,6 @@ use std::num::NonZeroI64;
 use std::time::Duration;
 
 use anyhow::Context;
-use bytes::Bytes;
 use fail::fail_point;
 use futures::Future;
 use mz_ore::cast::CastFrom;
@@ -350,7 +349,7 @@ async fn migrate_collections(
                 .context("migrating storage-export-metadata-u64")?;
             }
             COLLECTION_STORAGE_SHARD_FINALIZATION => {
-                migrate_collection::<ShardId, (), objects_v15::ShardId, ()>(client, id, epoch)
+                migrate_collection::<ShardId, (), String, ()>(client, id, epoch)
                     .await
                     .context("migrating storage-shards-to-finalize")?;
             }
@@ -1363,8 +1362,10 @@ impl From<MzAclItem> for objects_v15::MzAclItem {
 impl From<DurableCollectionMetadata> for objects_v15::DurableCollectionMetadata {
     fn from(json: DurableCollectionMetadata) -> Self {
         objects_v15::DurableCollectionMetadata {
-            remap_shard: json.remap_shard.map(objects_v15::ShardId::from),
-            data_shard: Some(json.data_shard.into()),
+            remap_shard: json.remap_shard.map(|id| objects_v15::StringWrapper {
+                inner: id.to_string(),
+            }),
+            data_shard: json.data_shard.to_string(),
         }
     }
 }
@@ -1382,14 +1383,6 @@ impl From<SinkAsOf> for objects_v15::SinkAsOf {
         objects_v15::SinkAsOf {
             frontier: Some(json.frontier.into()),
             strict: json.strict,
-        }
-    }
-}
-
-impl From<ShardId> for objects_v15::ShardId {
-    fn from(json: ShardId) -> Self {
-        objects_v15::ShardId {
-            id: Bytes::from(json.0.to_vec()),
         }
     }
 }
@@ -1423,7 +1416,6 @@ impl From<String> for objects_v15::StringWrapper {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::metrics::MetricsRegistry;
     use proptest::arbitrary::any;
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
@@ -1431,23 +1423,20 @@ mod tests {
     use tokio_postgres::Config;
 
     use crate::upgrade::json_to_proto::test_helpers::{
-        insert_collections, insert_stash, ArbitraryStash, Collection,
+        initialize_json_stash, insert_collections, insert_stash, ArbitraryStash, Collection,
     };
     use crate::upgrade::legacy_types::{
         ConfigValue, SettingKey, SettingValue, StorageUsageKey, StorageUsageV1,
         VersionedStorageUsage,
     };
-    use crate::StashFactory;
 
     use super::{migrate_json_to_proto, objects_v15};
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoketest_migrate_json_to_proto() {
-        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
-        let factory = StashFactory::new(&MetricsRegistry::new());
-
         // Connect to Cockroach.
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
         let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
         let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
             .await
@@ -1490,12 +1479,7 @@ mod tests {
             .unwrap();
 
         // Initialize the Stash.
-        let stash = factory
-            .open(connstr.to_string(), Some(schema), tls.clone())
-            .await
-            .unwrap();
-        let epoch = stash.epoch().unwrap();
-
+        let epoch = initialize_json_stash(&client, schema).await;
         insert_collections(&client, &arbitrary_stash).await;
         insert_stash(&client, &arbitrary_stash).await;
 
@@ -1527,10 +1511,9 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_unrecognized_collection() {
         mz_ore::test::init_logging();
-        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
-        let factory = StashFactory::new(&MetricsRegistry::new());
 
         // Connect to Cockroach.
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
         let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
         let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
             .await
@@ -1556,11 +1539,7 @@ mod tests {
             .unwrap();
 
         // Initialize the Stash.
-        let stash = factory
-            .open(connstr.to_string(), Some(schema), tls.clone())
-            .await
-            .unwrap();
-        let epoch = stash.epoch().unwrap();
+        let epoch = initialize_json_stash(&client, schema).await;
 
         // Insert a collection that is unknown.
         client
@@ -1581,10 +1560,9 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_very_large_collections() {
         mz_ore::test::init_logging();
-        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
-        let factory = StashFactory::new(&MetricsRegistry::new());
 
         // Connect to Cockroach.
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
         let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
         let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
             .await
@@ -1628,12 +1606,7 @@ mod tests {
             .unwrap();
 
         // Initialize the Stash.
-        let stash = factory
-            .open(connstr.to_string(), Some(schema), tls.clone())
-            .await
-            .unwrap();
-        let epoch = stash.epoch().unwrap();
-
+        let epoch = initialize_json_stash(&client, schema).await;
         insert_collections(&client, &arbitrary_stash).await;
         insert_stash(&client, &arbitrary_stash).await;
 
@@ -1652,10 +1625,8 @@ mod tests {
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn proptest_stash_migrate_json_to_proto() {
-        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
-        let factory = StashFactory::new(&MetricsRegistry::new());
-
         // Connect to Cockroach.
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
         let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
         let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
             .await
@@ -1699,12 +1670,7 @@ mod tests {
                 .unwrap();
 
             // Initialize the Stash.
-            let stash = factory
-                .open(connstr.to_string(), Some(schema), tls.clone())
-                .await
-                .unwrap();
-            let epoch = stash.epoch().unwrap();
-
+            let epoch = initialize_json_stash(&client, schema).await;
             insert_collections(&client, &arbitrary_stash).await;
             insert_stash(&client, &arbitrary_stash).await;
 
@@ -1717,6 +1683,8 @@ mod tests {
 }
 
 pub mod test_helpers {
+    use std::num::NonZeroI64;
+
     use itertools::Itertools;
     use proptest_derive::Arbitrary;
     use serde::Serialize;
@@ -1731,6 +1699,71 @@ pub mod test_helpers {
         RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
         SettingKey, SettingValue, ShardId, StorageUsageKey, TimestampKey, TimestampValue,
     };
+
+    const JSON_STASH_SCHEMA: &str = "
+CREATE TABLE fence (
+    epoch bigint PRIMARY KEY,
+    nonce bytea,
+    version bigint DEFAULT 1 NOT NULL
+);
+-- Epochs and versions are guaranteed to be non-zero, so start counting at 1.
+INSERT INTO fence (epoch, nonce, version) VALUES (1, '', 1);
+
+-- bigserial is not ideal for Cockroach, but we have a stable number of
+-- collections, so our use of it here is fine and compatible with Postgres.
+CREATE TABLE collections (
+    collection_id bigserial PRIMARY KEY,
+    name text NOT NULL UNIQUE
+);
+
+CREATE TABLE data (
+    collection_id bigint NOT NULL REFERENCES collections (collection_id),
+    key jsonb NOT NULL,
+    value jsonb NOT NULL,
+    time bigint NOT NULL,
+    diff bigint NOT NULL
+);
+
+CREATE INDEX data_time_idx ON data (collection_id, time);
+
+CREATE TABLE sinces (
+    collection_id bigint PRIMARY KEY REFERENCES collections (collection_id),
+    since bigint
+);
+
+CREATE TABLE uppers (
+    collection_id bigint PRIMARY KEY REFERENCES collections (collection_id),
+    upper bigint
+);
+";
+
+    /// Initializes a Stash with a `data` table that uses JSON, returning an epoch.
+    pub async fn initialize_json_stash(client: &Client, schema: String) -> NonZeroI64 {
+        client
+            .batch_execute("SET default_transaction_isolation = serializable")
+            .await
+            .expect("set isolation level");
+        client
+            .execute(format!("SET search_path TO {schema}").as_str(), &[])
+            .await
+            .expect("set search path");
+        client
+            .batch_execute(JSON_STASH_SCHEMA)
+            .await
+            .expect("create new Stash");
+
+        // Create an epoch
+        let nonce = [42_u8; 16];
+        let row = client
+            .query_one(
+                "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
+                &[&nonce.to_vec()],
+            )
+            .await
+            .expect("create epoch");
+
+        NonZeroI64::new(row.get(0)).unwrap()
+    }
 
     /// Insert all of the non-empty collections into CockroachDB.
     pub async fn insert_collections(client: &Client, stash: &ArbitraryStash) {

@@ -93,9 +93,10 @@ When you define a source, Materialize will automatically:
     ```nofmt
              name         |   type    |  size
     ----------------------+-----------+---------
+     mz_source            | postgres  | 3xsmall
+     mz_source_progress   | progress  |
      table_1              | subsource |
      table_2              | subsource |
-     mz_source            | postgres  | 3xsmall
     ```
 
     And perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.

@@ -5053,11 +5053,11 @@ impl<'a> Parser<'a> {
         }
         if variable.as_str().parse() == Ok(SCHEMA) {
             variable = Ident::new("search_path");
-            let to = self.parse_set_variable_value()?;
+            let to = self.parse_set_schema_to()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
-                to: SetVariableTo::Values(vec![to]),
+                to,
             }))
         } else if normal {
             let to = self.parse_set_variable_to()?;
@@ -5083,6 +5083,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_set_schema_to(&mut self) -> Result<SetVariableTo, ParserError> {
+        if self.parse_keyword(DEFAULT) {
+            Ok(SetVariableTo::Default)
+        } else {
+            let to = self.parse_set_variable_value()?;
+            Ok(SetVariableTo::Values(vec![to]))
+        }
+    }
+
     fn parse_set_variable_to(&mut self) -> Result<SetVariableTo, ParserError> {
         if self.parse_keyword(DEFAULT) {
             Ok(SetVariableTo::Default)
@@ -5104,7 +5113,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let variable = self.parse_identifier()?;
+        let mut variable = self.parse_identifier()?;
+        if variable.as_str().parse() == Ok(SCHEMA) {
+            variable = Ident::new("search_path");
+        }
         Ok(Statement::ResetVariable(ResetVariableStatement {
             variable,
         }))

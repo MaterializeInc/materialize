@@ -2951,6 +2951,7 @@ pub struct GrantObjectSpecification<T: AstInfo> {
     ///
     /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
     pub object_type: ObjectType,
+    /// Specification of each object affected.
     pub object_spec_inner: GrantObjectSpecificationInner<T>,
 }
 

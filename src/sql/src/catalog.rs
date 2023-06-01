@@ -30,6 +30,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, ObjectType, QualifiedReplica, UnresolvedItemName};
+use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
 use once_cell::sync::Lazy;
@@ -485,6 +486,28 @@ impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
     }
 }
 
+impl RustType<proto::RoleAttributes> for RoleAttributes {
+    fn into_proto(&self) -> proto::RoleAttributes {
+        proto::RoleAttributes {
+            inherit: self.inherit,
+            create_role: self.create_role,
+            create_db: self.create_db,
+            create_cluster: self.create_cluster,
+        }
+    }
+
+    fn from_proto(proto: proto::RoleAttributes) -> Result<Self, TryFromProtoError> {
+        let mut attributes = RoleAttributes::new();
+
+        attributes.inherit = proto.inherit;
+        attributes.create_cluster = proto.create_cluster;
+        attributes.create_role = proto.create_role;
+        attributes.create_db = proto.create_db;
+
+        Ok(attributes)
+    }
+}
+
 /// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
@@ -688,6 +711,42 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
         }
+    }
+}
+
+impl RustType<proto::CatalogItemType> for CatalogItemType {
+    fn into_proto(&self) -> proto::CatalogItemType {
+        match self {
+            CatalogItemType::Table => proto::CatalogItemType::Table,
+            CatalogItemType::Source => proto::CatalogItemType::Source,
+            CatalogItemType::Sink => proto::CatalogItemType::Sink,
+            CatalogItemType::View => proto::CatalogItemType::View,
+            CatalogItemType::MaterializedView => proto::CatalogItemType::MaterializedView,
+            CatalogItemType::Index => proto::CatalogItemType::Index,
+            CatalogItemType::Type => proto::CatalogItemType::Type,
+            CatalogItemType::Func => proto::CatalogItemType::Func,
+            CatalogItemType::Secret => proto::CatalogItemType::Secret,
+            CatalogItemType::Connection => proto::CatalogItemType::Connection,
+        }
+    }
+
+    fn from_proto(proto: proto::CatalogItemType) -> Result<Self, TryFromProtoError> {
+        let item_type = match proto {
+            proto::CatalogItemType::Table => CatalogItemType::Table,
+            proto::CatalogItemType::Source => CatalogItemType::Source,
+            proto::CatalogItemType::Sink => CatalogItemType::Sink,
+            proto::CatalogItemType::View => CatalogItemType::View,
+            proto::CatalogItemType::MaterializedView => CatalogItemType::MaterializedView,
+            proto::CatalogItemType::Index => CatalogItemType::Index,
+            proto::CatalogItemType::Type => CatalogItemType::Type,
+            proto::CatalogItemType::Func => CatalogItemType::Func,
+            proto::CatalogItemType::Secret => CatalogItemType::Secret,
+            proto::CatalogItemType::Connection => CatalogItemType::Connection,
+            proto::CatalogItemType::Unknown => {
+                return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"))
+            }
+        };
+        Ok(item_type)
     }
 }
 
