@@ -39,13 +39,13 @@ class Expression:
         self.is_expect_error = is_expect_error
 
     def to_sql(self) -> str:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         raise NotImplementedError
 
     def resolve_return_type_category(self) -> DataTypeCategory:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def try_resolve_exact_data_type(self) -> Optional[DataType]:
         raise NotImplementedError
@@ -54,13 +54,13 @@ class Expression:
         self, row_selection: DataRowSelection
     ) -> Set[ExpressionCharacteristics]:
         """Get all involved characteristics through recursion"""
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def collect_leaves(self) -> List[LeafExpression]:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def __str__(self) -> str:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def has_all_characteristics(
         self, characteristics: Set[ExpressionCharacteristics]

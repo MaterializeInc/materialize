@@ -68,7 +68,7 @@ class EvaluationStrategy:
         table_column_selection: TableColumnByNameSelection,
         override_db_object_name: Optional[str] = None,
     ) -> List[str]:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def get_db_object_name(
         self,
