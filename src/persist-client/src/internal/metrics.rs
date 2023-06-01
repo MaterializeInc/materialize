@@ -1110,6 +1110,7 @@ pub struct ShardsMetrics {
     rollup_count: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    seqnos_since_last_rollup: mz_ore::metrics::UIntGaugeVec,
     gc_seqno_held_parts: mz_ore::metrics::UIntGaugeVec,
     gc_live_diffs: mz_ore::metrics::UIntGaugeVec,
     gc_finished: mz_ore::metrics::IntCounterVec,
@@ -1200,6 +1201,11 @@ impl ShardsMetrics {
             seqnos_held: registry.register(metric!(
                 name: "mz_persist_shard_seqnos_held",
                 help: "maximum count of gc-ineligible states by shard",
+                var_labels: ["shard"],
+            )),
+            seqnos_since_last_rollup: registry.register(metric!(
+                name: "mz_persist_shard_seqnos_since_last_rollup",
+                help: "count of seqnos since last rollup",
                 var_labels: ["shard"],
             )),
             gc_seqno_held_parts: registry.register(metric!(
@@ -1330,6 +1336,7 @@ pub struct ShardMetrics {
     pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub seqnos_since_last_rollup: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1386,6 +1393,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            seqnos_since_last_rollup: shards_metrics
+                .seqnos_since_last_rollup
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             gc_seqno_held_parts: shards_metrics
                 .gc_seqno_held_parts

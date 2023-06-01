@@ -273,6 +273,12 @@ impl StateVersions {
 
                 shard_metrics.set_since(new_state.since());
                 shard_metrics.set_upper(new_state.upper());
+                shard_metrics.seqnos_since_last_rollup.set(
+                    new_state
+                        .seqno
+                        .0
+                        .saturating_sub(new_state.latest_rollup().0 .0),
+                );
                 shard_metrics
                     .spine_batch_count
                     .set(u64::cast_from(new_state.spine_batch_count()));
