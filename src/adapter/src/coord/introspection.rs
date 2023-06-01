@@ -96,8 +96,8 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
-        | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
         | Plan::ReassignOwned(_) => return TargetCluster::Active,
     };
 
@@ -280,8 +280,8 @@ pub fn user_privilege_hack(
         | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
-        | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
         | Plan::CopyRows(_)
         | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(

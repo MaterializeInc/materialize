@@ -77,6 +77,29 @@ impl AclMode {
         }
         Ok(acl_mode)
     }
+
+    pub fn to_error_string(&self) -> String {
+        let mut privileges = Vec::new();
+        if self.contains(AclMode::SELECT) {
+            privileges.push(SELECT_STR);
+        }
+        if self.contains(AclMode::INSERT) {
+            privileges.push(INSERT_STR);
+        }
+        if self.contains(AclMode::UPDATE) {
+            privileges.push(UPDATE_STR);
+        }
+        if self.contains(AclMode::DELETE) {
+            privileges.push(DELETE_STR);
+        }
+        if self.contains(AclMode::USAGE) {
+            privileges.push(USAGE_STR);
+        }
+        if self.contains(AclMode::CREATE) {
+            privileges.push(CREATE_STR);
+        }
+        privileges.join(", ")
+    }
 }
 
 impl FromStr for AclMode {

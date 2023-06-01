@@ -368,7 +368,14 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Adds a notice to the session.
     pub fn add_notice(&self, notice: AdapterNotice) {
-        let _ = self.notices_tx.send(notice);
+        self.add_notices([notice])
+    }
+
+    /// Adds multiple notices to the session.
+    pub fn add_notices(&self, notices: impl IntoIterator<Item = AdapterNotice>) {
+        for notice in notices {
+            let _ = self.notices_tx.send(notice);
+        }
     }
 
     /// Awaits a possible notice.

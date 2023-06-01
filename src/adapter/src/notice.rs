@@ -13,9 +13,11 @@ use chrono::{DateTime, Utc};
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{NotReadyReason, ServiceStatus};
 use mz_ore::str::StrExt;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
 use mz_sql::session::vars::IsolationLevel;
+use mz_sql_parser::ast::ObjectType;
 
 /// Notices that can occur in the adapter layer.
 ///
@@ -97,6 +99,11 @@ pub enum AdapterNotice {
     },
     CannotRevoke {
         name: String,
+    },
+    NonApplicablePrivilegeTypes {
+        non_applicable_privileges: AclMode,
+        object_type: ObjectType,
+        object_name: String,
     },
 }
 
@@ -252,6 +259,19 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::CannotRevoke { name } => {
                 write!(f, "no privileges could be revoked for {}", name.quoted())
+            }
+            AdapterNotice::NonApplicablePrivilegeTypes {
+                non_applicable_privileges,
+                object_type,
+                object_name,
+            } => {
+                write!(
+                    f,
+                    "non-applicable privilege types {} for {} {}",
+                    non_applicable_privileges.to_error_string(),
+                    object_type,
+                    object_name.quoted()
+                )
             }
         }
     }

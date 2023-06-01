@@ -92,8 +92,8 @@ pub enum Statement<T: AstInfo> {
     Raise(RaiseStatement),
     GrantRole(GrantRoleStatement<T>),
     RevokeRole(RevokeRoleStatement<T>),
-    GrantPrivilege(GrantPrivilegeStatement<T>),
-    RevokePrivilege(RevokePrivilegeStatement<T>),
+    GrantPrivileges(GrantPrivilegesStatement<T>),
+    RevokePrivileges(RevokePrivilegesStatement<T>),
     ReassignOwned(ReassignOwnedStatement<T>),
 }
 
@@ -152,8 +152,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Raise(stmt) => f.write_node(stmt),
             Statement::GrantRole(stmt) => f.write_node(stmt),
             Statement::RevokeRole(stmt) => f.write_node(stmt),
-            Statement::GrantPrivilege(stmt) => f.write_node(stmt),
-            Statement::RevokePrivilege(stmt) => f.write_node(stmt),
+            Statement::GrantPrivileges(stmt) => f.write_node(stmt),
+            Statement::RevokePrivileges(stmt) => f.write_node(stmt),
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
         }
     }
@@ -2243,6 +2243,26 @@ impl ObjectType {
             | ObjectType::Role => false,
         }
     }
+
+    pub fn is_relation(&self) -> bool {
+        match self {
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source => true,
+            ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Func
+            | ObjectType::Database
+            | ObjectType::Schema
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Role => false,
+        }
+    }
 }
 
 impl AstDisplay for ObjectType {
@@ -2927,61 +2947,61 @@ impl_display!(PrivilegeSpecification);
 
 /// `GRANT ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GrantPrivilegeStatement<T: AstInfo> {
+pub struct GrantPrivilegesStatement<T: AstInfo> {
     /// The privileges being granted on an object.
     pub privileges: PrivilegeSpecification,
     /// The type of object.
     ///
     /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
     pub object_type: ObjectType,
-    /// The name of the object.
-    pub name: T::ObjectName,
+    /// The names of the objects.
+    pub names: Vec<T::ObjectName>,
     /// The roles that will granted the privileges.
     pub roles: Vec<T::RoleName>,
 }
 
-impl<T: AstInfo> AstDisplay for GrantPrivilegeStatement<T> {
+impl<T: AstInfo> AstDisplay for GrantPrivilegesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("GRANT ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
         f.write_node(&self.object_type);
         f.write_str(" ");
-        f.write_node(&self.name);
+        f.write_node(&display::comma_separated(&self.names));
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.roles));
     }
 }
-impl_display_t!(GrantPrivilegeStatement);
+impl_display_t!(GrantPrivilegesStatement);
 
 /// `REVOKE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RevokePrivilegeStatement<T: AstInfo> {
+pub struct RevokePrivilegesStatement<T: AstInfo> {
     /// The privileges being revoked.
     pub privileges: PrivilegeSpecification,
     /// The type of object.
     ///
     /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
     pub object_type: ObjectType,
-    /// The name of the object.
-    pub name: T::ObjectName,
+    /// The names of the objects.
+    pub names: Vec<T::ObjectName>,
     /// The roles that will have privileges revoked.
     pub roles: Vec<T::RoleName>,
 }
 
-impl<T: AstInfo> AstDisplay for RevokePrivilegeStatement<T> {
+impl<T: AstInfo> AstDisplay for RevokePrivilegesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("REVOKE ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
         f.write_node(&self.object_type);
         f.write_str(" ");
-        f.write_node(&self.name);
+        f.write_node(&display::comma_separated(&self.names));
         f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.roles));
     }
 }
-impl_display_t!(RevokePrivilegeStatement);
+impl_display_t!(RevokePrivilegesStatement);
 
 /// `REASSIGN OWNED ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

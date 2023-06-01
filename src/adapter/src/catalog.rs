@@ -2581,19 +2581,7 @@ impl CatalogEntry {
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
     pub fn is_relation(&self) -> bool {
-        match self.item {
-            CatalogItem::Table(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_) => true,
-            CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
-        }
+        mz_sql::ast::ObjectType::from(self.item_type()).is_relation()
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
