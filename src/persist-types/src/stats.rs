@@ -759,7 +759,9 @@ mod impls {
                 .expect("lower bound should always truncate");
             let upper = arrow2::compute::aggregate::max_binary(value).unwrap_or_default();
             let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // TODO(mfp): Instead, truncate this column's stats entirely.
+                // NB: The cost+trim stuff will remove the column entirely if
+                // it's still too big (also this should be extremely rare in
+                // practice).
                 .unwrap_or_else(|| upper.to_owned());
             PrimitiveStats { lower, upper }
         }
@@ -772,7 +774,9 @@ mod impls {
                 .expect("lower bound should always truncate");
             let upper = arrow2::compute::aggregate::max_binary(value).unwrap_or_default();
             let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // TODO(mfp): Instead, truncate this column's stats entirely.
+                // NB: The cost+trim stuff will remove the column entirely if
+                // it's still too big (also this should be extremely rare in
+                // practice).
                 .unwrap_or_else(|| upper.to_owned());
             let none = value.validity().map_or(0, |x| x.unset_bits());
             OptionStats {
@@ -806,7 +810,9 @@ mod impls {
                 .expect("lower bound should always truncate");
             let upper = arrow2::compute::aggregate::max_string(value).unwrap_or_default();
             let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // TODO(mfp): Instead, truncate this column's stats entirely.
+                // NB: The cost+trim stuff will remove the column entirely if
+                // it's still too big (also this should be extremely rare in
+                // practice).
                 .unwrap_or_else(|| upper.to_owned());
             PrimitiveStats { lower, upper }
         }
@@ -819,7 +825,9 @@ mod impls {
                 .expect("lower bound should always truncate");
             let upper = arrow2::compute::aggregate::max_string(value).unwrap_or_default();
             let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // TODO(mfp): Instead, truncate this column's stats entirely.
+                // NB: The cost+trim stuff will remove the column entirely if
+                // it's still too big (also this should be extremely rare in
+                // practice).
                 .unwrap_or_else(|| upper.to_owned());
             let none = value.validity().map_or(0, |x| x.unset_bits());
             OptionStats {

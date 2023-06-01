@@ -203,8 +203,8 @@ impl From<&PersistConfig> for BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
-            // TODO(mfp): Make a dynamic config for this? This initial constant
-            // is the rough upper bound on what we see for the total serialized
+            // TODO: Make a dynamic config for this? This initial constant is
+            // the rough upper bound on what we see for the total serialized
             // batch size in prod, so it will at worst double it.
             stats_budget: 1024,
         }
@@ -671,8 +671,6 @@ pub(crate) struct BatchParts<T> {
 }
 
 fn force_keep_stats_col(name: &str) -> bool {
-    // TODO(mfp): Flesh out initial heuristics. At the very least, this should
-    // probably be case insensitive.
     name == "mz_internal_super_secret_source_data_errors"
         || name == "timestamp"
         || name == "ts"
@@ -743,20 +741,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .spawn_named(|| "batch::encode_part", async move {
                         let stats = if stats_collection_enabled {
                             let stats_start = Instant::now();
-                            // TODO(mfp): For now, if stats collections fails,
-                            // log it with `error!` so it shows up in Sentry,
-                            // but don't crash the process. Turn this into a
-                            // hard error once we've shaken out any issues.
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
-                                // TODO(mfp): HACK Only keep stats if it's not
-                                // empty. This makes it easier to exactly
-                                // roundtrip through the placeholder proto
-                                // serialization, which doesn't keep the
-                                // difference between empty and unset. We could
-                                // make it keep the distinction, but at the cost
-                                // of additional complexity which I don't think
-                                // is worth it.
-                                Ok(x) if x.is_empty() => None,
                                 Ok(mut x) => {
                                     x.key.trim_to_budget(stats_budget, force_keep_stats_col);
                                     Some((Arc::new(x), stats_start.elapsed()))
