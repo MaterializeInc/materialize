@@ -1167,7 +1167,6 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateMaterializedViewPlan,
-        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateMaterializedViewPlan {
             name,
@@ -1194,8 +1193,12 @@ impl Coordinator {
             return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
-        self.validate_timeline_context(depends_on.clone())?;
+        // Generate the optimized expression, which allows us to know exacly what we depend on.
+        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
+        let depends_on: Vec<_> = optimized_expr.depends_on().into_iter().collect();
 
+        // Validate after generating the optimized expression.
+        self.validate_timeline_context(depends_on.clone())?;
         self.validate_system_column_references(ambiguous_columns, &depends_on)?;
 
         // Materialized views are not allowed to depend on log sources, as replicas
@@ -1221,7 +1224,6 @@ impl Coordinator {
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
 
-        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
 
         // Pick the least valid read timestamp as the as-of for the view

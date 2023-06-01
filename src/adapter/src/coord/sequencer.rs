@@ -173,7 +173,7 @@ impl Coordinator {
             }
             Plan::CreateMaterializedView(plan) => {
                 tx.send(
-                    self.sequence_create_materialized_view(&mut session, plan, depends_on)
+                    self.sequence_create_materialized_view(&mut session, plan)
                         .await,
                     session,
                 );
