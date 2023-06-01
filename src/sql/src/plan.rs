@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -44,7 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::{TransactionIsolationLevel, TransactionMode};
+use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -122,6 +122,8 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
+    AlterClusterRename(AlterClusterRenamePlan),
+    AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
@@ -157,7 +159,12 @@ impl Plan {
                 PlanKind::AlterNoop,
             ],
             StatementKind::AlterObjectRename => {
-                vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
+                vec![
+                    PlanKind::AlterClusterRename,
+                    PlanKind::AlterClusterReplicaRename,
+                    PlanKind::AlterItemRename,
+                    PlanKind::AlterNoop,
+                ]
             }
             StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
@@ -295,6 +302,8 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
             },
+            Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
@@ -772,6 +781,21 @@ pub struct AlterSinkPlan {
 pub struct AlterSourcePlan {
     pub id: GlobalId,
     pub size: AlterOptionParameter,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterRenamePlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub to_name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterReplicaRenamePlan {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub name: QualifiedReplica,
+    pub to_name: String,
 }
 
 #[derive(Debug)]

@@ -18,7 +18,7 @@
 
 syntax = "proto3";
 
-package objects;
+package objects_v17;
 
 message ConfigKey {
     string key = 1;
@@ -379,19 +379,6 @@ message AuditLogEventV1 {
         string name = 2;
     }
 
-    message RenameClusterV1 {
-        string id = 1;
-        string old_name = 2;
-        string new_name = 3;
-    }
-
-    message RenameClusterReplicaV1 {
-        string cluster_id = 1;
-        string replica_id = 2;
-        string old_name = 3;
-        string new_name = 4;
-    }
-
     message RenameItemV1 {
         string id = 1;
         FullNameV1 old_name = 2;
@@ -475,8 +462,6 @@ message AuditLogEventV1 {
     ObjectType object_type = 3;
     StringWrapper user = 4;
     EpochMillis occurred_at = 5;
-
-    // next-id: 22
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
         DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
@@ -488,8 +473,6 @@ message AuditLogEventV1 {
         RevokeRoleV1 revoke_role_v1 = 13;
         RevokeRoleV2 revoke_role_v2 = 14;
         IdFullNameV1 id_full_name_v1 = 15;
-        RenameClusterV1 rename_cluster_v1 = 20;
-        RenameClusterReplicaV1 rename_cluster_replica_v1 = 21;
         RenameItemV1 rename_item_v1 = 16;
         IdNameV1 id_name_v1 = 17;
         SchemaV1 schema_v1 = 18;

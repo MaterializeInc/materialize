@@ -3703,26 +3703,56 @@ impl<'a> Parser<'a> {
             ObjectType::Cluster => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::Cluster(self.parse_identifier()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::Database => {
                 let if_exists = self.parse_if_exists()?;

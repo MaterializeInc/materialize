@@ -21,18 +21,19 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItemType, RoleAttributes, SessionCatalog};
 use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
-    AbortTransactionPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ClosePlan, CommitTransactionPlan, CopyFromPlan, CopyRowsPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
-    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
-    MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
-    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
-    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    AbortTransactionPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
+    AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ClosePlan,
+    CommitTransactionPlan, CopyFromPlan, CopyRowsPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateSourcePlans, CreateTablePlan, CreateTypePlan, CreateViewPlan, DeallocatePlan,
+    DeclarePlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, FetchPlan,
+    GrantPrivilegesPlan, GrantRolePlan, InsertPlan, MutationKind, PeekPlan, Plan,
+    PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan, ReassignOwnedPlan,
+    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan, SetTransactionPlan,
+    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
     StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
@@ -299,6 +300,8 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::CopyRows(_)
         | Plan::Explain(_)
         | Plan::Insert(_)
+        | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)
         | Plan::AlterIndexResetOptions(_)
@@ -367,7 +370,9 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
                 Vec::new()
             }
         }
-        Plan::CreateTable(_)
+        Plan::AlterClusterRename(_)
+        | Plan::AlterClusterReplicaRename(_)
+        | Plan::CreateTable(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateConnection(_)
         | Plan::CreateSchema(_)
@@ -578,6 +583,10 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
             .unwrap_or_default(),
         // Do not need ownership of descendant objects.
         Plan::DropObjects(plan) => plan.referenced_ids.clone(),
+        Plan::AlterClusterRename(plan) => vec![ObjectId::Cluster(plan.id)],
+        Plan::AlterClusterReplicaRename(plan) => {
+            vec![ObjectId::ClusterReplica((plan.cluster_id, plan.replica_id))]
+        }
         Plan::AlterIndexSetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterIndexResetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSink(plan) => vec![ObjectId::Item(plan.id)],
@@ -1105,7 +1114,9 @@ fn generate_required_privileges(
             }
             privleges
         }
-        Plan::CreateDatabase(CreateDatabasePlan {
+        Plan::AlterClusterRename(AlterClusterRenamePlan { .. })
+        | Plan::AlterClusterReplicaRename(AlterClusterReplicaRenamePlan { .. })
+        | Plan::CreateDatabase(CreateDatabasePlan {
             name: _,
             if_not_exists: _,
         })

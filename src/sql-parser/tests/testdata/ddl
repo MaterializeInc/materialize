@@ -1859,11 +1859,25 @@ ALTER CLUSTER foo OWNER TO joe
 AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: false, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
 
 parse-statement
+ALTER CLUSTER foo RENAME TO joe
+----
+ALTER CLUSTER foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Cluster, if_exists: false, name: Cluster(Ident("foo")), to_item_name: Ident("joe") })
+
+parse-statement
 ALTER CLUSTER IF EXISTS foo OWNER TO joe
 ----
 ALTER CLUSTER IF EXISTS foo OWNER TO joe
 =>
 AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
+
+parse-statement
+ALTER CLUSTER IF EXISTS foo RENAME TO joe
+----
+ALTER CLUSTER IF EXISTS foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), to_item_name: Ident("joe") })
 
 parse-statement
 ALTER CLUSTER REPLICA c.foo OWNER TO joe
@@ -1873,11 +1887,25 @@ ALTER CLUSTER REPLICA c.foo OWNER TO joe
 AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: false, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
 
 parse-statement
+ALTER CLUSTER REPLICA c.foo RENAME TO joe
+----
+ALTER CLUSTER REPLICA c.foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: ClusterReplica, if_exists: false, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), to_item_name: Ident("joe") })
+
+parse-statement
 ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
 ----
 ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
 =>
 AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: true, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
+
+parse-statement
+ALTER CLUSTER REPLICA IF EXISTS c.foo RENAME TO joe
+----
+ALTER CLUSTER REPLICA IF EXISTS c.foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: ClusterReplica, if_exists: true, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), to_item_name: Ident("joe") })
 
 parse-statement
 ALTER DATABASE foo OWNER TO joe

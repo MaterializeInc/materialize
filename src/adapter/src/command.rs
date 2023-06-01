@@ -486,7 +486,14 @@ impl ExecuteResponse {
 
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
-            AlterOwner | AlterItemRename | AlterNoop | AlterSecret | AlterSink | AlterSource
+            AlterClusterRename
+            | AlterClusterReplicaRename
+            | AlterOwner
+            | AlterItemRename
+            | AlterNoop
+            | AlterSecret
+            | AlterSink
+            | AlterSource
             | RotateKeys => {
                 vec![AlteredObject]
             }

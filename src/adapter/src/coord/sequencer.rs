@@ -291,6 +291,19 @@ impl Coordinator {
                     session,
                 );
             }
+            Plan::AlterClusterRename(plan) => {
+                tx.send(
+                    self.sequence_alter_cluster_rename(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterClusterReplicaRename(plan) => {
+                tx.send(
+                    self.sequence_alter_cluster_replica_rename(&session, plan)
+                        .await,
+                    session,
+                );
+            }
             Plan::AlterItemRename(plan) => {
                 tx.send(
                     self.sequence_alter_item_rename(&session, plan).await,
