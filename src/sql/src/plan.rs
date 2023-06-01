@@ -886,6 +886,7 @@ pub struct UpdatePrivilege {
 
 #[derive(Debug)]
 pub struct GrantPrivilegesPlan {
+    /// Description of each privilege being granted.
     pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will granted the privileges.
     pub grantees: Vec<RoleId>,
