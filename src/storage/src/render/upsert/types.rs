@@ -208,6 +208,9 @@ impl StateValue {
                 if value_xor.len() < bincode_buffer.len() {
                     value_xor.resize(bincode_buffer.len(), 0);
                 }
+                // Note that if the new value is _smaller_ than the `value_xor`, and
+                // the values at the end are zeroed out, we can shrink the buffer. This
+                // is extremely sensitive code, so we don't (yet) do that.
                 for (acc, val) in value_xor.iter_mut().zip(bincode_buffer.drain(..)) {
                     *acc ^= val;
                 }
@@ -241,7 +244,8 @@ impl StateValue {
                     // Truncation is fine (using `as`) as this is just a checksum
                     assert_eq!(
                         checksum_sum.0,
-                        seahash::hash(value_xor) as i64,
+                        // Hash the value, not the full buffer, which may have extra 0's
+                        seahash::hash(value) as i64,
                         "invalid upsert state"
                     );
                     *self = Self::Decoded(bincode_opts.deserialize(value).unwrap());
@@ -687,5 +691,29 @@ where
             .observe(f64::cast_lossy(stats.processed_gets));
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_merge_update() {
+        let mut buf = Vec::new();
+        let opts = upsert_bincode_opts();
+
+        let mut s = StateValue::Snapshotting(Snapshotting::default());
+
+        let small_row = Ok(mz_repr::Row::default());
+        let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
+        s.merge_update(small_row, 1, opts, &mut buf);
+        s.merge_update(longer_row.clone(), -1, opts, &mut buf);
+        // This clears the retraction of the `longer_row`, but the
+        // `value_xor` is the length of the `longer_row`. This tests
+        // that we are tracking checksums correctly.
+        s.merge_update(longer_row, 1, opts, &mut buf);
+
+        // Assert that the `Snapshotting` value is fully merged.
+        s.ensure_decoded(opts);
     }
 }

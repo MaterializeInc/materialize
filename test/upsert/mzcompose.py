@@ -51,6 +51,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "rehydration",
         "testdrive",
         "failpoint",
+        "incident-49",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -240,3 +241,52 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
 
     c.run("testdrive", "failpoint/05-reset.td")
     c.kill("clusterd1")
+
+
+def workflow_incident_49(c: Composition) -> None:
+    """Regression test for incident 49."""
+
+    c.down(destroy_volumes=True)
+
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+    ]
+
+    for (style, mz) in [
+        (
+            "with DISK",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/mzdata/source_data",
+                ],
+                additional_system_parameter_defaults={
+                    "upsert_source_disk_default": "true"
+                },
+                environment_extra=["MZ_PERSIST_COMPACTION_DISABLED=true"],
+            ),
+        ),
+        (
+            "without DISK",
+            Materialized(environment_extra=["MZ_PERSIST_COMPACTION_DISABLED=true"]),
+        ),
+    ]:
+
+        with c.override(
+            mz,
+            Testdrive(no_reset=True, consistent_seed=True),
+        ):
+            print(f"Running rehydration workflow {style}")
+
+            c.up(*dependencies)
+
+            c.run("testdrive", "incident-49/01-setup.td")
+
+            c.kill("materialized")
+            c.up("materialized")
+
+            c.run("testdrive", "incident-49/02-after-rehydration.td")
+
+        c.run("testdrive", "incident-49/03-reset.td")
