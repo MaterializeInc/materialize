@@ -520,10 +520,6 @@ where
     where
         M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
     {
-        fail::fail_point!("fail_merge_snapshot_chunk", |_| {
-            Err(anyhow::anyhow!("Error merging snapshot values"))
-        });
-
         if completed && self.snapshot_completed {
             panic!("attempted completion of already completed upsert snapshot")
         }
@@ -631,9 +627,6 @@ where
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<UpsertValue>)>,
     {
-        fail::fail_point!("fail_state_multi_put", |_| {
-            Err(anyhow::anyhow!("Error putting values into state"))
-        });
         let now = Instant::now();
         let stats = self
             .inner
@@ -673,9 +666,6 @@ where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
     {
-        fail::fail_point!("fail_state_multi_get", |_| {
-            Err(anyhow::anyhow!("Error getting values from state"))
-        });
         let now = Instant::now();
         let stats = self.inner.multi_get(gets, results_out).await?;
 

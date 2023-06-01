@@ -50,7 +50,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "rehydration",
         "testdrive",
-        "failpoint",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -179,64 +178,3 @@ def workflow_rehydration(c: Composition) -> None:
 
         c.run("testdrive", "rehydration/04-reset.td")
         c.kill("clusterd1")
-
-
-def workflow_failpoint(c: Composition) -> None:
-    """Test behaviour when upsert state errors"""
-    print("Running failpoint workflow")
-
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.run("testdrive", "failpoint/01-setup.td")
-
-    for failpoint in [
-        (
-            "fail_merge_snapshot_chunk",
-            "Failed to rehydrate state: Error merging snapshot values",
-        ),
-        (
-            "fail_state_multi_put",
-            "Failed to update records in state: Error putting values into state",
-        ),
-        (
-            "fail_state_multi_get",
-            "Failed to fetch records from state: Error getting values from state",
-        ),
-    ]:
-        run_one_failpoint(c, failpoint[0], failpoint[1])
-
-
-def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
-    print(f">>> Running failpoint test for failpoint {failpoint}")
-
-    with c.override(
-        Testdrive(no_reset=True, consistent_seed=True),
-    ):
-
-        dependencies = ["zookeeper", "kafka", "clusterd1", "materialized"]
-        c.up(*dependencies)
-        c.run("testdrive", "failpoint/02-source.td")
-        c.kill("clusterd1")
-
-        with c.override(
-            # Start clusterd with failpoint
-            Clusterd(
-                name="clusterd1",
-                options=[
-                    "--scratch-directory=/mzdata/source_data",
-                ],
-                environment_extra=[f"FAILPOINTS={failpoint}=return"],
-            ),
-        ):
-            c.up("clusterd1")
-            c.run(
-                "testdrive", f"--var=error={error_message}", "failpoint/03-failpoint.td"
-            )
-            c.kill("clusterd1")
-
-        # Running without set failpoint
-        c.up("clusterd1")
-        c.run("testdrive", "failpoint/04-recover.td")
-
-    c.run("testdrive", "failpoint/05-reset.td")
-    c.kill("clusterd1")
