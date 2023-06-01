@@ -663,7 +663,7 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn client_exchange_data() {
     // The whole point of SerdeLeasedBatchPart is that it can be exchanged
     // between timely workers, including over the network. Enforce then that it

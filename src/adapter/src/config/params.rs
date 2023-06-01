@@ -145,7 +145,7 @@ mod tests {
 
     use super::SynchronizedParameters;
 
-    #[test]
+    #[mz_ore::test]
     fn test_github_18189() {
         let vars = SystemVars::default();
         let mut sync = SynchronizedParameters::new(vars);
@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(sync.get("allowed_cluster_replica_sizes"), "");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_vars_are_synced() {
         let vars = SystemVars::default();
         let sync = SynchronizedParameters::new(vars);

@@ -640,7 +640,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn duration_protobuf_roundtrip(expect in any_duration() ) {
             let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);

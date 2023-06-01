@@ -1132,7 +1132,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_truncate_bytes() {
         #[track_caller]
         fn testcase(x: &[u8], max_len: usize, upper_should_exist: bool) {
@@ -1159,7 +1159,7 @@ mod tests {
         testcase(&[255, 255, 255], 2, false);
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn test_truncate_bytes_proptest() {
         fn testcase(x: &[u8]) {
@@ -1182,7 +1182,7 @@ mod tests {
         });
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_truncate_string() {
         #[track_caller]
         fn testcase(x: &str, max_len: usize, upper_should_exist: bool) {
@@ -1222,7 +1222,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn test_truncate_string_proptest() {
         fn testcase(x: &str) {
@@ -1248,7 +1248,7 @@ mod tests {
         });
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn primitive_cost_trim_proptest() {
         fn primitive_stats<'a, T: Data, F>(xs: &'a [T], f: F) -> (&'a [T], T::Stats)
@@ -1336,7 +1336,7 @@ mod tests {
         });
     }
 
-    #[test]
+    #[mz_ore::test]
     fn struct_trim_to_budget() {
         #[track_caller]
         fn testcase(cols: &[(&str, usize)], required: Option<&str>) {
@@ -1374,7 +1374,7 @@ mod tests {
 
     // Regression test for a bug found during code review of initial stats
     // trimming PR.
-    #[test]
+    #[mz_ore::test]
     fn stats_trim_regression_json() {
         // Make sure we recursively trim json string and map stats by asserting
         // that the goes down after trimming.

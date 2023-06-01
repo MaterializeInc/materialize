@@ -681,7 +681,7 @@ mod tests {
     ///
     /// NOTE: This test is weird: if everything is good it will pass. If we
     /// break the assumption that we test this will time out and we will notice.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_shard_source_implicit_initial_as_of() {
         let (persist_clients, location) = new_test_client_cache_and_location();
 
@@ -738,7 +738,7 @@ mod tests {
     ///
     /// NOTE: This test is weird: if everything is good it will pass. If we
     /// break the assumption that we test this will time out and we will notice.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_shard_source_explicit_initial_as_of() {
         let (persist_clients, location) = new_test_client_cache_and_location();
 

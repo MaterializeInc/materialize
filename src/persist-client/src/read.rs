@@ -1167,7 +1167,7 @@ mod tests {
     use super::*;
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn drop_unused_subscribe() {
         let data = vec![
@@ -1353,7 +1353,7 @@ mod tests {
         drop(subscribe);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn reader_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {

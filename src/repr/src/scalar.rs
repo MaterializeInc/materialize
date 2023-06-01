@@ -3245,7 +3245,7 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn verify_base_eq_record_nullability() {
     let s1 = ScalarType::Record {
         fields: vec![(
@@ -3282,7 +3282,7 @@ mod tests {
     use super::*;
 
     proptest! {
-       #[test]
+       #[mz_ore::test]
        #[cfg_attr(miri, ignore)] // too slow
         fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
@@ -3292,7 +3292,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
             let PropArray(row, elts) = array;
@@ -3301,7 +3301,7 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
             let PropList(row, elts) = array;
@@ -3310,7 +3310,7 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
             let PropDict(row, elts) = array;
@@ -3319,7 +3319,7 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
             let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
@@ -3328,7 +3328,7 @@ mod tests {
             assert_eq!(datums, unpacked);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn range_packing_unpacks_correctly(range in arb_range()) {
             let PropRange(row, prop_range) = range;

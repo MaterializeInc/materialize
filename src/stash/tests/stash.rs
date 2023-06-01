@@ -962,7 +962,7 @@ async fn test_stash_table(stash: &mut Stash) {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn test_table() {
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b

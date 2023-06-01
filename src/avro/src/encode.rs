@@ -173,7 +173,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_encode_empty_array() {
         let mut buf = Vec::new();
         let empty: Vec<Value> = Vec::new();
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(vec![0u8], buf);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_encode_empty_map() {
         let mut buf = Vec::new();
         let empty: BTreeMap<String, Value> = BTreeMap::new();

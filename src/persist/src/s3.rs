@@ -972,7 +972,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn should_multipart() {
         let config = MultipartConfig::default();
         assert_eq!(config.should_multipart(0), Ok(false));
@@ -1002,7 +1002,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn multipart_iter() {
         let iter = MultipartChunkIter::new(10, 0);
         assert_eq!(iter.collect::<Vec<_>>(), vec![]);

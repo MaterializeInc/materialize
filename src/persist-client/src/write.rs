@@ -852,7 +852,7 @@ mod tests {
         assert_eq!(actual, all_ok(&expected, 3));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn writer_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {

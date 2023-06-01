@@ -1149,7 +1149,7 @@ mod tests {
         assert_eq!(updates, all_ok(&data, CodecProduct::new(10, 0)));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn prefetches() {
         let desc = Description::new(

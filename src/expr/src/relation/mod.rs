@@ -3247,7 +3247,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
             let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
             assert!(actual.is_ok());
@@ -3256,7 +3256,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
             assert!(actual.is_ok());
@@ -3265,7 +3265,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn window_frame_units_protobuf_roundtrip(expect in any::<WindowFrameUnits>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameUnits>(&expect);
             assert!(actual.is_ok());
@@ -3274,7 +3274,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn window_frame_bound_protobuf_roundtrip(expect in any::<WindowFrameBound>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameBound>(&expect);
             assert!(actual.is_ok());
@@ -3283,7 +3283,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn window_frame_protobuf_roundtrip(expect in any::<WindowFrame>()) {
             let actual = protobuf_roundtrip::<_, ProtoWindowFrame>(&expect);
             assert!(actual.is_ok());
@@ -3291,7 +3291,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_row_set_finishing_as_text() {
         let finishing = RowSetFinishing {
             order_by: vec![ColumnOrder {

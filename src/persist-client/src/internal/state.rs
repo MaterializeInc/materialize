@@ -1647,7 +1647,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn downgrade_since() {
         let mut state = TypedState::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -2244,7 +2244,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn need_rollup() {
         const ROLLUP_THRESHOLD: usize = 3;
         mz_ore::test::init_logging();
@@ -2330,7 +2330,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn idempotency_token_sentinel() {
         assert_eq!(
             IdempotencyToken::SENTINEL.to_string(),
@@ -2346,7 +2346,7 @@ pub(crate) mod tests {
     ///
     /// This golden will have to be updated each time we change State, but
     /// that's a feature, not a bug.
-    #[test]
+    #[mz_ore::test]
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();

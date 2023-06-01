@@ -221,7 +221,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn invalid_array_error_protobuf_roundtrip(expect in any::<InvalidArrayError>()) {
             let actual = protobuf_roundtrip::<_, ProtoInvalidArrayError>(&expect);
             assert!(actual.is_ok());

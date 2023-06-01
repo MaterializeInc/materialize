@@ -773,7 +773,7 @@ fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
         .unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
@@ -1443,7 +1443,7 @@ fn test_auth_base() {
     drop(server);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_intermediate_ca() {
     // Create a CA, an intermediate CA, and a server key pair signed by the

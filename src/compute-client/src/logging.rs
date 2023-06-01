@@ -491,7 +491,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn logging_config_protobuf_roundtrip(expect in any::<LoggingConfig>()) {
             let actual = protobuf_roundtrip::<_, ProtoLoggingConfig>(&expect);
             assert!(actual.is_ok());

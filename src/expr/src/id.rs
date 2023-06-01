@@ -206,7 +206,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn id_protobuf_roundtrip(expect in any::<Id>()) {
             let actual = protobuf_roundtrip::<_, ProtoId>(&expect);
             assert!(actual.is_ok());

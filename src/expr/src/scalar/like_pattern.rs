@@ -456,7 +456,7 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_pattern() {
         struct TestCase<'a> {
             pattern: &'a str,
@@ -524,7 +524,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_escape_too_long() {
         match EscapeBehavior::from_str("foo") {
             Err(EvalError::LikeEscapeTooLong) => {}
@@ -534,7 +534,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_like() {
         struct Input<'a> {
             haystack: &'a str,

@@ -1401,7 +1401,7 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
@@ -1709,7 +1709,7 @@ mod tests {
         assert!(matches!(expired_writer_heartbeat, Err(_)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fmt_ids() {
         assert_eq!(
             format!("{}", ShardId([0u8; 16])),
@@ -1753,7 +1753,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn shard_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct ShardIdContainer {
@@ -1956,7 +1956,7 @@ mod tests {
         assert_eq!(snap.await, all_ok(&data[..], 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
@@ -1994,7 +1994,7 @@ mod tests {
     /// Regression test for 16743, where the nightly tests found that calling
     /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
     /// would panic.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn regression_16743_heartbeat_tombstone() {
         const EMPTY: &[(((), ()), u64, i64)] = &[];
         let (mut write, mut read) = new_test_client()
@@ -2018,7 +2018,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
             let actual = protobuf_roundtrip::<_, String>(&expect);
             assert!(actual.is_ok());

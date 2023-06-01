@@ -1992,7 +1992,7 @@ enum FetchResult {
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_options() {
         struct TestCase {
             input: &'static str,
@@ -2046,7 +2046,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_option() {
         struct TestCase {
             input: &'static str,
@@ -2093,7 +2093,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_split_options() {
         struct TestCase {
             input: &'static str,

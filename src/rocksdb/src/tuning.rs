@@ -450,7 +450,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn defaults_equality() {
         let r = RocksDBTuningParameters::from_parameters(
             defaults::DEFAULT_COMPACTION_STYLE,

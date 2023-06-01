@@ -1432,7 +1432,7 @@ mod tests {
 
     use super::{migrate_json_to_proto, objects_v15};
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoketest_migrate_json_to_proto() {
         // Connect to Cockroach.
@@ -1554,7 +1554,7 @@ mod tests {
             .expect("migration to succeed");
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_very_large_collections() {
         mz_ore::test::init_logging();
@@ -1620,7 +1620,7 @@ mod tests {
         assert_eq!(protos_storage_usage.items.len(), 100_000);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn proptest_stash_migrate_json_to_proto() {
         // Connect to Cockroach.

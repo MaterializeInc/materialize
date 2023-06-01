@@ -260,7 +260,7 @@ fn parse_query_when(s: &str) -> QueryWhen {
 /// Transaction isolation can also be set. The `determine` directive runs determine_timestamp and
 /// returns the chosen timestamp. Append `full` as an argument to it to see the entire
 /// TimestampDetermination.
-#[test]
+#[mz_ore::test]
 fn test_timestamp_selection() {
     datadriven::walk("tests/testdata/timestamp_selection", |tf| {
         let mut f = Frontiers {

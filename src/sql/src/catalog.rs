@@ -1240,7 +1240,7 @@ impl<'a, T> ErsatzCatalog<'a, T> {
 mod tests {
     use super::{CloudProvider, EnvironmentId, InvalidEnvironmentIdError};
 
-    #[test]
+    #[mz_ore::test]
     fn test_environment_id() {
         for (input, expected) in [
             (

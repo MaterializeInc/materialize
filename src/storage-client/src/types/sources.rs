@@ -2700,7 +2700,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_timeline_parsing() {
         assert_eq!(Ok(Timeline::EpochMilliseconds), "M".parse());
         assert_eq!(Ok(Timeline::External("JOE".to_string())), "E.JOE".parse());

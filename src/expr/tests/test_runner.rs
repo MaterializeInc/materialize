@@ -222,7 +222,7 @@ mod test {
         Ok(may_contain)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
             f.run(move |s| -> String {
