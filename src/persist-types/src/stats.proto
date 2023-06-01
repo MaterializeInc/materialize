@@ -87,7 +87,13 @@ message ProtoJsonStats {
 }
 
 message ProtoJsonMapStats {
-    map<string, ProtoJsonStats> elements = 1;
+    repeated ProtoJsonMapElementStats elements = 1;
+}
+
+message ProtoJsonMapElementStats {
+    string name = 1;
+    uint64 len = 2;
+    ProtoJsonStats stats = 3;
 }
 
 message ProtoBytesStats {

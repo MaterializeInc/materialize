@@ -177,7 +177,8 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
                 JsonStats::Maps(stats) => {
                     for (k, v) in val.iter() {
                         let key_stats = stats.entry(k.to_owned()).or_default();
-                        let () = jsonb_stats_datum(key_stats, v)?;
+                        key_stats.len += 1;
+                        let () = jsonb_stats_datum(&mut key_stats.stats, v)?;
                     }
                 }
                 _ => {

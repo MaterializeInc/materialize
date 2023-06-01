@@ -255,7 +255,24 @@ pub enum JsonStats {
     Lists,
     /// Recursive statistics about the set of keys present in any maps/objects
     /// in the column, or None if there were no maps/objects.
-    Maps(BTreeMap<String, JsonStats>),
+    Maps(BTreeMap<String, JsonMapElementStats>),
+}
+
+#[derive(Default, Debug)]
+#[cfg_attr(any(test), derive(Clone))]
+pub struct JsonMapElementStats {
+    pub len: usize,
+    pub stats: JsonStats,
+}
+
+impl JsonMapElementStats {
+    fn cost(&self) -> usize {
+        std::mem::size_of_val(&self.len) + self.stats.cost()
+    }
+
+    fn trim(&mut self) {
+        self.stats.trim()
+    }
 }
 
 impl Default for JsonStats {
@@ -403,7 +420,7 @@ mod impls {
     use arrow2::compute::aggregate::SimdOrd;
     use arrow2::types::simd::Simd;
     use arrow2::types::NativeType;
-    use mz_proto::{ProtoType, RustType, TryFromProtoError};
+    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use proptest::prelude::*;
     use serde::Serialize;
 
@@ -412,10 +429,10 @@ mod impls {
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
         truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
-        JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats, ProtoBytesStats,
-        ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats,
-        ProtoPrimitiveBytesStats, ProtoPrimitiveStats, ProtoStructStats, StructStats,
-        TruncateBound, TRUNCATE_LEN,
+        JsonMapElementStats, JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats,
+        ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats, ProtoJsonMapStats,
+        ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats,
+        ProtoStructStats, StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
     impl<T: StatsCost> StatsCost for OptionStats<T> {
@@ -893,7 +910,11 @@ mod impls {
                     JsonStats::Maps(x) => proto_json_stats::Kind::Maps(ProtoJsonMapStats {
                         elements: x
                             .iter()
-                            .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
+                            .map(|(k, v)| ProtoJsonMapElementStats {
+                                name: k.into_proto(),
+                                len: v.len.into_proto(),
+                                stats: Some(RustType::into_proto(&v.stats)),
+                            })
                             .collect(),
                     }),
                 }),
@@ -910,11 +931,15 @@ mod impls {
                 Some(proto_json_stats::Kind::Numerics(x)) => JsonStats::Numerics(x.into_rust()?),
                 Some(proto_json_stats::Kind::Lists(())) => JsonStats::Lists,
                 Some(proto_json_stats::Kind::Maps(x)) => {
-                    let mut map = BTreeMap::new();
-                    for (k, v) in x.elements {
-                        map.insert(k.into_rust()?, v.into_rust()?);
+                    let mut elements = BTreeMap::new();
+                    for x in x.elements {
+                        let stats = JsonMapElementStats {
+                            len: x.len.into_rust()?,
+                            stats: x.stats.into_rust_if_some("JsonMapElementStats::stats")?,
+                        };
+                        elements.insert(x.name.into_rust()?, stats);
                     }
-                    JsonStats::Maps(map)
+                    JsonStats::Maps(elements)
                 }
                 None => return Err(TryFromProtoError::missing_field("ProtoJsonStats::values")),
             })
@@ -1417,7 +1442,7 @@ mod tests {
         });
         testcase(col.clone());
         let mut cols = BTreeMap::new();
-        cols.insert("col".into(), col);
+        cols.insert("col".into(), JsonMapElementStats { len: 1, stats: col });
         testcase(JsonStats::Maps(cols));
     }
 }
