@@ -164,6 +164,8 @@ pub struct HollowBatchPart {
     pub key: PartialBatchKey,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
+    /// The number of updates in this part.
+    pub len: usize,
     /// Aggregate statistics about data contained in this part.
     ///
     /// Stored inside an Arc because HollowBatchPart needs to be cheaply
@@ -191,11 +193,13 @@ impl Ord for HollowBatchPart {
         let HollowBatchPart {
             key: self_key,
             encoded_size_bytes: _,
+            len: _,
             stats: _,
         } = self;
         let HollowBatchPart {
             key: other_key,
             encoded_size_bytes: _,
+            len: _,
             stats: _,
         } = other;
         self_key.cmp(other_key)
@@ -1623,6 +1627,7 @@ pub(crate) mod tests {
                 .map(|x| HollowBatchPart {
                     key: PartialBatchKey((*x).to_owned()),
                     encoded_size_bytes: 0,
+                    len: 0,
                     stats: None,
                 })
                 .collect(),

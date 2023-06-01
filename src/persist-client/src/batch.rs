@@ -665,7 +665,7 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<Arc<PartStats>>)>)>,
+    writing_parts: VecDeque<JoinHandle<HollowBatchPart>>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
 }
@@ -736,6 +736,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     updates: vec![updates],
                     index,
                 };
+                let num_updates = batch.updates.iter().map(|x| x.len()).sum::<usize>();
 
                 let (stats, (buf, encode_time)) = cpu_heavy_runtime
                     .spawn_named(|| "batch::encode_part", async move {
@@ -792,48 +793,43 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         .inc_by(stats_step_timing.as_secs_f64());
                     stats
                 });
-                (payload_len, stats)
+                HollowBatchPart {
+                    key: partial_key,
+                    encoded_size_bytes: payload_len,
+                    len: num_updates,
+                    stats,
+                }
             }
             .instrument(write_span),
         );
-        self.writing_parts.push_back((partial_key, handle));
+        self.writing_parts.push_back(handle);
 
         while self.writing_parts.len() > self.cfg.batch_builder_max_outstanding_parts {
             batch_metrics.write_stalls.inc();
-            let (key, handle) = self
+            let handle = self
                 .writing_parts
                 .pop_front()
                 .expect("pop failed when len was just > some usize");
-            let (encoded_size_bytes, stats) = match handle
+            let part = match handle
                 .instrument(debug_span!("batch::max_outstanding"))
                 .await
             {
                 Ok(x) => x,
-                Err(err) if err.is_cancelled() => (0, None),
                 Err(err) => panic!("part upload task failed: {}", err),
             };
-            self.finished_parts.push(HollowBatchPart {
-                key,
-                encoded_size_bytes,
-                stats,
-            });
+            self.finished_parts.push(part);
         }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
     pub(crate) async fn finish(self) -> Vec<HollowBatchPart> {
         let mut parts = self.finished_parts;
-        for (key, handle) in self.writing_parts {
-            let (encoded_size_bytes, stats) = match handle.await {
+        for handle in self.writing_parts {
+            let part = match handle.await {
                 Ok(x) => x,
-                Err(err) if err.is_cancelled() => (0, None),
                 Err(err) => panic!("part upload task failed: {}", err),
             };
-            parts.push(HollowBatchPart {
-                key,
-                encoded_size_bytes,
-                stats,
-            });
+            parts.push(part);
         }
         parts
     }

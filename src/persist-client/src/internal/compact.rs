@@ -1165,6 +1165,7 @@ mod tests {
             .map(|encoded_size_bytes| HollowBatchPart {
                 key: PartialBatchKey("".into()),
                 encoded_size_bytes,
+                len: 0,
                 stats: None,
             })
             .collect::<Vec<_>>();

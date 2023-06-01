@@ -905,13 +905,25 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 .map(|key| HollowBatchPart {
                     key: PartialBatchKey(key),
                     encoded_size_bytes: 0,
+                    len: 0,
                     stats: None,
                 }),
         );
+
+        // We didn't always fill in len for parts, so historical data will give
+        // back the proto default of 0. We don't write parts with 0 updates, so
+        // conveniently, we can use this as a sentinel for old data. Fill in the
+        // number of updates in the batch as an upper bound.
+        let len = proto.len.into_rust()?;
+        for mut part in parts.iter_mut() {
+            if part.len == 0 {
+                part.len = len;
+            }
+        }
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
-            len: proto.len.into_rust()?,
+            len,
             runs: proto.runs.into_rust()?,
         })
     }
@@ -923,6 +935,7 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+            len: self.len.into_proto(),
             key_stats,
         }
     }
@@ -937,6 +950,7 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
+            len: proto.len.into_rust()?,
             stats,
         })
     }
@@ -1118,6 +1132,7 @@ mod tests {
             parts: vec![HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
+                len: 0,
                 stats: None,
             }],
             runs: vec![],
@@ -1136,6 +1151,7 @@ mod tests {
         expected.parts.push(HollowBatchPart {
             key: PartialBatchKey("b".into()),
             encoded_size_bytes: 0,
+            len: 0,
             stats: None,
         });
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
