@@ -205,7 +205,7 @@ impl GrpcPubSubClient {
             if is_first_connection_attempt {
                 is_first_connection_attempt = false;
             } else {
-                tokio::time::sleep(PersistConfig::DEFAULT_PUBSUB_CLIENT_RECONNECT_BACKOFF).await;
+                tokio::time::sleep(config.persist_cfg.pubsub_reconnect_backoff).await;
             }
 
             info!("Connecting to Persist PubSub: {}", config.url);
@@ -1691,7 +1691,8 @@ mod grpc {
     }
 
     fn test_persist_config() -> PersistConfig {
-        let cfg = PersistConfig::new_for_tests();
+        let mut cfg = PersistConfig::new_for_tests();
+        cfg.pubsub_reconnect_backoff = Duration::ZERO;
         let mut params = PersistParameters::default();
         params.pubsub_client_enabled = Some(true);
         params.apply(&cfg);
