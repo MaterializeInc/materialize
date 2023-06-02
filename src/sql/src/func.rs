@@ -2403,6 +2403,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "atanh" => Scalar {
             params!(Float64) => UnaryFunc::Atanh(func::Atanh) => Float64, 2467;
         },
+        "age" => Scalar {
+            params!(Timestamp, Timestamp) => BinaryFunc::AgeTimestamp => Interval, 2058;
+            params!(TimestampTz, TimestampTz) => BinaryFunc::AgeTimestampTz => Interval, 1199;
+        },
         "timezone" => Scalar {
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
             params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz => Timestamp, 1159;

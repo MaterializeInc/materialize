@@ -2939,10 +2939,10 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         add_arb_duration(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
             .prop_map(PropDatum::Time)
             .boxed(),
-        add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+        arb_naive_date_time()
             .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
-        add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
+        arb_utc_date_time()
             .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
         arb_interval().prop_map(PropDatum::Interval).boxed(),
@@ -2964,6 +2964,16 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         ])
     })
     .boxed()
+}
+
+/// Generates an arbitrary [`NaiveDateTime`].
+pub fn arb_naive_date_time() -> impl Strategy<Value = NaiveDateTime> {
+    add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+}
+
+/// Generates an arbitrary [`DateTime`] in [`Utc`].
+pub fn arb_utc_date_time() -> impl Strategy<Value = DateTime<Utc>> {
+    add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
 }
 
 fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {

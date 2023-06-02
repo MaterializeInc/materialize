@@ -814,6 +814,22 @@ fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+fn age_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamp();
+    let b_ts = b.unwrap_timestamp();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
+}
+
+fn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamptz();
+    let b_ts = b.unwrap_timestamptz();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
+}
+
 fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
 }
@@ -1957,6 +1973,8 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddNumeric,
+    AgeTimestamp,
+    AgeTimestampTz,
     BitAndInt16,
     BitAndInt32,
     BitAndInt64,
@@ -2159,6 +2177,8 @@ impl BinaryFunc {
             BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
             BinaryFunc::AddNumeric => add_numeric(a, b),
             BinaryFunc::AddInterval => add_interval(a, b),
+            BinaryFunc::AgeTimestamp => age_timestamp(a, b),
+            BinaryFunc::AgeTimestampTz => age_timestamptz(a, b),
             BinaryFunc::BitAndInt16 => Ok(bit_and_int16(a, b)),
             BinaryFunc::BitAndInt32 => Ok(bit_and_int32(a, b)),
             BinaryFunc::BitAndInt64 => Ok(bit_and_int64(a, b)),
@@ -2455,6 +2475,8 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
+            AgeTimestamp | AgeTimestampTz => ScalarType::Interval.nullable(in_nullable),
+
             AddTimestampInterval
             | SubTimestampInterval
             | AddTimestampTzInterval
@@ -2603,6 +2625,8 @@ impl BinaryFunc {
             | AddDateTime
             | AddTimeInterval
             | AddNumeric
+            | AgeTimestamp
+            | AgeTimestampTz
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
@@ -2914,6 +2938,8 @@ impl BinaryFunc {
             | RangeDifference => true,
             ToCharTimestamp
             | ToCharTimestampTz
+            | AgeTimestamp
+            | AgeTimestampTz
             | DateBinTimestamp
             | DateBinTimestampTz
             | ExtractInterval
@@ -3104,6 +3130,7 @@ impl BinaryFunc {
             | BinaryFunc::IsRegexpMatch { .. } => (false, false),
             BinaryFunc::ToCharTimestamp | BinaryFunc::ToCharTimestampTz => (false, false),
             BinaryFunc::DateBinTimestamp | BinaryFunc::DateBinTimestampTz => (true, true),
+            BinaryFunc::AgeTimestamp | BinaryFunc::AgeTimestampTz => (true, true),
             // TODO: can these ever be treated as monotone? It's safe to treat the unary versions
             // as monotone in some cases, but only when extracting specific parts.
             BinaryFunc::ExtractInterval
@@ -3203,6 +3230,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddDateTime => f.write_str("+"),
             BinaryFunc::AddDateInterval => f.write_str("+"),
             BinaryFunc::AddTimeInterval => f.write_str("+"),
+            BinaryFunc::AgeTimestamp => f.write_str("age"),
+            BinaryFunc::AgeTimestampTz => f.write_str("age"),
             BinaryFunc::BitAndInt16 => f.write_str("&"),
             BinaryFunc::BitAndInt32 => f.write_str("&"),
             BinaryFunc::BitAndInt64 => f.write_str("&"),
@@ -3415,6 +3444,8 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddDateTime).boxed(),
             Just(BinaryFunc::AddTimeInterval).boxed(),
             Just(BinaryFunc::AddNumeric).boxed(),
+            Just(BinaryFunc::AgeTimestamp).boxed(),
+            Just(BinaryFunc::AgeTimestampTz).boxed(),
             Just(BinaryFunc::BitAndInt16).boxed(),
             Just(BinaryFunc::BitAndInt32).boxed(),
             Just(BinaryFunc::BitAndInt64).boxed(),
@@ -3620,6 +3651,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::AddDateTime => AddDateTime(()),
             BinaryFunc::AddTimeInterval => AddTimeInterval(()),
             BinaryFunc::AddNumeric => AddNumeric(()),
+            BinaryFunc::AgeTimestamp => AgeTimestamp(()),
+            BinaryFunc::AgeTimestampTz => AgeTimestampTz(()),
             BinaryFunc::BitAndInt16 => BitAndInt16(()),
             BinaryFunc::BitAndInt32 => BitAndInt32(()),
             BinaryFunc::BitAndInt64 => BitAndInt64(()),
@@ -3815,6 +3848,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 AddDateTime(()) => Ok(BinaryFunc::AddDateTime),
                 AddTimeInterval(()) => Ok(BinaryFunc::AddTimeInterval),
                 AddNumeric(()) => Ok(BinaryFunc::AddNumeric),
+                AgeTimestamp(()) => Ok(BinaryFunc::AgeTimestamp),
+                AgeTimestampTz(()) => Ok(BinaryFunc::AgeTimestampTz),
                 BitAndInt16(()) => Ok(BinaryFunc::BitAndInt16),
                 BitAndInt32(()) => Ok(BinaryFunc::BitAndInt32),
                 BitAndInt64(()) => Ok(BinaryFunc::BitAndInt64),

@@ -611,6 +611,8 @@ message ProtoBinaryFunc {
         google.protobuf.Empty uuid_generate_v5 = 183;
         google.protobuf.Empty mz_acl_item_contains_privilege = 184;
         google.protobuf.Empty parse_ident = 185;
+        google.protobuf.Empty age_timestamp = 186;
+        google.protobuf.Empty age_timestamp_tz = 187;
     }
 }
 
