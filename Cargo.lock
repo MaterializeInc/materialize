@@ -3932,7 +3932,6 @@ dependencies = [
  "mz-pgrepr",
  "mz-proto",
  "mz-repr",
- "mz-sql-parser",
  "num",
  "num_enum",
  "once_cell",
