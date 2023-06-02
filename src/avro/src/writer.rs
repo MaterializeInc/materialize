@@ -391,7 +391,7 @@ mod tests {
             ["null", "long"]
         "#;
 
-    #[test]
+    #[mz_ore::test]
     fn test_to_avro_datum() {
         let schema = Schema::from_str(SCHEMA).unwrap();
         let mut record = Record::new(schema.top_node()).unwrap();
@@ -406,7 +406,7 @@ mod tests {
         assert_eq!(to_avro_datum(&schema, record).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_union() {
         let schema = Schema::from_str(UNION_SCHEMA).unwrap();
         let union = Value::Union {
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(to_avro_datum(&schema, union).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_writer_append() {
         let schema = Schema::from_str(SCHEMA).unwrap();
         let mut writer = Writer::new(schema.clone(), Vec::new());
@@ -474,7 +474,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_writer_extend() {
         let schema = Schema::from_str(SCHEMA).unwrap();
         let mut writer = Writer::new(schema.clone(), Vec::new());
@@ -532,7 +532,7 @@ mod tests {
         b: String,
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `deflateInit2_` on OS `linux`
     fn test_writer_with_codec() {
         let schema = Schema::from_str(SCHEMA).unwrap();
@@ -585,7 +585,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_writer_roundtrip() {
         let schema = Schema::from_str(SCHEMA).unwrap();
         let make_record = |a: i64, b| {

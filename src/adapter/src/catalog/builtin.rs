@@ -4011,7 +4011,7 @@ mod tests {
 
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_compare_builtins_postgres() {
         async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
@@ -4337,7 +4337,7 @@ mod tests {
     }
 
     // Make sure pg views don't use types that only exist in Materialize.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();

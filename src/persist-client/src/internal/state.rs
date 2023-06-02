@@ -1647,7 +1647,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn downgrade_since() {
         let mut state = TypedState::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -1797,9 +1797,8 @@ pub(crate) mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn compare_and_append() {
-        mz_ore::test::init_logging();
         let state = &mut TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -1883,9 +1882,8 @@ pub(crate) mod tests {
             .is_continue());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn snapshot() {
-        mz_ore::test::init_logging();
         let now = SYSTEM_TIME.clone();
 
         let mut state = TypedState::<String, String, u64, i64>::new(
@@ -2049,10 +2047,8 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn next_listen_batch() {
-        mz_ore::test::init_logging();
-
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2121,10 +2117,8 @@ pub(crate) mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn expire_writer() {
-        mz_ore::test::init_logging();
-
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2200,9 +2194,8 @@ pub(crate) mod tests {
             .is_continue());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn maybe_gc() {
-        mz_ore::test::init_logging();
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2251,7 +2244,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn need_rollup() {
         const ROLLUP_THRESHOLD: usize = 3;
         mz_ore::test::init_logging();
@@ -2337,7 +2330,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn idempotency_token_sentinel() {
         assert_eq!(
             IdempotencyToken::SENTINEL.to_string(),
@@ -2353,7 +2346,7 @@ pub(crate) mod tests {
     ///
     /// This golden will have to be updated each time we change State, but
     /// that's a feature, not a bug.
-    #[test]
+    #[mz_ore::test]
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();

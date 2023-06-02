@@ -3105,7 +3105,7 @@ impl<T: Timestamp> ExportState<T> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn lag_writes_by_zero() {
         let policy =
             ReadPolicy::lag_writes_by(mz_repr::Timestamp::default(), mz_repr::Timestamp::default());

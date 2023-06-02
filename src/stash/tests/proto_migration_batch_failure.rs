@@ -88,11 +88,9 @@ use tokio_postgres::Config;
 // so when run as unit tests it interferes with the other running tests. Whereas integration tests
 // run in their own processes, which gives us the necessary isolation.
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_batch_failure() {
-    mz_ore::test::init_logging();
-
     // Connect to Cockroach.
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
     let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");

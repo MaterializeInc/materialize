@@ -697,7 +697,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
+    #[mz_ore::test]
     fn test_merge_update() {
         let mut buf = Vec::new();
         let opts = upsert_bincode_opts();

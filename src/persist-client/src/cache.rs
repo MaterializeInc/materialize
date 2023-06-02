@@ -659,7 +659,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn client_cache() {
         let cache = PersistClientCache::new(
@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(cache.consensus_by_uri.lock().await.len(), 4);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn state_cache() {
         mz_ore::test::init_logging();
         fn new_state<K, V, T, D>(shard_id: ShardId) -> TypedState<K, V, T, D>
@@ -868,7 +868,7 @@ mod tests {
         assert_eq!(states.strong_count(), 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn state_cache_concurrency() {
         mz_ore::test::init_logging();
 

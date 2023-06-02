@@ -499,7 +499,7 @@ mod tests {
 
     use super::DecodeError;
 
-    #[test]
+    #[mz_ore::test]
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
         let original = DecodeError {
             kind: DecodeErrorKind::Text("ciao".to_string()),

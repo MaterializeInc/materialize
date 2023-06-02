@@ -2738,7 +2738,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_reduce() {
         let relation_type = vec![
             ScalarType::Int64.nullable(true),
@@ -2845,7 +2845,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
             assert!(actual.is_ok());
@@ -2854,7 +2854,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn domain_limit_protobuf_roundtrip(expect in any::<DomainLimit>()) {
             let actual = protobuf_roundtrip::<_, ProtoDomainLimit>(&expect);
             assert!(actual.is_ok());
@@ -2863,7 +2863,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
             assert!(actual.is_ok());

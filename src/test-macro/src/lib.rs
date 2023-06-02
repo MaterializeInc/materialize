@@ -79,41 +79,91 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::error::Error;
+//! test macro with auto-initialized logging
 
-use mz_pid_file::PidFile;
+extern crate proc_macro;
 
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("pidfile");
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as Tokens;
+use quote::quote;
+use syn::parse_macro_input;
+use syn::parse_quote;
+use syn::AttributeArgs;
+use syn::ItemFn;
+use syn::Meta;
+use syn::NestedMeta;
+use syn::ReturnType;
 
-    // Creating a PID file should create a file at the specified path.
-    let pid_file = PidFile::open(&path)?;
-    assert!(path.exists());
+/// Based on <https://github.com/d-e-s-o/test-log>
+/// Copyright (C) 2019-2022 Daniel Mueller <deso@posteo.net>
+/// SPDX-License-Identifier: (Apache-2.0 OR MIT)
 
-    // PID contents should be accurate
-    let pid = PidFile::read(&path)?;
-    assert!(pid > 0);
-    assert_eq!(std::process::id(), u32::try_from(pid).unwrap());
+#[proc_macro_attribute]
+pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as AttributeArgs);
+    let input = parse_macro_input!(item as ItemFn);
 
-    // Attempting to open the PID file again should fail.
-    match PidFile::open(&path) {
-        Err(mz_pid_file::Error::AlreadyRunning { .. }) => (),
-        Ok(_) => panic!("unexpected success when opening pid file"),
-        Err(e) => return Err(e.into()),
+    let inner_test = match args.as_slice() {
+        [] => parse_quote! { ::core::prelude::v1::test },
+        [NestedMeta::Meta(Meta::Path(path))] => quote! { #path },
+        [NestedMeta::Meta(Meta::List(list))] => quote! { #list },
+        _ => panic!("unsupported attributes supplied: {:?}", args),
+    };
+
+    expand_wrapper(&inner_test, &input)
+}
+
+fn expand_logging_init() -> Tokens {
+    let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
+    if crate_name == "mz-ore" {
+        quote! {
+          {
+            use crate::test;
+            let _ = test::init_logging();
+          }
+        }
+    } else {
+        quote! {
+          {
+            let _ = ::mz_ore::test::init_logging();
+          }
+        }
     }
+}
 
-    // Dropping the PID file should remove it.
-    drop(pid_file);
-    assert!(!path.exists());
+/// Emit code for a wrapper function around a test function.
+fn expand_wrapper(inner_test: &Tokens, wrappee: &ItemFn) -> TokenStream {
+    let attrs = &wrappee.attrs;
+    let async_ = &wrappee.sig.asyncness;
+    let await_ = if async_.is_some() {
+        quote! {.await}
+    } else {
+        quote! {}
+    };
+    let body = &wrappee.block;
+    let test_name = &wrappee.sig.ident;
 
-    // Using the explicit `remove` method should work too.
-    let pid_file = PidFile::open(&path)?;
-    assert!(path.exists());
-    pid_file.remove()?;
-    assert!(!path.exists());
+    // Note that Rust does not allow us to have a test function with
+    // #[should_panic] that has a non-unit return value.
+    let ret = match &wrappee.sig.output {
+        ReturnType::Default => quote! {},
+        ReturnType::Type(_, type_) => quote! {-> #type_},
+    };
 
-    Ok(())
+    let logging_init = expand_logging_init();
+
+    let result = quote! {
+      #[#inner_test]
+      #(#attrs)*
+      #async_ fn #test_name() #ret {
+        #async_ fn test_impl() #ret {
+          #body
+        }
+
+        #logging_init
+
+        test_impl()#await_
+      }
+    };
+    result.into()
 }

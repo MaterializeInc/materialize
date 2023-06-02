@@ -3481,6 +3481,7 @@ dependencies = [
  "enum-kinds",
  "flate2",
  "itertools",
+ "mz-ore",
  "once_cell",
  "rand",
  "regex",
@@ -3575,6 +3576,7 @@ dependencies = [
  "async-trait",
  "k8s-openapi",
  "kube",
+ "mz-ore",
  "mz-repr",
  "schemars",
  "serde",
@@ -4259,6 +4261,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-tls",
+ "mz-test-macro",
  "native-tls",
  "once_cell",
  "openssl",
@@ -4390,6 +4393,7 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "mz-ore",
  "mz-proto",
  "parquet2",
  "proptest",
@@ -4407,6 +4411,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "csv",
+ "mz-ore",
  "mz-pgrepr",
  "mz-repr",
  "workspace-hack",
@@ -5075,6 +5080,17 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-test-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.107",
+ "tokio",
  "workspace-hack",
 ]
 

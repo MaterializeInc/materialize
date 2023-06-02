@@ -2998,7 +2998,7 @@ impl Value for Duration {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_value_duration() {
     fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
         let d = Duration::parse(&STATEMENT_TIMEOUT, VarInput::Flat(t)).expect("invalid duration");

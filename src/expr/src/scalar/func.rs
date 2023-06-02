@@ -7502,7 +7502,7 @@ mod test {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn add_interval_months() {
         let dt = ym(2000, 1);
 
@@ -7562,7 +7562,7 @@ mod test {
     // `UnaryFunc::introduces_nulls` and `UnaryFunc::propagates_nulls`.
     // Currently, only unit variants of UnaryFunc are tested because those are
     // the easiest to construct in bulk.
-    #[test]
+    #[mz_ore::test]
     fn unary_func_introduces_nulls() {
         // Dummy columns to test the nullability of `UnaryFunc::output_type`.
         // It is ok that we're feeding these dummy columns into functions that
@@ -7604,28 +7604,28 @@ mod test {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn unary_func_protobuf_roundtrip(expect in any::<UnaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnaryFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn binary_func_protobuf_roundtrip(expect in any::<BinaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoBinaryFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
             assert!(actual.is_ok());

@@ -936,7 +936,7 @@ mod tests {
     //
     // You need to set up a topic "queue-test" with 1000 "hello" messages in it. Obviously, running
     // this test requires a running Kafka instance at localhost:9092.
-    #[test]
+    #[mz_ore::test]
     #[ignore]
     fn demonstrate_kafka_queue_race_condition() -> Result<(), anyhow::Error> {
         let topic_name = "queue-test";

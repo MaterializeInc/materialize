@@ -2541,7 +2541,7 @@ mod tests {
     use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
 
     proptest! {
-       #[test]
+       #[mz_ore::test]
         fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
             assert!(actual.is_ok());
@@ -2550,7 +2550,7 @@ mod tests {
     }
 
     proptest! {
-       #[test]
+       #[mz_ore::test]
         fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
             assert!(actual.is_ok());

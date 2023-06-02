@@ -586,7 +586,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_fast_path_plan_as_text() {
         let typ = RelationType::new(vec![ColumnType {
             scalar_type: ScalarType::String,

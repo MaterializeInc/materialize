@@ -288,7 +288,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn top_k_plan_protobuf_roundtrip(expect in any::<TopKPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoTopKPlan>(&expect);
             assert!(actual.is_ok());

@@ -387,7 +387,7 @@ mod tests {
         vec![builder.finish()]
     }
 
-    #[test]
+    #[mz_ore::test]
     fn trace_batch_validate() {
         // Normal case
         let b = BlobTraceBatchPart {
@@ -483,7 +483,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn trace_batch_meta_validate() {
         // Normal case
         let b = batch_meta(0, 1);
@@ -521,7 +521,7 @@ mod tests {
         val_len
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn trace_batch_meta_validate_data() -> Result<(), Error> {
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let format = ProtoBatchFormat::ParquetKvtd;
@@ -597,7 +597,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn encoded_batch_sizes() {
         fn sizes(data: DataGenerator) -> usize {
             let trace = BlobTraceBatchPart {

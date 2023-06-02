@@ -1094,7 +1094,7 @@ mod tests {
     // Regression test for the apply_diffs_spine special case that sniffs out an
     // insert, applies it, and then lets the remaining diffs (if any) fall
     // through to the rest of the code. See #15493.
-    #[test]
+    #[mz_ore::test]
     fn regression_15493_sniff_insert() {
         fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
             HollowBatch {
@@ -1193,7 +1193,7 @@ mod tests {
         assert_eq!(actual, batches_after);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn apply_lenient() {
         #[track_caller]
         fn testcase(

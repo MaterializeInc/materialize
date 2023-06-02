@@ -1100,14 +1100,14 @@ mod pubsub_state {
         data: Bytes::from_static(&[4, 5, 6, 7]),
     };
 
-    #[test]
+    #[mz_ore::test]
     #[should_panic(expected = "unknown connection id: 100")]
     fn test_zero_connections_push_diff() {
         let state = Arc::new(PubSubState::new_for_test());
         state.push_diff(100, &SHARD_ID_0, &VERSIONED_DATA_0);
     }
 
-    #[test]
+    #[mz_ore::test]
     #[should_panic(expected = "unknown connection id: 100")]
     fn test_zero_connections_subscribe() {
         let state = Arc::new(PubSubState::new_for_test());
@@ -1115,21 +1115,21 @@ mod pubsub_state {
         state.subscribe(100, tx, &SHARD_ID_0);
     }
 
-    #[test]
+    #[mz_ore::test]
     #[should_panic(expected = "unknown connection id: 100")]
     fn test_zero_connections_unsubscribe() {
         let state = Arc::new(PubSubState::new_for_test());
         state.unsubscribe(100, &SHARD_ID_0);
     }
 
-    #[test]
+    #[mz_ore::test]
     #[should_panic(expected = "unknown connection id: 100")]
     fn test_zero_connections_remove() {
         let state = Arc::new(PubSubState::new_for_test());
         state.remove_connection(100)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_single_connection() {
         let state = Arc::new(PubSubState::new_for_test());
 
@@ -1189,7 +1189,7 @@ mod pubsub_state {
         assert!(state.active_connections().is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_many_connection() {
         let state = Arc::new(PubSubState::new_for_test());
 
@@ -1327,7 +1327,7 @@ mod grpc {
     // ALL tasks (including spawned child tasks) associated with one end of a connection, to most
     // closely model an actual disconnect.
 
-    #[test]
+    #[mz_ore::test]
     fn grpc_server() {
         let metrics = Arc::new(Metrics::new(
             &test_persist_config(),
@@ -1385,7 +1385,7 @@ mod grpc {
         });
     }
 
-    #[test]
+    #[mz_ore::test]
     fn grpc_client_sender_reconnects() {
         let metrics = Arc::new(Metrics::new(
             &test_persist_config(),
@@ -1465,7 +1465,7 @@ mod grpc {
         });
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn grpc_client_sender_subscription_tokens() {
         let metrics = Arc::new(Metrics::new(
             &test_persist_config(),
@@ -1539,7 +1539,7 @@ mod grpc {
         .await;
     }
 
-    #[test]
+    #[mz_ore::test]
     fn grpc_client_receiver() {
         let metrics = Arc::new(Metrics::new(
             &PersistConfig::new_for_tests(),

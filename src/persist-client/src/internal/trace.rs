@@ -1369,7 +1369,7 @@ pub(crate) mod tests {
         )
     }
 
-    #[test]
+    #[mz_ore::test]
     fn remove_redundant_merge_reqs() {
         fn req(lower: u64, upper: u64) -> FueledMergeReq<u64> {
             FueledMergeReq {

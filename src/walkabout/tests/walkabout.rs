@@ -77,7 +77,7 @@ use std::io::Write;
 
 use tempfile::NamedTempFile;
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: non-default mode 0o600 is not supported
 fn datadriven() {
     datadriven::walk("tests/testdata", |f| {

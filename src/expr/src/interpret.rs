@@ -1224,7 +1224,7 @@ mod tests {
         })
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_trivial_spec_matches() {
         fn check(datum: PropDatum) -> Result<(), TestCaseError> {
             let datum: Datum = (&datum).into();
@@ -1244,7 +1244,7 @@ mod tests {
         assert!(ResultSpec::fails().may_fail());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_equivalence() {
         fn check(data: ExpressionData) -> Result<(), TestCaseError> {
             let ExpressionData {
@@ -1292,7 +1292,7 @@ mod tests {
         });
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_mfp() {
         // Regression test for https://github.com/MaterializeInc/materialize/issues/19338
         use MirScalarExpr::*;
@@ -1337,7 +1337,7 @@ mod tests {
         assert!(spec.range.may_fail());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(
@@ -1405,7 +1405,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_jsonb() {
         let arena = RowArena::new();
 
@@ -1444,7 +1444,7 @@ mod tests {
         assert!(!range_out.may_contain(Datum::Numeric(400.into())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_trace() {
         use super::Trace;
 

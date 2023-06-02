@@ -643,7 +643,7 @@ pub fn encode_row_description(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_should_output_to_client() {
         #[rustfmt::skip]
         let test_cases = [
