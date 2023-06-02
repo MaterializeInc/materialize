@@ -9,8 +9,7 @@
 from typing import Set
 
 from materialize.output_consistency.execution.evaluation_strategy import (
-    CTF_EVALUATION_STRATEGY_ID,
-    DFR_EVALUATION_STRATEGY_ID,
+    EvaluationStrategyKey,
 )
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -155,13 +154,13 @@ class PreExecutionInconsistencyIgnoreFilter:
 class PostExecutionInconsistencyIgnoreFilter:
     def shall_ignore_error(self, error: ValidationError) -> bool:
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
-            outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_id()
+            outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
             dfr_successful = outcome_by_strategy_id[
-                DFR_EVALUATION_STRATEGY_ID
+                EvaluationStrategyKey.DATAFLOW_RENDERING
             ].successful
             ctf_successful = outcome_by_strategy_id[
-                CTF_EVALUATION_STRATEGY_ID
+                EvaluationStrategyKey.CONSTANT_FOLDING
             ].successful
 
             if (

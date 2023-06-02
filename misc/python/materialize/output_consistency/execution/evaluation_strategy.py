@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from enum import Enum
 from typing import List, Optional
 
 from materialize.output_consistency.data_type.data_type_with_values import (
@@ -26,9 +26,11 @@ from materialize.output_consistency.selection.selection import (
     TableColumnByNameSelection,
 )
 
-DUMMY_EVALUATION_STRATEGY_ID = "DUMMY"
-DFR_EVALUATION_STRATEGY_ID = "DFR"
-CTF_EVALUATION_STRATEGY_ID = "CTF"
+
+class EvaluationStrategyKey(Enum):
+    DUMMY = 1
+    DATAFLOW_RENDERING = 2
+    CONSTANT_FOLDING = 3
 
 
 class EvaluationStrategy:
@@ -36,7 +38,7 @@ class EvaluationStrategy:
 
     def __init__(
         self,
-        identifier: str,
+        identifier: EvaluationStrategyKey,
         name: str,
         object_name_base: str,
         simple_db_object_name: str,
@@ -101,7 +103,7 @@ class EvaluationStrategy:
 
 class DummyEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__(DUMMY_EVALUATION_STRATEGY_ID, "Dummy", "<source>", "dummy")
+        super().__init__(EvaluationStrategyKey.DUMMY, "Dummy", "<source>", "dummy")
 
     def generate_sources(
         self,
@@ -113,7 +115,7 @@ class DummyEvaluation(EvaluationStrategy):
 class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__(
-            DFR_EVALUATION_STRATEGY_ID,
+            EvaluationStrategyKey.DATAFLOW_RENDERING,
             "Dataflow rendering",
             "t_dfr",
             "dataflow_rendering",
@@ -152,7 +154,10 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
 class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__(
-            CTF_EVALUATION_STRATEGY_ID, "Constant folding", "v_ctf", "constant_folding"
+            EvaluationStrategyKey.CONSTANT_FOLDING,
+            "Constant folding",
+            "v_ctf",
+            "constant_folding",
         )
 
     def generate_source_for_storage_layout(

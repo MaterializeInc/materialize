@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Sequence
 from materialize.output_consistency.execution.evaluation_strategy import (
     DummyEvaluation,
     EvaluationStrategy,
+    EvaluationStrategyKey,
 )
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
@@ -34,7 +35,7 @@ class QueryExecution:
         self.outcomes: List[QueryOutcome] = []
         self.query_template = query_template
 
-    def get_outcome_by_strategy_id(self) -> Dict[str, QueryOutcome]:
+    def get_outcome_by_strategy_key(self) -> Dict[EvaluationStrategyKey, QueryOutcome]:
         return dict(
             [(outcome.strategy.identifier, outcome) for outcome in self.outcomes]
         )
