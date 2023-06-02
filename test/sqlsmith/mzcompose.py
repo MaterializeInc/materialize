@@ -121,6 +121,7 @@ known_errors = [
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
+    "string is not a valid identifier:",  # Expected in parse_ident
 ]
 
 
