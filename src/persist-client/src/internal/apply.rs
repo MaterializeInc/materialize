@@ -232,18 +232,18 @@ where
                     )
                 });
 
-        // The latest rollup <= seqno_since is not removable.
-        let (latest_rollup_lte_seqno_since, _) = rollups.pop().expect(&format!(
-            "shard {} must have rollup <= seqno_since({})",
-            self.shard_id, seqno_since
-        ));
-        assert!(latest_rollup_lte_seqno_since <= seqno_since);
-
-        // All remaining rollups are removable, as they are all `<` than the
-        // latest rollup `<= seqno_since`.
-        assert!(rollups
-            .iter()
-            .all(|(seqno, _)| *seqno < latest_rollup_lte_seqno_since));
+        // // The latest rollup <= seqno_since is not removable.
+        // let (latest_rollup_lte_seqno_since, _) = rollups.pop().expect(&format!(
+        //     "shard {} must have rollup <= seqno_since({})",
+        //     self.shard_id, seqno_since
+        // ));
+        // assert!(latest_rollup_lte_seqno_since <= seqno_since);
+        //
+        // // All remaining rollups are removable, as they are all `<` than the
+        // // latest rollup `<= seqno_since`.
+        // assert!(rollups
+        //     .iter()
+        //     .all(|(seqno, _)| *seqno < latest_rollup_lte_seqno_since));
 
         rollups
     }

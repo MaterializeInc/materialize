@@ -21,15 +21,16 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, warn, Instrument, Span};
+use tracing::{debug, debug_span, info, warn, Instrument, Span};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::maintenance;
 use crate::internal::maintenance::RoutineMaintenance;
-use crate::internal::metrics::RetryMetrics;
+use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBatchKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
@@ -236,7 +237,7 @@ where
             states.len()
         );
 
-        Self::incrementally_gc(
+        let maintenance = Self::incrementally_gc(
             &req.shard_id,
             &mut states,
             req.new_seqno_since,
@@ -244,11 +245,6 @@ where
             &mut report_step_timing,
         )
         .await;
-
-        // WIP: do we want to remove rollups incrementally?
-        let removable_rollups = machine.applier.removable_rollups();
-        let (removed_rollups, maintenance) = machine.remove_rollups(&removable_rollups).await;
-        debug!("removed rollups: {:?}", removed_rollups);
 
         // WIP: do we want to calculate the seqno_parts_held metric?
         while let Some(_) = states.next(|_| {}) {}
@@ -269,7 +265,8 @@ where
         seqno_since: SeqNo,
         machine: &mut Machine<K, V, T, D>,
         timer: &mut F,
-    ) where
+    ) -> RoutineMaintenance
+    where
         F: FnMut(&Counter),
     {
         let delete_semaphore = Semaphore::new(
@@ -286,29 +283,37 @@ where
         // to this process, which may be arbitrarily far ahead of `states`. we do
         // this for several reasons, but most importantly because we truncate live
         // diffs in Consensus before we remove rollups from state, WIP explain more plz
+        let mut removable_rollups: Vec<_> = machine
+            .applier
+            .removable_rollups()
+            .into_iter()
+            .filter(|(seqno, _rollup)| *seqno <= seqno_since)
+            .collect();
 
-        for (truncate_lt, _rollup) in machine.applier.removable_rollups() {
-            // our GC req was only to `seqno_since`. it's possible there's more
-            // work to do, but we'll leave that for a future GC req
-            if truncate_lt > seqno_since {
-                break;
-            }
+        info!(
+            "Removing to ({}). Eligible rollups: ({:?})",
+            seqno_since, removable_rollups
+        );
 
-            assert!(truncate_lt <= seqno_since);
+        for (truncate_lt, _rollup) in &removable_rollups {
+            assert!(*truncate_lt <= seqno_since);
             Self::find_removable_blobs(
                 states,
-                truncate_lt,
-                machine,
+                *truncate_lt,
+                &machine.applier.metrics.gc.steps,
                 timer,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
             );
 
-            assert_eq!(states.state().seqno, truncate_lt);
+            info!(
+                "While truncating lt ({}), removing: {:?}",
+                truncate_lt, rollups_to_delete
+            );
 
             Self::delete_and_truncate(
                 shard_id,
-                truncate_lt,
+                *truncate_lt,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
                 machine,
@@ -320,22 +325,28 @@ where
             assert!(batch_parts_to_delete.is_empty());
             assert!(rollups_to_delete.is_empty());
         }
+
+        removable_rollups.pop();
+
+        let (removed_rollups, maintenance) = machine.remove_rollups(&removable_rollups).await;
+        info!("removed rollups: {:?}", removed_rollups);
+        maintenance
     }
 
     /// Iterates through `states`, accumulating all deleted blobs (both batch parts
-    /// and rollups), until `truncate_lt` (exclusive).
+    /// and rollups) until `truncate_lt` (exclusive).
     fn find_removable_blobs<F>(
         states: &mut StateVersionsIter<T>,
         truncate_lt: SeqNo,
-        machine: &mut Machine<K, V, T, D>,
+        metrics: &GcStepTimings,
         timer: &mut F,
         batch_parts_to_delete: &mut Vec<PartialBatchKey>,
         rollups_to_delete: &mut Vec<PartialRollupKey>,
     ) where
         F: FnMut(&Counter),
     {
-        // WIP:
-        if states.state().seqno.next() > truncate_lt {
+        // if our state is already past the truncation point, there's nothing to do
+        if states.state().seqno().next() >= truncate_lt {
             return;
         }
 
@@ -355,19 +366,18 @@ where
                 });
             }
         }) {
-            if state.seqno == truncate_lt {
+            if state.seqno.next() == truncate_lt {
                 break;
             }
         }
 
-        timer(
-            &machine
-                .applier
-                .metrics
-                .gc
-                .steps
-                .find_deletable_blobs_seconds,
-        );
+        // there should always be enough live diffs to reach `truncate_lt`
+        // if our initial seqno.next() was <= `truncate_lt`.
+        //
+        // WIP: there's a wonderful proof but doesn't fit in this comment...
+        assert_eq!(states.state().seqno.next(), truncate_lt);
+
+        timer(&metrics.find_deletable_blobs_seconds);
     }
 
     /// Deletes all batch parts and rollups from Blob.
