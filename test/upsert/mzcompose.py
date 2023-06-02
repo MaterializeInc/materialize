@@ -23,6 +23,8 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
+materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
@@ -35,6 +37,7 @@ SERVICES = [
             "upsert_source_disk_default": "true",
             "enable_unmanaged_cluster_replicas": "true",
         },
+        environment_extra=materialized_environment_extra,
     ),
     Testdrive(),
     Clusterd(
@@ -47,6 +50,16 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--compaction-disabled",
+        action="store_true",
+        help="Run with MZ_PERSIST_COMPACTION_DISABLED",
+    )
+    args = parser.parse_args()
+
+    if args.compaction_disabled:
+        materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
+
     for name in [
         "rehydration",
         "testdrive",
@@ -96,6 +109,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--orchestrator-process-scratch-directory=/mzdata/source_data",
         ],
         additional_system_parameter_defaults={"upsert_source_disk_default": "true"},
+        environment_extra=materialized_environment_extra,
     )
 
     with c.override(testdrive, materialized):
@@ -156,9 +170,13 @@ def workflow_rehydration(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "upsert_source_disk_default": "true"
                 },
+                environment_extra=materialized_environment_extra,
             ),
         ),
-        ("without DISK", Materialized()),
+        (
+            "without DISK",
+            Materialized(environment_extra=materialized_environment_extra),
+        ),
     ]:
 
         with c.override(
@@ -265,12 +283,12 @@ def workflow_incident_49(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "upsert_source_disk_default": "true"
                 },
-                environment_extra=["MZ_PERSIST_COMPACTION_DISABLED=true"],
+                environment_extra=materialized_environment_extra,
             ),
         ),
         (
             "without DISK",
-            Materialized(environment_extra=["MZ_PERSIST_COMPACTION_DISABLED=true"]),
+            Materialized(environment_extra=materialized_environment_extra),
         ),
     ]:
 

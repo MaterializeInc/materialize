@@ -24,10 +24,11 @@ steps:
           - { value: limits }
           - { value: limits-instance-size }
           - { value: testdrive-partitions-5 }
-          - { value: testdrive-replicas-4}
-          - { value: testdrive-size-1}
-          - { value: testdrive-size-8}
-          - { value: testdrive-in-cloudtest}
+          - { value: testdrive-replicas-4 }
+          - { value: testdrive-size-1 }
+          - { value: testdrive-size-8 }
+          - { value: testdrive-in-cloudtest }
+          - { value: upsert-compaction-disabled }
           - { value: feature-benchmark }
           - { value: zippy-kafka-sources }
           - { value: zippy-kafka-parallel-insert }
@@ -238,6 +239,17 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-1, --persistent-user-tables]
     skip: Persistence tests disabled
+
+  - id: upsert-compaction-disabled
+    label: Upsert (compaction disabled)
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upsert
+          args: [--compaction-disabled]
+    agents:
+      queue: linux-x86_64
 
   - id: zippy-kafka-sources
     label: "Zippy Kafka Sources"
