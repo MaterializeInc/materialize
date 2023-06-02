@@ -415,6 +415,21 @@ The `mz_dataflow_addresses` view describes how the [dataflow] channels and opera
 | `id`         | [`bigint`]        | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
 | `address`    | [`bigint list`]   | A list of scope-local indexes indicating the path from the root to this channel or operator.                                                                  |
 
+### `mz_dataflow_arrangement_sizes`
+
+The `mz_dataflow_arrangement_sizes` view describes how many records and batches
+are contained in operators under each dataflow.
+
+| Field         | Type       | Meaning                                                                      |
+|---------------|------------|------------------------------------------------------------------------------|
+| `id`          | [`bigint`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
+| `name`        | [`bigint`] | The name of the object (e.g., index) maintained by the dataflow.             |
+| `records`     | [`bigint`] | The number of records in all arrangements in the dataflow.                   |
+| `batches`     | [`bigint`] | The number of batches in all arrangements in the dataflow.                   |
+| `size`        | [`bigint`] | The utilized size in bytes of the arrangements.                              |
+| `capacity`    | [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.      |
+| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangements.          |
+
 ### `mz_dataflow_channels`
 
 The `mz_dataflow_channels` view describes the communication channels between [dataflow] operators.
@@ -469,20 +484,14 @@ The `mz_dataflow_operator_parents` view describes how [dataflow] operators are n
 | `id`         | [`bigint`]   | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).                   |
 | `parent_id`  | [`bigint`]   | The ID of the operator's parent operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
 
-### `mz_dataflow_arrangement_sizes`
+### `mz_dataflow_shutdown_durations_histogram`
 
-The `mz_dataflow_arrangement_sizes` view describes how many records and batches
-are contained in operators under each dataflow.
+The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the time in nanoseconds required to fully shut down dropped [dataflows][dataflow].
 
-| Field         | Type       | Meaning                                                                      |
-|---------------|------------|------------------------------------------------------------------------------|
-| `id`          | [`bigint`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`bigint`] | The name of the object (e.g., index) maintained by the dataflow.             |
-| `records`     | [`bigint`] | The number of records in all arrangements in the dataflow.                   |
-| `batches`     | [`bigint`] | The number of batches in all arrangements in the dataflow.                   |
-| `size`        | [`bigint`] | The utilized size in bytes of the arrangements.                              |
-| `capacity`    | [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.      |
-| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangements.          |
+| Field          | Type         | Meaning                                                |
+| -------------- | ------------ | --------                                               |
+| `duration_ns`  | [`bigint`]   | The upper bound of the bucket in nanoseconds.          |
+| `count`        | [`bigint`]   | The (noncumulative) count of dataflows in this bucket. |
 
 ### `mz_message_counts`
 

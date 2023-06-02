@@ -223,6 +223,7 @@ pub enum ComputeLog {
     ArrangementHeapSize,
     ArrangementHeapCapacity,
     ArrangementHeapAllocations,
+    ShutdownDuration,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -240,6 +241,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::ArrangementHeapSize => ArrangementHeapSize(()),
                 ComputeLog::ArrangementHeapCapacity => ArrangementHeapCapacity(()),
                 ComputeLog::ArrangementHeapAllocations => ArrangementHeapAllocations(()),
+                ComputeLog::ShutdownDuration => ShutdownDuration(()),
             }),
         }
     }
@@ -257,6 +259,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(ArrangementHeapSize(())) => Ok(ComputeLog::ArrangementHeapSize),
             Some(ArrangementHeapCapacity(())) => Ok(ComputeLog::ArrangementHeapCapacity),
             Some(ArrangementHeapAllocations(())) => Ok(ComputeLog::ArrangementHeapAllocations),
+            Some(ShutdownDuration(())) => Ok(ComputeLog::ShutdownDuration),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -419,6 +422,10 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+
+            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::empty()
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
         }
     }
 
@@ -471,6 +478,7 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::FrontierDelay) => vec![],
             LogVariant::Compute(ComputeLog::PeekCurrent) => vec![],
             LogVariant::Compute(ComputeLog::PeekDuration) => vec![],
+            LogVariant::Compute(ComputeLog::ShutdownDuration) => vec![],
         }
     }
 }
