@@ -397,8 +397,8 @@ impl<'a> Parser<'a> {
         let expr = match tok {
             Token::LBracket => {
                 self.prev_token();
-                let name = self.parse_raw_name()?;
-                self.parse_function(name)
+                let function = self.parse_named_function()?;
+                Ok(Expr::Function(function))
             }
             Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
                 self.prev_token();
@@ -605,7 +605,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: RawItemName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: RawItemName) -> Result<Function<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let distinct = matches!(
             self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
@@ -660,13 +660,13 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(Expr::Function(Function {
+        Ok(Function {
             name,
             args,
             filter,
             over,
             distinct,
-        }))
+        })
     }
 
     fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
@@ -4664,9 +4664,10 @@ impl<'a> Parser<'a> {
                 }
                 if ends_with_wildcard {
                     Ok(Expr::QualifiedWildcard(id_parts))
-                } else if self.consume_token(&Token::LParen) {
-                    self.prev_token();
-                    self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))
+                } else if self.peek_token() == Some(Token::LParen) {
+                    let function =
+                        self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))?;
+                    Ok(Expr::Function(function))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -5463,7 +5464,13 @@ impl<'a> Parser<'a> {
                 let alias = self.parse_optional_table_alias()?;
                 let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 return Ok(TableFactor::Function {
-                    function: TableFunction { name, args },
+                    function: Function {
+                        name,
+                        args,
+                        filter: None,
+                        over: None,
+                        distinct: false,
+                    },
                     alias,
                     with_ordinality,
                 });
@@ -5529,7 +5536,13 @@ impl<'a> Parser<'a> {
                 let alias = self.parse_optional_table_alias()?;
                 let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 Ok(TableFactor::Function {
-                    function: TableFunction { name, args },
+                    function: Function {
+                        name,
+                        args,
+                        filter: None,
+                        over: None,
+                        distinct: false,
+                    },
                     alias,
                     with_ordinality,
                 })
@@ -5544,7 +5557,7 @@ impl<'a> Parser<'a> {
 
     fn parse_rows_from(&mut self) -> Result<TableFactor<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let functions = self.parse_comma_separated(Parser::parse_table_function)?;
+        let functions = self.parse_comma_separated(Parser::parse_named_function)?;
         self.expect_token(&Token::RParen)?;
         let alias = self.parse_optional_table_alias()?;
         let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
@@ -5555,13 +5568,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
+    fn parse_named_function(&mut self) -> Result<Function<Raw>, ParserError> {
         let name = self.parse_raw_name()?;
-        self.expect_token(&Token::LParen)?;
-        Ok(TableFunction {
-            name,
-            args: self.parse_optional_args(false)?,
-        })
+        self.parse_function(name)
     }
 
     fn parse_derived_table_factor(

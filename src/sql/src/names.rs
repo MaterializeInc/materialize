@@ -20,7 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::{MutRecBlock, TableFactor, UnresolvedObjectName};
+use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -1651,24 +1651,18 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 alias,
                 with_ordinality,
             } => {
-                let function = mz_sql_parser::ast::TableFunction {
-                    name: match &function.name {
-                        RawItemName::Name(name) => {
-                            if *name == UnresolvedItemName::unqualified("values")
-                                && self.status.is_ok()
-                            {
-                                self.status = Err(PlanError::FromValueRequiresParen);
-                            }
-
-                            self.fold_raw_object_name_name_internal(function.name, true)
+                match &function.name {
+                    RawItemName::Name(name) => {
+                        if *name == UnresolvedItemName::unqualified("values") && self.status.is_ok()
+                        {
+                            self.status = Err(PlanError::FromValueRequiresParen);
                         }
-                        RawItemName::Id(..) => self.fold_item_name(function.name),
-                    },
-                    args: self.fold_function_args(function.args),
-                };
+                    }
+                    _ => {}
+                }
 
                 Function {
-                    function,
+                    function: self.fold_function(function),
                     alias: alias.map(|alias| self.fold_table_alias(alias)),
                     with_ordinality,
                 }
@@ -1680,7 +1674,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             } => RowsFrom {
                 functions: functions
                     .into_iter()
-                    .map(|f| self.fold_table_function(f))
+                    .map(|f| self.fold_function(f))
                     .collect(),
                 alias: alias.map(|alias| self.fold_table_alias(alias)),
                 with_ordinality,
