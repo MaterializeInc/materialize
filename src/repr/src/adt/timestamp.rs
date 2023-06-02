@@ -551,13 +551,13 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
 
             // Flip sign if necessary.
             if a < b {
-                nanos = -nanos;
-                seconds = -seconds;
-                minutes = -minutes;
-                hours = -hours;
-                days = -days;
-                months = -months;
-                years = -years;
+                nanos = nanos.checked_neg()?;
+                seconds = seconds.checked_neg()?;
+                minutes = minutes.checked_neg()?;
+                hours = hours.checked_neg()?;
+                days = days.checked_neg()?;
+                months = months.checked_neg()?;
+                years = years.checked_neg()?;
             }
 
             // Carry negative fields into the next higher field.
@@ -592,22 +592,22 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
 
             // Revert the sign back, if we flipped it originally.
             if a < b {
-                nanos = -nanos;
-                seconds = -seconds;
-                minutes = -minutes;
-                hours = -hours;
-                days = -days;
-                months = -months;
-                years = -years;
+                nanos = nanos.checked_neg()?;
+                seconds = seconds.checked_neg()?;
+                minutes = minutes.checked_neg()?;
+                hours = hours.checked_neg()?;
+                days = days.checked_neg()?;
+                months = months.checked_neg()?;
+                years = years.checked_neg()?;
             }
 
             let months = i32::try_from(years * MONTHS_PER_YEAR + months).ok()?;
             let days = i32::try_from(days).ok()?;
             let micros = Duration::nanoseconds(
                 nanos
-                    + (seconds * NANOSECONDS_PER_SECOND)
-                    + (minutes * NANOSECONDS_PER_MINUTE)
-                    + (hours * NANOSECONDS_PER_HOUR),
+                    .checked_add(seconds.checked_mul(NANOSECONDS_PER_SECOND)?)?
+                    .checked_add(minutes.checked_mul(NANOSECONDS_PER_MINUTE)?)?
+                    .checked_add(hours.checked_mul(NANOSECONDS_PER_HOUR)?)?,
             )
             .num_microseconds()?;
 
