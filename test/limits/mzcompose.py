@@ -1284,7 +1284,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--workers",
         type=int,
         metavar="N",
-        default=2,
+        default=16,
         help="set the default number of workers",
     )
     args = parser.parse_args()
@@ -1362,7 +1362,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         "--clusters",
         type=int,
         metavar="N",
-        default=8,
+        default=16,
         help="set the number of clusters to create",
     )
     parser.add_argument(
@@ -1376,7 +1376,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         "--replicas",
         type=int,
         metavar="N",
-        default=4,
+        default=3,
         help="set the number of replicas per cluster",
     )
     args = parser.parse_args()
@@ -1398,9 +1398,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     with c.override(*cluster_replicas):
         with c.override(Testdrive(seed=1, no_reset=True)):
-
-            for n in cluster_replicas:
-                c.up(n.name)
+            c.up(*[n.name for n in cluster_replicas])
 
             # Increase resource limits
             c.testdrive(
@@ -1411,6 +1409,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     """
                     f"""
                     $ postgres-execute connection=mz_system
+                    ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
                     ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                     ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
                     """
@@ -1462,11 +1461,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                         + f"], WORKERS {args.workers})"
                     )
 
-                c.sql(
-                    "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-                    port=6877,
-                    user="mz_system",
-                )
                 c.sql(
                     f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
