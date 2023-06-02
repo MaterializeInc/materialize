@@ -46,3 +46,7 @@ TEXT_TRIM_SPEC_PARAM = EnumConstantOperationParam(
     {"BOTH ", "LEADING", "TRAILING"},
     add_quotes=False,
 )
+
+REPETITIONS_PARAM = EnumConstantOperationParam(
+    {"0", "1", "2", "10", "100", "-2"}, add_quotes=False
+)

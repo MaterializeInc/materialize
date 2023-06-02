@@ -18,6 +18,7 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     REGEX_FLAG_PARAM,
     REGEX_PARAM,
+    REPETITIONS_PARAM,
     TEXT_TRIM_SPEC_PARAM,
 )
 from materialize.output_consistency.input_data.params.number_operation_param import (
@@ -168,9 +169,8 @@ TEXT_OPERATION_TYPES.append(
         "lpad",
         [
             TextOperationParam(),
-            MaxSignedInt4OperationParam(
-                incompatibilities={ExpressionCharacteristics.NEGATIVE}
-            ),
+            # do not use an arbitrary integer to avoid long durations
+            REPETITIONS_PARAM,
             TextOperationParam(optional=True),
         ],
         TextReturnTypeSpec(),
@@ -224,10 +224,8 @@ TEXT_OPERATION_TYPES.append(
         "repeat",
         [
             TextOperationParam(),
-            MaxSignedInt4OperationParam(
-                # MAX_VALUE works but is very slow
-                incompatibilities={ExpressionCharacteristics.MAX_VALUE}
-            ),
+            # do not use an arbitrary integer to avoid crashing mz
+            REPETITIONS_PARAM,
         ],
         TextReturnTypeSpec(),
     )
