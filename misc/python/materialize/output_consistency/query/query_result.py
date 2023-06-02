@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Any, List, Sequence
+from __future__ import annotations
+
+from typing import Any, Dict, List, Sequence
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     DummyEvaluation,
@@ -31,6 +33,14 @@ class QueryExecution:
         self.query_id = query_id
         self.outcomes: List[QueryOutcome] = []
         self.query_template = query_template
+
+    def get_outcome_by_strategy_id(self) -> Dict[str, QueryOutcome]:
+        outcome_by_strategy_id = dict()
+
+        for outcome in self.outcomes:
+            outcome_by_strategy_id[outcome.strategy.identifier] = outcome
+
+        return outcome_by_strategy_id
 
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"
