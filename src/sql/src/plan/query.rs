@@ -3521,11 +3521,10 @@ fn plan_subscript(
             ecx,
             expr,
             positions,
-            if matches!(ty, ScalarType::Array(..)) {
-                1
-            } else {
-                0
-            },
+            // Int2Vector uses 0-based indexing, while arrays use 1-based indexing, so we need to
+            // adjust all Int2Vector subscript operations by 1 (both w/r/t input and the values we
+            // track in its backing data).
+            if ty == ScalarType::Int2Vector { 1 } else { 0 },
         ),
         ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
         ScalarType::List { element_type, .. } => {
