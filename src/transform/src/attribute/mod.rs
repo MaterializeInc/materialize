@@ -320,6 +320,7 @@ impl DerivedAttributes {
                 Some(AttributeId::RelationType) => self.trim_attr::<AsKey<RelationType>>(),
                 Some(AttributeId::Arity) => self.trim_attr::<AsKey<Arity>>(),
                 Some(AttributeId::UniqueKeys) => self.trim_attr::<AsKey<UniqueKeys>>(),
+                Some(AttributeId::Cardinality) => self.trim_attr::<AsKey<Cardinality>>(),
                 None => {}
             }
         }
@@ -346,6 +347,9 @@ impl Visitor<MirRelationExpr> for DerivedAttributes {
                 Some(AttributeId::UniqueKeys) => {
                     self.pre_visit_attr::<AsKey<UniqueKeys>>(expr);
                 }
+                Some(AttributeId::Cardinality) => {
+                    self.pre_visit_attr::<AsKey<Cardinality>>(expr);
+                }
                 None => {}
             }
         }
@@ -370,6 +374,9 @@ impl Visitor<MirRelationExpr> for DerivedAttributes {
                 }
                 Some(AttributeId::UniqueKeys) => {
                     self.post_visit_attr::<AsKey<UniqueKeys>>(expr);
+                }
+                Some(AttributeId::Cardinality) => {
+                    self.post_visit_attr::<AsKey<Cardinality>>(expr);
                 }
                 None => {}
             }
@@ -420,10 +427,11 @@ enum AttributeId {
     Arity = 2,
     RelationType = 3,
     UniqueKeys = 4,
+    Cardinality = 5,
 }
 
 /// Should always be equal to the number of attributes
-const TOTAL_ATTRIBUTES: usize = 5;
+const TOTAL_ATTRIBUTES: usize = 6;
 
 /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
 /// with [`Attributes`] derived from the given context configuration.
@@ -494,6 +502,18 @@ pub fn annotate_plan<'a>(
                     .into_iter()
                     .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
                 let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.keys = Some(attr);
+            }
+        }
+
+        if config.cardinality {
+            for (expr, cardinality) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<Cardinality>().into_iter(),
+            ) {
+                let formatted_cardinality = cardinality.to_string();
+                let attr = bracketed("(", ")", formatted_cardinality).to_string();
                 let attrs = annotations.entry(expr).or_default();
                 attrs.keys = Some(attr);
             }

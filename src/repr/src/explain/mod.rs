@@ -173,6 +173,8 @@ pub struct ExplainConfig {
     pub types: bool,
     /// Show MFP pushdown information.
     pub mfp_pushdown: bool,
+    /// Show cardinality information.
+    pub cardinality: bool,
 }
 
 impl Default for ExplainConfig {
@@ -190,6 +192,7 @@ impl Default for ExplainConfig {
             timing: false,
             types: false,
             mfp_pushdown: false,
+            cardinality: false,
         }
     }
 }
@@ -222,6 +225,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             timing: flags.remove("timing"),
             types: flags.remove("types"),
             mfp_pushdown: flags.remove("mfp_pushdown"),
+            cardinality: flags.remove("cardinality"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -483,6 +487,7 @@ pub struct Attributes {
     pub arity: Option<usize>,
     pub types: Option<String>,
     pub keys: Option<String>,
+    pub cardinality: Option<String>,
 }
 
 impl fmt::Display for Attributes {
@@ -501,6 +506,9 @@ impl fmt::Display for Attributes {
             builder.field("types", types);
         }
         if let Some(keys) = &self.keys {
+            builder.field("keys", keys);
+        }
+        if let Some(keys) = &self.cardinality {
             builder.field("keys", keys);
         }
         builder.finish()
@@ -621,6 +629,7 @@ mod tests {
             timing: true,
             types: false,
             mfp_pushdown: false,
+            cardinality: false,
         };
         let context = ExplainContext {
             env,

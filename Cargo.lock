@@ -5198,6 +5198,7 @@ dependencies = [
  "mz-repr",
  "num-derive",
  "num-traits",
+ "ordered-float",
  "proc-macro2",
  "serde_json",
  "tracing",
