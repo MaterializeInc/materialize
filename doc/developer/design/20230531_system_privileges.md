@@ -48,8 +48,8 @@ System privileges will be revoked with the following syntax:
 
 System privileges and role attributes will interact in the following ways:
 
-- Granting a system privilege will grant the privilege AND the attribute.
-- Revoking a system privilege will revoke the privilege AND the attribute.
+- Granting a system privilege will grant the privilege AND set the attribute to true.
+- Revoking a system privilege will revoke the privilege AND set the attribute to false.
 - Altering a role attribute will affect the role attribute but will not change the system privilege.
 - When checking to see if a role is allowed to execute a command we will check if they have the
   system privilege or the role attribute.
@@ -83,4 +83,4 @@ the preferred approach.
 
 - Where in the catalog should system privileges be stored? One option is in `mz_roles`. Another
   option is in a new table with a single column for system privileges.
-- Should we use the existing `mz_acl_item` for system privileges or create a new type?
+- Should we use the existing `mz_aclitem` for system privileges or create a new type?
