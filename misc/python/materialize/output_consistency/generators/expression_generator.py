@@ -242,7 +242,7 @@ class ExpressionGenerator:
 
     def _pick_enum_constant(self, param: EnumConstantOperationParam) -> Expression:
         enum_constant_index = self.randomized_picker.random_number(
-            0, param.value_count - 1
+            0, len(param.values) - 1
         )
         return param.get_enum_constant(enum_constant_index)
 

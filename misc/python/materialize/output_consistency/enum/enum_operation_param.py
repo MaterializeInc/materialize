@@ -24,7 +24,6 @@ class EnumConstantOperationParam(OperationParam):
             incompatibility_combinations=None,
         )
         self.values = list(values)
-        self.value_count = len(values)
         self.add_quotes = add_quotes
 
     def supports_type(self, data_type: DataType) -> bool:
@@ -32,7 +31,7 @@ class EnumConstantOperationParam(OperationParam):
 
     def get_enum_constant(self, index: int) -> EnumConstant:
         assert (
-            0 <= index < self.value_count
-        ), f"Index {index} out of range in list with {self.value_count} values"
+            0 <= index < len(self.values)
+        ), f"Index {index} out of range in list with {len(self.values)} values"
         value = self.values[index]
         return EnumConstant(f"'{value}'" if self.add_quotes else value)
