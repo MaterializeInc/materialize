@@ -70,6 +70,8 @@ DATE_TIME_OPERATION_TYPES.append(
         ],
         DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
         relevance=OperationRelevance.LOW,
+        # TODO gets stuck, may get better when appropriate input can be ensured
+        is_disabled=True,
     )
 )
 
