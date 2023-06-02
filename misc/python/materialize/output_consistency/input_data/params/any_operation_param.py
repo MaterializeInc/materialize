@@ -35,3 +35,25 @@ class AnyOperationParam(OperationParam):
 
     def supports_type(self, data_type: DataType) -> bool:
         return True
+
+
+class AnyLikeOtherOperationParam(OperationParam):
+    def __init__(
+        self,
+        index_of_previous_param: int,
+        optional: bool = False,
+        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibility_combinations: Optional[
+            List[Set[ExpressionCharacteristics]]
+        ] = None,
+    ):
+        super().__init__(
+            DataTypeCategory.ANY,
+            optional,
+            incompatibilities,
+            incompatibility_combinations,
+        )
+        self.index_of_previous_param = index_of_previous_param
+
+    def supports_type(self, data_type: DataType) -> bool:
+        return True
