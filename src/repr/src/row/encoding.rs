@@ -28,6 +28,7 @@ use prost::Message;
 use uuid::Uuid;
 
 use crate::adt::array::ArrayDimension;
+use crate::adt::date::{Date, ProtoDate};
 use crate::adt::jsonb::Jsonb;
 use crate::adt::numeric::Numeric;
 use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
@@ -38,7 +39,7 @@ use crate::row::{
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
 use crate::stats::{jsonb_stats_nulls, proto_datum_min_max_nulls};
-use crate::{ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
+use crate::{ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
 impl Codec for Row {
     type Schema = RelationDesc;
@@ -104,6 +105,8 @@ impl ColumnType {
             (true, Float32) => f.call::<Option<f32>>(),
             (false, Float64) => f.call::<f64>(),
             (true, Float64) => f.call::<Option<f64>>(),
+            (false, Date) => f.call::<crate::adt::date::Date>(),
+            (true, Date) => f.call::<Option<crate::adt::date::Date>>(),
             (false, PgLegacyChar) => f.call::<u8>(),
             (true, PgLegacyChar) => f.call::<Option<u8>>(),
             (false, Bytes) => f.call::<Vec<u8>>(),
@@ -114,10 +117,11 @@ impl ColumnType {
             }
             (false, Jsonb) => f.call::<crate::adt::jsonb::Jsonb>(),
             (true, Jsonb) => f.call::<Option<crate::adt::jsonb::Jsonb>>(),
+            (false, MzTimestamp) => f.call::<crate::Timestamp>(),
+            (true, MzTimestamp) => f.call::<Option<crate::Timestamp>>(),
             (
                 _,
                 Numeric { .. }
-                | Date
                 | Time
                 | Timestamp
                 | TimestampTz
@@ -128,7 +132,6 @@ impl ColumnType {
                 | Record { .. }
                 | Map { .. }
                 | Int2Vector
-                | MzTimestamp
                 | Range { .. }
                 | MzAclItem,
             ) => {
@@ -181,7 +184,9 @@ pub trait DatumToPersist {
     /// call `Self::encode` with a `Datum::Null` without tripping up some
     /// (useful) debug assertions. Feel free to remove this method if you can
     /// find a nice way to do it.
-    fn encode_default(col: &mut <Self::Data as Data>::Mut);
+    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
+        ColumnPush::<Self::Data>::push(col, <Self::Data as Data>::Ref::default());
+    }
 
     /// Decodes the data with the given reference into a Datum. This Datum is
     /// returned by pushing it in to the given RowPacker.
@@ -208,9 +213,6 @@ macro_rules! data_to_persist_primitive {
             fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
                 ColumnPush::<Self::Data>::push(col, datum.$unwrap());
             }
-            fn encode_default(col: &mut <Self::Data as Data>::Mut) {
-                ColumnPush::<Self::Data>::push(col, <$data as Data>::Ref::default());
-            }
             fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
                 row.push(Datum::from(val))
             }
@@ -226,9 +228,6 @@ macro_rules! data_to_persist_primitive {
                 } else {
                     ColumnPush::<Self::Data>::push(col, Some(datum.$unwrap()));
                 }
-            }
-            fn encode_default(col: &mut <Self::Data as Data>::Mut) {
-                ColumnPush::<Self::Data>::push(col, None);
             }
             fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
                 row.push(Datum::from(val))
@@ -249,6 +248,78 @@ data_to_persist_primitive!(f32, unwrap_float32);
 data_to_persist_primitive!(f64, unwrap_float64);
 data_to_persist_primitive!(Vec<u8>, unwrap_bytes);
 data_to_persist_primitive!(String, unwrap_str);
+
+impl DatumToPersist for Date {
+    type Data = i32;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
+    const STATS_FN: StatsFn = StatsFn::Default;
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        let ProtoDate { days } = datum.unwrap_date().into_proto();
+        ColumnPush::<Self::Data>::push(col, days);
+    }
+    fn decode(days: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        let date: Date = ProtoDate { days }.into_rust().expect("valid date");
+        row.push(Datum::from(date))
+    }
+}
+
+impl DatumToPersist for Option<Date> {
+    type Data = Option<i32>;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
+    const STATS_FN: StatsFn = StatsFn::Default;
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        if datum.is_null() {
+            ColumnPush::<Self::Data>::push(col, None);
+        } else {
+            let ProtoDate { days } = datum.unwrap_date().into_proto();
+            ColumnPush::<Self::Data>::push(col, Some(days));
+        }
+    }
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        let Some(days) = val else {
+            row.push(Datum::Null);
+            return;
+        };
+        let date: Date = ProtoDate { days }.into_rust().expect("valid date");
+        row.push(Datum::from(date))
+    }
+}
+
+impl DatumToPersist for Timestamp {
+    type Data = u64;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
+    const STATS_FN: StatsFn = StatsFn::Default;
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        ColumnPush::<Self::Data>::push(col, u64::from(datum.unwrap_mz_timestamp()));
+    }
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        row.push(Datum::from(Timestamp::new(val)))
+    }
+}
+
+impl DatumToPersist for Option<Timestamp> {
+    type Data = Option<u64>;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
+    const STATS_FN: StatsFn = StatsFn::Default;
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        if datum.is_null() {
+            ColumnPush::<Self::Data>::push(col, None);
+        } else {
+            ColumnPush::<Self::Data>::push(col, Some(u64::from(datum.unwrap_mz_timestamp())));
+        }
+    }
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        let Some(val) = val else {
+            row.push(Datum::Null);
+            return;
+        };
+        row.push(Datum::from(Timestamp::new(val)))
+    }
+}
 
 /// An implementation of [DatumToPersist] that maps to/from all non-nullable
 /// Datum types using the ProtoDatum representation.
@@ -274,9 +345,6 @@ impl DatumToPersist for ProtoDatumToPersist {
         let proto = ProtoDatum::from(datum);
         let buf = proto.encode_to_vec();
         ColumnPush::<Self::Data>::push(col, &buf);
-    }
-    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
-        ColumnPush::<Self::Data>::push(col, &[]);
     }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         let proto = ProtoDatum::decode(val).expect("col should be valid ProtoDatum");
@@ -314,9 +382,6 @@ impl DatumToPersist for NullableProtoDatumToPersist {
             ColumnPush::<Self::Data>::push(col, Some(&buf));
         }
     }
-    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
-        ColumnPush::<Self::Data>::push(col, None);
-    }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         let Some(val) = val else {
             row.push(Datum::Null);
@@ -342,9 +407,6 @@ impl DatumToPersist for Jsonb {
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         ProtoDatumToPersist::encode(col, datum)
     }
-    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
-        ProtoDatumToPersist::encode_default(col)
-    }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         ProtoDatumToPersist::decode(val, row)
     }
@@ -367,9 +429,6 @@ impl DatumToPersist for Option<Jsonb> {
     );
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         NullableProtoDatumToPersist::encode(col, datum)
-    }
-    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
-        NullableProtoDatumToPersist::encode_default(col)
     }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         NullableProtoDatumToPersist::decode(val, row)
@@ -400,12 +459,16 @@ pub enum DatumEncoder<'a> {
     OptFloat32(DataMut<'a, Option<f32>>),
     Float64(DataMut<'a, f64>),
     OptFloat64(DataMut<'a, Option<f64>>),
+    Date(DataMut<'a, Date>),
+    OptDate(DataMut<'a, Option<Date>>),
     Bytes(DataMut<'a, Vec<u8>>),
     OptBytes(DataMut<'a, Option<Vec<u8>>>),
     String(DataMut<'a, String>),
     OptString(DataMut<'a, Option<String>>),
     Jsonb(DataMut<'a, Jsonb>),
     OptJsonb(DataMut<'a, Option<Jsonb>>),
+    MzTimestamp(DataMut<'a, Timestamp>),
+    OptMzTimestamp(DataMut<'a, Option<Timestamp>>),
     Todo(DataMut<'a, ProtoDatumToPersist>),
     OptTodo(DataMut<'a, NullableProtoDatumToPersist>),
 }
@@ -488,12 +551,16 @@ pub enum DatumDecoder<'a> {
     OptFloat32(DataRef<'a, Option<f32>>),
     Float64(DataRef<'a, f64>),
     OptFloat64(DataRef<'a, Option<f64>>),
+    Date(DataRef<'a, Date>),
+    OptDate(DataRef<'a, Option<Date>>),
     Bytes(DataRef<'a, Vec<u8>>),
     OptBytes(DataRef<'a, Option<Vec<u8>>>),
     String(DataRef<'a, String>),
     OptString(DataRef<'a, Option<String>>),
     Jsonb(DataRef<'a, Jsonb>),
     OptJsonb(DataRef<'a, Option<Jsonb>>),
+    MzTimestamp(DataRef<'a, Timestamp>),
+    OptMzTimestamp(DataRef<'a, Option<Timestamp>>),
     Todo(DataRef<'a, ProtoDatumToPersist>),
     OptTodo(DataRef<'a, NullableProtoDatumToPersist>),
 }
