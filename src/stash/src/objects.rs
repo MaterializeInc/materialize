@@ -9,9 +9,15 @@
 
 //! The current types that are serialized in the Stash.
 
+use std::str::FromStr;
 use std::time::Duration;
 
+use mz_ore::now::EpochMillis;
 use mz_proto::IntoRustIfSome;
+use mz_repr::statement_logging::{
+    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementEndedExecutionRecord,
+    StatementLoggingEvent, StatementPreparedRecord,
+};
 use timely::progress::Antichain;
 
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -173,6 +179,243 @@ impl proto::Duration {
 impl From<String> for proto::StringWrapper {
     fn from(value: String) -> Self {
         proto::StringWrapper { inner: value }
+    }
+}
+
+impl RustType<proto::statement_logging_event::StatementPrepared> for StatementPreparedRecord {
+    fn into_proto(&self) -> proto::statement_logging_event::StatementPrepared {
+        proto::statement_logging_event::StatementPrepared {
+            id: self.id.to_string(),
+            name: self.name.clone(),
+            sql: self.sql.clone(),
+            session_id: self.session_id.to_string(),
+            prepared_at: Some(self.prepared_at.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::statement_logging_event::StatementPrepared,
+    ) -> Result<Self, TryFromProtoError> {
+        let proto::statement_logging_event::StatementPrepared {
+            id,
+            name,
+            session_id,
+            prepared_at,
+            sql,
+        } = proto;
+        let prepared_at = match prepared_at {
+            Some(prepared_at) => EpochMillis::from_proto(prepared_at)?,
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "StatementPrepared::prepared_at",
+                ))
+            }
+        };
+        let id = uuid::Uuid::parse_str(&id).map_err(TryFromProtoError::InvalidUuid)?;
+        let session_id =
+            uuid::Uuid::parse_str(&session_id).map_err(TryFromProtoError::InvalidUuid)?;
+        Ok(Self {
+            id,
+            name,
+            sql,
+            session_id,
+            prepared_at,
+        })
+    }
+}
+
+impl RustType<proto::StatementLoggingEvent> for StatementLoggingEvent {
+    fn into_proto(&self) -> proto::StatementLoggingEvent {
+        proto::StatementLoggingEvent {
+            value: Some(match self {
+                StatementLoggingEvent::Prepared(p) => {
+                    proto::statement_logging_event::Value::Prepared(p.into_proto())
+                }
+                StatementLoggingEvent::BeganExecution(be) => {
+                    let StatementBeganExecutionRecord {
+                        id,
+                        prepared_statement_id,
+                        sample_rate,
+                        params,
+                        began_at,
+                    } = be;
+                    use proto::statement_logging_event::statement_began_execution::param::Param as ProtoInnerParam;
+                    use proto::statement_logging_event::statement_began_execution::Param as ProtoParam;
+                    proto::statement_logging_event::Value::BeganExecution(
+                        proto::statement_logging_event::StatementBeganExecution {
+                            id: id.to_string(),
+                            prepared_statement_id: prepared_statement_id.to_string(),
+                            sample_rate: sample_rate.to_string(),
+                            params: params
+                                .iter()
+                                .map(|p| ProtoParam {
+                                    param: p
+                                        .as_ref()
+                                        .map(|p| ProtoInnerParam::ParamInner(p.clone())),
+                                })
+                                .collect(),
+                            began_at: Some(began_at.into_proto()),
+                        },
+                    )
+                }
+                StatementLoggingEvent::EndedExecution(ee) => {
+                    let StatementEndedExecutionRecord {
+                        id,
+                        reason,
+                        ended_at,
+                    } = ee;
+                    use proto::statement_logging_event::statement_ended_execution::Aborted as ProtoAborted;
+                    use proto::statement_logging_event::statement_ended_execution::Canceled as ProtoCanceled;
+                    use proto::statement_logging_event::statement_ended_execution::Errored as ProtoErrored;
+                    use proto::statement_logging_event::statement_ended_execution::Reason as ProtoReason;
+                    use proto::statement_logging_event::statement_ended_execution::Success as ProtoSuccess;
+                    proto::statement_logging_event::Value::EndedExecution(
+                        proto::statement_logging_event::StatementEndedExecution {
+                            id: id.to_string(),
+                            ended_at: Some(ended_at.into_proto()),
+                            reason: Some(match reason {
+                                StatementEndedExecutionReason::Success {
+                                    rows_returned,
+                                    was_fast_path,
+                                } => ProtoReason::Success(ProtoSuccess {
+                                    rows_returned: *rows_returned,
+                                    was_fast_path: *was_fast_path,
+                                }),
+                                StatementEndedExecutionReason::Canceled => {
+                                    ProtoReason::Canceled(ProtoCanceled {})
+                                }
+                                StatementEndedExecutionReason::Errored { error } => {
+                                    ProtoReason::Errored(ProtoErrored {
+                                        error: error.to_string(),
+                                    })
+                                }
+                                StatementEndedExecutionReason::Aborted => {
+                                    ProtoReason::Aborted(ProtoAborted {})
+                                }
+                            }),
+                        },
+                    )
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::StatementLoggingEvent) -> Result<Self, TryFromProtoError> {
+        let proto::StatementLoggingEvent { value } = proto;
+        match value {
+            Some(proto::statement_logging_event::Value::Prepared(
+                proto::statement_logging_event::StatementPrepared {
+                    id,
+                    name,
+                    sql,
+                    session_id,
+                    prepared_at,
+                },
+            )) => {
+                let prepared_at = prepared_at.ok_or_else(|| {
+                    TryFromProtoError::MissingField("StatementPrepared.prepared_at".to_string())
+                })?;
+                let id = uuid::Uuid::parse_str(&id).map_err(TryFromProtoError::InvalidUuid)?;
+                let session_id =
+                    uuid::Uuid::parse_str(&session_id).map_err(TryFromProtoError::InvalidUuid)?;
+                Ok(StatementLoggingEvent::Prepared(StatementPreparedRecord {
+                    id,
+                    sql,
+                    name,
+                    session_id,
+                    prepared_at: EpochMillis::from_proto(prepared_at)?,
+                }))
+            }
+            Some(proto::statement_logging_event::Value::BeganExecution(
+                proto::statement_logging_event::StatementBeganExecution {
+                    id,
+                    prepared_statement_id,
+                    sample_rate,
+                    params,
+                    began_at,
+                },
+            )) => {
+                use proto::statement_logging_event::statement_began_execution::param::Param as ProtoInnerParam;
+                use proto::statement_logging_event::statement_began_execution::Param as ProtoParam;
+
+                let id = uuid::Uuid::parse_str(&id).map_err(TryFromProtoError::InvalidUuid)?;
+                let prepared_statement_id = uuid::Uuid::parse_str(&prepared_statement_id)
+                    .map_err(TryFromProtoError::InvalidUuid)?;
+                let sample_rate =
+                    f64::from_str(sample_rate.as_str()).map_err(TryFromProtoError::InvalidF64)?;
+                let params = params
+                    .into_iter()
+                    .map(|ProtoParam { param }| {
+                        param.map(|inner| match inner {
+                            ProtoInnerParam::ParamInner(s) => s,
+                        })
+                    })
+                    .collect();
+                let began_at = began_at.ok_or_else(|| {
+                    TryFromProtoError::MissingField("StatementBeganExecution.began_at".to_string())
+                })?;
+                Ok(StatementLoggingEvent::BeganExecution(
+                    StatementBeganExecutionRecord {
+                        id,
+                        prepared_statement_id,
+                        sample_rate,
+                        params,
+                        began_at: EpochMillis::from_proto(began_at)?,
+                    },
+                ))
+            }
+            Some(proto::statement_logging_event::Value::EndedExecution(
+                proto::statement_logging_event::StatementEndedExecution {
+                    ended_at,
+                    reason,
+                    id,
+                },
+            )) => {
+                let id = uuid::Uuid::parse_str(&id).map_err(TryFromProtoError::InvalidUuid)?;
+                let ended_at = ended_at.ok_or_else(|| {
+                    TryFromProtoError::MissingField("StatementBeganExecution.ended_at".to_string())
+                })?;
+
+                use proto::statement_logging_event::statement_ended_execution::Aborted as ProtoAborted;
+                use proto::statement_logging_event::statement_ended_execution::Canceled as ProtoCanceled;
+                use proto::statement_logging_event::statement_ended_execution::Errored as ProtoErrored;
+                use proto::statement_logging_event::statement_ended_execution::Reason as ProtoReason;
+                use proto::statement_logging_event::statement_ended_execution::Success as ProtoSuccess;
+                let reason = match reason {
+                    Some(ProtoReason::Success(ProtoSuccess {
+                        rows_returned,
+                        was_fast_path,
+                    })) => StatementEndedExecutionReason::Success {
+                        rows_returned,
+                        was_fast_path,
+                    },
+                    Some(ProtoReason::Canceled(ProtoCanceled {})) => {
+                        StatementEndedExecutionReason::Canceled
+                    }
+                    Some(ProtoReason::Aborted(ProtoAborted {})) => {
+                        StatementEndedExecutionReason::Aborted
+                    }
+                    Some(ProtoReason::Errored(ProtoErrored { error })) => {
+                        StatementEndedExecutionReason::Errored { error }
+                    }
+                    None => {
+                        return Err(TryFromProtoError::MissingField(
+                            "StatementBeganExecution.reason".to_string(),
+                        ))
+                    }
+                };
+                Ok(StatementLoggingEvent::EndedExecution(
+                    StatementEndedExecutionRecord {
+                        id,
+                        reason,
+                        ended_at: EpochMillis::from_proto(ended_at)?,
+                    },
+                ))
+            }
+            None => Err(TryFromProtoError::MissingField(
+                "StatementLoggingEvent.value".to_string(),
+            )),
+        }
     }
 }
 

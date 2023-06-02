@@ -69,6 +69,8 @@ pub struct Config<'a> {
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
+    /// How long to retain statement logs
+    pub statement_logging_retention_period: Duration,
     /// Needed only for migrating PG source column metadata. If `None`, will
     /// skip any migrations that require it, which will likely cause tests to
     /// fail.

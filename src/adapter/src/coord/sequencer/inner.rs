@@ -105,12 +105,10 @@ use crate::notice::AdapterNotice;
 use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
-use crate::util::{
-    send_immediate_rows, viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt,
-};
+use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
-/// Attempts to execute an expression. If an error is returned then the error is sent
+/// Attempts to evaluate an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
 macro_rules! return_if_err {
     ($expr:expr, $ctx:expr) => {
@@ -1493,7 +1491,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
-        Ok(send_immediate_rows(
+        Ok(Self::send_immediate_rows(
             viewable_variables(self.catalog().state(), session)
                 .map(|v| {
                     Row::pack_slice(&[
@@ -1507,7 +1505,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_show_variable(
-        &self,
+        &mut self,
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -1522,7 +1520,7 @@ impl Coordinator {
                         .name()
                         .schema;
                     let row = Row::pack_slice(&[Datum::String(schema_name)]);
-                    Ok(send_immediate_rows(vec![row]))
+                    Ok(Self::send_immediate_rows(vec![row]))
                 }
                 None => {
                     session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
@@ -1533,7 +1531,9 @@ impl Coordinator {
                             .map(|schema| schema.to_string())
                             .collect(),
                     });
-                    Ok(send_immediate_rows(vec![Row::pack_slice(&[Datum::Null])]))
+                    Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[
+                        Datum::Null,
+                    ])]))
                 }
             };
         }
@@ -1565,7 +1565,7 @@ impl Coordinator {
             let name = variable.value();
             session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
-        Ok(send_immediate_rows(vec![row]))
+        Ok(Self::send_immediate_rows(vec![row]))
     }
 
     pub(super) async fn sequence_inspect_shard(
@@ -1588,7 +1588,7 @@ impl Coordinator {
             .inspect_persist_state(plan.id)
             .await?;
         let jsonb = Jsonb::from_serde_json(state)?;
-        Ok(send_immediate_rows(vec![jsonb.into_row()]))
+        Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
     }
 
     pub(super) fn sequence_set_variable(
@@ -1818,7 +1818,7 @@ impl Coordinator {
                 } else {
                     Datum::False
                 };
-                Ok(send_immediate_rows(vec![Row::pack_slice(&[res])]))
+                Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[res])]))
             }
         }
     }
@@ -1883,7 +1883,7 @@ impl Coordinator {
                     None => return,
                 },
                 PeekStage::Finish(stage) => {
-                    let res = self.peek_stage_finish(ctx.session_mut(), stage).await;
+                    let res = self.peek_stage_finish(&mut ctx, stage).await;
                     ctx.retire(res);
                     return;
                 }
@@ -2130,7 +2130,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_finish(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         PeekStageFinish {
             validity: _,
             finishing,
@@ -2156,7 +2156,7 @@ impl Coordinator {
 
         let peek_plan = self.plan_peek(
             dataflow,
-            session,
+            ctx.session_mut(),
             &when,
             cluster_id,
             view_id,
@@ -2173,13 +2173,19 @@ impl Coordinator {
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_peek_plan(peek_plan, finishing, cluster_id, target_replica)
+            .implement_peek_plan(
+                ctx.extra_mut(),
+                peek_plan,
+                finishing,
+                cluster_id,
+                target_replica,
+            )
             .await?;
 
-        if session.vars().emit_timestamp_notice() {
+        if ctx.session().vars().emit_timestamp_notice() {
             let explanation =
-                self.explain_timestamp(session, cluster_id, &id_bundle, determination);
-            session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                self.explain_timestamp(ctx.session(), cluster_id, &id_bundle, determination);
+            ctx.session().add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
 
         match copy_to {
@@ -2389,7 +2395,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_subscribe(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: SubscribePlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -2405,10 +2411,10 @@ impl Coordinator {
 
         let cluster = self
             .catalog()
-            .resolve_target_cluster(target_cluster, session)?;
+            .resolve_target_cluster(target_cluster, ctx.session())?;
         let cluster_id = cluster.id;
 
-        let target_replica_name = session.vars().cluster_replica();
+        let target_replica_name = ctx.session().vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
                 cluster.replica_id_by_name.get(name).copied().ok_or(
@@ -2425,7 +2431,8 @@ impl Coordinator {
         if when == QueryWhen::Immediately {
             // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
-            session.add_transaction_ops(TransactionOps::Subscribe)?;
+            ctx.session_mut()
+                .add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
         // Determine the frontier of updates to subscribe *from*.
@@ -2437,7 +2444,7 @@ impl Coordinator {
             .sufficient_collections(&depends_on);
         let timeline = self.validate_timeline_context(id_bundle.iter())?;
         let as_of = self
-            .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
+            .determine_timestamp(ctx.session(), &id_bundle, &when, cluster_id, timeline, None)?
             .timestamp_context
             .timestamp_or_default();
 
@@ -2469,12 +2476,12 @@ impl Coordinator {
                     .desc(
                         &self
                             .catalog()
-                            .resolve_full_name(from.name(), Some(session.conn_id())),
+                            .resolve_full_name(from.name(), Some(ctx.session().conn_id())),
                     )
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
                 let sink_id = self.allocate_transient_id()?;
-                let sink_desc = make_sink_desc(self, session, from_id, from_desc)?;
+                let sink_desc = make_sink_desc(self, ctx.session_mut(), from_id, from_desc)?;
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
@@ -2483,7 +2490,7 @@ impl Coordinator {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = make_sink_desc(self, session, id, desc)?;
+                let sink_desc = make_sink_desc(self, ctx.session_mut(), id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
@@ -2501,8 +2508,8 @@ impl Coordinator {
             .expect("subscribes have a single sink export");
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
-            user: session.user().clone(),
-            conn_id: session.conn_id().clone(),
+            user: ctx.session().user().clone(),
+            conn_id: ctx.session().conn_id().clone(),
             channel: tx,
             emit_progress,
             as_of,
@@ -2531,7 +2538,7 @@ impl Coordinator {
         }
 
         self.active_conns
-            .get_mut(session.conn_id())
+            .get_mut(ctx.session().conn_id())
             .expect("must exist for active sessions")
             .drop_sinks
             .push(ComputeSinkId {
@@ -2539,7 +2546,10 @@ impl Coordinator {
                 global_id: sink_id,
             });
 
-        let resp = ExecuteResponse::Subscribing { rx };
+        let resp = ExecuteResponse::Subscribing {
+            rx,
+            ctx_extra: std::mem::take(ctx.extra_mut()),
+        };
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
@@ -2558,7 +2568,7 @@ impl Coordinator {
         match plan.stage {
             ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
             _ => {
-                let result = self.sequence_explain_plan(ctx.session_mut(), plan, target_cluster);
+                let result = self.sequence_explain_plan(&mut ctx, plan, target_cluster);
                 ctx.retire(result);
             }
         }
@@ -2566,7 +2576,7 @@ impl Coordinator {
 
     fn sequence_explain_plan(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: ExplainPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -2586,8 +2596,10 @@ impl Coordinator {
         let cluster_id = {
             let catalog = self.catalog();
             let cluster = match explainee {
-                Explainee::Dataflow(_) => catalog.active_cluster(session)?,
-                Explainee::Query => catalog.resolve_target_cluster(target_cluster, session)?,
+                Explainee::Dataflow(_) => catalog.active_cluster(ctx.session())?,
+                Explainee::Query => {
+                    catalog.resolve_target_cluster(target_cluster, ctx.session())?
+                }
             };
             cluster.id
         };
@@ -2677,7 +2689,7 @@ impl Coordinator {
             // timestamp.
             let style = ExprPrepStyle::OneShot {
                 logical_time: EvalTime::Deferred,
-                session,
+                session: ctx.session(),
             };
             let state = self.catalog().state();
             dataflow.visit_children(
@@ -2702,7 +2714,7 @@ impl Coordinator {
                 Explainee::Query => {
                     let timestamp_context = self
                         .sequence_peek_timestamp(
-                            session,
+                            ctx.session_mut(),
                             &QueryWhen::Immediately,
                             cluster_id,
                             timeline_context,
@@ -2714,7 +2726,7 @@ impl Coordinator {
                     dataflow.set_as_of(timestamp_context.antichain());
                     let style = ExprPrepStyle::OneShot {
                         logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
-                        session,
+                        session: ctx.session(),
                     };
                     let state = self.catalog().state();
                     dataflow.visit_children(
@@ -2771,7 +2783,7 @@ impl Coordinator {
         let trace = optimizer_trace.drain_all(
             format,
             config,
-            self.catalog().for_session(session),
+            self.catalog().for_session(ctx.session()),
             row_set_finishing,
             used_indexes,
             fast_path_plan,
@@ -2813,7 +2825,7 @@ impl Coordinator {
             }
         };
 
-        Ok(send_immediate_rows(rows))
+        Ok(Self::send_immediate_rows(rows))
     }
 
     fn sequence_explain_timestamp_begin(&mut self, mut ctx: ExecuteContext, plan: ExplainPlan) {
@@ -2996,7 +3008,7 @@ impl Coordinator {
             explanation.to_string()
         };
         let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
-        Ok(send_immediate_rows(rows))
+        Ok(Self::send_immediate_rows(rows))
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -3057,7 +3069,7 @@ impl Coordinator {
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
             return match finishing.finish(plan.returning, plan.max_result_size) {
-                Ok(rows) => Ok(send_immediate_rows(rows)),
+                Ok(rows) => Ok(Self::send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };
         }
@@ -3298,6 +3310,17 @@ impl Coordinator {
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
         let (tx, _, session, extra) = ctx.into_parts();
+        // We construct a new execute context for the peek, with a trivial (`Default::default()`)
+        // execution context, because this peek does not directly correspond to an execute,
+        // and so we don't need to take any action on its retirement.
+        // TODO[btv]: we might consider extending statement logging to log the inner
+        // statement separately, here. That would require us to plumb through the SQL of the inner statement,
+        // and mint a new "real" execution context here. We'd also have to add some logic to
+        // make sure such "sub-statements" are always sampled when the top-level statement is
+        //
+        // It's debatable whether this makes sense conceptually,
+        // because the inner fragment here is not actually a
+        // "statement" in its own right.
         let peek_ctx = ExecuteContext::from_parts(
             peek_client_tx,
             self.internal_cmd_tx.clone(),
@@ -3339,7 +3362,49 @@ impl Coordinator {
             };
             let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
             let timeout_dur = *ctx.session().vars().statement_timeout();
-            let arena = RowArena::new();
+            let make_diffs = move |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
+                let arena = RowArena::new();
+                // Use 2x row len incase there's some assignments.
+                let mut diffs = Vec::with_capacity(rows.len() * 2);
+                let mut datum_vec = mz_repr::DatumVec::new();
+                for row in rows {
+                    if !assignments.is_empty() {
+                        assert!(
+                            matches!(kind, MutationKind::Update),
+                            "only updates support assignments"
+                        );
+                        let mut datums = datum_vec.borrow_with(&row);
+                        let mut updates = vec![];
+                        for (idx, expr) in &assignments {
+                            let updated = match expr.eval(&datums, &arena) {
+                                Ok(updated) => updated,
+                                Err(e) => return Err(AdapterError::Unstructured(anyhow!(e))),
+                            };
+                            updates.push((*idx, updated));
+                        }
+                        for (idx, new_value) in updates {
+                            datums[idx] = new_value;
+                        }
+                        let updated = Row::pack_slice(&datums);
+                        diffs.push((updated, 1));
+                    }
+                    match kind {
+                        // Updates and deletes always remove the
+                        // current row. Updates will also add an
+                        // updated value.
+                        MutationKind::Update | MutationKind::Delete => diffs.push((row, -1)),
+                        MutationKind::Insert => diffs.push((row, 1)),
+                    }
+                }
+                for (row, diff) in &diffs {
+                    if *diff > 0 {
+                        for (idx, datum) in row.iter().enumerate() {
+                            desc.constraints_met(idx, &datum)?;
+                        }
+                    }
+                }
+                Ok(diffs)
+            };
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
                     future: batch,
@@ -3351,56 +3416,7 @@ impl Coordinator {
                     // clusters.
                     match tokio::time::timeout(timeout_dur, batch).await {
                         Ok(res) => match res {
-                            PeekResponseUnary::Rows(rows) => {
-                                |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
-                                    // Use 2x row len incase there's some assignments.
-                                    let mut diffs = Vec::with_capacity(rows.len() * 2);
-                                    let mut datum_vec = mz_repr::DatumVec::new();
-                                    for row in rows {
-                                        if !assignments.is_empty() {
-                                            assert!(
-                                                matches!(kind, MutationKind::Update),
-                                                "only updates support assignments"
-                                            );
-                                            let mut datums = datum_vec.borrow_with(&row);
-                                            let mut updates = vec![];
-                                            for (idx, expr) in &assignments {
-                                                let updated = match expr.eval(&datums, &arena) {
-                                                    Ok(updated) => updated,
-                                                    Err(e) => {
-                                                        return Err(AdapterError::Unstructured(
-                                                            anyhow!(e),
-                                                        ))
-                                                    }
-                                                };
-                                                updates.push((*idx, updated));
-                                            }
-                                            for (idx, new_value) in updates {
-                                                datums[idx] = new_value;
-                                            }
-                                            let updated = Row::pack_slice(&datums);
-                                            diffs.push((updated, 1));
-                                        }
-                                        match kind {
-                                            // Updates and deletes always remove the
-                                            // current row. Updates will also add an
-                                            // updated value.
-                                            MutationKind::Update | MutationKind::Delete => {
-                                                diffs.push((row, -1))
-                                            }
-                                            MutationKind::Insert => diffs.push((row, 1)),
-                                        }
-                                    }
-                                    for (row, diff) in &diffs {
-                                        if *diff > 0 {
-                                            for (idx, datum) in row.iter().enumerate() {
-                                                desc.constraints_met(idx, &datum)?;
-                                            }
-                                        }
-                                    }
-                                    Ok(diffs)
-                                }(rows)
-                            }
+                            PeekResponseUnary::Rows(rows) => make_diffs(rows),
                             PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
@@ -3421,6 +3437,7 @@ impl Coordinator {
                         }
                     }
                 }
+                ExecuteResponse::SendingRowsImmediate { rows, span: _ } => make_diffs(rows),
                 resp @ ExecuteResponse::Canceled => {
                     ctx.retire(Ok(resp));
                     return;
@@ -3705,7 +3722,7 @@ impl Coordinator {
                             .expect("invalid create sql persisted to catalog")
                             .into_element()
                         {
-                            Statement::CreateSource(stmt) => stmt,
+                            (Statement::CreateSource(stmt), _) => stmt,
                             _ => unreachable!("proved type is source"),
                         };
 
@@ -4061,7 +4078,8 @@ impl Coordinator {
         let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
-        session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
+        let logging = ps.logging().clone();
+        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
     }
 
     pub(super) async fn sequence_grant_privileges(

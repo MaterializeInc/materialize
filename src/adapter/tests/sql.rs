@@ -181,7 +181,7 @@ async fn datadriven() {
                                 &scx,
                                 QueryLifetime::OneShot(scx.pcx().unwrap()),
                             );
-                            let q = parsed[0].clone();
+                            let (q, _) = parsed[0].clone();
                             let q = match q {
                                 Statement::Select(s) => s.query,
                                 _ => unreachable!(),

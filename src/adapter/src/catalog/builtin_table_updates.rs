@@ -9,8 +9,9 @@
 
 use std::net::Ipv4Addr;
 
+use bytes::BytesMut;
 use bytesize::ByteSize;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
@@ -21,11 +22,17 @@ use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::to_datetime;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::statement_logging::{
+    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementEndedExecutionRecord,
+    StatementPreparedRecord,
+};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
@@ -36,6 +43,7 @@ use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection
 use mz_storage_client::types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
 };
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
@@ -56,6 +64,10 @@ use crate::catalog::{
 };
 use crate::session::Session;
 use crate::subscribe::ActiveSubscribe;
+
+use super::builtin::{
+    MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
+};
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -655,10 +667,10 @@ impl CatalogState {
         view: &View,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let create_sql = mz_sql::parse::parse(&view.create_sql)
+        let (create_stmt, _) = mz_sql::parse::parse(&view.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
             .into_element();
-        let query = match create_sql {
+        let query = match create_stmt {
             Statement::CreateView(stmt) => stmt.definition.query,
             _ => unreachable!(),
         };
@@ -694,10 +706,10 @@ impl CatalogState {
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let create_sql = mz_sql::parse::parse(&mview.create_sql)
+        let (create_stmt, _) = mz_sql::parse::parse(&mview.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
             .into_element();
-        let query = match create_sql {
+        let query = match create_stmt {
             Statement::CreateMaterializedView(stmt) => stmt.query,
             _ => unreachable!(),
         };
@@ -789,7 +801,7 @@ impl CatalogState {
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
             .into_element()
         {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
+            (Statement::CreateIndex(CreateIndexStatement { key_parts, .. }), _) => {
                 key_parts.expect("key_parts is filled in during planning")
             }
             _ => unreachable!(),
@@ -1283,6 +1295,22 @@ impl CatalogState {
         }
     }
 
+    pub fn pack_session_history_update(&self, session: &Session) -> BuiltinTableUpdate {
+        let connect_dt = mz_ore::now::to_datetime(session.connect_time());
+        let session_role = session.session_role_id();
+        let session_user = &self.get_role(session_role).name;
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SESSION_HISTORY),
+            row: Row::pack_slice(&[
+                Datum::Uuid(session.uuid()),
+                Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
+                Datum::String(session.application_name()),
+                Datum::String(session_user),
+            ]),
+            diff: 1,
+        }
+    }
+
     pub fn pack_default_privileges_update(
         &self,
         default_privilege_object: &DefaultPrivilegeObject,
@@ -1343,5 +1371,146 @@ impl CatalogState {
             )
             .expect("privileges is 1 dimensional, and its length is used for the array length");
         row
+    }
+
+    pub fn pack_statement_prepared_update(
+        &self,
+        record: &StatementPreparedRecord,
+    ) -> BuiltinTableUpdate {
+        let StatementPreparedRecord {
+            id,
+            session_id,
+            name,
+            sql,
+            prepared_at,
+        } = record;
+        let row = Row::pack_slice(&[
+            Datum::Uuid(*id),
+            Datum::Uuid(*session_id),
+            Datum::String(name.as_str()),
+            Datum::String(sql.as_str()),
+            Datum::TimestampTz(to_datetime(*prepared_at).try_into().unwrap()),
+        ]);
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_PREPARED_STATEMENT_HISTORY),
+            row,
+            diff: 1,
+        }
+    }
+
+    fn pack_statement_execution_inner(
+        &self,
+        record: &StatementBeganExecutionRecord,
+        packer: &mut RowPacker,
+    ) {
+        let StatementBeganExecutionRecord {
+            id,
+            prepared_statement_id,
+            sample_rate,
+            params,
+            began_at,
+        } = record;
+
+        packer.extend([
+            Datum::Uuid(*id),
+            Datum::Uuid(*prepared_statement_id),
+            Datum::Float64((*sample_rate).into()),
+        ]);
+        packer.push_list_with(|packer| {
+            for s in params {
+                packer.push::<Datum>(s.as_ref().map(String::as_str).into());
+            }
+        });
+        packer.push(Datum::TimestampTz(
+            to_datetime(*began_at).try_into().expect("Sane system time"),
+        ));
+    }
+
+    pub fn pack_statement_began_execution_update(
+        &self,
+        record: &StatementBeganExecutionRecord,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        self.pack_statement_execution_inner(record, &mut packer);
+        packer.extend([
+            // finished_at
+            Datum::Null,
+            // was_successful
+            Datum::Null,
+            // was_canceled
+            Datum::Null,
+            // was_aborted
+            Datum::Null,
+            // error_message
+            Datum::Null,
+            // rows_returned
+            Datum::Null,
+            // was_fast_path
+            Datum::Null,
+        ]);
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_STATEMENT_EXECUTION_HISTORY),
+            row,
+            diff,
+        }
+    }
+
+    pub fn pack_full_statement_execution_update(
+        &self,
+        began_record: &StatementBeganExecutionRecord,
+        ended_record: &StatementEndedExecutionRecord,
+    ) -> BuiltinTableUpdate {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        self.pack_statement_execution_inner(began_record, &mut packer);
+        let (successful, aborted, canceled, error_message, rows_returned, was_fast_path) =
+            match &ended_record.reason {
+                StatementEndedExecutionReason::Success {
+                    rows_returned,
+                    was_fast_path,
+                } => (
+                    true,
+                    false,
+                    false,
+                    None,
+                    *rows_returned,
+                    Some(*was_fast_path),
+                ),
+                StatementEndedExecutionReason::Canceled => (false, false, true, None, None, None),
+                StatementEndedExecutionReason::Errored { error } => {
+                    (false, false, false, Some(error.as_str()), None, None)
+                }
+                StatementEndedExecutionReason::Aborted => (false, true, false, None, None, None),
+            };
+        packer.extend([
+            Datum::TimestampTz(
+                to_datetime(ended_record.ended_at)
+                    .try_into()
+                    .expect("Sane system time"),
+            ),
+            successful.into(),
+            canceled.into(),
+            aborted.into(),
+            error_message.into(),
+            rows_returned.into(),
+            was_fast_path.into(),
+        ]);
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_STATEMENT_EXECUTION_HISTORY),
+            row,
+            diff: 1,
+        }
+    }
+
+    pub fn pack_statement_ended_execution_updates(
+        &self,
+        began_record: &StatementBeganExecutionRecord,
+        ended_record: &StatementEndedExecutionRecord,
+    ) -> Vec<BuiltinTableUpdate> {
+        let retraction = self.pack_statement_began_execution_update(began_record, -1);
+        let new = self.pack_full_statement_execution_update(began_record, ended_record);
+        vec![retraction, new]
     }
 }

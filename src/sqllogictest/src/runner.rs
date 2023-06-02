@@ -980,6 +980,7 @@ impl<'a> RunnerInner<'a> {
             tracing_handle: TracingHandle::disabled(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
+            statement_logging_retention_period: Duration::from_secs(30 * 24 * 60 * 60),
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
@@ -1229,7 +1230,7 @@ impl<'a> RunnerInner<'a> {
                 }
             },
         };
-        let statement = match &*statements {
+        let (statement, _) = match &*statements {
             [] => bail!("Got zero statements?"),
             [statement] => statement,
             _ => bail!("Got multiple statements: {:?}", statements),
@@ -1976,7 +1977,7 @@ fn generate_view_sql(
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     assert!(stmts.len() == 1);
     let query = match &stmts[0] {
-        Statement::Select(stmt) => &stmt.query,
+        (Statement::Select(stmt), _) => &stmt.query,
         _ => unreachable!("This function should only be called for SELECTs"),
     };
 
@@ -2249,7 +2250,7 @@ fn derive_order_by_from_projection(
 fn mutate(sql: &str) -> Vec<String> {
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     let mut additional = Vec::new();
-    for stmt in stmts {
+    for (stmt, _) in stmts {
         match stmt {
             AstStatement::CreateTable(stmt) => additional.push(
                 // CREATE TABLE -> CREATE INDEX. Specify all columns manually in case CREATE

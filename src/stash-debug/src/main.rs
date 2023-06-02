@@ -82,6 +82,7 @@ use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
@@ -499,6 +500,7 @@ impl Usage {
             aws_privatelink_availability_zones: None,
             system_parameter_frontend: None,
             storage_usage_retention_period: None,
+            statement_logging_retention_period: Duration::from_secs(30*24*60*60),
             connection_context: None,
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
         })

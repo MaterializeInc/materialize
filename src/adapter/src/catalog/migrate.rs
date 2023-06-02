@@ -42,7 +42,7 @@ where
         privileges: _,
     } in items
     {
-        let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        let (mut stmt, _) = mz_sql::parse::parse(&create_sql)?.into_element();
 
         f(tx, &cat, &mut stmt).await?;
 

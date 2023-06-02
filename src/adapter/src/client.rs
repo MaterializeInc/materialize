@@ -22,6 +22,7 @@ use mz_ore::id_gen::{IdAllocator, IdHandle};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
+use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -202,15 +203,15 @@ impl Client {
         if stmts.len() != 1 {
             bail!("must supply exactly one query");
         }
-        let stmt = stmts.into_element();
+        let (stmt, sql) = stmts.into_element();
 
         const EMPTY_PORTAL: &str = "";
         session_client.start_transaction(Some(1))?;
         session_client
-            .declare(EMPTY_PORTAL.into(), stmt, vec![])
+            .declare(EMPTY_PORTAL.into(), stmt, sql.to_string(), vec![])
             .await?;
         match session_client
-            .execute(EMPTY_PORTAL.into(), futures::future::pending())
+            .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
             ExecuteResponse::SendingRows { future, span: _ } => match future.await {
@@ -281,10 +282,10 @@ pub struct SessionClient {
 impl SessionClient {
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
-    pub fn parse(
+    pub fn parse<'a>(
         &self,
-        sql: &str,
-    ) -> Result<Result<Vec<Statement<Raw>>, ParserStatementError>, String> {
+        sql: &'a str,
+    ) -> Result<Result<Vec<(Statement<Raw>, &'a str)>, ParserStatementError>, String> {
         match mz_sql::parse::parse_with_limit(sql) {
             Ok(Err(e)) => {
                 self.track_statement_parse_failure(&e);
@@ -374,11 +375,13 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Prepare {
             name,
             stmt,
+            sql,
             param_types,
             session,
             tx,
@@ -391,11 +394,13 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Statement<Raw>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Declare {
             name,
             stmt,
+            sql,
             param_types,
             session,
             tx,
@@ -410,6 +415,7 @@ impl SessionClient {
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
+        outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.send_with_cancel(
             |tx, session| Command::Execute {
@@ -417,6 +423,7 @@ impl SessionClient {
                 session,
                 tx,
                 span: tracing::Span::current(),
+                outer_ctx_extra,
             },
             cancel_future,
         )
@@ -473,6 +480,19 @@ impl SessionClient {
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
             .await
+    }
+
+    /// Tells the coordinator a statement has finished execution, in the cases
+    /// where we have no other reason to communicate with the coordinator.
+    pub fn retire_execute(
+        &mut self,
+        data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
+    ) {
+        if !data.is_trivial() {
+            let cmd = Command::RetireExecute { data, reason };
+            self.inner_mut().send(cmd);
+        }
     }
 
     /// Inserts a set of rows into the given table.
@@ -584,7 +604,8 @@ impl SessionClient {
                 | Command::CopyRows { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
-                | Command::Terminate { .. } => {}
+                | Command::Terminate { .. }
+                | Command::RetireExecute { .. } => {}
             };
             cmd
         });

@@ -32,6 +32,7 @@ use crate::catalog::storage::{
     STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
+use crate::coord::statement_logging::STATEMENT_LOGGING_EVENTS_COLLECTION;
 use crate::rbac;
 
 /// The key used within the "config" collection where we store the Stash version.
@@ -85,7 +86,7 @@ pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
 pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<
     proto::SystemPrivilegesKey,
     proto::SystemPrivilegesValue,
-> = TypedCollection::new("system_privileges");
+    > = TypedCollection::new("system_privileges");
 // If you add a new collection, then don't forget to write a migration that initializes the
 // collection either with some initial values or as empty. See
 // [`mz_stash::upgrade::v17_to_v18`] as an example.
@@ -772,6 +773,7 @@ pub async fn initialize(
         .initialize(tx, vec![])
         .await?;
     STORAGE_USAGE_COLLECTION.initialize(tx, vec![]).await?;
+    STATEMENT_LOGGING_EVENTS_COLLECTION.initialize(tx, vec![]).await?;
 
     // Set our initial version.
     CONFIG_COLLECTION

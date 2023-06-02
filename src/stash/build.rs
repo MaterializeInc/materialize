@@ -209,6 +209,9 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("AuditLogKey.event", ATTR)
         .enum_attribute("StorageUsageKey.usage", ATTR)
         .enum_attribute("ResolvedDatabaseSpecifier.value", ATTR)
+        .enum_attribute("StatementLoggingEvent.value", ATTR)
+        .enum_attribute("StatementEndedExecution.reason", ATTR)
+        .enum_attribute("Param.param", ATTR)
         .compile_protos(
             &paths,
             &[ /*

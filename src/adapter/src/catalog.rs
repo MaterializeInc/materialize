@@ -45,6 +45,7 @@ use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
+use mz_repr::statement_logging::StatementLoggingEvent;
 use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
@@ -713,7 +714,7 @@ impl CatalogState {
         // case during catalog rehydration in order to avoid panics.
         session_catalog.system_vars_mut().enable_all_feature_flags();
 
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        let (stmt, _) = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
@@ -2469,7 +2470,7 @@ impl CatalogItem {
         rename_self: bool,
     ) -> Result<CatalogItem, String> {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
-            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+            let (mut create_stmt, _) = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element();
             if rename_self {
@@ -3075,7 +3076,7 @@ impl CatalogItemRebuilder {
         } else {
             let create_sql = entry.create_sql().to_string();
             assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
-            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+            let (mut create_stmt, _) = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element();
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
@@ -3851,6 +3852,17 @@ impl Catalog {
             .await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
+        }
+        let (prepared_statement_log, executed_statement_log) = catalog
+            .storage()
+            .await
+            .fetch_and_prune_statement_log(config.statement_logging_retention_period)
+            .await?;
+        for ps in prepared_statement_log {
+            builtin_table_updates.push(catalog.state.pack_statement_prepared_update(&ps))
+        }
+        for (be, ee) in executed_statement_log {
+            builtin_table_updates.push(catalog.state.pack_full_statement_execution_update(&be, &ee))
         }
 
         for ip in &catalog.state.egress_ips {
@@ -4634,6 +4646,7 @@ impl Catalog {
             system_parameter_frontend: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
+            statement_logging_retention_period: Duration::from_secs(30 * 24 * 60 * 60),
             connection_context: None,
             active_connection_count,
         })
@@ -4805,6 +4818,16 @@ impl Catalog {
         self.storage()
             .await
             .persist_timestamp(timeline, timestamp)
+            .await
+    }
+
+    pub async fn append_statement_log_events(
+        &self,
+        events: Vec<StatementLoggingEvent>,
+    ) -> Result<(), Error> {
+        self.storage()
+            .await
+            .append_statement_log_events(events)
             .await
     }
 
@@ -5453,7 +5476,7 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&old_sink.create_sql)
+                    let (mut stmt, _) = mz_sql::parse::parse(&old_sink.create_sql)
                         .expect("invalid create sql persisted to catalog")
                         .into_element();
 
@@ -5543,7 +5566,7 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+                    let (mut stmt, _) = mz_sql::parse::parse(&old_source.create_sql)
                         .expect("invalid create sql persisted to catalog")
                         .into_element();
 
@@ -7326,7 +7349,7 @@ impl Catalog {
         // case during catalog rehydration in order to avoid panics.
         session_catalog.system_vars_mut().enable_all_feature_flags();
 
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        let (stmt, _) = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
@@ -9704,7 +9727,7 @@ mod tests {
             let catalog = catalog.for_system_session();
             let scx = &mut StatementContext::new(None, &catalog);
 
-            let parsed = mz_sql_parser::parser::parse_statements(
+            let (parsed, _) = mz_sql_parser::parser::parse_statements(
                 "create view public.foo as select 1 as bar",
             )
             .expect("")

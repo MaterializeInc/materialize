@@ -127,3 +127,58 @@ pub use crate::scalar::{
     PropList, ProtoScalarType, ScalarBaseType, ScalarType,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
+
+pub mod statement_logging {
+    use chrono::{DateTime, Utc};
+    use mz_ore::now::EpochMillis;
+    use uuid::Uuid;
+    /// Contains all the information necessary to generate the initial
+    /// entry in `mz_statement_execution_history`. We need to keep this
+    /// around in order to modify the entry later once the statement finishes executing.
+    #[derive(Clone, Debug)]
+    pub struct StatementBeganExecutionRecord {
+        pub id: Uuid,
+        pub prepared_statement_id: Uuid,
+        pub sample_rate: f64,
+        pub params: Vec<Option<String>>,
+        pub began_at: EpochMillis,
+    }
+
+    #[derive(Clone, Debug)]
+    pub enum StatementEndedExecutionReason {
+        Success {
+            rows_returned: Option<u64>,
+            was_fast_path: Option<bool>,
+        },
+        Canceled,
+        Errored {
+            error: String,
+        },
+        Aborted,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct StatementEndedExecutionRecord {
+        pub id: Uuid,
+        pub reason: StatementEndedExecutionReason,
+        pub ended_at: EpochMillis,
+    }
+
+    /// Contains all the information necessary to generate an entry in
+    /// `mz_prepared_statement_history`
+    #[derive(Clone, Debug)]
+    pub struct StatementPreparedRecord {
+        pub id: Uuid,
+        pub sql: String,
+        pub name: String,
+        pub session_id: Uuid,
+        pub prepared_at: EpochMillis,
+    }
+
+    #[derive(Clone, Debug)]
+    pub enum StatementLoggingEvent {
+        Prepared(StatementPreparedRecord),
+        BeganExecution(StatementBeganExecutionRecord),
+        EndedExecution(StatementEndedExecutionRecord),
+    }
+}
