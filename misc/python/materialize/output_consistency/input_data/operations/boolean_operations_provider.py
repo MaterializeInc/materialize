@@ -9,13 +9,11 @@
 from typing import List
 
 from materialize.output_consistency.input_data.params.any_operation_param import (
+    AnyLikeOtherOperationParam,
     AnyOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.validators.generic_args_validator import (
-    DataTypeCategoryMatchesArgsValidator,
 )
 from materialize.output_consistency.operation.operation import (
     DbOperation,
@@ -27,8 +25,7 @@ BOOLEAN_OPERATION_TYPES: List[DbOperationOrFunction] = []
 BOOLEAN_OPERATION_TYPES.append(
     DbOperation(
         "$ = $",
-        [AnyOperationParam(), AnyOperationParam()],
+        [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
         BooleanReturnTypeSpec(),
-        {DataTypeCategoryMatchesArgsValidator(0, 1)},
     )
 )
