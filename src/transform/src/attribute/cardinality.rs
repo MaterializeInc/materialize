@@ -227,15 +227,23 @@ impl<V> SymbolicExpression<V> {
                 .into_iter()
                 .map(|(p, scalar)| p * &SymbolicExpression::usize(scalar)),
         );
-        result.extend(variables.into_iter().map(|((v, n), scalar)| {
-            SymbolicExpression::Product(vec![
-                Variable(v.clone(), *n),
-                SymbolicExpression::usize(scalar),
-            ])
-        }));
-        result.push(Constant(constant));
+        result.extend(
+            variables.into_iter().map(|((v, n), scalar)| {
+                &Variable(v.clone(), *n) * &SymbolicExpression::usize(scalar)
+            }),
+        );
 
-        Sum(result)
+        if constant.0 != 0.0 {
+            result.push(Constant(constant));
+        }
+
+        if result.len() > 1 {
+            Sum(result)
+        } else if result.len() == 1 {
+            result.swap_remove(0)
+        } else {
+            Self::f64(0.0)
+        }
     }
 
     /// Computes the n-ary product of symbolic expressions, yielding a slightly more compact/normalized term than repeated multiplication
@@ -245,7 +253,7 @@ impl<V> SymbolicExpression<V> {
     {
         use SymbolicExpression::*;
 
-        let mut constant = OrderedFloat(0.0);
+        let mut constant = OrderedFloat(1.0);
         let mut variables = BTreeMap::new();
         let mut sums = BTreeMap::new();
 
@@ -269,15 +277,27 @@ impl<V> SymbolicExpression<V> {
             sums.into_iter()
                 .map(|(p, scalar)| p * &SymbolicExpression::usize(scalar)),
         );
-        result.extend(variables.into_iter().map(|((v, n), scalar)| {
-            SymbolicExpression::Product(vec![
-                Variable(v.clone(), *n),
-                SymbolicExpression::usize(scalar),
-            ])
-        }));
-        result.push(Constant(constant));
+        result.extend(
+            variables.into_iter().map(|((v, n), scalar)| {
+                &Variable(v.clone(), *n) * &SymbolicExpression::usize(scalar)
+            }),
+        );
 
-        Product(result)
+        if constant.0 == 0.0 {
+            return Self::f64(0.0);
+        }
+
+        if constant.0 != 1.0 {
+            result.push(Constant(constant));
+        }
+
+        if result.len() > 1 {
+            Product(result)
+        } else if result.len() == 1 {
+            result.swap_remove(0)
+        } else {
+            Self::f64(1.0)
+        }
     }
 }
 
@@ -474,17 +494,19 @@ impl Attribute for Cardinality {
 }
 
 impl SymbolicExpression<GlobalId> {
-    pub fn humanize<H>(&self, h: &H, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        H: ExprHumanizer,
-    {
+    pub fn humanize(
+        &self,
+        h: &dyn ExprHumanizer,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         self.humanize_factor(h, f)
     }
 
-    fn humanize_factor<H>(&self, h: &H, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        H: ExprHumanizer,
-    {
+    fn humanize_factor(
+        &self,
+        h: &dyn ExprHumanizer,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         use SymbolicExpression::*;
         match self {
             Sum(ss) => {
@@ -502,10 +524,11 @@ impl SymbolicExpression<GlobalId> {
         }
     }
 
-    fn humanize_term<H>(&self, h: &H, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        H: ExprHumanizer,
-    {
+    fn humanize_term(
+        &self,
+        h: &dyn ExprHumanizer,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         use SymbolicExpression::*;
         match self {
             Product(ps) => {
@@ -523,10 +546,11 @@ impl SymbolicExpression<GlobalId> {
         }
     }
 
-    fn humanize_atom<H>(&self, h: &H, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        H: ExprHumanizer,
-    {
+    fn humanize_atom(
+        &self,
+        h: &dyn ExprHumanizer,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         use SymbolicExpression::*;
         match self {
             Constant(OrderedFloat(n)) => write!(f, "{n}"),
@@ -552,5 +576,16 @@ impl SymbolicExpression<GlobalId> {
 impl std::fmt::Display for SymbolicExpression<GlobalId> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.humanize(&mz_repr::explain::DummyHumanizer, f)
+    }
+}
+
+pub struct HumanizedSymbolicExpression<'a, 'b> {
+    pub expr: &'a SymbolicExpression<GlobalId>,
+    pub humanizer: &'b dyn ExprHumanizer,
+}
+
+impl<'a, 'b> std::fmt::Display for HumanizedSymbolicExpression<'a, 'b> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expr.humanize(self.humanizer, f)
     }
 }

@@ -199,7 +199,7 @@ impl Default for ExplainConfig {
 
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
-        self.subtree_size || self.non_negative || self.arity || self.types || self.keys
+        self.subtree_size || self.non_negative || self.arity || self.types || self.keys || self.cardinality
     }
 }
 
@@ -509,7 +509,7 @@ impl fmt::Display for Attributes {
             builder.field("keys", keys);
         }
         if let Some(keys) = &self.cardinality {
-            builder.field("keys", keys);
+            builder.field("cardinality", keys);
         }
         builder.finish()
     }

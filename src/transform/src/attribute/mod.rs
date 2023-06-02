@@ -280,6 +280,9 @@ impl From<&ExplainConfig> for DerivedAttributes {
         if config.keys {
             builder.require::<UniqueKeys>();
         }
+        if config.cardinality {
+            builder.require::<Cardinality>();
+        }
         builder.finish()
     }
 }
@@ -512,10 +515,13 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<Cardinality>().into_iter(),
             ) {
-                let formatted_cardinality = cardinality.to_string();
-                let attr = bracketed("(", ")", formatted_cardinality).to_string();
+                let attr = cardinality::HumanizedSymbolicExpression {
+                    expr: &cardinality,
+                    humanizer: context.humanizer,
+                }
+                .to_string();
                 let attrs = annotations.entry(expr).or_default();
-                attrs.keys = Some(attr);
+                attrs.cardinality = Some(attr);
             }
         }
     }
