@@ -756,23 +756,28 @@ mod test {
         )
         .unwrap();
 
+        let years = HIGH_DATE.year() - LOW_DATE.year();
+        let months = years * 12;
+
         // Test high - low.
         let result = high.age(&low).unwrap();
-        assert_eq!(result, Interval::new(3202272, 0, 0));
+        assert_eq!(result, Interval::new(months, 0, 0));
 
         // Test low - high.
         let result = low.age(&high).unwrap();
-        assert_eq!(result, Interval::new(-3202272, 0, 0));
+        assert_eq!(result, Interval::new(-months, 0, 0));
     }
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // slow
         fn test_age_naive(a: CheckedTimestamp<NaiveDateTime>, b: CheckedTimestamp<NaiveDateTime>) {
             let result = a.age(&b);
             prop_assert!(result.is_ok());
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // slow
         fn test_age_utc(a: CheckedTimestamp<DateTime<Utc>>, b: CheckedTimestamp<DateTime<Utc>>) {
             let result = a.age(&b);
             prop_assert!(result.is_ok());
