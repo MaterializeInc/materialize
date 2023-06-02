@@ -5793,12 +5793,15 @@ fn error_if_null<'a>(
         .collect::<Result<Vec<_>, _>>()?;
     match datums[0] {
         Datum::Null => {
-            let err_msg = if datums[1].is_null() {
-                "unexpected NULL"
-            } else {
-                datums[1].unwrap_str()
+            let err_msg = match datums[1] {
+                Datum::Null => {
+                    return Err(EvalError::Internal(
+                        "unexpected NULL in error side of error_if_null".to_string(),
+                    ))
+                }
+                o => o.unwrap_str(),
             };
-            Err(EvalError::Internal(err_msg.to_string()))
+            Err(EvalError::IfNullError(err_msg.to_string()))
         }
         _ => Ok(datums[0]),
     }

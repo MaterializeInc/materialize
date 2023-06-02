@@ -2240,6 +2240,9 @@ pub enum EvalError {
         a: String,
         b: String,
     },
+    // The error for ErrorIfNull; this should not be used in other contexts as a generic error
+    // printer.
+    IfNullError(String),
 }
 
 impl fmt::Display for EvalError {
@@ -2424,6 +2427,7 @@ impl fmt::Display for EvalError {
             EvalError::DateDiffOverflow { unit, a, b } => {
                 write!(f, "datediff overflow, {unit} of {a}, {b}")
             }
+            EvalError::IfNullError(s) => f.write_str(s),
         }
     }
 }
@@ -2672,6 +2676,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 a: a.to_owned(),
                 b: b.to_owned(),
             }),
+            EvalError::IfNullError(s) => IfNullError(s.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2787,6 +2792,7 @@ impl RustType<ProtoEvalError> for EvalError {
                     a: v.a,
                     b: v.b,
                 }),
+                IfNullError(v) => Ok(EvalError::IfNullError(v)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

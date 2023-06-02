@@ -260,10 +260,10 @@ SELECT mz_internal.mz_normalize_object_name('"SchemaX"."TableY"')::text;
 ----
 {NULL,SchemaX,TableY}
 
-query error db error: ERROR: internal error: improper relation name \(too many dotted names\): Dbz\.Schemax\.Tabley\.Cola
+query error db error: ERROR: improper relation name \(too many dotted names\): Dbz\.Schemax\.Tabley\.Cola
 SELECT mz_internal.mz_normalize_object_name('Dbz.Schemax.Tabley.Cola')::text;
 
-query error db error: ERROR: internal error: improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"\.Cola
+query error db error: ERROR: improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"\.Cola
 SELECT mz_internal.mz_normalize_object_name('"Dbz"."SchemaX"."TableY".Cola')::text;
 
 query error db error: ERROR: string is not a valid identifier: ""
@@ -305,7 +305,7 @@ SELECT mz_internal.mz_normalize_object_name('🌍.🌍.🌍');
 ----
 {🌍,🌍,🌍}
 
-query error db error: ERROR: internal error: improper relation name \(too many dotted names\): 🌍\.🌍\.🌍\.🌍
+query error db error: ERROR: improper relation name \(too many dotted names\): 🌍\.🌍\.🌍\.🌍
 SELECT mz_internal.mz_normalize_object_name('🌍.🌍.🌍.🌍');
 
 statement ok
