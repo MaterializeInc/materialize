@@ -35,12 +35,9 @@ class QueryExecution:
         self.query_template = query_template
 
     def get_outcome_by_strategy_id(self) -> Dict[str, QueryOutcome]:
-        outcome_by_strategy_id = dict()
-
-        for outcome in self.outcomes:
-            outcome_by_strategy_id[outcome.strategy.identifier] = outcome
-
-        return outcome_by_strategy_id
+        return dict(
+            [(outcome.strategy.identifier, outcome) for outcome in self.outcomes]
+        )
 
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"
