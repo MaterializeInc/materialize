@@ -186,6 +186,32 @@ name                nullable    type
  spcacl             true        text[]
  spcoptions         true        text[]
 
+> SHOW COLUMNS FROM pg_aggregate
+name                nullable    type
+------------------------------------------------------------
+ aggfnoid           false       oid
+ aggkind            false       text
+ aggnumdirectargs   false       smallint
+ aggtransfn         true        regproc
+ aggfinalfn         false       regproc
+ aggcombinefn       false       regproc
+ aggserialfn        false       regproc
+ aggdeserialfn      false       regproc
+ aggmtransfn        false       regproc
+ aggminvtransfn     false       regproc
+ aggmfinalfn        false       regproc
+ aggfinalextra      false       boolean
+ aggmfinalextra     false       boolean
+ aggfinalmodify     true        char
+ aggmfinalmodify    true        char
+ aggsortop          false       oid
+ aggtranstype       true        oid
+ aggtransspace      true        integer
+ aggmtranstype      false       oid
+ aggmtransspace     true        integer
+ agginitval         true        text
+ aggminitval        true        text
+
 > SHOW COLUMNS FROM pg_trigger
 name                nullable    type
 ------------------------------------------------------------
