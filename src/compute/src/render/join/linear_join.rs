@@ -55,7 +55,7 @@ impl LinearJoinImpl {
         Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
         Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
         L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
-        I: IntoIterator,
+        I: IntoIterator + 'static,
         I::Item: Data,
     {
         match self {
