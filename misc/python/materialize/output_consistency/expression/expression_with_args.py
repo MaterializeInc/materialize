@@ -129,11 +129,14 @@ def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
     storage_layout: Optional[ValueStorageLayout] = None
 
     for arg in args:
+        if arg.storage_layout == ValueStorageLayout.ANY:
+            continue
+
         if storage_layout is None:
             storage_layout = arg.storage_layout
         elif storage_layout != arg.storage_layout:
             raise RuntimeError(
-                "It is not allowed to mix storage layouts in an expression"
+                f"It is not allowed to mix storage layouts in an expression (current={storage_layout}, got={arg.storage_layout})"
             )
 
     if storage_layout is None:

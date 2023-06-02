@@ -67,7 +67,10 @@ class QueryGenerator:
             self.any_layout_presumably_failing_expressions.append(expression)
             return
 
-        if expression.storage_layout == ValueStorageLayout.HORIZONTAL:
+        if expression.storage_layout == ValueStorageLayout.ANY:
+            # does not matter, could be taken by all
+            self.vertical_layout_normal_expressions.append(expression)
+        elif expression.storage_layout == ValueStorageLayout.HORIZONTAL:
             if expression.is_aggregate:
                 self.horizontal_layout_aggregate_expressions.append(expression)
             else:
@@ -220,7 +223,7 @@ class QueryGenerator:
             )
             return DataRowSelection(row_indices)
         else:
-            raise RuntimeError(f"Unknown storage layout: {storage_layout}")
+            raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
     def _remove_known_inconsistencies(
         self,
