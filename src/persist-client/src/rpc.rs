@@ -9,6 +9,7 @@
 
 //! gRPC-based implementations of Persist PubSub client and server.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
@@ -839,8 +840,13 @@ impl PubSubState {
 
         {
             let mut subscribed_shards = self.shard_subscribers.write().expect("lock poisoned");
-            if let Some(subscribed_connections) = subscribed_shards.get_mut(shard_id) {
+            if let Entry::Occupied(mut entry) = subscribed_shards.entry(*shard_id) {
+                let subscribed_connections = entry.get_mut();
                 subscribed_connections.remove(&connection_id);
+
+                if subscribed_connections.is_empty() {
+                    entry.remove_entry();
+                }
             }
         }
 
