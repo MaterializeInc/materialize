@@ -246,6 +246,8 @@ impl PersistConfig {
         clamp: Duration::from_secs(16),
     };
 
+    pub(crate) const DEFAULT_PUBSUB_CLIENT_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
+
     pub(crate) const DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER: usize = 3;
 
     /// Default value for [`DynamicConfig::blob_cache_mem_limit_bytes`].

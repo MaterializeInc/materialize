@@ -192,12 +192,20 @@ impl GrpcPubSubClient {
         config: PersistPubSubClientConfig,
         metrics: Arc<Metrics>,
     ) {
+        let mut is_first_connection_attempt = true;
         loop {
             metrics.pubsub_client.grpc_connection.connected.set(0);
 
             if !config.persist_cfg.dynamic.pubsub_client_enabled() {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
+            }
+
+            // add a bit of backoff when reconnecting after some network/server failure
+            if is_first_connection_attempt {
+                is_first_connection_attempt = false;
+            } else {
+                tokio::time::sleep(PersistConfig::DEFAULT_PUBSUB_CLIENT_RECONNECT_BACKOFF).await;
             }
 
             info!("Connecting to Persist PubSub: {}", config.url);
