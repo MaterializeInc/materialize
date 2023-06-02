@@ -38,10 +38,12 @@ use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
+pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
+pub mod transform;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
 
