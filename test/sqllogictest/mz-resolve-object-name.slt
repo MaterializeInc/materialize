@@ -87,10 +87,10 @@ SELECT mz_internal.mz_global_id_to_name('u3');
 ----
 d.s.t
 
-query error db error: ERROR: internal error: improper relation name \(too many dotted names\): d\.s\.t\.c
+query error db error: ERROR: improper relation name \(too many dotted names\): d\.s\.t\.c
 SELECT mz_internal.mz_resolve_object_name('d.s.t.c');
 
-query error db error: ERROR: internal error: improper relation name \(too many dotted names\): d\.s\.t\.c\.b
+query error db error: ERROR: improper relation name \(too many dotted names\): d\.s\.t\.c\.b
 SELECT mz_internal.mz_resolve_object_name('d.s.t.c.b');
 
 # Respects search path
