@@ -36,7 +36,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::transform::Transform;
+use crate::plan::transform::{Transform, TransformConfig};
 use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
 pub mod interpret;
@@ -1706,7 +1706,25 @@ This is not expected to cause incorrect results, but could indicate a performanc
             // analysis and transform under checked recursion. By a similar argument
             // made in `from_mir`, we do not expect the recursion limit to be hit.
             // However, if that happens, we propagate an error to the caller.
-            Self::refine_single_time_consolidation(&mut dataflow)?;
+            // To apply the transform, we first obtain monotonic source and index
+            // global IDs and add them to a `TransformConfig` instance.
+            let monotonic_ids = dataflow
+                .source_imports
+                .iter()
+                .filter_map(|(id, (_, monotonic))| if *monotonic { Some(id) } else { None })
+                .chain(
+                    dataflow
+                        .index_imports
+                        .iter()
+                        .filter_map(
+                            |(id, (_, _, monotonic))| if *monotonic { Some(id) } else { None },
+                        ),
+                )
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            let config = TransformConfig { monotonic_ids };
+            Self::refine_single_time_consolidation(&mut dataflow, &config)?;
         }
 
         mz_repr::explain::trace_plan(&dataflow);
@@ -1905,17 +1923,17 @@ This is not expected to cause incorrect results, but could indicate a performanc
     )]
     fn refine_single_time_consolidation(
         dataflow: &mut DataflowDescription<Self>,
+        config: &TransformConfig,
     ) -> Result<(), String> {
         // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
         if !dataflow.is_single_time() {
             return Ok(());
         }
 
-        // Apply transform for single-time relaxation of consolidation.
         let transform = transform::RelaxMustConsolidate::<T>::new();
         for build_desc in dataflow.objects_to_build.iter_mut() {
             transform
-                .transform(&(), &mut build_desc.plan)
+                .transform(config, &mut build_desc.plan)
                 .map_err(|_| "Maximum recursion limit error in consolidation relaxation.")?;
         }
         mz_repr::explain::trace_plan(dataflow);

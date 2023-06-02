@@ -9,14 +9,20 @@
 
 //! Utilities for transformation of [crate::plan::Plan] structures.
 
+use std::collections::BTreeSet;
+
 use mz_ore::stack::RecursionLimitError;
+use mz_repr::GlobalId;
 
 use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 use crate::plan::Plan;
 
 /// The type of configuration options passed to all [Transform::transform] calls
 /// as an immutable reference.
-pub type TransformConfig = ();
+#[derive(Debug)]
+pub struct TransformConfig {
+    pub monotonic_ids: BTreeSet<GlobalId>,
+}
 
 /// A transform for [crate::plan::Plan] nodes.
 pub trait Transform<T = mz_repr::Timestamp> {
@@ -53,13 +59,13 @@ pub trait BottomUpTransform<T = mz_repr::Timestamp> {
 
     /// A type responsible for synthesizing the [Self::Info] associated with
     /// each sub-term.
-    type Interpreter: Interpreter<T, Domain = Self::Info>;
+    type Interpreter<'a>: Interpreter<T, Domain = Self::Info>;
 
     /// The name for this transform.
     fn name(&self) -> &'static str;
 
     /// Derive a [Self::Interpreter] instance from the [TransformConfig].
-    fn interpreter(config: &TransformConfig) -> Self::Interpreter;
+    fn interpreter(config: &TransformConfig) -> Self::Interpreter<'_>;
 
     /// A callback for manipulating the root of the given [Plan] using the
     /// [Self::Info] derived for itself and its children.

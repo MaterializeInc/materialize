@@ -35,14 +35,14 @@ impl<T> RelaxMustConsolidate<T> {
 impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
     type Info = PhysicallyMonotonic;
 
-    type Interpreter = SingleTimeMonotonic<T>;
+    type Interpreter<'a> = SingleTimeMonotonic<'a, T>;
 
     fn name(&self) -> &'static str {
         "must_consolidate relaxation"
     }
 
-    fn interpreter(_config: &TransformConfig) -> Self::Interpreter {
-        SingleTimeMonotonic::new()
+    fn interpreter(config: &TransformConfig) -> Self::Interpreter<'_> {
+        SingleTimeMonotonic::new(&config.monotonic_ids)
     }
 
     fn action(_plan: &mut Plan<T>, _plan_info: &Self::Info, _input_infos: &[Self::Info]) {
