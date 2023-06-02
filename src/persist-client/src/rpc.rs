@@ -717,9 +717,10 @@ impl PubSubState {
 
         {
             let mut subscribers = self.shard_subscribers.write().expect("lock poisoned");
-            for (_shard, connections) in subscribers.iter_mut() {
-                connections.remove(&connection_id);
-            }
+            subscribers.retain(|_shard, connections_for_shard| {
+                connections_for_shard.remove(&connection_id);
+                !connections_for_shard.is_empty()
+            });
         }
 
         self.metrics
@@ -1378,7 +1379,7 @@ mod grpc {
             })
             .await;
             poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-                server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 0)])
+                server_state.shard_subscription_counts() == HashMap::new()
             })
             .await
         });
@@ -1499,7 +1500,7 @@ mod grpc {
         // dropping the token will unsubscribe our client
         drop(token);
         poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 0)])
+            server_state.shard_subscription_counts() == HashMap::new()
         })
         .await;
 
@@ -1524,7 +1525,7 @@ mod grpc {
         drop(token2);
         drop(token3);
         poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 0)])
+            server_state.shard_subscription_counts() == HashMap::new()
         })
         .await;
 
