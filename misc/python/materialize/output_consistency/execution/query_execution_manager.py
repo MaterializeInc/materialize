@@ -142,6 +142,10 @@ class QueryExecutionManager:
         query_id = f"{query_id_prefix}{query_no}"
         query_execution = QueryExecution(query_template, query_id)
 
+        if self.config.verbose_output:
+            # print the header with the query before the execution to have information if it gets stuck
+            self.print_query_header(query_id, query_execution, collapsed=True)
+
         for strategy in evaluation_strategies:
             sql_query_string = query_template.to_sql(
                 strategy,
@@ -240,6 +244,21 @@ class QueryExecutionManager:
 
         return validation_outcomes
 
+    def print_query_header(
+        self,
+        query_id: str,
+        query_execution: QueryExecution,
+        collapsed: bool,
+        flush: bool = False,
+    ) -> None:
+        self.output_printer.start_section(
+            f"Test query #{query_id}", collapsed=collapsed
+        )
+        self.output_printer.print_sql(query_execution.generic_sql)
+
+        if flush:
+            self.output_printer.flush()
+
     def print_test_result(
         self,
         query_id: str,
@@ -253,10 +272,11 @@ class QueryExecutionManager:
         ):
             return
 
-        self.output_printer.start_section(
-            f"Test query #{query_id}", collapsed=validation_outcome.success()
-        )
-        self.output_printer.print_sql(query_execution.generic_sql)
+        if not self.config.verbose_output:
+            # In verbose mode, the header has already been printed
+            self.print_query_header(
+                query_id, query_execution, collapsed=False, flush=True
+            )
 
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
         success_reason = (
