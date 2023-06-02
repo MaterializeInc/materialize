@@ -11,6 +11,7 @@ from typing import List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -53,7 +54,9 @@ class NumericOperationParam(OperationParam):
         self.no_floating_point_type = no_floating_point_type
         self.no_unsigned_type = no_unsigned_type
 
-    def supports_type(self, data_type: DataType) -> bool:
+    def supports_type(
+        self, data_type: DataType, previous_args: List[Expression]
+    ) -> bool:
         if not isinstance(data_type, NumberDataType):
             return False
 

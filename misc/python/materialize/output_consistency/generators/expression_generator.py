@@ -241,7 +241,9 @@ class ExpressionGenerator:
                 nesting_level,
             )
         else:
-            return self._generate_simple_arg_for_param(param, storage_layout)
+            return self._generate_simple_arg_for_param(
+                param, arg_context, storage_layout
+            )
 
     def _pick_enum_constant(self, param: EnumConstantOperationParam) -> Expression:
         enum_constant_index = self.randomized_picker.random_number(
@@ -250,10 +252,15 @@ class ExpressionGenerator:
         return param.get_enum_constant(enum_constant_index)
 
     def _generate_simple_arg_for_param(
-        self, param: OperationParam, storage_layout: ValueStorageLayout
+        self,
+        param: OperationParam,
+        arg_context: ArgContext,
+        storage_layout: ValueStorageLayout,
     ) -> LeafExpression:
         # only consider the data type category, do not check incompatibilities and other validations at this point
-        suitable_types_with_values = self._get_data_type_values_of_category(param)
+        suitable_types_with_values = self._get_data_type_values_of_category(
+            param, arg_context
+        )
 
         if len(suitable_types_with_values) == 0:
             raise NoSuitableExpressionFound("No suitable type")
@@ -294,7 +301,7 @@ class ExpressionGenerator:
         )
 
         suitable_operations = self._get_operations_of_category(
-            param.type_category, must_use_aggregation, allow_aggregation
+            param, arg_context, must_use_aggregation, allow_aggregation
         )
 
         if len(suitable_operations) == 0:
@@ -321,7 +328,9 @@ class ExpressionGenerator:
 
         data_type = nested_expression.try_resolve_exact_data_type()
 
-        if data_type is not None and not param.supports_type(data_type):
+        if data_type is not None and not param.supports_type(
+            data_type, arg_context.args
+        ):
             if try_number < 5:
                 return self._generate_complex_arg_for_param(
                     param,
@@ -337,9 +346,9 @@ class ExpressionGenerator:
         return nested_expression
 
     def _get_data_type_values_of_category(
-        self, param: OperationParam
+        self, param: OperationParam, arg_context: ArgContext
     ) -> List[DataTypeWithValues]:
-        category = param.type_category
+        category = param.resolve_type_category(arg_context.args)
         if category == DataTypeCategory.ANY:
             return self.input_data.all_data_types_with_values
 
@@ -351,17 +360,19 @@ class ExpressionGenerator:
         suitable_types_with_values = []
 
         for type_with_values in preselected_types_with_values:
-            if param.supports_type(type_with_values.data_type):
+            if param.supports_type(type_with_values.data_type, arg_context.args):
                 suitable_types_with_values.append(type_with_values)
 
         return suitable_types_with_values
 
     def _get_operations_of_category(
         self,
-        category: DataTypeCategory,
+        param: OperationParam,
+        arg_context: ArgContext,
         must_use_aggregation: bool,
         allow_aggregation: bool,
     ) -> List[DbOperationOrFunction]:
+        category = param.resolve_type_category(arg_context.args)
         suitable_operations = self._get_all_operations_of_category(category)
         if must_use_aggregation:
             return self._get_only_aggregate_operations(suitable_operations)
