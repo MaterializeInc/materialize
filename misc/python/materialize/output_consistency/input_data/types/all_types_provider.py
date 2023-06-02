@@ -19,7 +19,12 @@ from materialize.output_consistency.input_data.types.date_time_types_provider im
 from materialize.output_consistency.input_data.types.number_types_provider import (
     NUMERIC_DATA_TYPES,
 )
+from materialize.output_consistency.input_data.types.text_type_provider import (
+    TEXT_DATA_TYPE,
+)
 
 DATA_TYPES: List[DataType] = list(
-    itertools.chain(NUMERIC_DATA_TYPES, [BOOLEAN_DATA_TYPE], DATE_TIME_DATA_TYPES)
+    itertools.chain(
+        NUMERIC_DATA_TYPES, [BOOLEAN_DATA_TYPE], DATE_TIME_DATA_TYPES, [TEXT_DATA_TYPE]
+    )
 )

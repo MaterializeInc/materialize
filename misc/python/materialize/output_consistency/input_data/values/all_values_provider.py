@@ -21,11 +21,15 @@ from materialize.output_consistency.input_data.values.date_time_values_provider 
 from materialize.output_consistency.input_data.values.number_values_provider import (
     VALUES_PER_NUMERIC_DATA_TYPE,
 )
+from materialize.output_consistency.input_data.values.text_values_provider import (
+    TEXT_DATA_TYPE_WITH_VALUES,
+)
 
 ALL_DATA_TYPES_WITH_VALUES: List[DataTypeWithValues] = list(
     itertools.chain(
         list(VALUES_PER_NUMERIC_DATA_TYPE.values()),
         [BOOLEAN_DATA_TYPE_WITH_VALUES],
         DATE_TIME_DATA_TYPES_WITH_VALUES,
+        [TEXT_DATA_TYPE_WITH_VALUES],
     )
 )
