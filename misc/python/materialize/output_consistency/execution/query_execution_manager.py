@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from datetime import datetime
 from typing import List
 
 from materialize.output_consistency.common.configuration import (
@@ -148,13 +149,18 @@ class QueryExecutionManager:
                 ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
             )
 
+            start_time = datetime.now()
+
             try:
                 data = self.executor.query(sql_query_string)
+                duration = self._get_duration_in_ms(start_time)
                 result = QueryResult(
                     strategy, sql_query_string, query_template.column_count(), data
                 )
                 query_execution.outcomes.append(result)
+                query_execution.durations.append(duration)
             except SqlExecutionError as err:
+                duration = self._get_duration_in_ms(start_time)
                 self.rollback_tx(start_new_tx=True)
 
                 if self.shall_retry_with_smaller_query(query_template):
@@ -168,6 +174,7 @@ class QueryExecutionManager:
                     strategy, sql_query_string, query_template.column_count(), str(err)
                 )
                 query_execution.outcomes.append(failure)
+                query_execution.durations.append(duration)
 
         if self.config.dry_run:
             return [ValidationOutcome()]
@@ -176,6 +183,11 @@ class QueryExecutionManager:
         self.print_test_result(query_id, query_execution, validation_outcome)
 
         return [validation_outcome]
+
+    def _get_duration_in_ms(self, start_time: datetime) -> float:
+        end_time = datetime.now()
+        duration = end_time - start_time
+        return duration.total_seconds()
 
     def shall_retry_with_smaller_query(self, query_template: QueryTemplate) -> bool:
         return (
@@ -257,6 +269,11 @@ class QueryExecutionManager:
         self.output_printer.print_info(
             f"Test with query #{query_id} {result_desc}{success_reason}."
         )
+
+        duration_info = ", ".join(
+            "{:.3f}".format(duration) for duration in query_execution.durations
+        )
+        self.output_printer.print_info(f"Durations: {duration_info}")
 
         if validation_outcome.has_errors():
             self.output_printer.print_info(
