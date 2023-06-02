@@ -9,6 +9,8 @@
 
 //! Utilities for transformation of [crate::plan::Plan] structures.
 
+use mz_ore::stack::RecursionLimitError;
+
 use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 use crate::plan::Plan;
 
@@ -26,14 +28,22 @@ pub trait Transform<T = mz_repr::Timestamp> {
     /// delegates to the [Transform::do_transform] method. Clients should
     /// override this method if they don't want the [Transform::transform] call
     /// to record a trace of its output.
-    fn transform(&self, config: &TransformConfig, plan: &mut Plan<T>) {
+    fn transform(
+        &self,
+        config: &TransformConfig,
+        plan: &mut Plan<T>,
+    ) -> Result<(), RecursionLimitError> {
         use tracing::{span, Level};
         let _span = span!(Level::TRACE, "transform", path.segment = self.name()).entered();
-        self.do_transform(config, plan);
+        self.do_transform(config, plan)
     }
 
     /// A method that performs the actual transform.
-    fn do_transform(&self, config: &TransformConfig, plan: &mut Plan<T>);
+    fn do_transform(
+        &self,
+        config: &TransformConfig,
+        plan: &mut Plan<T>,
+    ) -> Result<(), RecursionLimitError>;
 }
 
 pub trait BottomUpTransform<T = mz_repr::Timestamp> {
@@ -64,8 +74,12 @@ where
         self.name()
     }
 
-    fn do_transform(&self, config: &TransformConfig, plan: &mut Plan<T>) {
+    fn do_transform(
+        &self,
+        config: &TransformConfig,
+        plan: &mut Plan<T>,
+    ) -> Result<(), RecursionLimitError> {
         let mut fold = FoldMut::new(Self::interpreter(config), Self::action);
-        fold.apply(plan);
+        fold.apply(plan).map(|_| ())
     }
 }
