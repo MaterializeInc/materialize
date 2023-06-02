@@ -28,7 +28,20 @@ from materialize.output_consistency.selection.selection import DataRowSelection
 class InconsistencyIgnoreFilter:
     """Allows specifying and excluding expressions with known output inconsistencies"""
 
-    def shall_ignore(
+    def __init__(self) -> None:
+        self.pre_execution_filter = PreExecutionInconsistencyIgnoreFilter()
+
+    def shall_ignore_expression(
+        self, expression: Expression, row_selection: DataRowSelection
+    ) -> bool:
+        """This filter is applied before the query execution."""
+        return self.pre_execution_filter.shall_ignore_expression(
+            expression, row_selection
+        )
+
+
+class PreExecutionInconsistencyIgnoreFilter:
+    def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> bool:
         if expression.is_leaf():
@@ -49,7 +62,7 @@ class InconsistencyIgnoreFilter:
 
         # recursively check arguments
         for arg in expression.args:
-            if self.shall_ignore(arg, row_selection):
+            if self.shall_ignore_expression(arg, row_selection):
                 return True
 
         return False
