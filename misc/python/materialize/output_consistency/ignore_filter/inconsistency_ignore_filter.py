@@ -23,6 +23,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.validation.validation_message import ValidationError
 
 
 class InconsistencyIgnoreFilter:
@@ -30,6 +31,7 @@ class InconsistencyIgnoreFilter:
 
     def __init__(self) -> None:
         self.pre_execution_filter = PreExecutionInconsistencyIgnoreFilter()
+        self.post_execution_filter = PostExecutionInconsistencyIgnoreFilter()
 
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
@@ -38,6 +40,10 @@ class InconsistencyIgnoreFilter:
         return self.pre_execution_filter.shall_ignore_expression(
             expression, row_selection
         )
+
+    def shall_ignore_error(self, error: ValidationError) -> bool:
+        """This filter is applied on an error after the query execution."""
+        return self.post_execution_filter.shall_ignore_error(error)
 
 
 class PreExecutionInconsistencyIgnoreFilter:
@@ -136,4 +142,9 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return True
 
+        return False
+
+
+class PostExecutionInconsistencyIgnoreFilter:
+    def shall_ignore_error(self, error: ValidationError) -> bool:
         return False
