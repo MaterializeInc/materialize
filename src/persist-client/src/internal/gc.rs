@@ -8,11 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
@@ -32,9 +30,8 @@ use mz_persist_types::{Codec, Codec64};
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::RetryMetrics;
-use crate::internal::paths::{BlobKey, PartialBatchKey, PartialBlobKey, PartialRollupKey};
+use crate::internal::paths::{BlobKey, PartialBatchKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
-use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 use crate::ShardId;
 
@@ -285,28 +282,33 @@ where
         let mut batch_parts_to_delete: Vec<PartialBatchKey> = vec![];
         let mut rollups_to_delete: Vec<PartialRollupKey> = vec![];
 
-        // determine which rollups are removable
+        // we determine which rollups are removable from the *latest* state known
+        // to this process, which may be arbitrarily far ahead of `states`. we do
+        // this for several reasons, but most importantly because we truncate live
+        // diffs in Consensus before we remove rollups from state, WIP explain more plz
 
-        for (truncate_to, _rollup) in machine.applier.removable_rollups() {
-            if truncate_to > seqno_since {
+        for (truncate_lt, _rollup) in machine.applier.removable_rollups() {
+            // our GC req was only to `seqno_since`. it's possible there's more
+            // work to do, but we'll leave that for a future GC req
+            if truncate_lt > seqno_since {
                 break;
             }
 
-            assert!(truncate_to <= seqno_since);
+            assert!(truncate_lt <= seqno_since);
             Self::find_removable_blobs(
                 states,
-                truncate_to,
+                truncate_lt,
                 machine,
                 timer,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
             );
 
-            assert_eq!(states.state().seqno.next(), truncate_to);
+            assert_eq!(states.state().seqno, truncate_lt);
 
             Self::delete_and_truncate(
                 shard_id,
-                truncate_to,
+                truncate_lt,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
                 machine,
@@ -321,10 +323,10 @@ where
     }
 
     /// Iterates through `states`, accumulating all deleted blobs (both batch parts
-    /// and rollups), until `truncate_to` (exclusive).
+    /// and rollups), until `truncate_lt` (exclusive).
     fn find_removable_blobs<F>(
         states: &mut StateVersionsIter<T>,
-        truncate_to: SeqNo,
+        truncate_lt: SeqNo,
         machine: &mut Machine<K, V, T, D>,
         timer: &mut F,
         batch_parts_to_delete: &mut Vec<PartialBatchKey>,
@@ -332,6 +334,12 @@ where
     ) where
         F: FnMut(&Counter),
     {
+        // WIP:
+        if states.state().seqno.next() > truncate_lt {
+            return;
+        }
+
+        assert!(states.state().seqno.next() <= truncate_lt);
         while let Some(state) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
@@ -347,7 +355,7 @@ where
                 });
             }
         }) {
-            if state.seqno.next() == truncate_to {
+            if state.seqno == truncate_lt {
                 break;
             }
         }
@@ -363,10 +371,10 @@ where
     }
 
     /// Deletes all batch parts and rollups from Blob.
-    /// Truncates Consensus to `truncate_to`.
+    /// Truncates Consensus to `truncate_lt`.
     async fn delete_and_truncate<F>(
         shard_id: &ShardId,
-        truncate_to: SeqNo,
+        truncate_lt: SeqNo,
         batch_parts: &mut Vec<PartialBatchKey>,
         rollups: &mut Vec<PartialRollupKey>,
         machine: &mut Machine<K, V, T, D>,
@@ -400,7 +408,7 @@ where
         machine
             .applier
             .state_versions
-            .truncate_diffs(shard_id, truncate_to)
+            .truncate_diffs(shard_id, truncate_lt)
             .await;
         timer(&machine.applier.metrics.gc.steps.truncate_diff_seconds);
     }
