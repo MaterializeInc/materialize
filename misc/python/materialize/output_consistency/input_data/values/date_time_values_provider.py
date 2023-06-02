@@ -34,6 +34,7 @@ def __create_values(
     timezone_value_suffix = f" {_timezone}" if _timezone else ""
     timezone_column_suffix = f"_{_timezone}" if _timezone else ""
     timezone_column_suffix = re.sub("\\+", "PLUS", timezone_column_suffix)
+    timezone_column_suffix = re.sub("/", "_", timezone_column_suffix)
 
     _values_of_type.add_raw_value(
         f"'{_date_time_data_type.min_value}{timezone_value_suffix}'",
