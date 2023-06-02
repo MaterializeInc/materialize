@@ -370,6 +370,53 @@ ALTER VIEW mv RENAME TO mv2
 statement error materialize\.public\.mv is not a view\nHINT: Use EXPLAIN \[\.\.\.\] MATERIALIZED VIEW to explain a materialized view\.
 EXPLAIN WITH(arity, join_impls) VIEW mv
 
+# We should be able to create materialized views on top of 'SHOW' commands.
+
+statement ok
+CREATE MATERIALIZED VIEW mat_clusters AS SELECT name FROM (SHOW CLUSTERS);
+
+# Depends on an mz_internal table.
+statement error cannot create materialized view with unstable dependencies
+CREATE MATERIALIZED VIEW mat_cluster_replicas AS SELECT cluster, replica, size, ready FROM (SHOW CLUSTER REPLICAS);
+
+# Note: the only reason we use mat_clusters here, is because we know it should exist.
+statement ok
+CREATE MATERIALIZED VIEW mat_columns AS SELECT name, nullable, type FROM (SHOW COLUMNS FROM mat_clusters);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_connections AS SELECT name, type FROM (SHOW CONNECTIONS);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_databases AS SELECT name FROM (SHOW DATABASES);
+
+# Depends on an mz_internal table.
+statement error cannot create materialized view with unstable dependencies
+CREATE MATERIALIZED VIEW mat_indexes AS SELECT name, on, cluster, key FROM (SHOW INDEXES);
+
+# Depends on an mz_internal table.
+statement error cannot create materialized view with unstable dependencies
+CREATE MATERIALIZED VIEW mat_mat_views AS SELECT name, cluster FROM (SHOW MATERIALIZED VIEWS);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_objects AS SELECT name FROM (SHOW OBJECTS);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_schemas AS SELECT name FROM (SHOW SCHEMAS);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
+
+statement ok
+CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
 
 # Cleanup
 
