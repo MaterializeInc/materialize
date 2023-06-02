@@ -328,9 +328,17 @@ class ExpressionGenerator:
 
         data_type = nested_expression.try_resolve_exact_data_type()
 
-        if data_type is not None and not param.supports_type(
+        is_unsupported = data_type is not None and not param.supports_type(
             data_type, arg_context.args
-        ):
+        )
+        is_unsupported = (
+            is_unsupported
+            or not param.might_support_as_input_assuming_category_matches(
+                nested_expression.operation.return_type_spec
+            )
+        )
+
+        if is_unsupported:
             if try_number < 5:
                 return self._generate_complex_arg_for_param(
                     param,

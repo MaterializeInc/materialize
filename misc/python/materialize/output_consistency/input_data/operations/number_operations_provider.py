@@ -171,7 +171,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "CBRT",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 # CEIL == CEILING
@@ -208,7 +208,7 @@ NUMERIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -250,7 +250,7 @@ NUMERIC_OPERATION_TYPES.append(
                 },
             ),
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -298,7 +298,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "SQRT",
         [NumericOperationParam(incompatibilities={ExpressionCharacteristics.NEGATIVE})],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(

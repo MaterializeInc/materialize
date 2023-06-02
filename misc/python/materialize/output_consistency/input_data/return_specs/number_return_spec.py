@@ -12,9 +12,7 @@ from materialize.output_consistency.operation.return_type_spec import ReturnType
 
 
 class NumericReturnTypeSpec(ReturnTypeSpec):
-    def __init__(
-        self,
-        only_integer: bool = False,
-    ):
+    def __init__(self, only_integer: bool = False, always_floating_type: bool = False):
         super().__init__(DataTypeCategory.NUMERIC)
         self.only_integer = only_integer
+        self.always_floating_type = always_floating_type

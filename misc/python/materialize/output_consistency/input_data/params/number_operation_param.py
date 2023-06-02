@@ -15,6 +15,9 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.types.number_types_provider import (
     INT8_TYPE_IDENTIFIER,
     UINT4_TYPE_IDENTIFIER,
@@ -22,6 +25,7 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
     NumberDataType,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class NumericOperationParam(OperationParam):
@@ -75,6 +79,17 @@ class NumericOperationParam(OperationParam):
 
         if self.no_unsigned_type and not data_type.is_signed:
             return False
+
+        return True
+
+    def might_support_as_input_assuming_category_matches(
+        self, return_type_spec: ReturnTypeSpec
+    ) -> bool:
+        # In doubt return True
+
+        if isinstance(return_type_spec, NumericReturnTypeSpec):
+            if self.no_floating_point_type and return_type_spec.always_floating_type:
+                return False
 
         return True
 

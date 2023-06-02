@@ -15,6 +15,7 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class OperationParam:
@@ -51,6 +52,11 @@ class OperationParam:
         self, data_type: DataType, previous_args: List[Expression]
     ) -> bool:
         raise NotImplementedError
+
+    def might_support_as_input_assuming_category_matches(
+        self, return_type_spec: ReturnTypeSpec
+    ) -> bool:
+        return True
 
     def supports_expression(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:
