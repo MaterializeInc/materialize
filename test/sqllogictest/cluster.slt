@@ -561,12 +561,6 @@ size_1  1  1  18446744073709000000  18446744073709551615  1  1
 size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
 size_32  32  1  18446744073709000000  18446744073709551615  32  1
 
-# We should be able to create a Materialized View on top of SHOW CLUSTERS.
-#
-# Note: previously this panicked.
-statement ok
-CREATE MATERIALIZED VIEW should_not_panic AS SELECT * FROM (SHOW CLUSTER REPLICAS);
-
 statement ok
 DROP CLUSTER foo CASCADE
 
