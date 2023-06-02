@@ -187,7 +187,7 @@ class QueryGenerator:
         for expression in expressions:
             row_selection = self._select_rows(expression.storage_layout)
 
-            if self.ignore_filter.shall_ignore(expression, row_selection):
+            if self.ignore_filter.shall_ignore_expression(expression, row_selection):
                 self._log_skipped_expression(logger, expression)
                 continue
 
@@ -234,7 +234,7 @@ class QueryGenerator:
         indices_to_remove = []
 
         for index, expression in enumerate(expressions):
-            if self.ignore_filter.shall_ignore(expression, row_selection):
+            if self.ignore_filter.shall_ignore_expression(expression, row_selection):
                 self._log_skipped_expression(logger, expression)
                 indices_to_remove.append(index)
 

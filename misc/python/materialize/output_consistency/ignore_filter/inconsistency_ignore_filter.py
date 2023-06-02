@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 from typing import Set
 
+from materialize.output_consistency.execution.evaluation_strategy import (
+    EvaluationStrategyKey,
+)
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -23,12 +26,34 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.validation.validation_message import (
+    ValidationError,
+    ValidationErrorType,
+)
 
 
 class InconsistencyIgnoreFilter:
     """Allows specifying and excluding expressions with known output inconsistencies"""
 
-    def shall_ignore(
+    def __init__(self) -> None:
+        self.pre_execution_filter = PreExecutionInconsistencyIgnoreFilter()
+        self.post_execution_filter = PostExecutionInconsistencyIgnoreFilter()
+
+    def shall_ignore_expression(
+        self, expression: Expression, row_selection: DataRowSelection
+    ) -> bool:
+        """This filter is applied before the query execution."""
+        return self.pre_execution_filter.shall_ignore_expression(
+            expression, row_selection
+        )
+
+    def shall_ignore_error(self, error: ValidationError) -> bool:
+        """This filter is applied on an error after the query execution."""
+        return self.post_execution_filter.shall_ignore_error(error)
+
+
+class PreExecutionInconsistencyIgnoreFilter:
+    def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> bool:
         if expression.is_leaf():
@@ -49,7 +74,7 @@ class InconsistencyIgnoreFilter:
 
         # recursively check arguments
         for arg in expression.args:
-            if self.shall_ignore(arg, row_selection):
+            if self.shall_ignore_expression(arg, row_selection):
                 return True
 
         return False
@@ -121,6 +146,29 @@ class InconsistencyIgnoreFilter:
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
+                return True
+
+        return False
+
+
+class PostExecutionInconsistencyIgnoreFilter:
+    def shall_ignore_error(self, error: ValidationError) -> bool:
+        if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
+            outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
+
+            dfr_successful = outcome_by_strategy_id[
+                EvaluationStrategyKey.DATAFLOW_RENDERING
+            ].successful
+            ctf_successful = outcome_by_strategy_id[
+                EvaluationStrategyKey.CONSTANT_FOLDING
+            ].successful
+
+            if (
+                error.query_execution.query_template.contains_aggregations
+                and not dfr_successful
+                and ctf_successful
+            ):
+                # see https://github.com/MaterializeInc/materialize/issues/19662
                 return True
 
         return False

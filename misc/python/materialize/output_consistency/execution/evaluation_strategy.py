@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from enum import Enum
 from typing import List, Optional
 
 from materialize.output_consistency.data_type.data_type_with_values import (
@@ -27,18 +27,32 @@ from materialize.output_consistency.selection.selection import (
 )
 
 
+class EvaluationStrategyKey(Enum):
+    DUMMY = 1
+    DATAFLOW_RENDERING = 2
+    CONSTANT_FOLDING = 3
+
+
 class EvaluationStrategy:
     """Strategy how to execute a `QueryTemplate`"""
 
-    def __init__(self, key: str, simple_db_object_name: str, name: str):
+    def __init__(
+        self,
+        identifier: EvaluationStrategyKey,
+        name: str,
+        object_name_base: str,
+        simple_db_object_name: str,
+    ):
         """
-         :param key: the db object name will be derived from this key
-         :param simple_db_object_name: only used by the reproduction code printer
+        :param identifier: identifier of this strategy
         :param name: readable name
+        :param object_name_base: the db object name will be derived from this
+        :param simple_db_object_name: only used by the reproduction code printer
         """
-        self.key = key
-        self.simple_db_object_name = simple_db_object_name
+        self.identifier = identifier
         self.name = name
+        self.object_name_base = object_name_base
+        self.simple_db_object_name = simple_db_object_name
 
     def generate_sources(self, input_data: ConsistencyTestInputData) -> List[str]:
         statements = []
@@ -81,7 +95,7 @@ class EvaluationStrategy:
         storage_suffix = (
             "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
         )
-        return f"{self.key}_{storage_suffix}"
+        return f"{self.object_name_base}_{storage_suffix}"
 
     def __str__(self) -> str:
         return self.name
@@ -89,7 +103,7 @@ class EvaluationStrategy:
 
 class DummyEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__("<source>", "dummy", "Dummy")
+        super().__init__(EvaluationStrategyKey.DUMMY, "Dummy", "<source>", "dummy")
 
     def generate_sources(
         self,
@@ -100,7 +114,12 @@ class DummyEvaluation(EvaluationStrategy):
 
 class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__("t_dfr", "dataflow_rendering", "Dataflow rendering")
+        super().__init__(
+            EvaluationStrategyKey.DATAFLOW_RENDERING,
+            "Dataflow rendering",
+            "t_dfr",
+            "dataflow_rendering",
+        )
 
     def generate_source_for_storage_layout(
         self,
@@ -134,7 +153,12 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
 
 class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__("v_ctf", "constant_folding", "Constant folding")
+        super().__init__(
+            EvaluationStrategyKey.CONSTANT_FOLDING,
+            "Constant folding",
+            "v_ctf",
+            "constant_folding",
+        )
 
     def generate_source_for_storage_layout(
         self,

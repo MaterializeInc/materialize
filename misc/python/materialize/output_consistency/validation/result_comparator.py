@@ -11,6 +11,9 @@ import re
 from decimal import Decimal
 from typing import Any, cast
 
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+    InconsistencyIgnoreFilter,
+)
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
     QueryFailure,
@@ -30,6 +33,9 @@ from materialize.output_consistency.validation.validation_outcome import (
 
 class ResultComparator:
     """Compares the outcome (result or failure) of multiple query executions"""
+
+    def __init__(self, ignore_filter: InconsistencyIgnoreFilter):
+        self.ignore_filter = ignore_filter
 
     def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
         validation_outcome = ValidationOutcome()
@@ -80,8 +86,9 @@ class ResultComparator:
     ) -> None:
         if outcome1.successful != outcome2.successful:
             validation_outcome.add_error(
+                self.ignore_filter,
                 ValidationError(
-                    query_execution.query_template,
+                    query_execution,
                     ValidationErrorType.SUCCESS_MISMATCH,
                     "Outcome differs",
                     value1=outcome1.__class__.__name__,
@@ -90,7 +97,7 @@ class ResultComparator:
                     strategy2=outcome2.strategy,
                     sql1=outcome1.sql,
                     sql2=outcome2.sql,
-                )
+                ),
             )
             return
 
@@ -145,8 +152,9 @@ class ResultComparator:
 
         if num_rows1 != num_rows2:
             validation_outcome.add_error(
+                self.ignore_filter,
                 ValidationError(
-                    query_execution.query_template,
+                    query_execution,
                     ValidationErrorType.ROW_COUNT_MISMATCH,
                     "Row count differs",
                     value1=str(num_rows1),
@@ -155,7 +163,7 @@ class ResultComparator:
                     strategy2=result2.strategy,
                     sql1=result1.sql,
                     sql2=result2.sql,
-                )
+                ),
             )
 
     def validate_error_messages(
@@ -170,8 +178,9 @@ class ResultComparator:
 
         if norm_error_message_1 != norm_error_message_2:
             validation_outcome.add_error(
+                self.ignore_filter,
                 ValidationError(
-                    query_execution.query_template,
+                    query_execution,
                     ValidationErrorType.ERROR_MISMATCH,
                     "Error message differs",
                     value1=norm_error_message_1,
@@ -180,7 +189,7 @@ class ResultComparator:
                     strategy2=failure2.strategy,
                     sql1=failure1.sql,
                     sql2=failure2.sql,
-                )
+                ),
             )
 
     def normalize_error_message(self, error_message: str) -> str:
@@ -279,8 +288,9 @@ class ResultComparator:
 
             if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(
+                    self.ignore_filter,
                     ValidationError(
-                        query_execution.query_template,
+                        query_execution,
                         ValidationErrorType.CONTENT_MISMATCH,
                         "Value differs",
                         value1=result_value1,
