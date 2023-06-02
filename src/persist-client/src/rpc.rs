@@ -9,6 +9,7 @@
 
 //! gRPC-based implementations of Persist PubSub client and server.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
@@ -192,12 +193,20 @@ impl GrpcPubSubClient {
         config: PersistPubSubClientConfig,
         metrics: Arc<Metrics>,
     ) {
+        let mut is_first_connection_attempt = true;
         loop {
             metrics.pubsub_client.grpc_connection.connected.set(0);
 
             if !config.persist_cfg.dynamic.pubsub_client_enabled() {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
+            }
+
+            // add a bit of backoff when reconnecting after some network/server failure
+            if is_first_connection_attempt {
+                is_first_connection_attempt = false;
+            } else {
+                tokio::time::sleep(config.persist_cfg.pubsub_reconnect_backoff).await;
             }
 
             info!("Connecting to Persist PubSub: {}", config.url);
@@ -708,9 +717,10 @@ impl PubSubState {
 
         {
             let mut subscribers = self.shard_subscribers.write().expect("lock poisoned");
-            for (_shard, connections) in subscribers.iter_mut() {
-                connections.remove(&connection_id);
-            }
+            subscribers.retain(|_shard, connections_for_shard| {
+                connections_for_shard.remove(&connection_id);
+                !connections_for_shard.is_empty()
+            });
         }
 
         self.metrics
@@ -831,8 +841,13 @@ impl PubSubState {
 
         {
             let mut subscribed_shards = self.shard_subscribers.write().expect("lock poisoned");
-            if let Some(subscribed_connections) = subscribed_shards.get_mut(shard_id) {
+            if let Entry::Occupied(mut entry) = subscribed_shards.entry(*shard_id) {
+                let subscribed_connections = entry.get_mut();
                 subscribed_connections.remove(&connection_id);
+
+                if subscribed_connections.is_empty() {
+                    entry.remove_entry();
+                }
             }
         }
 
@@ -1304,6 +1319,10 @@ mod grpc {
         data: Bytes::from_static(&[4, 5, 6, 7]),
     };
 
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+    const SUBSCRIPTIONS_TIMEOUT: Duration = Duration::from_secs(3);
+    const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
     // NB: we use separate runtimes for client and server throughout these tests to cleanly drop
     // ALL tasks (including spawned child tasks) associated with one end of a connection, to most
     // closely model an actual disconnect.
@@ -1340,27 +1359,27 @@ mod grpc {
 
         // wait until the client is connected and subscribed
         server_runtime.block_on(async {
-            poll_until_true(Duration::from_secs(10), || {
+            poll_until_true(CONNECT_TIMEOUT, || {
                 server_state.active_connections().len() == 1
             })
             .await;
-            poll_until_true(Duration::from_secs(2), || {
+            poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
                 server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
             })
             .await
         });
 
         // drop the client
-        client_runtime.shutdown_timeout(Duration::from_secs(2));
+        client_runtime.shutdown_timeout(SERVER_SHUTDOWN_TIMEOUT);
 
         // server should notice the client dropping and clean up its state
         server_runtime.block_on(async {
-            poll_until_true(Duration::from_secs(10), || {
+            poll_until_true(CONNECT_TIMEOUT, || {
                 server_state.active_connections().is_empty()
             })
             .await;
-            poll_until_true(Duration::from_secs(2), || {
-                server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 0)])
+            poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
+                server_state.shard_subscription_counts() == HashMap::new()
             })
             .await
         });
@@ -1399,21 +1418,21 @@ mod grpc {
 
         server_runtime.block_on(async {
             // client connects automatically once the server is up
-            poll_until_true(Duration::from_secs(10), || {
+            poll_until_true(CONNECT_TIMEOUT, || {
                 server_state.active_connections().len() == 1
             })
             .await;
 
             // client rehydrated its subscriptions. notably, only includes the shard that
             // still has an active token
-            poll_until_true(Duration::from_secs(2), || {
+            poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
                 server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
             })
             .await;
         });
 
         // kill the server
-        server_runtime.shutdown_timeout(Duration::from_secs(2));
+        server_runtime.shutdown_timeout(SERVER_SHUTDOWN_TIMEOUT);
 
         // client can still send requests without error
         let _token_2 = Arc::clone(&client.sender).subscribe(&SHARD_ID_1);
@@ -1431,14 +1450,14 @@ mod grpc {
 
         server_runtime.block_on(async {
             // client automatically reconnects to new server
-            poll_until_true(Duration::from_secs(5), || {
+            poll_until_true(CONNECT_TIMEOUT, || {
                 server_state.active_connections().len() == 1
             })
             .await;
 
             // and rehydrates its subscriptions, including the new one that was sent
             // while the server was unavailable.
-            poll_until_true(Duration::from_secs(3), || {
+            poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
                 server_state.shard_subscription_counts()
                     == HashMap::from([(SHARD_ID_0, 1), (SHARD_ID_1, 1)])
             })
@@ -1466,28 +1485,28 @@ mod grpc {
         );
 
         // our client connects
-        poll_until_true(Duration::from_secs(5), || {
+        poll_until_true(CONNECT_TIMEOUT, || {
             server_state.active_connections().len() == 1
         })
         .await;
 
         // we can subscribe to a shard, receiving back a token
         let token = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
-        poll_until_true(Duration::from_secs(3), || {
+        poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
             server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
         })
         .await;
 
         // dropping the token will unsubscribe our client
         drop(token);
-        poll_until_true(Duration::from_secs(3), || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 0)])
+        poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
+            server_state.shard_subscription_counts() == HashMap::new()
         })
         .await;
 
         // we can resubscribe to a shard
         let token = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
-        poll_until_true(Duration::from_secs(3), || {
+        poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
             server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
         })
         .await;
@@ -1496,7 +1515,7 @@ mod grpc {
         let token2 = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
         let token3 = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
         assert_eq!(Arc::strong_count(&token), 3);
-        poll_until_true(Duration::from_secs(3), || {
+        poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
             server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 1)])
         })
         .await;
@@ -1505,15 +1524,15 @@ mod grpc {
         drop(token);
         drop(token2);
         drop(token3);
-        poll_until_true(Duration::from_secs(3), || {
-            server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 0)])
+        poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
+            server_state.shard_subscription_counts() == HashMap::new()
         })
         .await;
 
         // we can subscribe to many shards
         let _token0 = Arc::clone(&client.sender).subscribe(&SHARD_ID_0);
         let _token1 = Arc::clone(&client.sender).subscribe(&SHARD_ID_1);
-        poll_until_true(Duration::from_secs(3), || {
+        poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
             server_state.shard_subscription_counts()
                 == HashMap::from([(SHARD_ID_0, 1), (SHARD_ID_1, 1)])
         })
@@ -1563,7 +1582,7 @@ mod grpc {
         let server_state = server_runtime.block_on(spawn_server(tcp_listener_stream));
 
         // wait until both clients are connected
-        server_runtime.block_on(poll_until_true(Duration::from_secs(10), || {
+        server_runtime.block_on(poll_until_true(CONNECT_TIMEOUT, || {
             server_state.active_connections().len() == 2
         }));
 
@@ -1574,7 +1593,7 @@ mod grpc {
         // subscribe and send a diff
         let _token_client_1 = Arc::clone(&client_1.sender).subscribe(&SHARD_ID_0);
         let _token_client_2 = Arc::clone(&client_2.sender).subscribe(&SHARD_ID_0);
-        server_runtime.block_on(poll_until_true(Duration::from_secs(2), || {
+        server_runtime.block_on(poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
             server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 2)])
         }));
 
@@ -1590,7 +1609,7 @@ mod grpc {
         });
 
         // kill the server
-        server_runtime.shutdown_timeout(Duration::from_secs(2));
+        server_runtime.shutdown_timeout(SERVER_SHUTDOWN_TIMEOUT);
 
         // receivers can still be polled without error
         assert!(client_1.receiver.next().now_or_never().is_none());
@@ -1609,11 +1628,11 @@ mod grpc {
 
         // client automatically reconnects to new server and rehydrates subscriptions
         server_runtime.block_on(async {
-            poll_until_true(Duration::from_secs(10), || {
+            poll_until_true(CONNECT_TIMEOUT, || {
                 server_state.active_connections().len() == 2
             })
             .await;
-            poll_until_true(Duration::from_secs(2), || {
+            poll_until_true(SUBSCRIPTIONS_TIMEOUT, || {
                 server_state.shard_subscription_counts() == HashMap::from([(SHARD_ID_0, 2)])
             })
             .await;
@@ -1683,7 +1702,8 @@ mod grpc {
     }
 
     fn test_persist_config() -> PersistConfig {
-        let cfg = PersistConfig::new_for_tests();
+        let mut cfg = PersistConfig::new_for_tests();
+        cfg.pubsub_reconnect_backoff = Duration::ZERO;
         let mut params = PersistParameters::default();
         params.pubsub_client_enabled = Some(true);
         params.apply(&cfg);
