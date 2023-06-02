@@ -42,7 +42,12 @@ class DbOperationOrFunction:
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_disabled: bool = False,
     ):
+        """
+        :param is_disabled: an operation should only be disabled if its execution causes problems;
+                            if it just fails, it should be ignored
+        """
         if args_validators is None:
             args_validators = set()
 
@@ -53,6 +58,7 @@ class DbOperationOrFunction:
         self.args_validators: Set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
         self.relevance = relevance
+        self.is_disabled = is_disabled
 
     def to_pattern(self, args_count: int) -> str:
         raise NotImplementedError
@@ -109,6 +115,7 @@ class DbOperation(DbOperationOrFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_disabled: bool = False,
     ):
         param_count = len(params)
         super().__init__(
@@ -119,6 +126,7 @@ class DbOperation(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=False,
             relevance=relevance,
+            is_disabled=is_disabled,
         )
         self.pattern = pattern
 
@@ -146,6 +154,7 @@ class DbFunction(DbOperationOrFunction):
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_disabled: bool = False,
     ):
         self.validate_params(params)
 
@@ -157,6 +166,7 @@ class DbFunction(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=is_aggregation,
             relevance=relevance,
+            is_disabled=is_disabled,
         )
         self.function_name = function_name.lower()
 
