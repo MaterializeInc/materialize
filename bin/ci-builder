@@ -191,6 +191,7 @@ case "$cmd" in
         fi
 
         for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
+        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOZE|MZ)_' | sed 's/=.*//'); do
             args+=(--env "$env")
         done
         if [[ -t 1 ]]; then

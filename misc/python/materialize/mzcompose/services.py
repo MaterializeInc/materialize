@@ -94,6 +94,7 @@ class Materialized(Service):
             # To dynamically change the environment during a workflow run,
             # use Composition.override.
             "MZ_LOG_FILTER",
+            "MZ_PERSIST_COMPACTION_DISABLED",
             "CLUSTERD_LOG_FILTER",
             *environment_extra,
         ]

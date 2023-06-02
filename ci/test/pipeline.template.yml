@@ -16,6 +16,7 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
+  MZ_PERSIST_COMPACTION_DISABLED: true
 
 steps:
   - id: build-x86_64
