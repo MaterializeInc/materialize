@@ -20,7 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
+use mz_sql_parser::ast::{MutRecBlock, TableFactor, UnresolvedObjectName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -1620,210 +1620,84 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         }
     }
 
-    fn fold_expr(&mut self, node: mz_sql_parser::ast::Expr<Raw>) -> mz_sql_parser::ast::Expr<Aug> {
-        use mz_sql_parser::ast::Expr::*;
-        match node {
-            mz_sql_parser::ast::Expr::Identifier(i) => {
-                Identifier(i.into_iter().map(|i| self.fold_ident(i)).collect())
-            }
-            mz_sql_parser::ast::Expr::QualifiedWildcard(i) => {
-                QualifiedWildcard(i.into_iter().map(|i| self.fold_ident(i)).collect())
-            }
-            mz_sql_parser::ast::Expr::FieldAccess { expr, field } => FieldAccess {
-                expr: Box::new(self.fold_expr(*expr)),
-                field: self.fold_ident(field),
+    fn fold_function(
+        &mut self,
+        node: mz_sql_parser::ast::Function<Raw>,
+    ) -> mz_sql_parser::ast::Function<Aug> {
+        mz_sql_parser::ast::Function {
+            name: match node.name {
+                name @ RawItemName::Name(..) => self.fold_raw_object_name_name_internal(name, true),
+                _ => self.fold_item_name(node.name),
             },
-            mz_sql_parser::ast::Expr::WildcardAccess(expr) => {
-                WildcardAccess(Box::new(self.fold_expr(*expr)))
-            }
-            mz_sql_parser::ast::Expr::Parameter(p) => Parameter(p),
-            mz_sql_parser::ast::Expr::Not { expr } => Not {
-                expr: Box::new(self.fold_expr(*expr)),
-            },
-            mz_sql_parser::ast::Expr::And { left, right } => And {
-                left: Box::new(self.fold_expr(*left)),
-                right: Box::new(self.fold_expr(*right)),
-            },
-            mz_sql_parser::ast::Expr::Or { left, right } => Or {
-                left: Box::new(self.fold_expr(*left)),
-                right: Box::new(self.fold_expr(*right)),
-            },
-            mz_sql_parser::ast::Expr::IsExpr {
-                expr,
-                construct,
-                negated,
-            } => IsExpr {
-                expr: Box::new(self.fold_expr(*expr)),
-                construct: self.fold_is_expr_construct(construct),
-                negated,
-            },
-            mz_sql_parser::ast::Expr::InList {
-                expr,
-                list,
-                negated,
-            } => InList {
-                expr: Box::new(self.fold_expr(*expr)),
-                list: list.into_iter().map(|l| self.fold_expr(l)).collect(),
-                negated,
-            },
-            mz_sql_parser::ast::Expr::InSubquery {
-                expr,
-                subquery,
-                negated,
-            } => InSubquery {
-                expr: Box::new(self.fold_expr(*expr)),
-                subquery: Box::new(self.fold_query(*subquery)),
-                negated,
-            },
-            mz_sql_parser::ast::Expr::Like {
-                expr,
-                pattern,
-                escape,
-                case_insensitive,
-                negated,
-            } => Like {
-                expr: Box::new(self.fold_expr(*expr)),
-                pattern: Box::new(self.fold_expr(*pattern)),
-                escape: escape.map(|expr| Box::new(self.fold_expr(*expr))),
-                case_insensitive,
-                negated,
-            },
-            mz_sql_parser::ast::Expr::Between {
-                expr,
-                negated,
-                low,
-                high,
-            } => Between {
-                expr: Box::new(self.fold_expr(*expr)),
-                negated,
-                low: Box::new(self.fold_expr(*low)),
-                high: Box::new(self.fold_expr(*high)),
-            },
-            mz_sql_parser::ast::Expr::Op { op, expr1, expr2 } => Op {
-                op: self.fold_op(op),
-                expr1: Box::new(self.fold_expr(*expr1)),
-                expr2: expr2.map(|expr2| Box::new(self.fold_expr(*expr2))),
-            },
-            mz_sql_parser::ast::Expr::Cast { expr, data_type } => Cast {
-                expr: Box::new(self.fold_expr(*expr)),
-                data_type: self.fold_data_type(data_type),
-            },
-            mz_sql_parser::ast::Expr::Collate { expr, collation } => Collate {
-                expr: Box::new(self.fold_expr(*expr)),
-                collation: self.fold_unresolved_item_name(collation),
-            },
-            mz_sql_parser::ast::Expr::HomogenizingFunction { function, exprs } => {
-                HomogenizingFunction {
-                    function: self.fold_homogenizing_function(function),
-                    exprs: exprs.into_iter().map(|expr| self.fold_expr(expr)).collect(),
-                }
-            }
-            mz_sql_parser::ast::Expr::NullIf { l_expr, r_expr } => NullIf {
-                l_expr: Box::new(self.fold_expr(*l_expr)),
-                r_expr: Box::new(self.fold_expr(*r_expr)),
-            },
-            mz_sql_parser::ast::Expr::Nested(expr) => Nested(Box::new(self.fold_expr(*expr))),
-            mz_sql_parser::ast::Expr::Row { exprs } => Row {
-                exprs: exprs.into_iter().map(|expr| self.fold_expr(expr)).collect(),
-            },
-            mz_sql_parser::ast::Expr::Value(value) => Value(self.fold_value(value)),
-            mz_sql_parser::ast::Expr::Function(mz_sql_parser::ast::Function {
-                name,
-                args,
-                filter,
-                over,
-                distinct,
-            }) => Function(mz_sql_parser::ast::Function {
-                name: match name {
-                    name @ RawItemName::Name(..) => {
-                        self.fold_raw_object_name_name_internal(name, true)
-                    }
-                    _ => self.fold_item_name(name),
-                },
-                args: self.fold_function_args(args),
-                filter: filter.map(|expr| Box::new(self.fold_expr(*expr))),
-                over: over.map(|over| self.fold_window_spec(over)),
-                distinct,
-            }),
-            mz_sql_parser::ast::Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => Case {
-                operand: operand.map(|expr| Box::new(self.fold_expr(*expr))),
-                conditions: conditions
-                    .into_iter()
-                    .map(|expr| self.fold_expr(expr))
-                    .collect(),
-                results: results
-                    .into_iter()
-                    .map(|expr| self.fold_expr(expr))
-                    .collect(),
-                else_result: else_result.map(|expr| Box::new(self.fold_expr(*expr))),
-            },
-            mz_sql_parser::ast::Expr::Exists(query) => Exists(Box::new(self.fold_query(*query))),
-            mz_sql_parser::ast::Expr::Subquery(subquery) => {
-                Subquery(Box::new(self.fold_query(*subquery)))
-            }
-            mz_sql_parser::ast::Expr::AnySubquery { left, op, right } => AnySubquery {
-                left: Box::new(self.fold_expr(*left)),
-                op: self.fold_op(op),
-                right: Box::new(self.fold_query(*right)),
-            },
-            mz_sql_parser::ast::Expr::AnyExpr { left, op, right } => AnyExpr {
-                left: Box::new(self.fold_expr(*left)),
-                op: self.fold_op(op),
-                right: Box::new(self.fold_expr(*right)),
-            },
-            mz_sql_parser::ast::Expr::AllSubquery { left, op, right } => AllSubquery {
-                left: Box::new(self.fold_expr(*left)),
-                op: self.fold_op(op),
-                right: Box::new(self.fold_query(*right)),
-            },
-            mz_sql_parser::ast::Expr::AllExpr { left, op, right } => AllExpr {
-                left: Box::new(self.fold_expr(*left)),
-                op: self.fold_op(op),
-                right: Box::new(self.fold_expr(*right)),
-            },
-            mz_sql_parser::ast::Expr::Array(exprs) => {
-                Array(exprs.into_iter().map(|expr| self.fold_expr(expr)).collect())
-            }
-            mz_sql_parser::ast::Expr::ArraySubquery(subquery) => {
-                ArraySubquery(Box::new(self.fold_query(*subquery)))
-            }
-            mz_sql_parser::ast::Expr::List(exprs) => {
-                List(exprs.into_iter().map(|expr| self.fold_expr(expr)).collect())
-            }
-            mz_sql_parser::ast::Expr::ListSubquery(subquery) => {
-                ListSubquery(Box::new(self.fold_query(*subquery)))
-            }
-            mz_sql_parser::ast::Expr::Subscript { expr, positions } => Subscript {
-                expr: Box::new(self.fold_expr(*expr)),
-                positions: positions
-                    .into_iter()
-                    .map(|p| self.fold_subscript_position(p))
-                    .collect(),
-            },
+            args: self.fold_function_args(node.args),
+            filter: node.filter.map(|expr| Box::new(self.fold_expr(*expr))),
+            over: node.over.map(|over| self.fold_window_spec(over)),
+            distinct: node.distinct,
         }
     }
 
-    fn fold_table_function(
+    fn fold_table_factor(
         &mut self,
-        node: mz_sql_parser::ast::TableFunction<Raw>,
-    ) -> mz_sql_parser::ast::TableFunction<Aug> {
-        mz_sql_parser::ast::TableFunction {
-            name: match &node.name {
-                RawItemName::Name(name) => {
-                    if *name == UnresolvedItemName::unqualified("values") && self.status.is_ok() {
-                        self.status = Err(PlanError::FromValueRequiresParen);
-                    }
-
-                    self.fold_raw_object_name_name_internal(node.name, true)
-                }
-                RawItemName::Id(..) => self.fold_item_name(node.name),
+        node: mz_sql_parser::ast::TableFactor<Raw>,
+    ) -> mz_sql_parser::ast::TableFactor<Aug> {
+        use mz_sql_parser::ast::TableFactor::*;
+        match node {
+            Table { name, alias } => Table {
+                name: self.fold_item_name(name),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
             },
-            args: self.fold_function_args(node.args),
+            Function {
+                function,
+                alias,
+                with_ordinality,
+            } => {
+                let function = mz_sql_parser::ast::TableFunction {
+                    name: match &function.name {
+                        RawItemName::Name(name) => {
+                            if *name == UnresolvedItemName::unqualified("values")
+                                && self.status.is_ok()
+                            {
+                                self.status = Err(PlanError::FromValueRequiresParen);
+                            }
+
+                            self.fold_raw_object_name_name_internal(function.name, true)
+                        }
+                        RawItemName::Id(..) => self.fold_item_name(function.name),
+                    },
+                    args: self.fold_function_args(function.args),
+                };
+
+                Function {
+                    function,
+                    alias: alias.map(|alias| self.fold_table_alias(alias)),
+                    with_ordinality,
+                }
+            }
+            RowsFrom {
+                functions,
+                alias,
+                with_ordinality,
+            } => RowsFrom {
+                functions: functions
+                    .into_iter()
+                    .map(|f| self.fold_table_function(f))
+                    .collect(),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+                with_ordinality,
+            },
+            Derived {
+                lateral,
+                subquery,
+                alias,
+            } => Derived {
+                lateral,
+                subquery: Box::new(self.fold_query(*subquery)),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+            },
+            NestedJoin { join, alias } => NestedJoin {
+                join: Box::new(self.fold_table_with_joins(*join)),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+            },
         }
     }
 }
