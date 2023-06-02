@@ -1714,6 +1714,36 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 Ok(lhs.call_binary(rhs, BinaryFunc::ArrayArrayConcat))
             }) => ArrayAnyCompatible, 383;
         },
+        "array_fill" => Scalar {
+            params!(AnyElement, ScalarType::Array(Box::new(ScalarType::Int32))) => Operation::binary(|ecx, elem, dims| {
+                let elem_type = ecx.scalar_type(&elem);
+
+                let elem_type = match elem_type.array_of_self_elem_type() {
+                    Ok(elem_type) => elem_type,
+                    Err(elem_type) => bail_unsupported!(
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                    ),
+                };
+
+                Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs: vec![elem, dims] })
+            }) => ArrayAnyCompatible, 1193;
+            params!(
+                AnyElement,
+                ScalarType::Array(Box::new(ScalarType::Int32)),
+                ScalarType::Array(Box::new(ScalarType::Int32))
+            ) => Operation::variadic(|ecx, exprs| {
+                let elem_type = ecx.scalar_type(&exprs[0]);
+
+                let elem_type = match elem_type.array_of_self_elem_type() {
+                    Ok(elem_type) => elem_type,
+                    Err(elem_type) => bail_unsupported!(
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                    ),
+                };
+
+                Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs })
+            }) => ArrayAny, 1286;
+        },
         "array_in" => Scalar {
             params!(String, Oid, Int32) =>
                 Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
@@ -2640,13 +2670,18 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "array_agg" => Aggregate {
             params!(NonVecAny) => Operation::unary_ordered(|ecx, e, order_by| {
                 let elem_type = ecx.scalar_type(&e);
-                if let ScalarType::Char {.. } | ScalarType::Map { .. } = elem_type {
-                    bail_unsupported!(format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type)));
+
+                let elem_type = match elem_type.array_of_self_elem_type() {
+                    Ok(elem_type) => elem_type,
+                    Err(elem_type) => bail_unsupported!(
+                        format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type))
+                    ),
                 };
+
                 // ArrayConcat excepts all inputs to be arrays, so wrap all input datums into
                 // arrays.
                 let e_arr = HirScalarExpr::CallVariadic{
-                    func: VariadicFunc::ArrayCreate { elem_type: ecx.scalar_type(&e) },
+                    func: VariadicFunc::ArrayCreate { elem_type },
                     exprs: vec![e],
                 };
                 Ok((e_arr, AggregateFunc::ArrayConcat { order_by }))

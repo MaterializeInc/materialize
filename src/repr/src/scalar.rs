@@ -2762,6 +2762,53 @@ impl<'a> ScalarType {
             */
         ]
     }
+
+    /// Returns the appropriate element type for making a [`ScalarType::Array`] whose elements are
+    /// of `self`.
+    ///
+    /// If the type is not compatible with making an array, returns in the error position.
+    pub fn array_of_self_elem_type(self) -> Result<ScalarType, ScalarType> {
+        match self {
+            t @ (ScalarType::Bool
+            | ScalarType::Int16
+            | ScalarType::Int32
+            | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
+            | ScalarType::Float32
+            | ScalarType::Float64
+            | ScalarType::Numeric { .. }
+            | ScalarType::Date
+            | ScalarType::Time
+            | ScalarType::Timestamp
+            | ScalarType::TimestampTz
+            | ScalarType::Interval
+            | ScalarType::PgLegacyChar
+            | ScalarType::Bytes
+            | ScalarType::String
+            | ScalarType::VarChar { .. }
+            | ScalarType::Jsonb
+            | ScalarType::Uuid
+            | ScalarType::Record { .. }
+            | ScalarType::Oid
+            | ScalarType::RegProc
+            | ScalarType::RegType
+            | ScalarType::RegClass
+            | ScalarType::Int2Vector
+            | ScalarType::MzTimestamp
+            | ScalarType::Range { .. }
+            | ScalarType::MzAclItem { .. }) => Ok(t),
+
+            ScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
+
+            // https://github.com/MaterializeInc/materialize/issues/7613
+            t @ (ScalarType::Char { .. }
+            // not sensible to put in arrays
+            | ScalarType::Map { .. }
+            | ScalarType::List { .. }) => Err(t),
+        }
+    }
 }
 
 // See the chapter "Generating Recurisve Data" from the proptest book:

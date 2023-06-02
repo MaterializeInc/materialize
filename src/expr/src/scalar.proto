@@ -652,6 +652,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty make_mz_acl_item = 28;
         google.protobuf.Empty translate = 29;
         google.protobuf.Empty array_position = 30;
+        mz_repr.relation_and_scalar.ProtoScalarType array_fill = 31;
     }
 }
 
@@ -777,5 +778,7 @@ message ProtoEvalError {
         google.protobuf.Empty multi_dimensional_array_search = 66;
         string must_not_be_null = 67;
         ProtoInvalidIdentifier invalid_identifier = 68;
+        google.protobuf.Empty array_fill_wrong_array_subscripts = 69;
+        uint64 max_array_size_exceeded = 70;
     }
 }

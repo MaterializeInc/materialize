@@ -22,8 +22,7 @@ use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_lowertest::MzReflect;
-use mz_ore::cast::CastFrom;
-use mz_ore::cast::{self, ReinterpretCast};
+use mz_ore::cast::{self, CastFrom, ReinterpretCast};
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
@@ -6937,6 +6936,101 @@ fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     }))
 }
 
+fn array_fill<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    const MAX_SIZE: usize = 1 << 28 - 1;
+    const NULL_ARR_ERR: &str = "dimension array or low bound array";
+    const NULL_ELEM_ERR: &str = "dimension values";
+
+    let fill = datums[0];
+    if matches!(fill, Datum::Array(_)) {
+        return Err(EvalError::Unsupported {
+            feature: "array_fill with arrays".to_string(),
+            issue_no: None,
+        });
+    }
+
+    let arr = match datums[1] {
+        Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.to_string())),
+        o => o.unwrap_array(),
+    };
+
+    let dimensions = arr
+        .elements()
+        .iter()
+        .map(|d| match d {
+            Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.to_string())),
+            d => Ok(usize::cast_from(u32::reinterpret_cast(d.unwrap_int32()))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let lower_bounds = match datums.get(2) {
+        Some(d) => {
+            let arr = match d {
+                Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.to_string())),
+                o => o.unwrap_array(),
+            };
+
+            arr.elements()
+                .iter()
+                .map(|l| match l {
+                    Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.to_string())),
+                    l => Ok(usize::cast_from(u32::reinterpret_cast(l.unwrap_int32()))),
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        None => {
+            vec![1usize; dimensions.len()]
+        }
+    };
+
+    if lower_bounds.len() != dimensions.len() {
+        return Err(EvalError::ArrayFillWrongArraySubscripts);
+    }
+
+    let fill_count: usize = dimensions
+        .iter()
+        .cloned()
+        .map(Some)
+        .reduce(|a, b| match (a, b) {
+            (Some(a), Some(b)) => a.checked_mul(b),
+            _ => None,
+        })
+        .flatten()
+        .ok_or(EvalError::MaxArraySizeExceeded(MAX_SIZE))?;
+
+    if matches!(
+        mz_repr::datum_size(&fill).checked_mul(fill_count),
+        None | Some(MAX_SIZE..)
+    ) {
+        return Err(EvalError::MaxArraySizeExceeded(MAX_SIZE));
+    }
+
+    let array_dimensions = if fill_count == 0 {
+        vec![ArrayDimension {
+            lower_bound: 1,
+            length: 0,
+        }]
+    } else {
+        dimensions
+            .into_iter()
+            .zip_eq(lower_bounds.into_iter())
+            .map(|(length, lower_bound)| ArrayDimension {
+                lower_bound,
+                length,
+            })
+            .collect()
+    };
+
+    Ok(temp_storage.make_datum(|packer| {
+        packer
+            .push_array(&array_dimensions, vec![fill; fill_count])
+            .unwrap()
+    }))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum VariadicFunc {
     Coalesce,
@@ -6985,6 +7079,9 @@ pub enum VariadicFunc {
     MakeMzAclItem,
     Translate,
     ArrayPosition,
+    ArrayFill {
+        elem_type: ScalarType,
+    },
 }
 
 impl VariadicFunc {
@@ -7062,6 +7159,7 @@ impl VariadicFunc {
             VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
+            VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
         }
     }
 
@@ -7097,7 +7195,8 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestampTz
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
-            | VariadicFunc::ArrayPosition => false,
+            | VariadicFunc::ArrayPosition
+            | VariadicFunc::ArrayFill { .. } => false,
         }
     }
 
@@ -7173,6 +7272,9 @@ impl VariadicFunc {
             .nullable(false),
             MakeMzAclItem => ScalarType::MzAclItem.nullable(true),
             ArrayPosition => ScalarType::Int32.nullable(true),
+            ArrayFill { elem_type } => {
+                ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
+            }
         }
     }
 
@@ -7197,6 +7299,7 @@ impl VariadicFunc {
                 | VariadicFunc::ErrorIfNull
                 | VariadicFunc::RangeCreate { .. }
                 | VariadicFunc::ArrayPosition
+                | VariadicFunc::ArrayFill { .. }
         )
     }
 
@@ -7230,7 +7333,8 @@ impl VariadicFunc {
             | And
             | Or
             | MakeMzAclItem
-            | ArrayPosition => false,
+            | ArrayPosition
+            | ArrayFill { .. } => false,
             Coalesce
             | Greatest
             | Least
@@ -7328,7 +7432,8 @@ impl VariadicFunc {
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::Translate
-            | VariadicFunc::ArrayPosition => false,
+            | VariadicFunc::ArrayPosition
+            | VariadicFunc::ArrayFill { .. } => false,
         }
     }
 }
@@ -7375,6 +7480,7 @@ impl fmt::Display for VariadicFunc {
             }),
             VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
+            VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
         }
     }
 }
@@ -7433,6 +7539,9 @@ impl Arbitrary for VariadicFunc {
                 .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
                 .boxed(),
             Just(VariadicFunc::ArrayPosition).boxed(),
+            ScalarType::arbitrary()
+                .prop_map(|elem_type| VariadicFunc::ArrayFill { elem_type })
+                .boxed(),
         ])
     }
 }
@@ -7474,6 +7583,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
             VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
             VariadicFunc::ArrayPosition => ArrayPosition(()),
+            VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7525,6 +7635,9 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 }),
                 MakeMzAclItem(()) => Ok(VariadicFunc::MakeMzAclItem),
                 ArrayPosition(()) => Ok(VariadicFunc::ArrayPosition),
+                ArrayFill(elem_type) => Ok(VariadicFunc::ArrayFill {
+                    elem_type: elem_type.into_rust()?,
+                }),
             }
         } else {
             Err(TryFromProtoError::missing_field(
