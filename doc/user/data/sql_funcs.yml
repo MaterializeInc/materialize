@@ -82,16 +82,16 @@
       `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
 
   - signature: 'variance(x: T) -> U'
-    description: Historical alias for `variance_samp`. *(imprecise)*
+    description: Historical alias for `var_samp`. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
-  - signature: 'variance_pop(x: T) -> U'
+  - signature: 'var_pop(x: T) -> U'
     description: Population variance of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
-  - signature: 'variance_samp(x: T) -> U'
+  - signature: 'var_samp(x: T) -> U'
     description: Sample variance of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
