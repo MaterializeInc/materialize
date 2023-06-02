@@ -1268,7 +1268,9 @@ SERVICES = [
     SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
-    Materialized(memory="8G", default_size=1),
+    Materialized(
+        memory="8G", default_size=1, ulimits={"nproc": 513365, "nofile": 1048576}
+    ),
     Testdrive(default_timeout="120s"),
 ]
 
@@ -1294,10 +1296,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
 
     nodes = [
-        Clusterd(name="clusterd_1_1"),
-        Clusterd(name="clusterd_1_2"),
-        Clusterd(name="clusterd_2_1"),
-        Clusterd(name="clusterd_2_2"),
+        Clusterd(name="clusterd_1_1", ulimits={"nproc": 513365, "nofile": 1048576}),
+        Clusterd(name="clusterd_1_2", ulimits={"nproc": 513365, "nofile": 1048576}),
+        Clusterd(name="clusterd_2_1", ulimits={"nproc": 513365, "nofile": 1048576}),
+        Clusterd(name="clusterd_2_2", ulimits={"nproc": 513365, "nofile": 1048576}),
     ]
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])

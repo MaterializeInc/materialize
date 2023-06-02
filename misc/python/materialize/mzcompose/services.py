@@ -10,7 +10,7 @@
 import os
 import random
 import tempfile
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import toml
 
@@ -69,6 +69,7 @@ class Materialized(Service):
         system_parameter_defaults: Optional[Dict[str, str]] = None,
         additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
         soft_assertions: bool = True,
+        ulimits: Optional[Dict[str, Any]] = None,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -227,6 +228,9 @@ class Materialized(Service):
                 }
             )
 
+        if ulimits:
+            config["ulimits"] = ulimits
+
         super().__init__(name=name, config=config)
 
 
@@ -238,6 +242,7 @@ class Clusterd(Service):
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
         options: List[str] = [],
+        ulimits: Optional[Dict[str, Any]] = None,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -271,6 +276,9 @@ class Clusterd(Service):
                 "volumes": DEFAULT_MZ_VOLUMES,
             }
         )
+
+        if ulimits:
+            config["ulimits"] = ulimits
 
         super().__init__(name=name, config=config)
 
