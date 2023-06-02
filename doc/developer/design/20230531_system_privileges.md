@@ -44,7 +44,7 @@ System privileges will be granted with the following syntax:
 `GRANT <privilege-specification> ON SYSTEM TO <role-specification>`
 
 System privileges will be revoked with the following syntax:
-`REVOKE <privilege-specification> ON SYSTEM TO <role-specification>`
+`REVOKE <privilege-specification> ON SYSTEM FROM <role-specification>`
 
 System privileges and role attributes will interact in the following ways:
 
