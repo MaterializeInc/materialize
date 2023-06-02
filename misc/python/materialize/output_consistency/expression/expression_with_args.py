@@ -76,15 +76,19 @@ class ExpressionWithArgs(Expression):
         return self.return_type_spec
 
     def resolve_return_type_category(self) -> DataTypeCategory:
-        first_arg_type_category_hint = None
+        input_type_hints = []
 
-        if self.return_type_spec.type_category == DataTypeCategory.DYNAMIC:
-            # Only compute the hint for this category
-            first_arg_type_category_hint = (
-                self.args[0].resolve_return_type_category() if self.has_args() else None
-            )
+        if self.return_type_spec.indices_of_required_input_type_hints is not None:
+            # provide input types that are required as hints to determine the output type
+            for arg_index in self.return_type_spec.indices_of_required_input_type_hints:
+                assert (
+                    0 <= arg_index <= len(self.args)
+                ), f"Invalid requested index: {arg_index} as hint for {self.operation}"
+                input_type_hints.append(
+                    self.args[arg_index].resolve_return_type_category()
+                )
 
-        return self.return_type_spec.resolve_type_category(first_arg_type_category_hint)
+        return self.return_type_spec.resolve_type_category(input_type_hints)
 
     def try_resolve_exact_data_type(self) -> Optional[DataType]:
         return self.operation.try_resolve_exact_data_type(self.args)

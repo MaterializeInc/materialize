@@ -57,7 +57,7 @@ GENERIC_OPERATION_TYPES.append(
     DbOperation(
         "CASE WHEN $ THEN $ ELSE $ END",
         [BooleanOperationParam(), AnyOperationParam(), AnyOperationParam()],
-        DynamicReturnTypeSpec(),
+        DynamicReturnTypeSpec(param_index_to_take_type=1),
         {DataTypeCategoryMatchesArgsValidator(1, 2)},
     )
 )
