@@ -179,6 +179,7 @@ pub enum PlanError {
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
     FromValueRequiresParen,
     VarError(VarError),
+    UnsolvablePolymorphicFunctionInput,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -462,6 +463,9 @@ impl fmt::Display for PlanError {
                 "VALUES expression in FROM clause must be surrounded by parentheses"
             ),
             Self::VarError(e) => e.fmt(f),
+            Self::UnsolvablePolymorphicFunctionInput => f.write_str(
+                "could not determine polymorphic type because input has type unknown"
+            ),
         }
     }
 }
