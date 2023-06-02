@@ -1518,25 +1518,6 @@ fn coerce_args_to_types(
                 }
                 _ => cexpr.type_as_any(ecx)?,
             },
-            p @ (ArrayAny | ListAny | MapAny | RangeAny) => {
-                let target = polymorphic_solution
-                    .target_for_param_type(p)
-                    .ok_or_else(|| {
-                        // n.b. This errors here, rather than during building
-                        // the polymorphic solution, to make the error clearer.
-                        // If we errored while constructing the polymorphic
-                        // solution, an implementation would get discarded even
-                        // if it were the only one, and it would appear as if a
-                        // compatible solution did not exist. Instead, the
-                        // problem is simply that we couldn't resolve the
-                        // polymorphic type.
-                        PlanError::Unstructured(
-                            "could not determine polymorphic type because input has type unknown"
-                                .to_string(),
-                        )
-                    })?;
-                do_convert(cexpr, &target)?
-            }
             RecordAny => match cexpr {
                 CoercibleScalarExpr::LiteralString(_) => {
                     sql_bail!("input of anonymous composite types is not implemented");
@@ -1550,7 +1531,17 @@ fn coerce_args_to_types(
             p => {
                 let target = polymorphic_solution
                     .target_for_param_type(p)
-                    .expect("polymorphic key determined");
+                    .ok_or_else(|| {
+                        // n.b. This errors here, rather than during building
+                        // the polymorphic solution, to make the error clearer.
+                        // If we errored while constructing the polymorphic
+                        // solution, an implementation would get discarded even
+                        // if it were the only one, and it would appear as if a
+                        // compatible solution did not exist. Instead, the
+                        // problem is simply that we couldn't resolve the
+                        // polymorphic type.
+                        PlanError::UnsolvablePolymorphicFunctionInput
+                    })?;
                 do_convert(cexpr, &target)?
             }
         };
