@@ -11,10 +11,10 @@
 
 #![warn(missing_debug_implementations)]
 
-use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
+use itertools::Itertools;
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LetRecLimit,
@@ -36,6 +36,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
+use crate::plan::transform::Transform;
 use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
 pub mod interpret;
@@ -1699,7 +1700,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
         Self::refine_source_mfps(&mut dataflow);
 
         if enable_monotonic_oneshot_selects {
-            Self::refine_single_time_dataflow(&mut dataflow);
+            Self::refine_single_time_operator_selection(&mut dataflow);
+
+            // The relaxation of the `must_consolidate` flag performs an LIR-based
+            // analysis and transform under checked recursion. By a similar argument
+            // made in `from_mir`, we do not expect the recursion limit to be hit.
+            // However, if that happens, we propagate an error to the caller.
+            Self::refine_single_time_consolidation(&mut dataflow)?;
         }
 
         mz_repr::explain::trace_plan(&dataflow);
@@ -1841,9 +1848,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         target = "optimizer",
         level = "debug",
         skip_all,
-        fields(path.segment = "refine_single_time_dataflow")
+        fields(path.segment = "refine_single_time_operator_selection")
     )]
-    fn refine_single_time_dataflow(dataflow: &mut DataflowDescription<Self>) {
+    fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
         // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
         if !dataflow.is_single_time() {
             return;
@@ -1885,6 +1892,34 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
         }
         mz_repr::explain::trace_plan(dataflow);
+    }
+
+    /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
+    /// the setting of the `must_consolidate` attribute of monotonic operators, if necessary,
+    /// whenever the input is deemed to be physically monotonic.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_single_time_consolidation")
+    )]
+    fn refine_single_time_consolidation(
+        dataflow: &mut DataflowDescription<Self>,
+    ) -> Result<(), String> {
+        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
+        if !dataflow.is_single_time() {
+            return Ok(());
+        }
+
+        // Apply transform for single-time relaxation of consolidation.
+        let transform = transform::RelaxMustConsolidate::<T>::new();
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            transform
+                .transform(&(), &mut build_desc.plan)
+                .map_err(|_| "Maximum recursion limit error in consolidation relaxation.")?;
+        }
+        mz_repr::explain::trace_plan(dataflow);
+        Ok(())
     }
 
     /// Partitions the plan into `parts` many disjoint pieces.

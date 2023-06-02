@@ -9,3 +9,45 @@
 
 //! Placeholder module for an [crate::plan::transform::Transform] that infers
 //! physical monotonicity.
+
+use std::marker::PhantomData;
+
+use crate::plan::interpret::{PhysicallyMonotonic, SingleTimeMonotonic};
+use crate::plan::transform::{BottomUpTransform, TransformConfig};
+use crate::plan::Plan;
+
+/// A transformation that takes the result of single-time physical monotonicity
+/// analysis and refines, as appropriate, the setting of the `must_consolidate`
+/// flag in monotonic `Plan` nodes with forced consolidation.
+#[derive(Debug)]
+pub struct RelaxMustConsolidate<T = mz_repr::Timestamp> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T> RelaxMustConsolidate<T> {
+    pub fn new() -> Self {
+        RelaxMustConsolidate {
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
+    type Info = PhysicallyMonotonic;
+
+    type Interpreter = SingleTimeMonotonic<T>;
+
+    fn name(&self) -> &'static str {
+        "must_consolidate relaxation"
+    }
+
+    fn interpreter(_config: &TransformConfig) -> Self::Interpreter {
+        SingleTimeMonotonic::new()
+    }
+
+    fn action(_plan: &mut Plan<T>, _plan_info: &Self::Info, _input_infos: &[Self::Info]) {
+        // do nothing for now
+        // TODO(vmarcos): look at `plan_info` and type of `Plan` node and refine the
+        // `must_consolidate` flag if appropriate
+    }
+}
