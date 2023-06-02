@@ -25,7 +25,7 @@ use mz_sql_parser::ast::{
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, CteBlock, Function,
     FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    TableFunction, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -227,20 +227,6 @@ pub fn create_statement(
             }
             if let Some(over) = &mut func.over {
                 self.visit_window_spec_mut(over);
-            }
-        }
-
-        fn visit_table_function_mut(&mut self, func: &'ast mut TableFunction<Aug>) {
-            match &mut func.args {
-                FunctionArgs::Star => (),
-                FunctionArgs::Args { args, order_by } => {
-                    for arg in args {
-                        self.visit_expr_mut(arg);
-                    }
-                    for expr in order_by {
-                        self.visit_order_by_expr_mut(expr);
-                    }
-                }
             }
         }
 
