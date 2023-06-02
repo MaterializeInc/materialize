@@ -20,6 +20,7 @@ use mz_repr::explain::ExprHumanizer;
 use ordered_float::OrderedFloat;
 
 use crate::attribute::subtree_size::SubtreeSize;
+use crate::attribute::unique_keys::UniqueKeys;
 use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
 
 /// Compute the estimated cardinality of each subtree of a [MirRelationExpr] from the bottom up.
@@ -65,13 +66,14 @@ pub trait Factorizer<V> {
     fn filter(
         &self,
         predicates: &Vec<MirScalarExpr>,
+        keys: &Vec<Vec<usize>>,
         input: &SymbolicExpression<V>,
     ) -> SymbolicExpression<V>;
     fn join(
         &self,
         equivalences: &Vec<Vec<MirScalarExpr>>,
         implementation: &JoinImplementation,
-        inputs: Vec<&SymbolicExpression<V>>,
+        inputs: Vec<(&SymbolicExpression<V>, &Vec<Vec<usize>>)>,
     ) -> SymbolicExpression<V>;
     fn reduce(
         &self,
@@ -119,8 +121,11 @@ where
     fn filter(
         &self,
         _predicates: &Vec<MirScalarExpr>,
+        _keys: &Vec<Vec<usize>>,
         input: &SymbolicExpression<V>,
     ) -> SymbolicExpression<V> {
+        // TODO(mgree): use knowledge about predicates and keys to do a better job
+
         // worst case scaling factor is 1
         input.clone()
     }
@@ -129,10 +134,10 @@ where
         &self,
         _equivalences: &Vec<Vec<MirScalarExpr>>,
         _implementation: &JoinImplementation,
-        inputs: Vec<&SymbolicExpression<V>>,
+        inputs: Vec<(&SymbolicExpression<V>, &Vec<Vec<usize>>)>,
     ) -> SymbolicExpression<V> {
         // TODO(mgree): some knowledge about these equivalences (and the indices) will let us give a better scaling factor
-        SymbolicExpression::product(inputs)
+        SymbolicExpression::product(inputs.into_iter().map(|(input, _keys)| input).collect())
     }
 
     fn reduce(
@@ -411,7 +416,9 @@ impl Attribute for Cardinality {
             }
             Filter { predicates, .. } => {
                 let input = &self.results[n - 1];
-                self.results.push(self.factorize.filter(predicates, input));
+                let keys = &deps.get_results::<UniqueKeys>()[n - 1];
+                self.results
+                    .push(self.factorize.filter(predicates, keys, input));
             }
             Join {
                 equivalences,
@@ -419,12 +426,12 @@ impl Attribute for Cardinality {
                 inputs,
                 ..
             } => {
-                // TODO(mgree): we can give better answers for some kinds of joins if we have index information... here or elsewhere?
-
                 let mut input_results = Vec::with_capacity(inputs.len());
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
-                    input_results.push(&self.results[n - offset]);
+                    let input = &self.results[n - offset];
+                    let keys = &deps.get_results::<UniqueKeys>()[n - offset];
+                    input_results.push((input, keys));
                     offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
 
@@ -478,6 +485,7 @@ impl Attribute for Cardinality {
         Self: Sized,
     {
         builder.require::<SubtreeSize>();
+        builder.require::<UniqueKeys>()
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {
