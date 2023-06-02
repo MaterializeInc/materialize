@@ -12,7 +12,7 @@ from typing import Optional
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
-from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.query.query_result import QueryExecution
 
 
 class ValidationErrorType(Enum):
@@ -73,7 +73,7 @@ class ValidationWarning(ValidationMessage):
 class ValidationError(ValidationMessage):
     def __init__(
         self,
-        query_template: QueryTemplate,
+        query_execution: QueryExecution,
         error_type: ValidationErrorType,
         message: str,
         strategy1: EvaluationStrategy,
@@ -87,7 +87,7 @@ class ValidationError(ValidationMessage):
         location: Optional[str] = None,
     ):
         super().__init__(message, description)
-        self.query_template = query_template
+        self.query_execution = query_execution
         self.error_type = error_type
         self.value1 = value1
         self.value2 = value2

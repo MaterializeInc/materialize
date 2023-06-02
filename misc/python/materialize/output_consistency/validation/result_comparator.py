@@ -81,7 +81,7 @@ class ResultComparator:
         if outcome1.successful != outcome2.successful:
             validation_outcome.add_error(
                 ValidationError(
-                    query_execution.query_template,
+                    query_execution,
                     ValidationErrorType.SUCCESS_MISMATCH,
                     "Outcome differs",
                     value1=outcome1.__class__.__name__,
@@ -146,7 +146,7 @@ class ResultComparator:
         if num_rows1 != num_rows2:
             validation_outcome.add_error(
                 ValidationError(
-                    query_execution.query_template,
+                    query_execution,
                     ValidationErrorType.ROW_COUNT_MISMATCH,
                     "Row count differs",
                     value1=str(num_rows1),
@@ -171,7 +171,7 @@ class ResultComparator:
         if norm_error_message_1 != norm_error_message_2:
             validation_outcome.add_error(
                 ValidationError(
-                    query_execution.query_template,
+                    query_execution,
                     ValidationErrorType.ERROR_MISMATCH,
                     "Error message differs",
                     value1=norm_error_message_1,
@@ -280,7 +280,7 @@ class ResultComparator:
             if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(
                     ValidationError(
-                        query_execution.query_template,
+                        query_execution,
                         ValidationErrorType.CONTENT_MISMATCH,
                         "Value differs",
                         value1=result_value1,
