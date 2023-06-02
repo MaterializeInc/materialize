@@ -1319,7 +1319,7 @@ mod grpc {
     };
 
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-    const SUBSCRIPTIONS_TIMEOUT: Duration = Duration::from_secs(5);
+    const SUBSCRIPTIONS_TIMEOUT: Duration = Duration::from_secs(3);
     const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
     // NB: we use separate runtimes for client and server throughout these tests to cleanly drop
