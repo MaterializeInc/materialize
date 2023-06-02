@@ -8,6 +8,10 @@
 # by the Apache License, Version 2.0.
 from typing import Set
 
+from materialize.output_consistency.execution.evaluation_strategy import (
+    CTF_EVALUATION_STRATEGY_ID,
+    DFR_EVALUATION_STRATEGY_ID,
+)
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -23,7 +27,10 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
-from materialize.output_consistency.validation.validation_message import ValidationError
+from materialize.output_consistency.validation.validation_message import (
+    ValidationError,
+    ValidationErrorType,
+)
 
 
 class InconsistencyIgnoreFilter:
@@ -147,4 +154,22 @@ class PreExecutionInconsistencyIgnoreFilter:
 
 class PostExecutionInconsistencyIgnoreFilter:
     def shall_ignore_error(self, error: ValidationError) -> bool:
+        if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
+            outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_id()
+
+            dfr_successful = outcome_by_strategy_id[
+                DFR_EVALUATION_STRATEGY_ID
+            ].successful
+            ctf_successful = outcome_by_strategy_id[
+                CTF_EVALUATION_STRATEGY_ID
+            ].successful
+
+            if (
+                error.query_execution.query_template.contains_aggregations
+                and not dfr_successful
+                and ctf_successful
+            ):
+                # see https://github.com/MaterializeInc/materialize/issues/19662
+                return True
+
         return False
