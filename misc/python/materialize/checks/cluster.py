@@ -10,10 +10,11 @@ from textwrap import dedent
 from typing import List
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import CheckDisabled
+from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
-class CreateCluster(CheckDisabled):
+class CreateCluster(Check):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -62,8 +63,7 @@ class CreateCluster(CheckDisabled):
         )
 
 
-# https://github.com/MaterializeInc/materialize/issues/13235
-class DropCluster(CheckDisabled):
+class DropCluster(Check):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -101,20 +101,81 @@ class DropCluster(CheckDisabled):
                 """
                 > SET cluster=drop_cluster1
 
-                > SET cluster=create_cluster2
+                > SET cluster=drop_cluster2
 
                 > SET cluster=default
 
                 > SELECT * FROM drop_cluster1_table;
                 123
 
-                > SELECT * FROM drop_cluster1_view;
-                123
+                ! SELECT * FROM drop_cluster1_view;
+                contains: unknown catalog item 'drop_cluster1_view'
 
                 > SELECT * FROM drop_cluster2_table;
                 234
 
-                > SELECT * FROM drop_cluster2_view;
+                ! SELECT * FROM drop_cluster2_view;
+                contains: unknown catalog item 'drop_cluster2_view'
+           """
+            )
+        )
+
+
+class RenameCluster(Check):
+    def _can_run(self) -> bool:
+        return self.base_version >= MzVersion.parse("0.57.0-dev")
+
+    def manipulate(self) -> List[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > CREATE TABLE rename_cluster1_table (f1 INTEGER);
+                > CREATE TABLE rename_cluster2_table (f1 INTEGER);
+
+                > INSERT INTO rename_cluster1_table VALUES (123);
+                > INSERT INTO rename_cluster2_table VALUES (234);
+
+                > CREATE CLUSTER rename_cluster1 REPLICAS (replica1 (SIZE '2-2'));
+                > CREATE CLUSTER rename_cluster2 REPLICAS (replica1 (SIZE '2-2'));
+
+                > SET cluster=rename_cluster1
+                > CREATE DEFAULT INDEX ON rename_cluster1_table;
+                > CREATE MATERIALIZED VIEW rename_cluster1_view AS SELECT SUM(f1) FROM rename_cluster1_table;
+
+                > SET cluster=rename_cluster2
+                > CREATE DEFAULT INDEX ON rename_cluster2_table;
+                > CREATE MATERIALIZED VIEW rename_cluster2_view AS SELECT SUM(f1) FROM rename_cluster2_table;
+
+                > ALTER CLUSTER rename_cluster1 RENAME TO rename_cluster_new1;
+                """,
+                """
+
+                > ALTER CLUSTER rename_cluster2 RENAME TO rename_cluster_new2;
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SET cluster=rename_cluster_new1
+
+                > SET cluster=rename_cluster_new2
+
+                > SET cluster=default
+
+                > SELECT * FROM rename_cluster1_table;
+                123
+
+                > SELECT * FROM rename_cluster1_view;
+                123
+
+                > SELECT * FROM rename_cluster2_table;
+                234
+
+                > SELECT * FROM rename_cluster2_view;
                 234
            """
             )

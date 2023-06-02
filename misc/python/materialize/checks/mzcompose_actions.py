@@ -86,6 +86,7 @@ class ConfigureMz(MzcomposeAction):
             "ALTER SYSTEM SET max_materialized_views = 1000;",
             "ALTER SYSTEM SET max_objects_per_schema = 1000;",
             "ALTER SYSTEM SET max_secrets = 1000;",
+            "ALTER SYSTEM SET max_clusters = 1000;",
         }
 
         if e.current_mz_version >= MzVersion(0, 45, 0):
