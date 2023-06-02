@@ -285,7 +285,13 @@ where
         let mut batch_parts_to_delete: Vec<PartialBatchKey> = vec![];
         let mut rollups_to_delete: Vec<PartialRollupKey> = vec![];
 
+        // determine which rollups are removable
+
         for (truncate_to, _rollup) in machine.applier.removable_rollups() {
+            if truncate_to > seqno_since {
+                break;
+            }
+
             assert!(truncate_to <= seqno_since);
             Self::find_removable_blobs(
                 states,
