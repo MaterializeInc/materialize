@@ -244,7 +244,7 @@ class QueryExecutionManager:
         self.output_printer.start_section(
             f"Test query #{query_id}", collapsed=validation_outcome.success()
         )
-        self.output_printer.print_non_executable_sql(query_execution.generic_sql)
+        self.output_printer.print_sql(query_execution.generic_sql)
 
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
         success_reason = (
