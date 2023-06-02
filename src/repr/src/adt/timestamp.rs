@@ -753,7 +753,7 @@ mod test {
     use super::*;
     use proptest::prelude::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_max_age() {
         let low = CheckedTimestamp::try_from(
             LOW_DATE.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
@@ -777,14 +777,14 @@ mod test {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow
         fn test_age_naive(a: CheckedTimestamp<NaiveDateTime>, b: CheckedTimestamp<NaiveDateTime>) {
             let result = a.age(&b);
             prop_assert!(result.is_ok());
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow
         fn test_age_utc(a: CheckedTimestamp<DateTime<Utc>>, b: CheckedTimestamp<DateTime<Utc>>) {
             let result = a.age(&b);
