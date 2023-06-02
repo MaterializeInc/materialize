@@ -352,9 +352,7 @@ class ExpressionGenerator:
         if category == DataTypeCategory.ANY:
             return self.input_data.all_data_types_with_values
 
-        assert (
-            category != DataTypeCategory.DYNAMIC
-        ), f"Type category {category} not allowed for parameters"
+        self._assert_valid_type_category_for_param(param, category)
 
         preselected_types_with_values = self.types_with_values_by_category[category]
         suitable_types_with_values = []
@@ -365,6 +363,14 @@ class ExpressionGenerator:
 
         return suitable_types_with_values
 
+    def _assert_valid_type_category_for_param(
+        self, param: OperationParam, category: DataTypeCategory
+    ) -> None:
+        assert category not in {
+            DataTypeCategory.DYNAMIC,
+            DataTypeCategory.DYNAMIC_ARRAY,
+        }, f"Type category {category} not allowed for parameters (param={param})"
+
     def _get_operations_of_category(
         self,
         param: OperationParam,
@@ -373,7 +379,7 @@ class ExpressionGenerator:
         allow_aggregation: bool,
     ) -> List[DbOperationOrFunction]:
         category = param.resolve_type_category(arg_context.args)
-        suitable_operations = self._get_all_operations_of_category(category)
+        suitable_operations = self._get_all_operations_of_category(param, category)
         if must_use_aggregation:
             return self._get_only_aggregate_operations(suitable_operations)
         elif not allow_aggregation:
@@ -382,14 +388,12 @@ class ExpressionGenerator:
             return suitable_operations
 
     def _get_all_operations_of_category(
-        self, category: DataTypeCategory
+        self, param: OperationParam, category: DataTypeCategory
     ) -> List[DbOperationOrFunction]:
         if category == DataTypeCategory.ANY:
             return self.input_data.all_operation_types
 
-        assert (
-            category != DataTypeCategory.DYNAMIC
-        ), f"Type category {DataTypeCategory.DYNAMIC} not allowed for parameters"
+        self._assert_valid_type_category_for_param(param, category)
 
         return self.operations_by_return_type_category[category]
 
