@@ -29,6 +29,9 @@ from materialize.output_consistency.input_data.return_specs.date_time_return_spe
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
+from materialize.output_consistency.input_data.return_specs.text_return_spec import (
+    TextReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.types.date_time_types_provider import (
     INTERVAL_TYPE_IDENTIFIER,
     TIMESTAMP_TYPE_IDENTIFIER,
@@ -154,8 +157,7 @@ DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "to_char",
         [DateTimeOperationParam(support_time=False), TYPE_FORMAT_PARAM],
-        # TODO: wrong, requires text type
-        DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
+        TextReturnTypeSpec(),
     )
 )
 
