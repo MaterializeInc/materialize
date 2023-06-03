@@ -31,7 +31,7 @@ use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::client::ConnectionIdType;
+use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
     Canceled, Command, ExecuteResponse, GetVariablesResponse, Response, StartupMessage,
     StartupResponse,
@@ -106,6 +106,10 @@ impl Coordinator {
                 secret_key,
             } => {
                 self.handle_cancel(conn_id, secret_key);
+            }
+
+            Command::PrivilegedCancelRequest { conn_id } => {
+                self.handle_privileged_cancel(conn_id);
             }
 
             Command::DumpCatalog { session, tx } => {
@@ -589,12 +593,13 @@ impl Coordinator {
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
-    /// the named `conn_id`.
+    /// the named `conn_id` if the correct secret key is specified.
     ///
-    /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned `ConnectionId` because
-    /// this method gets called by external clients when they request to cancel a request.
+    /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned
+    /// `ConnectionId` because this method gets called by external clients when
+    /// they request to cancel a request.
     fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
-        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
+        if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
             // rogue cancellation request and ignore it.
@@ -602,12 +607,23 @@ impl Coordinator {
                 return;
             }
 
+            // Now that we've verified the secret key, this is a privileged
+            // cancellation request. We can upgrade the raw connection ID to a
+            // proper `IdHandle`.
+            self.handle_privileged_cancel(id_handle.clone())
+        }
+    }
+
+    /// Unconditionally instructs the dataflow layer to cancel any ongoing,
+    /// interactive work for the named `conn_id`.
+    fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
+        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // Cancel pending writes. There is at most one pending write per session.
             if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
                 matches!(pending_write_txn, PendingWriteTxn::User {
                     pending_txn: PendingTxn { session, .. },
                     ..
-                } if **session.conn_id() == conn_id)
+                } if *session.conn_id() == conn_id)
             }) {
                 if let PendingWriteTxn::User {
                     pending_txn:
@@ -627,7 +643,7 @@ impl Coordinator {
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
-                .position(|ready| matches!(ready, Deferred::Plan(ready) if **ready.session.conn_id() == conn_id))
+                .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.session.conn_id() == conn_id))
             {
                 let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
                 if let Deferred::Plan(ready) = ready {
@@ -651,7 +667,7 @@ impl Coordinator {
                 conn_id: _,
                 cluster_id: _,
                 depends_on: _,
-            } in self.cancel_pending_peeks(conn_id)
+            } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
                 // up, but before the connection's state has been cleaned up.
@@ -685,7 +701,7 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .dec();
         self.active_conns.remove(session.conn_id());
-        self.cancel_pending_peeks(**session.conn_id());
+        self.cancel_pending_peeks(session.conn_id());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }

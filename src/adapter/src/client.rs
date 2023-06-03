@@ -245,7 +245,7 @@ impl ConnClient {
         }
     }
 
-    /// Cancels the query currently running on another connection.
+    /// Cancels the query currently running on the specified connection.
     pub fn cancel_request(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         self.inner.send(Command::CancelRequest {
             conn_id,
@@ -505,7 +505,6 @@ impl SessionClient {
         let name_hint = ApplicationNameHint::from_str(application_name);
         let (tx, mut rx) = oneshot::channel();
         let conn_id = session.conn_id().clone();
-        let secret_key = session.secret_key();
         self.inner_mut().inner.send({
             let cmd = f(tx, session);
             // Measure the success and error rate of certain commands:
@@ -519,6 +518,7 @@ impl SessionClient {
                 | Command::VerifyPreparedStatement { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
+                | Command::PrivilegedCancelRequest { .. }
                 | Command::DumpCatalog { .. }
                 | Command::CopyRows { .. }
                 | Command::GetSystemVars { .. }
@@ -552,7 +552,9 @@ impl SessionClient {
                 },
                 _err = &mut cancel_future, if !cancelled => {
                     cancelled = true;
-                    self.inner_mut().cancel_request(*conn_id, secret_key);
+                    self.inner().inner.send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
                 }
             };
         }
