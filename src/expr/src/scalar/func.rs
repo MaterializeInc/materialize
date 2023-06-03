@@ -6271,7 +6271,7 @@ where
     }
 }
 
-fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
+fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
     mz_ore::soft_assert!(offset == 0 || offset == 1, "offset must be either 0 or 1");
 
     let array = datums[0].unwrap_array();
@@ -6285,10 +6285,13 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
 
     for (d, idx) in dims.into_iter().zip_eq(datums[1..].iter()) {
         // Lower bound is written in terms of 1-based indexing, which offset accounts for.
-        let idx = usize::cast_from(u64::reinterpret_cast(idx.unwrap_int64())) + offset;
+        let idx = isize::cast_from(idx.unwrap_int64() + offset);
 
-        // This index missed all of the data at this layer.
-        if !(d.lower_bound..d.lower_bound + d.length).contains(&idx) {
+        let (lower, upper) = d.dimension_bounds();
+
+        // This index missed all of the data at this layer. The dimension bounds are inclusive,
+        // while range checks are exclusive, so adjust.
+        if !(lower..upper + 1).contains(&idx) {
             return Datum::Null;
         }
 
@@ -6296,8 +6299,10 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
         final_idx *= d.length;
 
         // Because both index and lower bound are handled in 1-based indexing, taking their
-        // difference moves us back into 0-based indexing.
-        final_idx += idx - d.lower_bound;
+        // difference moves us back into 0-based indexing. Similarly, if the lower bound is
+        // negative, subtracting a negative value >= to itself ensures its non-negativity.
+        final_idx += usize::try_from(idx - d.lower_bound)
+            .expect("previous bounds check ensures phsical index is at least 0");
     }
 
     array
@@ -6977,12 +6982,12 @@ fn array_fill<'a>(
                 .iter()
                 .map(|l| match l {
                     Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.to_string())),
-                    l => Ok(usize::cast_from(u32::reinterpret_cast(l.unwrap_int32()))),
+                    l => Ok(isize::cast_from(l.unwrap_int32())),
                 })
                 .collect::<Result<Vec<_>, _>>()?
         }
         None => {
-            vec![1usize; dimensions.len()]
+            vec![1isize; dimensions.len()]
         }
     };
 
@@ -7051,9 +7056,9 @@ pub enum VariadicFunc {
         elem_type: ScalarType,
     },
     ArrayIndex {
-        // Subtract `offset` from users' input to use 0-indexed arrays, i.e. is
-        // `1` in the case of `ScalarType::Array`.
-        offset: usize,
+        // Adjusts the index by offset depending on whether being called on an array or an
+        // Int2Vector.
+        offset: i64,
     },
     ListCreate {
         // We need to know the element type to type empty lists.
@@ -7515,7 +7520,7 @@ impl Arbitrary for VariadicFunc {
             ScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ArrayToString { elem_type })
                 .boxed(),
-            usize::arbitrary()
+            i64::arbitrary()
                 .prop_map(|offset| VariadicFunc::ArrayIndex { offset })
                 .boxed(),
             ScalarType::arbitrary()

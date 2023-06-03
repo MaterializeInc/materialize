@@ -355,3 +355,40 @@ query T
 SELECT array_fill(6, ARRAY[3, 2], ARRAY[4, 3]) || array_fill(7, ARRAY[3, 2], ARRAY[4, 3]);
 ----
 [4:9][3:4]={{6,6},{6,6},{6,6},{7,7},{7,7},{7,7}}
+
+# Negative lower bounds
+
+query T
+SELECT array_fill(3, ARRAY[2], ARRAY[-3]);
+----
+[-3:-2]={3,3}
+
+query I
+SELECT (array_fill(3, ARRAY[2], ARRAY[-3]))[-3];
+----
+3
+
+query T
+SELECT
+    concat(
+        o,
+        E'\t',
+        i,
+        E'\t',
+        COALESCE(((array_fill(5, ARRAY[2, 2], ARRAY[-2, -1]))[o][i])::text, 'null')
+    )
+FROM generate_series(-3, 0) AS o, generate_series(-2, 0) AS i
+ORDER BY o, i;
+----
+-3	-2	null
+-3	-1	null
+-3	0	null
+-2	-2	null
+-2	-1	5
+-2	0	5
+-1	-2	null
+-1	-1	5
+-1	0	5
+0	-2	null
+0	-1	null
+0	0	null

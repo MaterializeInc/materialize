@@ -1308,7 +1308,7 @@ impl RowPacker<'_> {
         for dim in dims {
             self.row
                 .data
-                .extend_from_slice(&u64::cast_from(dim.lower_bound).to_le_bytes());
+                .extend_from_slice(&i64::cast_from(dim.lower_bound).to_le_bytes());
             self.row
                 .data
                 .extend_from_slice(&u64::cast_from(dim.length).to_le_bytes());

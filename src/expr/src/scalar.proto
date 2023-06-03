@@ -634,7 +634,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty jsonb_build_object = 10;
         mz_repr.relation_and_scalar.ProtoScalarType array_create = 11;
         mz_repr.relation_and_scalar.ProtoScalarType array_to_string = 12;
-        uint64 array_index = 13;
+        int64 array_index = 13;
         mz_repr.relation_and_scalar.ProtoScalarType list_create = 14;
         ProtoRecordCreate record_create = 15;
         google.protobuf.Empty list_index = 6;
