@@ -186,7 +186,7 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
-/// The response to [`ConnClient::startup`](crate::ConnClient::startup).
+/// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
     /// Notifications associated with session startup.

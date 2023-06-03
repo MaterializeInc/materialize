@@ -68,7 +68,7 @@ pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
     pub tls_mode: Option<TlsMode>,
     /// A client for the adapter.
-    pub adapter_client: mz_adapter::ConnClient,
+    pub adapter_client: mz_adapter::Client,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The protocol version that the client provided in the startup message.
@@ -159,10 +159,13 @@ where
     }
 
     // Construct session.
-    let mut session = adapter_client.new_session(User {
-        name: user.clone(),
-        external_metadata: None,
-    });
+    let mut session = adapter_client.new_session(
+        conn.conn_id().clone(),
+        User {
+            name: user.clone(),
+            external_metadata: None,
+        },
+    );
 
     let is_expired = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)

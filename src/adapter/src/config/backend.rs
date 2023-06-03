@@ -25,9 +25,9 @@ pub struct SystemParameterBackend {
 
 impl SystemParameterBackend {
     pub async fn new(client: Client) -> Result<Self, AdapterError> {
-        let conn_client = client.new_conn()?;
-        let session = conn_client.new_session(SYSTEM_USER.clone());
-        let (session_client, _) = conn_client.startup(session).await?;
+        let conn_id = client.new_conn_id()?;
+        let session = client.new_session(conn_id, SYSTEM_USER.clone());
+        let (session_client, _) = client.startup(session).await?;
         Ok(Self { session_client })
     }
 
