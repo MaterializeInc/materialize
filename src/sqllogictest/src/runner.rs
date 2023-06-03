@@ -43,7 +43,7 @@ use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_ore::cast::ReinterpretCast;
+use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -436,15 +436,15 @@ impl<'a> FromSql<'a> for Slt {
                         // Map a Vec<Option<Slt>> to Vec<Option<Value>>.
                         .map(|v| v.map(|v| v.0))
                         .collect();
-                    // TODO(benesch): rewrite to avoid `as`.
-                    #[allow(clippy::as_conversions)]
+
                     Self(Value::Array {
                         dims: arr
                             .dimensions()
                             .map(|d| {
                                 Ok(mz_repr::adt::array::ArrayDimension {
-                                    lower_bound: d.lower_bound as usize,
-                                    length: d.len as usize,
+                                    lower_bound: isize::cast_from(d.lower_bound),
+                                    length: usize::try_from(d.len)
+                                        .expect("cannot have negative length"),
                                 })
                             })
                             .collect()?,

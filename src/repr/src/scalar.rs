@@ -1137,7 +1137,8 @@ impl fmt::Display for Datum<'_> {
             Datum::Array(array) => {
                 if array.dims().into_iter().any(|dim| dim.lower_bound != 1) {
                     write_delimited(f, "", array.dims().into_iter(), |f, e| {
-                        write!(f, "[{}:{}]", e.lower_bound, e.lower_bound + e.length - 1)
+                        let (lower, upper) = e.dimension_bounds();
+                        write!(f, "[{}:{}]", lower, upper)
                     })?;
                     f.write_str("=")?;
                 }

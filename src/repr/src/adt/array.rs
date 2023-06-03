@@ -111,7 +111,7 @@ impl Iterator for ArrayDimensionsIter<'_> {
             None
         } else {
             let sz = mem::size_of::<usize>();
-            let lower_bound = usize::from_ne_bytes(self.data[..sz].try_into().unwrap());
+            let lower_bound = isize::from_ne_bytes(self.data[..sz].try_into().unwrap());
             self.data = &self.data[sz..];
             let length = usize::from_ne_bytes(self.data[..sz].try_into().unwrap());
             self.data = &self.data[sz..];
@@ -126,10 +126,26 @@ impl Iterator for ArrayDimensionsIter<'_> {
 /// The specification of one dimension of an [`Array`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct ArrayDimension {
-    /// The index at which this dimension begins.
-    pub lower_bound: usize,
+    /// The "logical" index at which this dimension begins. This value has no bearing on the
+    /// physical layout of the data, only how users want to use its indices (which may be negative).
+    pub lower_bound: isize,
     /// The number of elements in this array.
     pub length: usize,
+}
+
+impl ArrayDimension {
+    /// Presents the "logical indices" of the array, i.e. those that are revealed to the user.
+    ///
+    /// # Panics
+    /// - If the array contain more than [`isize::MAX`] elements (i.e. more than 9EB of data).
+    pub fn dimension_bounds(&self) -> (isize, isize) {
+        (
+            self.lower_bound,
+            self.lower_bound
+                + isize::try_from(self.length).expect("fewer than isize::MAX elements")
+                - 1,
+        )
+    }
 }
 
 /// An error that can occur when constructing an array.

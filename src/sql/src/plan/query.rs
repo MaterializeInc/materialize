@@ -3561,7 +3561,7 @@ fn plan_subscript_array(
     ecx: &ExprContext,
     expr: HirScalarExpr,
     positions: &[SubscriptPosition<Aug>],
-    offset: usize,
+    offset: i64,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let mut exprs = Vec::with_capacity(positions.len() + 1);
     exprs.push(expr);

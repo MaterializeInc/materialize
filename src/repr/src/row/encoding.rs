@@ -588,7 +588,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                     .dims()
                     .into_iter()
                     .map(|x| ProtoArrayDimension {
-                        lower_bound: u64::cast_from(x.lower_bound),
+                        lower_bound: i64::cast_from(x.lower_bound),
                         length: u64::cast_from(x.length),
                     })
                     .collect(),
@@ -727,7 +727,7 @@ impl RowPacker<'_> {
                     .dims
                     .iter()
                     .map(|x| ArrayDimension {
-                        lower_bound: usize::cast_from(x.lower_bound),
+                        lower_bound: isize::cast_from(x.lower_bound),
                         length: usize::cast_from(x.length),
                     })
                     .collect::<Vec<_>>();

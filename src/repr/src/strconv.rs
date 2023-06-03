@@ -1357,12 +1357,9 @@ where
     F: FormatBuffer,
 {
     if dims.iter().any(|dim| dim.lower_bound != 1) {
-        for ArrayDimension {
-            lower_bound,
-            length,
-        } in dims.iter()
-        {
-            write!(buf, "[{}:{}]", lower_bound, *lower_bound + *length - 1);
+        for d in dims.iter() {
+            let (lower, upper) = d.dimension_bounds();
+            write!(buf, "[{}:{}]", lower, upper);
         }
         buf.write_char('=');
     }
