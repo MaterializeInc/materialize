@@ -119,7 +119,7 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::new_static(0);
+pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
 
 const CREATE_SQL_TODO: &str = "TODO";
 

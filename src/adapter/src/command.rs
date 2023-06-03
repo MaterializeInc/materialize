@@ -77,8 +77,6 @@ pub enum Command {
     },
 
     CancelRequest {
-        /// Note: This is a [`ConnectionIdType`] and not a `ConnetionId` to support external
-        /// clients.
         conn_id: ConnectionIdType,
         secret_key: u32,
     },
