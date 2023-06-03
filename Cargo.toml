@@ -129,3 +129,6 @@ prost-build = { git = "https://github.com/MaterializeInc/prost" }
 prost-derive = { git = "https://github.com/MaterializeInc/prost" }
 prost-types = { git = "https://github.com/MaterializeInc/prost" }
 tonic-build = { git = "https://github.com/MaterializeInc/tonic" }
+# Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
+# a release.
+openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
