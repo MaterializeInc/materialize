@@ -731,7 +731,7 @@ mod tests {
 
         assert_eq!(
             decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
-            "invalid input syntax for type array: invalid input syntax for type integer: invalid digit found in string: \"t\": \"{t}\"".to_string()
+            "invalid input syntax for type array: specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
         );
     }
 }
