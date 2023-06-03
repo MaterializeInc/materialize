@@ -6755,7 +6755,7 @@ fn array_array_concat<'a>(
                 return Err(EvalError::IncompatibleArrayDimensions { dims: None });
             }
             dims = vec![ArrayDimension {
-                lower_bound: 1,
+                lower_bound: a_dims[0].lower_bound,
                 length: a_dims[0].length + b_dims[0].length,
             }];
             dims.extend(&a_dims[1..]);
@@ -6768,7 +6768,7 @@ fn array_array_concat<'a>(
                 return Err(EvalError::IncompatibleArrayDimensions { dims: None });
             }
             dims = vec![ArrayDimension {
-                lower_bound: 1,
+                lower_bound: b_dims[0].lower_bound,
                 // Since `a` is treated as an element of `b`, the length of
                 // the first dimension of `b` is incremented by one, as `a` is
                 // non-empty.
@@ -6784,7 +6784,7 @@ fn array_array_concat<'a>(
                 return Err(EvalError::IncompatibleArrayDimensions { dims: None });
             }
             dims = vec![ArrayDimension {
-                lower_bound: 1,
+                lower_bound: a_dims[0].lower_bound,
                 // Since `b` is treated as an element of `a`, the length of
                 // the first dimension of `a` is incremented by one, as `b`
                 // is non-empty.
