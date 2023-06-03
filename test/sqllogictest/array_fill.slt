@@ -46,6 +46,16 @@ SELECT (array_fill(5, array[3]))[1]
 
 # Lower bound adjustment works
 query T
+SELECT array_fill(5, array[3], array[2])
+----
+[2:4]={5,5,5}
+
+query T
+SELECT array_fill(5, array[3, 1], array[2, 4])
+----
+[2:4][4:4]={{5},{5},{5}}
+
+query T
 SELECT (array_fill(5, array[3], array[2]))[1]
 ----
 NULL
@@ -100,7 +110,7 @@ ORDER BY 1;
 query T
 SELECT array_fill(5, array[3, 2], array[2, 3])
 ----
-{{5,5},{5,5},{5,5}}
+[2:4][3:4]={{5,5},{5,5},{5,5}}
 
 # Reveal structure of 2D array
 query T
@@ -321,3 +331,27 @@ SELECT array_length(a, 1), array_length(a, 2) FROM (
 ----
 99
 101
+
+# Concatenating arrays
+
+query error db error: ERROR: cannot concatenate incompatible arrays
+SELECT array_fill(1, ARRAY[2], ARRAY[1] || array_fill(1, ARRAY[3, 2], ARRAY[4, 1]));
+
+# RHS is element of LHS
+
+query T
+SELECT array_fill(6, ARRAY[3, 2], ARRAY[4, 3]) || array_fill(7, ARRAY[2], ARRAY[3]);
+----
+[4:7][3:4]={{6,6},{6,6},{6,6},{7,7}}
+
+# LHS is element of RHS
+query T
+SELECT array_fill(6, ARRAY[2], ARRAY[3]) || array_fill(7, ARRAY[3, 2], ARRAY[4, 3]);
+----
+[4:7][3:4]={{6,6},{7,7},{7,7},{7,7}}
+
+# Array || Array
+query T
+SELECT array_fill(6, ARRAY[3, 2], ARRAY[4, 3]) || array_fill(7, ARRAY[3, 2], ARRAY[4, 3]);
+----
+[4:9][3:4]={{6,6},{6,6},{6,6},{7,7},{7,7},{7,7}}
