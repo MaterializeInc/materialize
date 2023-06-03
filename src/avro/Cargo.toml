@@ -39,4 +39,4 @@ once_cell = "1.16.0"
 snappy = ["byteorder", "crc32fast", "snap"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+normal = ["mz-ore", "workspace-hack"]
