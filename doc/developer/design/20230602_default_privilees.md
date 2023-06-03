@@ -50,7 +50,7 @@ please read the linked documentation.
 ## Goals
 
 - Allow users to configure default privileges on objects of different types, in a simple and easy to
-  understand way (preferably simpler the PostgreSQL's).
+  understand way (preferably simpler the PostgreSQL's model).
 
 ## Overview
 
@@ -63,10 +63,13 @@ The `mz_default_privileges` table will store default privileges and have the fol
 - `id text` (maybe `uint4`): The id of the default privilege.
 - `role_id text`: The id of the role this default privilege applies to. A special ID will be
   reserved for all roles.
-- `schema_id text`: The id of the schema this default privilege applies to or NULL if it applies to
-  all objects.
+- `schema_id text`: The id of the schema this default privilege applies to or NULL.
+- `database_id text`: The id of the database this default privilege applies to or NULL.
 - `object_type char`: Type of object this default privilege applies to.
 - `privileges mz_aclitem[]`: The default privileges to apply.
+
+If both `schema_id` and `database_id` are NULL, then the default privilege applies to all objects of
+a certain type in all databases and schemas.
 
 `object_type` can be one of the following characters:
 
@@ -81,13 +84,13 @@ The `mz_default_privileges` table will store default privileges and have the fol
 `mz_default_privileges` will be pre-populated with certain system default privileges. Currently, the
 only one is:
 
-- `(<id>, <reserved-role-id-for-all-roles>, NULL, T, {=U/mz_system})`. i.e. `PUBLIC` is
+- `(<id>, <reserved-role-id-for-all-roles>, NULL, NULL, T, {=U/mz_system})`. i.e. `PUBLIC` is
   granted `USAGE` on every type.
 
 `ALTER DEFAULT PRIVILEGES` is a command that will have the following syntax (formatted the same way
 that PostgreSQL formats SQL syntax in their documentation):
 
-`ALTER DEFAULT PRIVILEGES [ FOR <role_specification> ] [ IN SCHEMA <schem_name> [, ...] ] <abbreviated_grant_or_revoke>`
+`ALTER DEFAULT PRIVILEGES [ FOR <role_specification> ] [ { IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...] } ] <abbreviated_grant_or_revoke>`
 
 `<role_specification>: FOR { { ROLE | USER } <target_role> [, ...] | ALL ROLES }`
 
@@ -124,8 +127,6 @@ When an object is first created materialize will do the following in order:
 
 ## Open questions
 
-- Should we allow an `IN DATABASE` syntax? It would be convenient, but it might cause confusion on
-  what to do with conflicting schema and database default privileges.
 - Should we allow users to modify the default owner privileges on an object?
 - `mz_aclitem` might not be the best type for the `privilege` column, because we won't know the
-  actual grantor until the privilege is applied to some object. 
+  actual grantor until the privilege is applied to some object.
