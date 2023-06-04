@@ -3320,46 +3320,58 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     ON s.id = d.subsource
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
         },
-        "mz_name_to_global_id" => Table {
-            // If the user wants to specify a database, we also require them to specify which
-            // schemas in that database they want us to search in that database.
-            params!(String, ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
-                SELECT o.id
-                FROM
-                    mz_catalog.mz_objects AS o
-                        JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
-                WHERE
-                    o.name = $3::pg_catalog.text AND s.name =ANY ($2::pg_catalog.text[])
-                        AND
-                    (
-                        s.database_id IS NULL
-                            OR
-                        s.database_id
-                        = (SELECT id FROM mz_catalog.mz_databases WHERE name = $1::pg_catalog.text)
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_FULL_QUAL;
-            params!(ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(), $1, $2
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ANY_SCHEMA;
-            params!(String, String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(),
-                        ARRAY[($1)::pg_catalog.text],
-                        $2
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ONE_SCHEMA;
-            params!(String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(),
-                        pg_catalog.current_schemas(true),
-                        $1
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ITEM_NAME;
+        "mz_name_to_global_id" => Scalar {
+            // This implementation is available primarily to drive the other, single-param
+            // implementation.
+            params!(
+                String,
+                ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
+                String
+            ) => sql_impl_func("
+                (
+                    SELECT o.id
+                    FROM
+                        mz_catalog.mz_objects AS o
+                            JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                            JOIN unnest($2::text[]) AS search_schema (name)
+                                ON search_schema.name = s.name
+                    WHERE
+                        o.name = $3::pg_catalog.text
+                            AND
+                        (
+                            s.database_id IS NULL
+                                OR
+                            s.database_id
+                            = (
+                                SELECT id FROM mz_catalog.mz_databases
+                                WHERE name = $1::pg_catalog.text
+                            )
+                        )
+                    -- WITH ORDINALITY doesn't respect ordering of elements in array,
+                    -- so we have to mimic it here.
+                    ORDER BY pg_catalog.array_position($2::text[], s.name)
+                    LIMIT 1
+                )
+            ") => String, oid::FUNC_MZ_NAME_TO_GLOBAL_ID_FULL_QUAL;
+            params!(String) => sql_impl_func("
+                (
+                    SELECT
+                        mz_internal.mz_error_if_null(
+                            mz_internal.mz_name_to_global_id(
+                                COALESCE(n[1], pg_catalog.current_database()),
+                                CASE
+                                    WHEN n[2] IS NULL
+                                        THEN pg_catalog.current_schemas(false)
+                                    ELSE
+                                        ARRAY[n[2]]
+                                END,
+                                n[3]
+                            ),
+                            'unknown catalog item ''' || $1 || ''''
+                        )
+                    FROM (SELECT mz_internal.mz_normalize_object_name($1)) AS o (n)
+                )
+            ") => String, oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ITEM_NAME;
         },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("
