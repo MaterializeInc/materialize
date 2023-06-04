@@ -3393,6 +3393,30 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
         },
+        "mz_normalize_object_name" => Scalar {
+            params!(String) => sql_impl_func("
+            (
+                SELECT
+                    CASE
+                        WHEN $1 IS NULL THEN NULL
+                        WHEN pg_catalog.array_length(ident, 1) > 3
+                            THEN mz_internal.mz_error_if_null(
+                                NULL::pg_catalog.text[],
+                                'improper relation name (too many dotted names): ' || $1
+                            )
+                        ELSE pg_catalog.array_cat(
+                            pg_catalog.array_fill(
+                                CAST(NULL AS pg_catalog.text),
+                                ARRAY[3 - pg_catalog.array_length(ident, 1)]
+                            ),
+                            ident
+                        )
+                    END
+                FROM (
+                    SELECT pg_catalog.parse_ident($1) AS ident
+                ) AS i
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
+        },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
