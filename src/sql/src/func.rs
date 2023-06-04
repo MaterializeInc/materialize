@@ -3314,64 +3314,64 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         FROM
                         mz_internal.mz_object_dependencies AS d
                             JOIN
-                            mz_internal.mz_name_to_global_id($1) AS g (id)
+                            mz_internal.mz_resolve_object_name($1) AS g
                             ON d.object_id = g.id
                     ) AS d
                     ON s.id = d.subsource
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
         },
-        "mz_name_to_global_id" => Scalar {
+        "mz_resolve_object_name" => Table {
             // This implementation is available primarily to drive the other, single-param
             // implementation.
             params!(
+                // Database
                 String,
+                // Schemas/search path
                 ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
+                // Item name
                 String
-            ) => sql_impl_func("
-                (
-                    SELECT o.id
+            ) =>
+            // credit for using rank() to @def-
+            sql_impl_table_func("
+                SELECT id, oid, schema_id, name, type, owner_id, privileges
+                FROM (
+                    SELECT o.*, rank() OVER (ORDER BY pg_catalog.array_position($2, search_schema.name))
                     FROM
                         mz_catalog.mz_objects AS o
-                            JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
-                            JOIN unnest($2::text[]) AS search_schema (name)
-                                ON search_schema.name = s.name
+                        JOIN mz_catalog.mz_schemas AS s
+                            ON o.schema_id = s.id
+                        JOIN unnest($2::text[]) AS search_schema (name)
+                            ON search_schema.name = s.name
+                        JOIN mz_catalog.mz_databases AS d
+                            -- Schemas without database IDs are present in every
+                            -- database that exists.
+                            ON d.id = COALESCE(s.database_id, d.id)
                     WHERE
                         o.name = $3::pg_catalog.text
-                            AND
-                        (
-                            s.database_id IS NULL
-                                OR
-                            s.database_id
-                            = (
-                                SELECT id FROM mz_catalog.mz_databases
-                                WHERE name = $1::pg_catalog.text
-                            )
-                        )
-                    -- WITH ORDINALITY doesn't respect ordering of elements in array,
-                    -- so we have to mimic it here.
-                    ORDER BY pg_catalog.array_position($2::text[], s.name)
-                    LIMIT 1
+                        AND d.name = $1::pg_catalog.text
                 )
-            ") => String, oid::FUNC_MZ_NAME_TO_GLOBAL_ID_FULL_QUAL;
-            params!(String) => sql_impl_func("
-                (
-                    SELECT
-                        mz_internal.mz_error_if_null(
-                            mz_internal.mz_name_to_global_id(
-                                COALESCE(n[1], pg_catalog.current_database()),
-                                CASE
-                                    WHEN n[2] IS NULL
-                                        THEN pg_catalog.current_schemas(false)
-                                    ELSE
-                                        ARRAY[n[2]]
-                                END,
-                                n[3]
-                            ),
-                            'unknown catalog item ''' || $1 || ''''
-                        )
-                    FROM (SELECT mz_internal.mz_normalize_object_name($1)) AS o (n)
-                )
-            ") => String, oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ITEM_NAME;
+                WHERE rank = 1;
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL;
+            params!(String) =>
+            // Normalize the input name, and for any NULL values (e.g. not database qualified), use
+            // the defaults used during name resolution.
+            sql_impl_table_func("
+                SELECT
+                    o.id, o.oid, o.schema_id, o.name, o.type, o.owner_id, o.privileges
+                FROM
+                    (SELECT mz_internal.mz_normalize_object_name($1))
+                            AS normalized (n),
+                    mz_internal.mz_resolve_object_name(
+                        COALESCE(n[1], pg_catalog.current_database()),
+                        CASE
+                            WHEN n[2] IS NULL
+                                THEN pg_catalog.current_schemas(true)
+                            ELSE
+                                ARRAY[n[2]]
+                        END,
+                        n[3]
+                    ) AS o
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
         },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("

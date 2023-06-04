@@ -316,8 +316,7 @@ EXPLAIN SELECT mz_internal.mz_normalize_object_name(c)::text FROM t;
 ----
 Explained Query:
   Project (#1)
-    Map (arraytostr(case when ((parse_ident(#0, true) array_length 1) > 3) then error_if_null(null, ("improper relation name (too many dotted names): " || #0)) else (array_fill(null, array[(3 - (parse_ident(#0, true) array_length 1))]) || parse_ident(#0, true)) end))
+    Map (arraytostr(case when (#0) IS NULL then null else case when ((parse_ident(#0, true) array_length 1) > 3) then error_if_null(null, ("improper relation name (too many dotted names): " || #0)) else (array_fill(null, array[(3 - (parse_ident(#0, true) array_length 1))]) || parse_ident(#0, true)) end end))
       Get materialize.public.t
 
 EOF
-
