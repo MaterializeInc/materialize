@@ -148,6 +148,10 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 materialize.public.test_slot_source materialize.public.pk_table subsource
 materialize.public.test_slot_source materialize.public.test_slot_source_progress progress
 
+> SELECT source, subsource, type FROM mz_internal.mz_get_subsources('materialize.public.test_slot_source');
+materialize.public.test_slot_source materialize.public.pk_table subsource
+materialize.public.test_slot_source materialize.public.test_slot_source_progress progress
+
 > DROP SOURCE test_slot_source
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
