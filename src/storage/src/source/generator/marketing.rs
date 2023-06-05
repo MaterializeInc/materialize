@@ -30,7 +30,7 @@ const EXPERIMENT: &str = "experiment";
 
 pub struct Marketing {}
 
-// Note that this generator issues retractions; if you change this,
+// Note that this generator does not issues retractions; if you change this,
 // `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
 // must be updated.
 impl Generator for Marketing {
@@ -177,7 +177,7 @@ impl Generator for Marketing {
                     if converted {
                         let converted_at = now() + rng.gen_range(5..30);
 
-                        let mut conversion = Row::with_capacity(3);
+                        let mut conversion = Row::with_capacity(4);
                         let mut packer = conversion.packer();
 
                         let id = counter;
