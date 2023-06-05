@@ -9,11 +9,13 @@
 
 //! Definition and helper structs for the [`Cardinality`] attribute.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use mz_expr::{Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc};
+use mz_expr::{
+    BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+    VariadicFunc,
+};
 use mz_ore::cast::CastLossy;
-use mz_ore::iter::IteratorExt;
 use mz_repr::GlobalId;
 
 use mz_repr::explain::ExprHumanizer;
@@ -22,6 +24,7 @@ use ordered_float::OrderedFloat;
 use crate::attribute::subtree_size::SubtreeSize;
 use crate::attribute::unique_keys::UniqueKeys;
 use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
+use crate::symbolic::SymbolicExpression;
 
 /// Compute the estimated cardinality of each subtree of a [MirRelationExpr] from the bottom up.
 #[allow(missing_debug_implementations)]
@@ -30,9 +33,9 @@ pub struct Cardinality {
     env: Env<Self>,
     /// A vector of results for all nodes in the visited tree in
     /// post-visit order
-    pub results: Vec<SymbolicExpression<GlobalId>>,
+    pub results: Vec<SymExp>,
     /// A factorizer for generating appropriating scaling factors
-    pub factorize: Box<dyn Factorizer<GlobalId> + Send + Sync>,
+    pub factorize: Box<dyn Factorizer + Send + Sync>,
 }
 
 impl Default for Cardinality {
@@ -47,111 +50,271 @@ impl Default for Cardinality {
     }
 }
 
-/// Symbolic algebraic expressions over variables `V`
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SymbolicExpression<V> {
-    /// A constant expression
-    Constant(OrderedFloat<f64>),
-    /// `Variable(x, n)` represents `x^n`
-    Variable(V, usize),
-    /// `Sum([e_1, ..., e_m])` represents e_1 + ... + e_m
-    Sum(Vec<SymbolicExpression<V>>),
-    /// `Product([e_1, ..., e_m])` represents e_1 * ... * e_m
-    Product(Vec<SymbolicExpression<V>>),
+/// The variables used in symbolic expressions representing cardinality
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FactorizerVariable {
+    /// The total cardinality of a given global id
+    Id(GlobalId),
+    /// The inverse of the number of distinct keys in the index held in the given column, i.e., 1/|# of distinct keys|
+    ///
+    /// TODO(mgree): need to correlate this back to a given global table, to feed in statistics (or have a sub-attribute for collecting this)
+    Index(usize),
 }
 
+/// SymbolicExpressions specialized to factorizer variables
+pub type SymExp = SymbolicExpression<FactorizerVariable>;
+
 /// A `Factorizer` computes selectivity factors
-pub trait Factorizer<V> {
-    fn flat_map(&self, tf: &TableFunc, input: &SymbolicExpression<V>) -> SymbolicExpression<V>;
+pub trait Factorizer {
+    /// Compute selectivity for the flat map of `tf`
+    fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp;
+    /// Computes selectivity of the predicate `expr`, given that `indexed_columns` are indexed
+    ///
+    /// The result should be in the range (0, 1.0]
+    fn predicate(&self, expr: &MirScalarExpr, indexed_columns: &BTreeSet<usize>) -> SymExp;
     fn filter(
         &self,
         predicates: &Vec<MirScalarExpr>,
         keys: &Vec<Vec<usize>>,
-        input: &SymbolicExpression<V>,
-    ) -> SymbolicExpression<V>;
+        input: &SymExp,
+    ) -> SymExp;
+    /// Computes selectivity for a join; the cardinality estimate for each input is paired with the keys on that input
     fn join(
         &self,
         equivalences: &Vec<Vec<MirScalarExpr>>,
         implementation: &JoinImplementation,
-        inputs: Vec<(&SymbolicExpression<V>, &Vec<Vec<usize>>)>,
-    ) -> SymbolicExpression<V>;
+        input_keys: Vec<&Vec<Vec<usize>>>,
+        inputs: Vec<&SymExp>,
+    ) -> SymExp;
+    /// Computes selectivity for a reduce
     fn reduce(
         &self,
         group_key: &Vec<MirScalarExpr>,
         expected_group_size: &Option<u64>,
-        input: &SymbolicExpression<V>,
-    ) -> SymbolicExpression<V>;
+        input: &SymExp,
+    ) -> SymExp;
+    /// Computes selectivity for a topk
     fn topk(
         &self,
         group_key: &Vec<usize>,
         limit: &Option<usize>,
         expected_group_size: &Option<u64>,
-        input: &SymbolicExpression<V>,
-    ) -> SymbolicExpression<V>;
-    fn threshold(&self, input: &SymbolicExpression<V>) -> SymbolicExpression<V>;
+        input: &SymExp,
+    ) -> SymExp;
+    /// Computes slectivity for a threshold
+    fn threshold(&self, input: &SymExp) -> SymExp;
 }
 
-pub struct WorstCaseFactorizer<V> {
-    pub cardinalities: BTreeMap<V, usize>,
+pub struct WorstCaseFactorizer {
+    pub cardinalities: BTreeMap<FactorizerVariable, usize>,
 }
 
-impl<V> Factorizer<V> for WorstCaseFactorizer<V>
-where
-    V: Clone + Ord,
-{
-    fn flat_map(&self, tf: &TableFunc, input: &SymbolicExpression<V>) -> SymbolicExpression<V> {
+impl Factorizer for WorstCaseFactorizer {
+    fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp {
         match tf {
             TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz => input.clone(),
             TableFunc::Wrap { types, width } => {
-                input
-                    * &SymbolicExpression::f64(
-                        f64::cast_lossy(types.len()) / f64::cast_lossy(*width),
-                    )
+                input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
             }
             _ => {
                 // TODO(mgree) what explosion factor should we make up?
-                input * &SymbolicExpression::f64(4.0)
+                input * &SymExp::from(4.0)
             }
+        }
+    }
+
+    fn predicate(&self, expr: &MirScalarExpr, indexed_columns: &BTreeSet<usize>) -> SymExp {
+        let index_cardinality = |expr: &MirScalarExpr| -> Option<SymExp> {
+            match expr {
+                MirScalarExpr::Column(col) => {
+                    if indexed_columns.contains(col) {
+                        Some(SymbolicExpression::var(FactorizerVariable::Index(*col)))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        };
+
+        match expr {
+            MirScalarExpr::Column(_)
+            | MirScalarExpr::Literal(_, _)
+            | MirScalarExpr::CallUnmaterializable(_) => SymExp::from(1.0),
+            MirScalarExpr::CallUnary { func, expr } => match func {
+                UnaryFunc::Not(_) => 1.0 - self.predicate(expr, indexed_columns),
+                UnaryFunc::IsTrue(_) | UnaryFunc::IsFalse(_) => SymExp::from(0.5),
+                UnaryFunc::IsNull(_) => {
+                    if let Some(icard) = index_cardinality(expr) {
+                        icard
+                    } else {
+                        SymExp::from(0.1)
+                    }
+                }
+                _ => SymExp::from(1.0),
+            },
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                match func {
+                    BinaryFunc::Eq => match (index_cardinality(expr1), index_cardinality(expr2)) {
+                        (Some(icard1), Some(icard2)) => SymbolicExpression::max(icard1, icard2),
+                        (Some(icard), None) | (None, Some(icard)) => icard,
+                        (None, None) => SymExp::from(0.1),
+                    },
+                    // 1.0 - the Eq case
+                    BinaryFunc::NotEq => match (index_cardinality(expr1), index_cardinality(expr2))
+                    {
+                        (Some(icard1), Some(icard2)) => {
+                            1.0 - SymbolicExpression::max(icard1, icard2)
+                        }
+                        (Some(icard), None) | (None, Some(icard)) => 1.0 - icard,
+                        (None, None) => SymExp::from(0.9),
+                    },
+                    BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => {
+                        // if we have high/low key values and one of the columns is an index
+                        SymExp::from(0.33)
+                    }
+                    _ => SymExp::from(1.0), // TOOD(mgree): are there other interesting cases?
+                }
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => match func {
+                VariadicFunc::And => {
+                    // can't use SymExp::product because it expects a vector of references :/
+                    let mut factor = SymExp::from(1.0);
+
+                    for expr in exprs {
+                        factor = factor * self.predicate(expr, indexed_columns);
+                    }
+
+                    factor
+                }
+                VariadicFunc::Or => {
+                    // TODO(mgree): BETWEEN will get compiled down to an OR of appropriate bounds---we could try to detect it and be clever
+
+                    // F(expr1 OR expr2) = F(expr1) + F(expr2) - F(expr1) * F(expr2), but generalized
+                    let mut exprs = exprs.into_iter();
+
+                    let mut expr1;
+
+                    if let Some(first) = exprs.next() {
+                        expr1 = self.predicate(first, indexed_columns);
+                    } else {
+                        return SymExp::from(1.0);
+                    }
+
+                    for expr2 in exprs {
+                        let expr2 = self.predicate(expr2, indexed_columns);
+
+                        expr1 = expr1.clone() + expr2.clone() - expr1.clone() * expr2;
+                    }
+                    expr1
+                }
+                _ => SymExp::from(1.0),
+            },
+            MirScalarExpr::If { cond: _, then, els } => SymExp::max(
+                self.predicate(then, indexed_columns),
+                self.predicate(els, indexed_columns),
+            ),
         }
     }
 
     fn filter(
         &self,
-        _predicates: &Vec<MirScalarExpr>,
-        _keys: &Vec<Vec<usize>>,
-        input: &SymbolicExpression<V>,
-    ) -> SymbolicExpression<V> {
-        // TODO(mgree): use knowledge about predicates and keys to do a better job
+        predicates: &Vec<MirScalarExpr>,
+        keys: &Vec<Vec<usize>>,
+        input: &SymExp,
+    ) -> SymExp {
+        // TODO(mgree): should we try to do something for indices built on multiple columns?
+        let mut indexed_columns = BTreeSet::new();
+        for key in keys {
+            if key.len() == 1 {
+                indexed_columns.insert(key[0]);
+            }
+        }
 
         // worst case scaling factor is 1
-        input.clone()
+        let mut factor = SymExp::from(1.0);
+
+        for expr in predicates {
+            let predicate_scaling_factor = self.predicate(expr, &indexed_columns);
+
+            // constant scaling factors should be in (0,1]
+            debug_assert!(match predicate_scaling_factor {
+                SymExp::Constant(OrderedFloat(n)) => 0.0 < n && n <= 1.0,
+                _ => true,
+            });
+
+            factor = factor * predicate_scaling_factor;
+        }
+
+        input.clone() * factor
     }
 
     fn join(
         &self,
-        _equivalences: &Vec<Vec<MirScalarExpr>>,
+        equivalences: &Vec<Vec<MirScalarExpr>>,
         _implementation: &JoinImplementation,
-        inputs: Vec<(&SymbolicExpression<V>, &Vec<Vec<usize>>)>,
-    ) -> SymbolicExpression<V> {
-        // TODO(mgree): some knowledge about these equivalences (and the indices) will let us give a better scaling factor
-        SymbolicExpression::product(inputs.into_iter().map(|(input, _keys)| input).collect())
+        input_keys: Vec<&Vec<Vec<usize>>>,
+        inputs: Vec<&SymExp>,
+    ) -> SymExp {
+        let mut indexed_columns = BTreeMap::new();
+        for (idx, keys) in input_keys.iter().enumerate() {
+            for key in *keys {
+                if key.len() == 1 {
+                    println!("key on column {} for source {idx}", key[0]);
+                    indexed_columns.insert(key[0], idx);
+                }
+            }
+        }
+
+        let mut inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
+
+        for equiv in equivalences {
+            let sources = equiv
+                .iter()
+                .map(|expr| {
+                    if let MirScalarExpr::Column(col) = expr {
+                        indexed_columns.get(col)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Option<Vec<_>>>();
+
+            // these inputs have unique keys for all of the equivalence, so they're a bound on how many rows we'll get from those sources
+            // we'll find the leftmost such input and use it to hold the minimum; the other sources we set to 1.0 (so they have no effect)
+            if let Some(sources) = sources {
+                // TODO(mgree): currently this code isn't getting exercised because the uniquekeys attribute is showing up empty (because it's just trying to read things off of `Get.typ` rather than consulting the catalog)
+                let mut sources = sources.iter();
+
+                let lhs_idx = **sources.next().unwrap();
+                let mut lhs = std::mem::replace(&mut inputs[lhs_idx], SymExp::f64(1.0));
+                for &&rhs_idx in sources {
+                    let rhs = std::mem::replace(&mut inputs[rhs_idx], SymExp::f64(1.0));
+                    lhs = SymExp::min(lhs, rhs);
+                }
+
+                inputs[lhs_idx] = lhs;
+            }
+        }
+
+        SymbolicExpression::product(inputs)
     }
 
     fn reduce(
         &self,
         group_key: &Vec<MirScalarExpr>,
         expected_group_size: &Option<u64>,
-        input: &SymbolicExpression<V>,
-    ) -> SymbolicExpression<V> {
+        input: &SymExp,
+    ) -> SymExp {
         // TODO(mgree): if no `group_key` is present, we can do way better
 
         if let Some(group_size) = expected_group_size {
-            input * &SymbolicExpression::f64(1.0 / f64::cast_lossy(*group_size))
+            input / f64::cast_lossy(*group_size)
         } else if group_key.is_empty() {
-            SymbolicExpression::usize(1)
+            SymExp::from(1)
         } else {
             // in the worst case, every row is its own group
             input.clone()
@@ -163,227 +326,37 @@ where
         group_key: &Vec<usize>,
         limit: &Option<usize>,
         expected_group_size: &Option<u64>,
-        input: &SymbolicExpression<V>,
-    ) -> SymbolicExpression<V> {
+        input: &SymExp,
+    ) -> SymExp {
         let k = limit.unwrap_or(1);
 
         if let Some(group_size) = expected_group_size {
-            input * &SymbolicExpression::f64(f64::cast_lossy(k) / f64::cast_lossy(*group_size))
+            input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
         } else if group_key.is_empty() {
-            SymbolicExpression::usize(k)
+            SymExp::from(k)
         } else {
             // in the worst case, every row is its own group
             input.clone()
         }
     }
 
-    fn threshold(&self, input: &SymbolicExpression<V>) -> SymbolicExpression<V> {
+    fn threshold(&self, input: &SymExp) -> SymExp {
         // worst case scaling factor is 1
         input.clone()
     }
 }
 
-impl<V> SymbolicExpression<V> {
-    pub fn usize(n: usize) -> Self {
-        Self::Constant(OrderedFloat(f64::cast_lossy(n)))
-    }
-
-    pub fn f64(n: f64) -> Self {
-        Self::Constant(OrderedFloat(n))
-    }
-
-    /// References a variable (with a default exponent of 1)
-    pub fn var(v: V) -> Self
-    where
-        V: Ord,
-    {
-        Self::Variable(v, 1)
-    }
-
-    /// Computes the n-ary sum of symbolic expressions, yielding a slightly more compact/normalized term than repeated addition
-    pub fn sum(es: Vec<&Self>) -> Self
-    where
-        V: Clone + Eq + Ord,
-    {
-        use SymbolicExpression::*;
-
-        let mut constant = OrderedFloat(0.0);
-        let mut variables = BTreeMap::new();
-        let mut products = BTreeMap::new();
-
-        let mut summands = es;
-        while let Some(e) = summands.pop() {
-            match e {
-                Constant(n) => constant += n,
-                Variable(v, n) => {
-                    variables.entry((v, n)).and_modify(|e| *e += 1).or_insert(1);
-                }
-                Sum(ss) => summands.extend(ss),
-                p @ Product(_) => {
-                    products.entry(p).and_modify(|e| *e += 1).or_insert(1);
-                }
-            }
-        }
-
-        let mut result = Vec::with_capacity(1 + variables.len() + products.len());
-
-        result.extend(
-            products
-                .into_iter()
-                .map(|(p, scalar)| p * &SymbolicExpression::usize(scalar)),
-        );
-        result.extend(
-            variables.into_iter().map(|((v, n), scalar)| {
-                &Variable(v.clone(), *n) * &SymbolicExpression::usize(scalar)
-            }),
-        );
-
-        if constant.0 != 0.0 {
-            result.push(Constant(constant));
-        }
-
-        if result.len() > 1 {
-            Sum(result)
-        } else if result.len() == 1 {
-            result.swap_remove(0)
-        } else {
-            Self::f64(0.0)
-        }
-    }
-
-    /// Computes the n-ary product of symbolic expressions, yielding a slightly more compact/normalized term than repeated multiplication
-    pub fn product(es: Vec<&Self>) -> Self
-    where
-        V: Clone + Eq + Ord,
-    {
-        use SymbolicExpression::*;
-
-        let mut constant = OrderedFloat(1.0);
-        let mut variables = BTreeMap::new();
-        let mut sums = BTreeMap::new();
-
-        let mut products = es;
-        while let Some(e) = products.pop() {
-            match e {
-                Constant(n) => constant *= n,
-                Variable(v, n) => {
-                    variables.entry((v, n)).and_modify(|e| *e += 1).or_insert(1);
-                }
-                Product(ps) => products.extend(ps),
-                s @ Sum(_) => {
-                    sums.entry(s).and_modify(|e| *e += 1).or_insert(1);
-                }
-            }
-        }
-
-        let mut result = Vec::with_capacity(1 + variables.len() + sums.len());
-
-        result.extend(
-            sums.into_iter()
-                .map(|(p, scalar)| p * &SymbolicExpression::usize(scalar)),
-        );
-        result.extend(
-            variables.into_iter().map(|((v, n), scalar)| {
-                &Variable(v.clone(), *n) * &SymbolicExpression::usize(scalar)
-            }),
-        );
-
-        if constant.0 == 0.0 {
-            return Self::f64(0.0);
-        }
-
-        if constant.0 != 1.0 {
-            result.push(Constant(constant));
-        }
-
-        if result.len() > 1 {
-            Product(result)
-        } else if result.len() == 1 {
-            result.swap_remove(0)
-        } else {
-            Self::f64(1.0)
-        }
-    }
-}
-
-impl<V> Default for SymbolicExpression<V> {
-    fn default() -> Self {
-        SymbolicExpression::f64(0.0)
-    }
-}
-
-impl<V> std::ops::Add for &SymbolicExpression<V>
-where
-    V: Clone + Eq,
-{
-    type Output = SymbolicExpression<V>;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        use SymbolicExpression::*;
-        match (self, rhs) {
-            (Constant(OrderedFloat(n1)), Constant(OrderedFloat(n2))) => {
-                SymbolicExpression::f64(n1 + n2)
-            }
-            (Constant(OrderedFloat(n)), factor) | (factor, Constant(OrderedFloat(n)))
-                if *n == 0.0 =>
-            {
-                factor.clone()
-            }
-            (Sum(ss1), Sum(ss2)) => Sum(ss1.iter().chain(ss2.iter()).cloned().collect()),
-            (summand, Sum(ss)) | (Sum(ss), summand) => {
-                Sum(ss.iter().chain_one(summand).cloned().collect())
-            }
-            (lhs, rhs) => Sum(vec![lhs.clone(), rhs.clone()]),
-        }
-    }
-}
-
-impl<V> std::ops::Mul for &SymbolicExpression<V>
-where
-    V: Clone + Eq,
-{
-    type Output = SymbolicExpression<V>;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        use SymbolicExpression::*;
-        match (self, rhs) {
-            (Constant(OrderedFloat(n1)), Constant(OrderedFloat(n2))) => {
-                SymbolicExpression::f64(n1 * n2)
-            }
-            (Constant(OrderedFloat(n)), factor) | (factor, Constant(OrderedFloat(n)))
-                if *n == 1.0 =>
-            {
-                factor.clone()
-            }
-            (Constant(OrderedFloat(n)), _) | (_, Constant(OrderedFloat(n))) if *n == 0.0 => {
-                SymbolicExpression::f64(0.0)
-            }
-            (Variable(v1, n1), Variable(v2, n2)) if v1 == v2 => {
-                SymbolicExpression::Variable(v1.clone(), n1 + n2)
-            }
-            (Product(ps1), Product(ps2)) => {
-                Product(ps1.iter().chain(ps2.iter()).cloned().collect())
-            }
-            (factor, Product(ps)) | (Product(ps), factor) => {
-                Product(ps.iter().chain_one(factor).cloned().collect())
-            }
-            (factor, Sum(ss)) | (Sum(ss), factor) => Sum(ss.iter().map(|s| factor * s).collect()),
-            (lhs, rhs) => Product(vec![lhs.clone(), rhs.clone()]),
-        }
-    }
-}
-
 impl Attribute for Cardinality {
-    type Value = SymbolicExpression<GlobalId>;
+    type Value = SymExp;
 
     fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes) {
         use MirRelationExpr::*;
         let n = self.results.len();
 
         match expr {
-            Constant { rows, .. } => self.results.push(SymbolicExpression::usize(
-                rows.as_ref().map_or_else(|_| 0, |v| v.len()),
-            )),
+            Constant { rows, .. } => self
+                .results
+                .push(SymExp::from(rows.as_ref().map_or_else(|_| 0, |v| v.len()))),
             Get { id, .. } => match id {
                 Id::Local(id) => match self.env.get(id) {
                     Some(value) => self.results.push(value.clone()),
@@ -392,7 +365,9 @@ impl Attribute for Cardinality {
                         unimplemented!()
                     }
                 },
-                Id::Global(id) => self.results.push(SymbolicExpression::var(*id)),
+                Id::Global(id) => self
+                    .results
+                    .push(SymbolicExpression::var(FactorizerVariable::Id(*id))),
             },
             Let { .. } | Project { .. } | Map { .. } | ArrangeBy { .. } | Negate { .. } => {
                 let input = self.results[n - 1].clone();
@@ -403,10 +378,10 @@ impl Attribute for Cardinality {
                 let mut branches = Vec::with_capacity(inputs.len() + 1);
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
-                    branches.push(&self.results[n - offset]);
+                    branches.push(self.results[n - offset].clone());
                     offset += deps.get_results::<SubtreeSize>()[n - offset];
                 }
-                branches.push(&self.results[n - offset]);
+                branches.push(self.results[n - offset].clone());
 
                 self.results.push(SymbolicExpression::sum(branches));
             }
@@ -427,18 +402,23 @@ impl Attribute for Cardinality {
                 ..
             } => {
                 let mut input_results = Vec::with_capacity(inputs.len());
+                let mut input_keys = Vec::with_capacity(inputs.len());
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     let input = &self.results[n - offset];
                     let keys = &deps.get_results::<UniqueKeys>()[n - offset];
-                    input_results.push((input, keys));
+                    input_results.push(input);
+                    // TODO(mgree): if this is correct, we can make this `extend`
+                    input_keys.push(keys);
                     offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
 
-                self.results.push(
-                    self.factorize
-                        .join(equivalences, implementation, input_results),
-                );
+                self.results.push(self.factorize.join(
+                    equivalences,
+                    implementation,
+                    input_keys,
+                    input_results,
+                ));
             }
             Reduce {
                 group_key,
@@ -455,8 +435,6 @@ impl Attribute for Cardinality {
                 expected_group_size,
                 ..
             } => {
-                // TODO(mgree) if we add `SymbolicExpression::max` we can express `limit` nicely
-
                 let input = &self.results[n - 1];
                 self.results.push(self.factorize.topk(
                     group_key,
@@ -501,7 +479,8 @@ impl Attribute for Cardinality {
     }
 }
 
-impl SymbolicExpression<GlobalId> {
+impl SymExp {
+    /// Render a symbolic expression nicely
     pub fn humanize(
         &self,
         h: &dyn ExprHumanizer,
@@ -561,8 +540,8 @@ impl SymbolicExpression<GlobalId> {
     ) -> std::fmt::Result {
         use SymbolicExpression::*;
         match self {
-            Constant(OrderedFloat(n)) => write!(f, "{n}"),
-            Variable(v, n) => {
+            Constant(OrderedFloat::<f64>(n)) => write!(f, "{n}"),
+            Variable(FactorizerVariable::Id(v), n) => {
                 let id = h.humanize_id(*v).unwrap_or_else(|| format!("{v:?}"));
                 write!(f, "{id}")?;
 
@@ -571,6 +550,23 @@ impl SymbolicExpression<GlobalId> {
                 }
 
                 Ok(())
+            }
+            Variable(FactorizerVariable::Index(col), n) => {
+                write!(f, "icard(#{col})^{n}")
+            }
+            Max(e1, e2) => {
+                write!(f, "max(")?;
+                e1.humanize_factor(h, f)?;
+                write!(f, ", ")?;
+                e2.humanize_factor(h, f)?;
+                write!(f, ")")
+            }
+            Min(e1, e2) => {
+                write!(f, "min(")?;
+                e1.humanize_factor(h, f)?;
+                write!(f, ", ")?;
+                e2.humanize_factor(h, f)?;
+                write!(f, ")")
             }
             Sum(_) | Product(_) => {
                 write!(f, "(")?;
@@ -581,19 +577,26 @@ impl SymbolicExpression<GlobalId> {
     }
 }
 
-impl std::fmt::Display for SymbolicExpression<GlobalId> {
+impl std::fmt::Display for SymExp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.humanize(&mz_repr::explain::DummyHumanizer, f)
     }
 }
 
+/// Wrapping struct for pretty printing of symbolic expressions
 pub struct HumanizedSymbolicExpression<'a, 'b> {
-    pub expr: &'a SymbolicExpression<GlobalId>,
-    pub humanizer: &'b dyn ExprHumanizer,
+    expr: &'a SymExp,
+    humanizer: &'b dyn ExprHumanizer,
+}
+
+impl<'a, 'b> HumanizedSymbolicExpression<'a, 'b> {
+    pub fn new(expr: &'a SymExp, humanizer: &'b dyn ExprHumanizer) -> Self {
+        Self { expr, humanizer }
+    }
 }
 
 impl<'a, 'b> std::fmt::Display for HumanizedSymbolicExpression<'a, 'b> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.expr.humanize(self.humanizer, f)
+        self.expr.normalize().humanize(self.humanizer, f)
     }
 }

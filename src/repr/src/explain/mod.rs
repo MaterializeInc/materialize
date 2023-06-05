@@ -199,7 +199,12 @@ impl Default for ExplainConfig {
 
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
-        self.subtree_size || self.non_negative || self.arity || self.types || self.keys || self.cardinality
+        self.subtree_size
+            || self.non_negative
+            || self.arity
+            || self.types
+            || self.keys
+            || self.cardinality
     }
 }
 

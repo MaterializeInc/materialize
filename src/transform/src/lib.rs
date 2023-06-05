@@ -123,6 +123,7 @@ pub mod reduce_elision;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
+pub mod symbolic;
 pub mod threshold_elision;
 pub mod typecheck;
 pub mod union_cancel;

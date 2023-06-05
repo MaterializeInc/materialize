@@ -515,11 +515,9 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<Cardinality>().into_iter(),
             ) {
-                let attr = cardinality::HumanizedSymbolicExpression {
-                    expr: &cardinality,
-                    humanizer: context.humanizer,
-                }
-                .to_string();
+                let attr =
+                    cardinality::HumanizedSymbolicExpression::new(&cardinality, context.humanizer)
+                        .to_string();
                 let attrs = annotations.entry(expr).or_default();
                 attrs.cardinality = Some(attr);
             }
