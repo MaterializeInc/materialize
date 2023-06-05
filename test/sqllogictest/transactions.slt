@@ -654,3 +654,42 @@ SELECT * FROM t AS OF AT LEAST 1683131452106;
 
 statement ok
 COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+SET TRANSACTION_ISOLATION TO serializable
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+SET TRANSACTION ISOLATION LEVEL serializable
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SET TRANSACTION_ISOLATION TO serializable
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+RESET TRANSACTION_ISOLATION
+
+statement ok
+ROLLBACK

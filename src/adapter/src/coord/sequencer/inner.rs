@@ -1799,8 +1799,12 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
+
+        let vars = session.vars_mut();
         let values = match plan.value {
             VariableValue::Default => None,
             VariableValue::Values(values) => Some(values),
@@ -1856,6 +1860,9 @@ impl Coordinator {
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let name = plan.name;
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
         session
             .vars_mut()
             .reset(Some(self.catalog().system_config()), &name, false)?;
@@ -1873,18 +1880,30 @@ impl Coordinator {
                 TransactionMode::AccessMode(_) => {
                     return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
                 }
-                TransactionMode::IsolationLevel(isolation_level) => session.vars_mut().set(
-                    Some(self.catalog().system_config()),
-                    TRANSACTION_ISOLATION_VAR_NAME.as_str(),
-                    VarInput::Flat(&isolation_level.to_ast_string_stable()),
-                    plan.local,
-                )?,
+                TransactionMode::IsolationLevel(isolation_level) => {
+                    self.validate_set_isolation_level(session)?;
+
+                    session.vars_mut().set(
+                        Some(self.catalog().system_config()),
+                        TRANSACTION_ISOLATION_VAR_NAME.as_str(),
+                        VarInput::Flat(&isolation_level.to_ast_string_stable()),
+                        plan.local,
+                    )?
+                }
             }
         }
         Ok(ExecuteResponse::SetVariable {
             name: TRANSACTION_ISOLATION_VAR_NAME.to_string(),
             reset: false,
         })
+    }
+
+    fn validate_set_isolation_level(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.transaction().contains_ops() {
+            Err(AdapterError::InvalidSetIsolationLevel)
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) fn sequence_end_transaction(

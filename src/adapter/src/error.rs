@@ -78,6 +78,8 @@ pub enum AdapterError {
         size: String,
         expected: Vec<String>,
     },
+    /// SET TRANSACTION ISOLATION LEVEL was called in the middle of a transaction.
+    InvalidSetIsolationLevel,
     /// No such storage instance size has been configured.
     InvalidStorageClusterSize {
         size: String,
@@ -387,6 +389,10 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
                 write!(f, "unknown cluster replica size {size}",)
             }
+            AdapterError::InvalidSetIsolationLevel => write!(
+                f,
+                "SET TRANSACTION ISOLATION LEVEL must be called before any query"
+            ),
             AdapterError::InvalidStorageClusterSize { size, .. } => {
                 write!(f, "unknown source size {size}")
             }
