@@ -157,16 +157,19 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
             _ => *stats = JsonStats::Mixed,
         },
         Datum::Numeric(val) => {
-            let val = f64::try_from(val.0)
-                .map_err(|_| format!("TODO: Could not collect stats for decimal: {}", val))?;
+            // We can't convert a decimal into a float with perfect precision,
+            // so we at least ensure the true value is bounded on either side.
+            // (And numbers without a fractional part can be converted exactly.)
+            let (lower, upper) = f64::try_from(val.0)
+                .map_or((f64::NEG_INFINITY, f64::INFINITY), |f| {
+                    (f.floor(), f.ceil())
+                });
             match stats {
-                JsonStats::None => {
-                    *stats = JsonStats::Numerics(PrimitiveStats {
-                        lower: val,
-                        upper: val,
-                    })
+                JsonStats::None => *stats = JsonStats::Numerics(PrimitiveStats { lower, upper }),
+                JsonStats::Numerics(stats) => {
+                    update_stats(stats, &lower);
+                    update_stats(stats, &upper);
                 }
-                JsonStats::Numerics(stats) => update_stats(stats, &val),
                 _ => *stats = JsonStats::Mixed,
             }
         }

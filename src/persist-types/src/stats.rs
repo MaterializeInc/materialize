@@ -290,9 +290,7 @@ pub enum JsonStats {
     Bools(PrimitiveStats<bool>),
     /// The min and max strings, or None if there were none.
     Strings(PrimitiveStats<String>),
-    /// The min and max numerics, or None if there were none.
-    ///
-    /// TODO(mfp): Storing this as an f64 is not correct.
+    /// Lower and upper bounds on the numerics, or None if there were none.
     Numerics(PrimitiveStats<f64>),
     /// A sentinel that indicates all elements were `Datum::List`s.
     ///
