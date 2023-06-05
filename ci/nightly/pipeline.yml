@@ -69,6 +69,7 @@ steps:
           - { value: sqlancer-having }
           - { value: sqlancer-query-partitioning }
           - { value: crdb-restarts }
+          - { value: pubsub-disruption }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -690,6 +691,15 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: crdb-restarts
+
+  - id: pubsub-disruption
+    label: "PubSub disruption"
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: pubsub-disruption
 
   - wait: ~
     continue_on_failure: true
