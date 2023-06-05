@@ -215,22 +215,16 @@ where
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
     /// updated to the latest state.
-    pub fn removable_rollups(&self) -> Vec<(SeqNo, PartialRollupKey)> {
-        // Find all rollups <= seqno_since.
-        let (mut rollups, seqno_since) =
-            self.state
-                .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
-                    let seqno_since = state.seqno_since();
-                    (
-                        state
-                            .collections
-                            .rollups
-                            .range(..=seqno_since)
-                            .map(|(seqno, rollup)| (*seqno, rollup.key.clone()))
-                            .collect::<Vec<(SeqNo, PartialRollupKey)>>(),
-                        seqno_since,
-                    )
-                });
+    pub fn rollups_lte_seqno(&self, seqno_since: SeqNo) -> Vec<(SeqNo, PartialRollupKey)> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state
+                    .collections
+                    .rollups
+                    .range(..=seqno_since)
+                    .map(|(seqno, rollup)| (*seqno, rollup.key.clone()))
+                    .collect::<Vec<(SeqNo, PartialRollupKey)>>()
+            })
 
         // // The latest rollup <= seqno_since is not removable.
         // let (latest_rollup_lte_seqno_since, _) = rollups.pop().expect(&format!(
@@ -244,8 +238,6 @@ where
         // assert!(rollups
         //     .iter()
         //     .all(|(seqno, _)| *seqno < latest_rollup_lte_seqno_since));
-
-        rollups
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {

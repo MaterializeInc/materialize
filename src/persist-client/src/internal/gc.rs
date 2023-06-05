@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, info, warn, Instrument, Span};
 
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashSet;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
@@ -269,6 +270,33 @@ where
     where
         F: FnMut(&Counter),
     {
+        let rollups_lte_seqno: Vec<_> = machine.applier.rollups_lte_seqno(seqno_since);
+        let rollup_seqnos = rollups_lte_seqno
+            .iter()
+            .map(|(x, _)| *x)
+            .collect::<HashSet<_>>();
+
+        let Some((rollup_to_keep, rollups_to_remove_from_state)) = rollups_lte_seqno.split_last() else {
+            // If `rollups_lte_seqno` is empty, then our `seqno_since` is old
+            // and everything has already been GC'd. We can safely exit.
+            machine.applier.metrics.gc.noop.inc();
+            return RoutineMaintenance::default();
+        };
+
+        // If `rollups_to_remove_from_state` is empty, then there is only a single rollup
+        // <= `seqno_since`. This means there are no rollups that are safe to truncate to
+        // (we can only truncate ones < than the latest rollup <= seqno_since), so we can
+        // safely exit here as well.
+        if rollups_to_remove_from_state.is_empty() {
+            machine.applier.metrics.gc.noop.inc();
+            return RoutineMaintenance::default();
+        }
+
+        info!(
+            "Finding all rollups <= ({}). Will remove rollups: ({:?}), truncating up to: {}",
+            seqno_since, rollups_to_remove_from_state, rollup_to_keep.0
+        );
+
         let delete_semaphore = Semaphore::new(
             machine
                 .applier
@@ -279,24 +307,25 @@ where
         let mut batch_parts_to_delete: Vec<PartialBatchKey> = vec![];
         let mut rollups_to_delete: Vec<PartialRollupKey> = vec![];
 
-        // we determine which rollups are removable from the *latest* state known
-        // to this process, which may be arbitrarily far ahead of `states`. we do
-        // this for several reasons, but most importantly because we truncate live
-        // diffs in Consensus before we remove rollups from state, WIP explain more plz
-        let mut removable_rollups: Vec<_> = machine
-            .applier
-            .removable_rollups()
-            .into_iter()
-            .filter(|(seqno, _rollup)| *seqno <= seqno_since)
-            .collect();
-
-        info!(
-            "Removing to ({}). Eligible rollups: ({:?})",
-            seqno_since, removable_rollups
-        );
-
-        for (truncate_lt, _rollup) in &removable_rollups {
+        for (truncate_lt, _rollup) in &rollups_lte_seqno {
             assert!(*truncate_lt <= seqno_since);
+            assert!(batch_parts_to_delete.is_empty());
+            assert!(rollups_to_delete.is_empty());
+
+            // our state is already past the truncation point. there's no work to do --
+            // some process already truncated this far
+            if states.state().seqno >= *truncate_lt {
+                continue;
+            }
+
+            // By our invariant, `states` should always begin on a rollup.
+            assert!(
+                rollup_seqnos.contains(&states.state().seqno),
+                "rollups = {:?}, state seqno = {}",
+                rollup_seqnos,
+                states.state().seqno
+            );
+
             Self::find_removable_blobs(
                 states,
                 *truncate_lt,
@@ -304,6 +333,25 @@ where
                 timer,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
+            );
+
+            // Since we're about to GC, our seqno should be exactly `truncate_lt`
+            // and be referred to by a rollup, to have properly calculated all
+            // blobs to delete through this truncation point + maintain our invariant
+            // of the earliest seqno having a rollup.
+            //
+            // This assertion is subtle, but there should always be enough live diffs to
+            // reach `truncate_lt` if our initial seqno was < `truncate_lt`:
+            // * Our GC request was generated after `seqno_since` was written.
+            // * If our initial seqno on this loop was < `truncate_lt`, then our read to
+            //   `fetch_all_live_states` must have seen live diffs through at least `seqno_since`.
+            // * `seqno_since` >= `truncate_lt`, so we must have enough live diffs to reach `truncate_lt`.
+            assert_eq!(states.state().seqno, *truncate_lt);
+            assert!(
+                rollup_seqnos.contains(&states.state().seqno),
+                "rollups = {:?}, state seqno = {}",
+                rollup_seqnos,
+                states.state().seqno
             );
 
             info!(
@@ -321,20 +369,21 @@ where
                 &delete_semaphore,
             )
             .await;
-
-            assert!(batch_parts_to_delete.is_empty());
-            assert!(rollups_to_delete.is_empty());
         }
 
-        removable_rollups.pop();
-
-        let (removed_rollups, maintenance) = machine.remove_rollups(&removable_rollups).await;
+        // We could prefer to do this incrementally, but it has tradeoffs... WIP
+        let (removed_rollups, maintenance) =
+            machine.remove_rollups(&rollups_to_remove_from_state).await;
         info!("removed rollups: {:?}", removed_rollups);
+
         maintenance
     }
 
     /// Iterates through `states`, accumulating all deleted blobs (both batch parts
-    /// and rollups) until `truncate_lt` (exclusive).
+    /// and rollups) until `truncate_lt`.
+    ///
+    /// * The initial seqno of `states` MUST be less than `truncate_lt`.
+    /// * The seqno of `states` after this fn will be exactly `truncate_lt`.
     fn find_removable_blobs<F>(
         states: &mut StateVersionsIter<T>,
         truncate_lt: SeqNo,
@@ -345,12 +394,7 @@ where
     ) where
         F: FnMut(&Counter),
     {
-        // if our state is already past the truncation point, there's nothing to do
-        if states.state().seqno().next() >= truncate_lt {
-            return;
-        }
-
-        assert!(states.state().seqno.next() <= truncate_lt);
+        assert!(states.state().seqno < truncate_lt);
         while let Some(state) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
@@ -366,16 +410,10 @@ where
                 });
             }
         }) {
-            if state.seqno.next() == truncate_lt {
+            if state.seqno == truncate_lt {
                 break;
             }
         }
-
-        // there should always be enough live diffs to reach `truncate_lt`
-        // if our initial seqno.next() was <= `truncate_lt`.
-        //
-        // WIP: there's a wonderful proof but doesn't fit in this comment...
-        assert_eq!(states.state().seqno.next(), truncate_lt);
 
         timer(&metrics.find_deletable_blobs_seconds);
     }
