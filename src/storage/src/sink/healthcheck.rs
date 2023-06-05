@@ -203,7 +203,7 @@ mod tests {
     use super::*;
 
     // Test suite
-    #[tokio::test(start_paused = true)]
+    #[mz_ore::test(tokio::test(start_paused = true))]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_startup() {
         let persist_cache = persist_cache();
@@ -226,7 +226,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[mz_ore::test(tokio::test(start_paused = true))]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_bootstrap_different_sources() {
         let shard_id = ShardId::new();
@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(healthchecker.current_status, None);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[mz_ore::test(tokio::test(start_paused = true))]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_repeated_update() {
         let shard_id = ShardId::new();
@@ -287,7 +287,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    #[mz_ore::test(tokio::test(start_paused = true))]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_forbidden_transition() {
         let shard_id = ShardId::new();
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(hint_message, "more explanation");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_can_transition() {
         let test_cases = [
             // Allowed transitions

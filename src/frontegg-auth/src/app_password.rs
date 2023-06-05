@@ -107,7 +107,7 @@ mod tests {
 
     use super::AppPassword;
 
-    #[test]
+    #[mz_ore::test]
     fn test_app_password() {
         struct TestCase {
             input: &'static str,

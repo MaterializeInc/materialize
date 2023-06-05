@@ -32,19 +32,19 @@ class SqlExecutor:
         return self.__class__.__name__
 
     def ddl(self, sql: str) -> None:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def begin_tx(self, isolation_level: str) -> None:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def commit(self) -> None:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def rollback(self) -> None:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def query(self, sql: str) -> Sequence[Sequence[Any]]:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):

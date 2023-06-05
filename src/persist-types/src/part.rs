@@ -22,6 +22,7 @@ use arrow2::io::parquet::write::Encoding;
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{ColumnFormat, Data, DataType, Schema};
 use crate::stats::{DynStats, StatsFn, StructStats};
+use crate::Codec64;
 
 /// A columnar representation of one blob's worth of data.
 #[derive(Debug, Default)]
@@ -324,36 +325,6 @@ impl PartBuilder {
         PartBuilder { key, val, ts, diff }
     }
 
-    /// Returns a [ColumnsMut] for the key columns.
-    pub fn key_mut<'a>(&'a mut self) -> ColumnsMut<'a> {
-        ColumnsMut {
-            cols: self
-                .key
-                .iter_mut()
-                .map(|(name, col)| (name.as_str(), col))
-                .collect(),
-        }
-    }
-
-    /// Returns a [ColumnsMut] for the val columns.
-    pub fn val_mut<'a>(&'a mut self) -> ColumnsMut<'a> {
-        ColumnsMut {
-            cols: self
-                .val
-                .iter_mut()
-                .map(|(name, col)| (name.as_str(), col))
-                .collect(),
-        }
-    }
-
-    /// Adds a single timestamp and diff.
-    ///
-    /// TODO: Feels like there's some better way to model this.
-    pub fn push_ts_diff(&mut self, ts: i64, diff: i64) {
-        self.ts.push(ts);
-        self.diff.push(diff);
-    }
-
     /// Returns a [PartMut] for this in-progress part.
     pub fn get_mut<'a>(&'a mut self) -> PartMut<'a> {
         let key = ColumnsMut {
@@ -373,8 +344,8 @@ impl PartBuilder {
         PartMut {
             key,
             val,
-            ts: &mut self.ts,
-            diff: &mut self.diff,
+            ts: Codec64Mut(&mut self.ts),
+            diff: Codec64Mut(&mut self.diff),
         }
     }
 
@@ -416,15 +387,19 @@ pub struct PartMut<'a> {
     /// The val column.
     pub val: ColumnsMut<'a>,
     /// The ts column.
-    ///
-    /// TODO(mfp): This breaks the abstraction. Better would be something that
-    /// talks in terms of Codec64.
-    pub ts: &'a mut Vec<i64>,
+    pub ts: Codec64Mut<'a>,
     /// The diff column.
-    ///
-    /// TODO(mfp): This breaks the abstraction. Better would be something that
-    /// talks in terms of Codec64.
-    pub diff: &'a mut Vec<i64>,
+    pub diff: Codec64Mut<'a>,
+}
+
+/// Mutable access to a column of a Codec64 implementor.
+pub struct Codec64Mut<'a>(&'a mut Vec<i64>);
+
+impl Codec64Mut<'_> {
+    /// Pushes the given value into this column.
+    pub fn push<X: Codec64>(&mut self, val: X) {
+        self.0.push(i64::from_le_bytes(Codec64::encode(&val)));
+    }
 }
 
 /// A type-erased [crate::columnar::Data::Col].

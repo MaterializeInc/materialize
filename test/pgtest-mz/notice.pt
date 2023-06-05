@@ -138,8 +138,7 @@ ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"schema"}]}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"no schema on the search path exists: default"}]}
-DataRow {"fields":["NULL"]}
+DataRow {"fields":["public"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"cluster \"nonexistant\" does not exist"}]}

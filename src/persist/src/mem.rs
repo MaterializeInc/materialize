@@ -265,7 +265,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn mem_blob() -> Result<(), ExternalError> {
         let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
         blob_impl_test(move |path| {
@@ -276,7 +276,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn mem_consensus() -> Result<(), ExternalError> {
         consensus_impl_test(|| async { Ok(MemConsensus::default()) }).await
     }

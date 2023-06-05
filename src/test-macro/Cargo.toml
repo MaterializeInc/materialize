@@ -1,0 +1,26 @@
+[package]
+name = "mz-test-macro"
+description = "test macro with automatically initialized logging for Materialize."
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Materialize, Inc.", "Daniel Mueller <deso@posteo.net>"]
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = {version = "1.0"}
+syn = {version = "1.0", features = ["extra-traits", "full"]}
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+tokio = {version = "1.24.2", default-features = false, features = ["rt-multi-thread", "macros"]}
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[lib]
+proc-macro = true

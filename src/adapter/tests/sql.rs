@@ -101,7 +101,7 @@ use tokio::sync::Mutex;
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn datadriven() {
     datadriven::walk_async("tests/testdata/sql", |mut f| async {
         // The datadriven API takes an `FnMut` closure, and can't express to Rust that

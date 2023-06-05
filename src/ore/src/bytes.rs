@@ -320,7 +320,7 @@ mod tests {
 
     use super::SegmentedBytes;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_empty() {
         let s = SegmentedBytes::default();
 
@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(bytes_read, 0);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_bytes_buf() {
         let mut s = SegmentedBytes::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
 
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(s.chunk(), &[6, 7]);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_bytes_buf_multi() {
         let segments = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]];
         let mut s: SegmentedBytes<2> = segments.into_iter().collect();
@@ -406,7 +406,7 @@ mod tests {
         assert_eq!(s.chunk(), &[13, 14, 15]);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_io_read() {
         let s = SegmentedBytes::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
         let mut reader = s.reader();
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(buf, [2, 3, 4, 5]);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_io_read_multi() {
         let segments = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7, 8, 9], vec![10, 11]];
         let s: SegmentedBytes<2> = segments.into_iter().collect();
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(buf, &[6, 7, 8, 9, 10, 11]);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_multi() {
         let segments = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7, 8, 9], vec![10, 11]];
         let mut s: SegmentedBytes<2> = segments.into_iter().collect();
@@ -530,7 +530,7 @@ mod tests {
         assert_eq!(buf, [6, 7, 8, 9, 10, 11, 0, 0]);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_single_empty_segment() {
         let s = SegmentedBytes::from(Vec::<u8>::new());
 
@@ -548,7 +548,7 @@ mod tests {
         assert_eq!(buf, [0, 0, 0, 0]);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_middle_segment_empty() {
         let segments = vec![vec![1, 2], vec![], vec![3, 4, 5, 6]];
         let mut s: SegmentedBytes = segments.clone().into_iter().collect();
@@ -589,7 +589,7 @@ mod tests {
         assert_eq!(buf, [5, 6, 5, 6]);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_last_segment_empty() {
         let segments = vec![vec![1, 2], vec![3, 4, 5, 6], vec![]];
         let mut s: SegmentedBytes = segments.clone().into_iter().collect();
@@ -642,7 +642,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_test_macro::test]
         #[cfg_attr(miri, ignore)] // slow
         fn proptest_copy_to_bytes(segments: Vec<Vec<u8>>, num_bytes: usize) {
             let contiguous: Vec<u8> = segments.clone().into_iter().flatten().collect();
@@ -658,7 +658,7 @@ mod tests {
             prop_assert_eq!(copied_c, copied_s);
         }
 
-        #[test]
+        #[mz_test_macro::test]
         #[cfg_attr(miri, ignore)] // slow
         fn proptest_read_to_end(segments: Vec<Vec<u8>>) {
             let contiguous: Vec<u8> = segments.clone().into_iter().flatten().collect();

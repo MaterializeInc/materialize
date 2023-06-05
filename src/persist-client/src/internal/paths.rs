@@ -230,7 +230,7 @@ impl std::fmt::Display for BlobKeyPrefix<'_> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn partial_blob_key_completion() {
         let (shard_id, writer_id, part_id) = (ShardId::new(), WriterId::new(), PartId::new());
         let partial_key = PartialBatchKey::new(&writer_id, &part_id);
@@ -240,7 +240,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn blob_key_parse() -> Result<(), String> {
         let (shard_id, writer_id, part_id) = (ShardId::new(), WriterId::new(), PartId::new());
 

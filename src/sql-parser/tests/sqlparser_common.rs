@@ -99,7 +99,7 @@ use mz_sql_parser::parser::{
 };
 use unicode_width::UnicodeWidthStr;
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     use datadriven::{walk, TestCase};
@@ -132,10 +132,10 @@ fn datadriven() {
                 let stmt = s.into_element();
                 let parsed = match parser::parse_statements(&stmt.to_string()) {
                     Ok(parsed) => parsed.into_element(),
-                    Err(err) => return format!("reparse failed: {}\n", err),
+                    Err(err) => panic!("reparse failed: {}\n", err),
                 };
                 if parsed != stmt {
-                    return format!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
+                    panic!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
                 }
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", stmt)
@@ -176,7 +176,7 @@ fn datadriven() {
     });
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
@@ -218,7 +218,7 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+#[mz_ore::test]
 fn format_ident() {
     let cases = vec![
         ("foo", "foo", "\"foo\""),
@@ -247,7 +247,7 @@ fn format_ident() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     struct Visitor<'a> {
@@ -355,7 +355,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";

@@ -946,7 +946,7 @@ mod tests {
 
     use super::WebSocketAuth;
 
-    #[test]
+    #[mz_ore::test]
     fn smoke_test_websocket_auth_parse() {
         struct TestCase {
             json: &'static str,

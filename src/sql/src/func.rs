@@ -326,10 +326,11 @@ impl<R> Operation<R> {
 pub fn sql_impl(
     expr: &'static str,
 ) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> {
-    let expr = mz_sql_parser::parser::parse_expr(expr).unwrap_or_else(|_| {
+    let expr = mz_sql_parser::parser::parse_expr(expr).unwrap_or_else(|e| {
         panic!(
-            "static function definition failed to parse {}",
+            "static function definition failed to parse {}: {}",
             expr.quoted(),
+            e,
         )
     });
     move |qcx, types| {
@@ -1689,6 +1690,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "array_lower" => Scalar {
             params!(ArrayAny, Int64) => BinaryFunc::ArrayLower => Int32, 2091;
         },
+        "array_position" => Scalar {
+            params!(ArrayAnyCompatible, AnyCompatible) => VariadicFunc::ArrayPosition => Int32, 3277;
+            params!(ArrayAnyCompatible, AnyCompatible, Int32) => VariadicFunc::ArrayPosition => Int32, 3278;
+        },
         "array_remove" => Scalar {
             params!(ArrayAnyCompatible, AnyCompatible) => BinaryFunc::ArrayRemove => ArrayAnyCompatible, 3167;
         },
@@ -2129,6 +2134,14 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 Ok(e.call_unary(UnaryFunc::MzRowSize(func::MzRowSize)))
             }) => Int32, oid::FUNC_MZ_ROW_SIZE;
         },
+        "parse_ident" => Scalar {
+            params!(String) => Operation::unary(|_ecx, ident| {
+                Ok(ident.call_binary(HirScalarExpr::literal_true(), BinaryFunc::ParseIdent))
+            }) => ScalarType::Array(Box::new(ScalarType::String)),
+                oid::FUNC_PARSE_IDENT_DEFAULT_STRICT;
+            params!(String, Bool) => BinaryFunc::ParseIdent
+                => ScalarType::Array(Box::new(ScalarType::String)), 1268;
+        },
         "pg_encoding_to_char" => Scalar {
             // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
             // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
@@ -2389,6 +2402,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "atanh" => Scalar {
             params!(Float64) => UnaryFunc::Atanh(func::Atanh) => Float64, 2467;
+        },
+        "age" => Scalar {
+            params!(Timestamp, Timestamp) => BinaryFunc::AgeTimestamp => Interval, 2058;
+            params!(TimestampTz, TimestampTz) => BinaryFunc::AgeTimestampTz => Interval, 1199;
         },
         "timezone" => Scalar {
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
@@ -3146,6 +3163,98 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // If the first argument is NULL, returns an EvalError::Internal whose error
             // message is the second argument.
             params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
+        },
+        "mz_get_subsources" => Table {
+            params!(String) => sql_impl_table_func("
+                SELECT
+                    mz_internal.mz_global_id_to_name(d.object_id) AS source,
+                    mz_internal.mz_global_id_to_name(d.subsource) AS subsource,
+                    s.type AS type
+                FROM
+                    mz_sources AS s
+                    JOIN (
+                        SELECT object_id, referenced_object_id AS subsource
+                        FROM
+                        mz_internal.mz_object_dependencies AS d
+                            JOIN
+                            mz_internal.mz_name_to_global_id($1) AS g (id)
+                            ON d.object_id = g.id
+                    ) AS d
+                    ON s.id = d.subsource
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
+        },
+        "mz_name_to_global_id" => Table {
+            // If the user wants to specify a database, we also require them to specify which
+            // schemas in that database they want us to search in that database.
+            params!(String, ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
+                SELECT o.id
+                FROM
+                    mz_catalog.mz_objects AS o
+                        JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                WHERE
+                    o.name = $3::pg_catalog.text AND s.name =ANY ($2::pg_catalog.text[])
+                        AND
+                    (
+                        s.database_id IS NULL
+                            OR
+                        s.database_id
+                        = (SELECT id FROM mz_catalog.mz_databases WHERE name = $1::pg_catalog.text)
+                    )
+            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_FULL_QUAL;
+            params!(ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
+                SELECT
+                    mz_internal.mz_name_to_global_id(
+                        pg_catalog.current_database(), $1, $2
+                    )
+            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ANY_SCHEMA;
+            params!(String, String) => sql_impl_table_func("
+                SELECT
+                    mz_internal.mz_name_to_global_id(
+                        pg_catalog.current_database(),
+                        ARRAY[($1)::pg_catalog.text],
+                        $2
+                    )
+            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ONE_SCHEMA;
+            params!(String) => sql_impl_table_func("
+                SELECT
+                    mz_internal.mz_name_to_global_id(
+                        pg_catalog.current_database(),
+                        pg_catalog.current_schemas(true),
+                        $1
+                    )
+            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ITEM_NAME;
+        },
+        "mz_global_id_to_name" => Scalar {
+            params!(String) => sql_impl_func("
+            CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    SELECT mz_internal.mz_error_if_null(
+                        (
+                            SELECT concat(qual.d, qual.s, item.name)
+                            FROM
+                                mz_objects AS item
+                            JOIN
+                            (
+                                SELECT
+                                    d.name || '.' AS d,
+                                    s.name || '.' AS s,
+                                    s.id AS schema_id
+                                FROM
+                                    mz_schemas AS s
+                                    LEFT JOIN
+                                        (SELECT id, name FROM mz_databases)
+                                        AS d
+                                        ON s.database_id = d.id
+                            ) AS qual
+                            ON qual.schema_id = item.schema_id
+                            WHERE item.id = CAST($1 AS text)
+                        ),
+                        'global ID ' || $1 || ' does not exist'
+                    )
+                )
+                END
+            ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
         },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;

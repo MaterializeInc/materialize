@@ -1137,7 +1137,7 @@ mod tests {
         )
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_recursive_types_a() {
         let mut act = test_term_rec_a(0);
         let exp = test_term_rec_a(20);
@@ -1169,7 +1169,7 @@ mod tests {
     ///         - <B as VisitChildren<A>>::visit_children`
     ///           - <A as Visit>::visit_post_nolimit`
     ///             - <A as VisitChildren<A>>::visit_children`
-    #[test]
+    #[mz_ore::test]
     #[ignore = "making the VisitChildren definitions symmetric breaks the compiler"]
     fn test_recursive_types_b() {
         let mut act = test_term_rec_b(0);

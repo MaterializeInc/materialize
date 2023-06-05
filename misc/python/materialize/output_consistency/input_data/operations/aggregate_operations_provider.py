@@ -18,19 +18,29 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
+from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
+    BooleanReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
+    DynamicReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperationOrFunction,
     OperationRelevance,
 )
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "array_arg",
+        "array_agg",
         [AnyOperationParam()],
-        DataTypeCategory.DYNAMIC_ARRAY,
+        ReturnTypeSpec(DataTypeCategory.DYNAMIC_ARRAY),
         is_aggregation=True,
     ),
 )
@@ -38,7 +48,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "avg",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
     ),
@@ -47,7 +57,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "bool_and",
         [BooleanOperationParam()],
-        DataTypeCategory.BOOLEAN,
+        BooleanReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
     ),
@@ -56,7 +66,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "bool_or",
         [BooleanOperationParam()],
-        DataTypeCategory.BOOLEAN,
+        BooleanReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
     ),
@@ -65,7 +75,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "count",
         [AnyOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(only_integer=True),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
     ),
@@ -74,7 +84,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "max",
         [AnyOperationParam()],
-        DataTypeCategory.DYNAMIC,
+        DynamicReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
     )
@@ -83,7 +93,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "min",
         [AnyOperationParam()],
-        DataTypeCategory.DYNAMIC,
+        DynamicReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
     )
@@ -92,7 +102,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "stddev_pop",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
     ),
@@ -102,7 +112,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "stddev_samp",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
     ),
@@ -111,16 +121,16 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "sum",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
     ),
 )
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "variance_pop",
+        "var_pop",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
     ),
@@ -128,9 +138,9 @@ AGGREGATE_OPERATION_TYPES.append(
 # equal to variance
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "variance_samp",
+        "var_samp",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
     ),

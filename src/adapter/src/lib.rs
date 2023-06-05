@@ -119,7 +119,7 @@ pub mod metrics;
 pub mod session;
 pub mod telemetry;
 
-pub use crate::client::{Client, ConnClient, Handle, SessionClient};
+pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{
     Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupMessage, StartupResponse,
 };

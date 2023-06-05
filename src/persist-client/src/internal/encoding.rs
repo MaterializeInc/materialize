@@ -1042,7 +1042,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn applier_version_state() {
         let v1 = semver::Version::new(1, 0, 0);
         let v2 = semver::Version::new(2, 0, 0);
@@ -1077,7 +1077,7 @@ mod tests {
         assert!(v1_res.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn applier_version_state_diff() {
         let v1 = semver::Version::new(1, 0, 0);
         let v2 = semver::Version::new(2, 0, 0);
@@ -1106,7 +1106,7 @@ mod tests {
         assert!(v1_res.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hollow_batch_migration_keys() {
         let x = HollowBatch {
             desc: Description::new(
@@ -1141,7 +1141,7 @@ mod tests {
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn reader_state_migration_lease_duration() {
         let x = LeasedReaderState {
             seqno: SeqNo(1),
@@ -1163,7 +1163,7 @@ mod tests {
         assert_eq!(<LeasedReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn writer_state_migration_most_recent_write() {
         let proto = ProtoWriterState {
             last_heartbeat_timestamp_ms: 1,
@@ -1190,7 +1190,7 @@ mod tests {
         assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn state_migration_rollups() {
         let r1 = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
@@ -1227,7 +1227,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn state_diff_migration_rollups() {
         let r1_rollup = HollowRollup {
@@ -1320,7 +1320,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn state_proto_roundtrip() {
         fn testcase<T: Timestamp + Lattice + Codec64>(state: State<T>) {
             let before = UntypedState {

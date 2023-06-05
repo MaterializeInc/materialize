@@ -227,7 +227,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn unreliable_blob() {
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let handle = UnreliableHandle::default();
@@ -258,7 +258,7 @@ mod tests {
         assert!(blob.get("a").await.is_err());
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn unreliable_consensus() {
         let consensus = Arc::new(MemConsensus::default());
         let handle = UnreliableHandle::default();

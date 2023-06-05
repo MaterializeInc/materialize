@@ -49,7 +49,7 @@ impl PartStats {
         // on the old part format. We don't intend to make this fast, rather we
         // intend to compute stats on the new part format.
         let mut new_format = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
-        let builder = new_format.get_mut();
+        let mut builder = new_format.get_mut();
         let mut key = schemas.key.encoder(builder.key)?;
         let mut val = schemas.val.encoder(builder.val)?;
         for x in part {
@@ -66,10 +66,5 @@ impl PartStats {
         drop(val);
         let new_format = new_format.finish()?;
         Self::new(schemas, &new_format)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        let Self { key } = self;
-        key.len == 0
     }
 }

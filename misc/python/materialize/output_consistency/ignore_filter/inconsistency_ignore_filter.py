@@ -8,7 +8,9 @@
 # by the Apache License, Version 2.0.
 from typing import Set
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.evaluation_strategy import (
+    EvaluationStrategyKey,
+)
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -16,17 +18,42 @@ from materialize.output_consistency.expression.expression_characteristics import
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperationOrFunction,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.validation.validation_message import (
+    ValidationError,
+    ValidationErrorType,
+)
 
 
 class InconsistencyIgnoreFilter:
     """Allows specifying and excluding expressions with known output inconsistencies"""
 
-    def shall_ignore(
+    def __init__(self) -> None:
+        self.pre_execution_filter = PreExecutionInconsistencyIgnoreFilter()
+        self.post_execution_filter = PostExecutionInconsistencyIgnoreFilter()
+
+    def shall_ignore_expression(
+        self, expression: Expression, row_selection: DataRowSelection
+    ) -> bool:
+        """This filter is applied before the query execution."""
+        return self.pre_execution_filter.shall_ignore_expression(
+            expression, row_selection
+        )
+
+    def shall_ignore_error(self, error: ValidationError) -> bool:
+        """This filter is applied on an error after the query execution."""
+        return self.post_execution_filter.shall_ignore_error(error)
+
+
+class PreExecutionInconsistencyIgnoreFilter:
+    def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> bool:
         if expression.is_leaf():
@@ -47,7 +74,7 @@ class InconsistencyIgnoreFilter:
 
         # recursively check arguments
         for arg in expression.args:
-            if self.shall_ignore(arg, row_selection):
+            if self.shall_ignore_expression(arg, row_selection):
                 return True
 
         return False
@@ -90,9 +117,13 @@ class InconsistencyIgnoreFilter:
     ) -> bool:
         if operation.is_aggregation:
             for arg in expression.args:
+                if arg.is_leaf():
+                    continue
+
+                arg_type_spec = arg.resolve_return_type_spec()
                 if (
-                    not arg.is_leaf()
-                    and arg.resolve_return_type_category() == DataTypeCategory.NUMERIC
+                    isinstance(arg_type_spec, NumericReturnTypeSpec)
+                    and not arg_type_spec.only_integer
                 ):
                     # tracked with https://github.com/MaterializeInc/materialize/issues/19592
                     return True
@@ -105,7 +136,14 @@ class InconsistencyIgnoreFilter:
         all_involved_characteristics: Set[ExpressionCharacteristics],
     ) -> bool:
         # Note that function names are always provided in lower case.
-        if db_function.function_name in {"sum", "avg", "stddev_samp", "stddev_pop"}:
+        if db_function.function_name in {
+            "sum",
+            "avg",
+            "stddev_samp",
+            "stddev_pop",
+            "var_samp",
+            "var_pop",
+        }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return True
@@ -115,6 +153,34 @@ class InconsistencyIgnoreFilter:
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
+                return True
+
+        if db_function.function_name in {"array_agg", "string_agg"}:
+            # They would require a special comparison because the order of items in the resulting array differs.
+            # related to https://github.com/MaterializeInc/materialize/issues/17189
+            return True
+
+        return False
+
+
+class PostExecutionInconsistencyIgnoreFilter:
+    def shall_ignore_error(self, error: ValidationError) -> bool:
+        if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
+            outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
+
+            dfr_successful = outcome_by_strategy_id[
+                EvaluationStrategyKey.DATAFLOW_RENDERING
+            ].successful
+            ctf_successful = outcome_by_strategy_id[
+                EvaluationStrategyKey.CONSTANT_FOLDING
+            ].successful
+
+            if (
+                error.query_execution.query_template.contains_aggregations
+                and not dfr_successful
+                and ctf_successful
+            ):
+                # see https://github.com/MaterializeInc/materialize/issues/19662
                 return True
 
         return False

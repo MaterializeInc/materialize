@@ -164,7 +164,7 @@ mod test {
         }
     );
 
-    #[test]
+    #[mz_ore::test]
     fn elision_rules_infallible() {
         assert_eq!(format!("{}", Infallible1), "INFALLIBLE");
         assert!(Infallible1.propagates_nulls());
@@ -177,7 +177,7 @@ mod test {
         assert!(Infallible3.introduces_nulls());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn output_types_infallible() {
         assert_eq!(
             Infallible1.output_type(ScalarType::Float32.nullable(true)),
@@ -225,7 +225,7 @@ mod test {
         }
     );
 
-    #[test]
+    #[mz_ore::test]
     fn elision_rules_fallible() {
         assert!(Fallible1.propagates_nulls());
         assert!(!Fallible1.introduces_nulls());
@@ -237,7 +237,7 @@ mod test {
         assert!(Fallible3.introduces_nulls());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn output_types_fallible() {
         assert_eq!(
             Fallible1.output_type(ScalarType::Float32.nullable(true)),

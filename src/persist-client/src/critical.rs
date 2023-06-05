@@ -315,7 +315,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn reader_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(container.reader_id, id);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn rate_limit() {
         let client = crate::tests::new_test_client().await;
@@ -376,7 +376,7 @@ mod tests {
     }
 
     // Verifies that the handle updates its view of the opaque token correctly
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn handle_opaque_token() {
         let client = new_test_client().await;

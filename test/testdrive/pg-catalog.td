@@ -157,6 +157,26 @@ name                nullable    type
  grantor            false       oid
  admin_option       false       boolean
 
+> SHOW COLUMNS FROM pg_locks
+name                nullable    type
+------------------------------------------------------------
+ locktype           false       text
+ database           false       oid
+ relation           false       oid
+ page               false       integer
+ tuple              false       smallint
+ virtualxid         false       text
+ transactionid      false       text
+ classid            false       oid
+ objid              false       oid
+ objsubid           false       smallint
+ virtualtransaction false       text
+ pid                false       integer
+ mode               false       text
+ granted            false       boolean
+ fastpath           false       boolean
+ waitstart          false       "timestamp with time zone"
+
 > SHOW COLUMNS FROM pg_tablespace
 name                nullable    type
 ------------------------------------------------------------
@@ -165,6 +185,32 @@ name                nullable    type
  spcowner           true        oid
  spcacl             true        text[]
  spcoptions         true        text[]
+
+> SHOW COLUMNS FROM pg_aggregate
+name                nullable    type
+------------------------------------------------------------
+ aggfnoid           false       oid
+ aggkind            false       text
+ aggnumdirectargs   false       smallint
+ aggtransfn         true        regproc
+ aggfinalfn         false       regproc
+ aggcombinefn       false       regproc
+ aggserialfn        false       regproc
+ aggdeserialfn      false       regproc
+ aggmtransfn        false       regproc
+ aggminvtransfn     false       regproc
+ aggmfinalfn        false       regproc
+ aggfinalextra      false       boolean
+ aggmfinalextra     false       boolean
+ aggfinalmodify     true        char
+ aggmfinalmodify    true        char
+ aggsortop          false       oid
+ aggtranstype       true        oid
+ aggtransspace      true        integer
+ aggmtranstype      false       oid
+ aggmtransspace     true        integer
+ agginitval         true        text
+ aggminitval        true        text
 
 > SHOW COLUMNS FROM pg_trigger
 name                nullable    type
@@ -188,3 +234,27 @@ name                nullable    type
  tgqual             false       text
  tgoldtable         false       text
  tgnewtable         false       text
+
+> SHOW COLUMNS FROM pg_rewrite
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ rulename           false       text
+ ev_class           false       oid
+ ev_type            false       char
+ ev_enabled         false       char
+ is_instead         false       boolean
+ ev_qual            false       text
+ ev_action          false       text
+
+> SHOW COLUMNS FROM pg_extension
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ extname            false       text
+ extowner           false       oid
+ extnamespace       false       oid
+ extrelocatable     false       boolean
+ extversion         false       text
+ extconfig          false       oid[]
+ extcondition       false       text[]

@@ -1297,6 +1297,12 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
+pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_shutdown_durations_histogram_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
+};
+
 pub const MZ_ARRANGEMENT_HEAP_SIZE_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_heap_size_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1680,6 +1686,15 @@ pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
         .with_column("return_type_id", ScalarType::String.nullable(true)),
+    is_retained_metrics_object: false,
+});
+pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_aggregates",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("agg_kind", ScalarType::String.nullable(false))
+        .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
     is_retained_metrics_object: false,
 });
 
@@ -2639,6 +2654,28 @@ FROM mz_internal.mz_peek_durations_histogram_per_worker
 GROUP BY duration_ns",
 };
 
+pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_dataflow_shutdown_durations_histogram_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker AS SELECT
+    worker_id, duration_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_dataflow_shutdown_durations_histogram_raw
+GROUP BY
+    worker_id, duration_ns",
+};
+
+pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_dataflow_shutdown_durations_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_shutdown_durations_histogram AS
+SELECT
+    duration_ns,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker
+GROUP BY duration_ns",
+};
+
 pub const MZ_SCHEDULING_ELAPSED_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3210,6 +3247,31 @@ AS SELECT
 WHERE false",
 };
 
+pub const PG_LOCKS: BuiltinView = BuiltinView {
+    name: "pg_locks",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_locks
+AS SELECT
+-- While there exist locks in Materialize, we don't expose them, so all of these fields are NULL.
+    NULL::pg_catalog.text AS locktype,
+    NULL::pg_catalog.oid AS database,
+    NULL::pg_catalog.oid AS relation,
+    NULL::pg_catalog.int4 AS page,
+    NULL::pg_catalog.int2 AS tuple,
+    NULL::pg_catalog.text AS virtualxid,
+    NULL::pg_catalog.text AS transactionid,
+    NULL::pg_catalog.oid AS classid,
+    NULL::pg_catalog.oid AS objid,
+    NULL::pg_catalog.int2 AS objsubid,
+    NULL::pg_catalog.text AS virtualtransaction,
+    NULL::pg_catalog.int4 AS pid,
+    NULL::pg_catalog.text AS mode,
+    NULL::pg_catalog.bool AS granted,
+    NULL::pg_catalog.bool AS fastpath,
+    NULL::pg_catalog.timestamptz AS waitstart
+WHERE false",
+};
+
 pub const PG_AUTHID: BuiltinView = BuiltinView {
     name: "pg_authid",
     schema: PG_CATALOG_SCHEMA,
@@ -3243,6 +3305,38 @@ AS SELECT
 FROM mz_catalog.mz_roles r",
 };
 
+pub const PG_AGGREGATE: BuiltinView = BuiltinView {
+    name: "pg_aggregate",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_aggregate
+AS SELECT
+    a.oid as aggfnoid,
+    -- Currently Materialize only support 'normal' aggregate functions.
+    a.agg_kind as aggkind,
+    a.agg_num_direct_args as aggnumdirectargs,
+    -- Materialize doesn't support these fields.
+    NULL::pg_catalog.regproc as aggtransfn,
+    '0'::pg_catalog.regproc as aggfinalfn,
+    '0'::pg_catalog.regproc as aggcombinefn,
+    '0'::pg_catalog.regproc as aggserialfn,
+    '0'::pg_catalog.regproc as aggdeserialfn,
+    '0'::pg_catalog.regproc as aggmtransfn,
+    '0'::pg_catalog.regproc as aggminvtransfn,
+    '0'::pg_catalog.regproc as aggmfinalfn,
+    false as aggfinalextra,
+    false as aggmfinalextra,
+    NULL::pg_catalog.\"char\" AS aggfinalmodify,
+    NULL::pg_catalog.\"char\" AS aggmfinalmodify,
+    '0'::pg_catalog.oid as aggsortop,
+    NULL::pg_catalog.oid as aggtranstype,
+    NULL::pg_catalog.int4 as aggtransspace,
+    '0'::pg_catalog.oid as aggmtranstype,
+    NULL::pg_catalog.int4 as aggmtransspace,
+    NULL::pg_catalog.text as agginitval,
+    NULL::pg_catalog.text as aggminitval
+FROM mz_internal.mz_aggregates a",
+};
+
 pub const PG_TRIGGER: BuiltinView = BuiltinView {
     name: "pg_trigger",
     schema: PG_CATALOG_SCHEMA,
@@ -3270,6 +3364,44 @@ AS SELECT
     NULL::pg_catalog.text AS tgqual,
     NULL::pg_catalog.text AS tgoldtable,
     NULL::pg_catalog.text AS tgnewtable
+WHERE false
+    ",
+};
+
+pub const PG_REWRITE: BuiltinView = BuiltinView {
+    name: "pg_rewrite",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_rewrite
+AS SELECT
+    -- MZ doesn't support rewrite rules so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS rulename,
+    NULL::pg_catalog.oid AS ev_class,
+    NULL::pg_catalog.\"char\" AS ev_type,
+    NULL::pg_catalog.\"char\" AS ev_enabled,
+    NULL::pg_catalog.bool AS is_instead,
+    -- NOTE: The ev_qual and ev_action columns are actually type `pg_node_tree` which we don't
+    -- support. CockroachDB uses text as a placeholder, so we'll follow their lead here.
+    NULL::pg_catalog.text AS ev_qual,
+    NULL::pg_catalog.text AS ev_action
+WHERE false
+    ",
+};
+
+pub const PG_EXTENSION: BuiltinView = BuiltinView {
+    name: "pg_extension",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_extension
+AS SELECT
+    -- MZ doesn't support extensions so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS extname,
+    NULL::pg_catalog.oid AS extowner,
+    NULL::pg_catalog.oid AS extnamespace,
+    NULL::pg_catalog.bool AS extrelocatable,
+    NULL::pg_catalog.text AS extversion,
+    NULL::pg_catalog.oid[] AS extconfig,
+    NULL::pg_catalog.text[] AS extcondition
 WHERE false
     ",
 };
@@ -3760,6 +3892,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_CAPACITY_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_SIZE_RAW),
@@ -3795,6 +3928,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
+        Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
@@ -3848,6 +3982,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
+        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER),
+        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_SCHEDULING_ELAPSED_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),
@@ -3876,6 +4012,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TABLES),
         Builtin::View(&PG_TABLESPACE),
         Builtin::View(&PG_ACCESS_METHODS),
+        Builtin::View(&PG_LOCKS),
         Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
@@ -3883,7 +4020,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
+        Builtin::View(&PG_AGGREGATE),
         Builtin::View(&PG_TRIGGER),
+        Builtin::View(&PG_REWRITE),
+        Builtin::View(&PG_EXTENSION),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
@@ -3980,7 +4120,7 @@ mod tests {
 
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_compare_builtins_postgres() {
         async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
@@ -4306,7 +4446,7 @@ mod tests {
     }
 
     // Make sure pg views don't use types that only exist in Materialize.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();

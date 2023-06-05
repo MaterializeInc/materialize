@@ -189,7 +189,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn char_length_protobuf_roundtrip(expect in any::<CharLength>()) {
             let actual = protobuf_roundtrip::<_, ProtoCharLength>(&expect);
             assert!(actual.is_ok());

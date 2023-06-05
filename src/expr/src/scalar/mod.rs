@@ -16,6 +16,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::StrExt;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -2223,6 +2224,12 @@ pub enum EvalError {
     InvalidRoleId(String),
     InvalidPrivileges(String),
     LetRecLimitExceeded(String),
+    MultiDimensionalArraySearch,
+    MustNotBeNull(String),
+    InvalidIdentifier {
+        ident: String,
+        detail: Option<String>,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -2380,6 +2387,14 @@ impl fmt::Display for EvalError {
                 write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
                        max_iters)
             }
+            EvalError::MultiDimensionalArraySearch => write!(
+                f,
+                "searching for elements in multidimensional arrays is not supported"
+            ),
+            EvalError::MustNotBeNull(v) => write!(f, "{v} must not be null"),
+            EvalError::InvalidIdentifier { ident, .. } => {
+                write!(f, "string is not a valid identifier: {}", ident.quoted())
+            }
         }
     }
 }
@@ -2397,6 +2412,7 @@ impl EvalError {
                 "Arrays of {} and {} dimensions are not compatible for concatenation.",
                 a_dims, b_dims
             )),
+            EvalError::InvalidIdentifier { detail, .. } => detail.clone(),
             _ => None,
         }
     }
@@ -2584,6 +2600,14 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
             EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
             EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
+            EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
+            EvalError::MustNotBeNull(v) => MustNotBeNull(v.clone()),
+            EvalError::InvalidIdentifier { ident, detail } => {
+                InvalidIdentifier(ProtoInvalidIdentifier {
+                    ident: ident.clone(),
+                    detail: detail.into_proto(),
+                })
+            }
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2683,6 +2707,12 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
                 InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
                 WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
+                MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
+                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v)),
+                InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier {
+                    ident: v.ident,
+                    detail: v.detail,
+                }),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
@@ -2708,7 +2738,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_reduce() {
         let relation_type = vec![
             ScalarType::Int64.nullable(true),
@@ -2815,7 +2845,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
             assert!(actual.is_ok());
@@ -2824,7 +2854,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn domain_limit_protobuf_roundtrip(expect in any::<DomainLimit>()) {
             let actual = protobuf_roundtrip::<_, ProtoDomainLimit>(&expect);
             assert!(actual.is_ok());
@@ -2833,7 +2863,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
             assert!(actual.is_ok());

@@ -450,7 +450,7 @@ where
                             let bytes_emitted = {
                                 let mut bytes_emitted = 0;
                                 for mut part_desc in std::mem::take(&mut batch_parts) {
-                                    // TODO(mfp): Push the filter down into the Subscribe?
+                                    // TODO: Push the filter down into the Subscribe?
                                     if cfg.dynamic.stats_filter_enabled() {
                                         let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| should_fetch_part(stats));
                                         let bytes = u64::cast_from(part_desc.encoded_size_bytes);
@@ -681,7 +681,7 @@ mod tests {
     ///
     /// NOTE: This test is weird: if everything is good it will pass. If we
     /// break the assumption that we test this will time out and we will notice.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_shard_source_implicit_initial_as_of() {
         let (persist_clients, location) = new_test_client_cache_and_location();
 
@@ -738,7 +738,7 @@ mod tests {
     ///
     /// NOTE: This test is weird: if everything is good it will pass. If we
     /// break the assumption that we test this will time out and we will notice.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_shard_source_explicit_initial_as_of() {
         let (persist_clients, location) = new_test_client_cache_and_location();
 

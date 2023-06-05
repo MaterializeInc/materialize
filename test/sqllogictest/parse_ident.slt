@@ -1,0 +1,236 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# transliterated from postgres/src/test/regress/sql/name.sql
+
+query T
+SELECT parse_ident('Schemax.Tabley')::text;
+----
+{schemax,tabley}
+
+query T
+SELECT parse_ident('"SchemaX"."TableY"')::text;
+----
+{SchemaX,TableY}
+
+query T
+SELECT parse_ident('foo.boo')::text;
+----
+{foo,boo}
+
+query error db error: ERROR: string is not a valid identifier: "foo.boo\[\]"
+SELECT parse_ident('foo.boo[]');
+
+query T
+SELECT parse_ident('foo.boo[]', false)::text;
+----
+{foo,boo}
+
+query error string is not a valid identifier: " "
+SELECT parse_ident(' ');
+
+query error string is not a valid identifier: " .aaa"
+SELECT parse_ident(' .aaa');
+
+query error string is not a valid identifier: " aaa . "
+SELECT parse_ident(' aaa . ');
+
+query error string is not a valid identifier: "aaa.a%b"
+SELECT parse_ident('aaa.a%b');
+
+query error db error: ERROR: string is not a valid identifier: "X\rXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+SELECT parse_ident(E'X\rXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX');
+
+query II
+SELECT length(parse_ident[1]), length(parse_ident[2])
+FROM
+  (
+    SELECT
+      parse_ident(
+        '"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+      )
+  );
+----
+414
+289
+
+query T
+SELECT parse_ident(' first . "  second  " ."   third   ". "  ' || repeat('x',66) || '"')::text;
+----
+{first,"  second  ","   third   ","  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+
+query error octal escapes are not supported
+SELECT parse_ident(E'"c".X XXXX\002XXXXXX');
+
+query error string is not a valid identifier: "1020"
+SELECT parse_ident('1020');
+
+query error string is not a valid identifier: "10.20"
+SELECT parse_ident('10.20');
+
+query error string is not a valid identifier: "."
+SELECT parse_ident('.');
+
+query error string is not a valid identifier: ".1020"
+SELECT parse_ident('.1020');
+
+query error string is not a valid identifier: "xxx.1020"
+SELECT parse_ident('xxx.1020');
+
+# Non-PG tests
+
+query error db error: ERROR: string is not a valid identifier: ""
+SELECT parse_ident('');
+
+query error db error: ERROR: string is not a valid identifier: "\$abc"
+SELECT parse_ident('$abc');
+
+query T
+SELECT parse_ident('"$abc"');
+----
+{$abc}
+
+query error db error: ERROR: string is not a valid identifier: "abc\.\$def"
+SELECT parse_ident('abc.$def');
+
+query T
+SELECT parse_ident('abc."$def"');
+----
+{abc,$def}
+
+query error db error: ERROR: string is not a valid identifier: "abc\.def \$"
+SELECT parse_ident('abc.def $');
+
+query T
+SELECT parse_ident('abc."def $"');
+----
+{abc,"def $"}
+
+query T
+SELECT parse_ident('abc.def $', false);
+----
+{abc,def}
+
+query T
+SELECT parse_ident('a$');
+----
+{a$}
+
+query T
+SELECT parse_ident('abc.d$');
+----
+{abc,d$}
+
+query T
+SELECT parse_ident('a$.d$');
+----
+{a$,d$}
+
+query T
+SELECT parse_ident('🌍');
+----
+{🌍}
+
+query T
+SELECT parse_ident('🌍.🌍');
+----
+{🌍,🌍}
+
+query T
+SELECT parse_ident('🌍.abc');
+----
+{🌍,abc}
+
+query T
+SELECT parse_ident('abc.🌍');
+----
+{abc,🌍}
+
+query T
+SELECT parse_ident('"🌍"');
+----
+{🌍}
+
+query T
+SELECT parse_ident('"🌍"."🌍"');
+----
+{🌍,🌍}
+
+query T
+SELECT parse_ident('"🌍".abc');
+----
+{🌍,abc}
+
+query T
+SELECT parse_ident('abc."🌍"');
+----
+{abc,🌍}
+
+query T
+SELECT parse_ident('  🌍 ');
+----
+{🌍}
+
+query T
+SELECT parse_ident('  🌍 .  🌍 ');
+----
+{🌍,🌍}
+
+query T
+SELECT parse_ident('"  🌍 "."  🌍 "');
+----
+{"  🌍 ","  🌍 "}
+
+query T
+SELECT parse_ident('  🌍 .abc');
+----
+{🌍,abc}
+
+query T
+SELECT parse_ident('abc.  🌍 ');
+----
+{abc,🌍}
+
+query T
+SELECT parse_ident('a.b.c.d.e.f');
+----
+{a,b,c,d,e,f}
+
+query error db error: ERROR: string is not a valid identifier: "a\\0b"
+SELECT parse_ident('a\0b');
+
+query T
+SELECT parse_ident('"a\0b"');
+----
+{"a\\0b"}
+
+query error db error: ERROR: string is not a valid identifier: "a b"
+SELECT parse_ident('a b');
+
+query error db error: ERROR: string is not a valid identifier: "a\.b c"
+SELECT parse_ident('a.b c');
+
+simple
+SELECT parse_ident('a."b');
+----
+db error: ERROR: string is not a valid identifier: "a.\"b"
+DETAIL: String has unclosed double quotes.
+
+statement ok
+CREATE TABLE t (c text);
+
+query T multiline
+EXPLAIN SELECT parse_ident(c)::text FROM t;
+----
+Explained Query:
+  Project (#1)
+    Map (arraytostr(parse_ident(#0, true)))
+      Get materialize.public.t
+
+EOF

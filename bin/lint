@@ -79,9 +79,12 @@ newline_files=$(grep -vE '\.(png|jpe?g|pb|avro|ico|so)$' <<< "$files")
 
 shell_files=$(sort -u <(git_files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.*'))
 
+rust_files=$(sort -u <(git_files '*.rs'))
+
 try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
 try xargs misc/lint/trailing-newline.sh <<< "$newline_files"
 try xargs git --no-pager diff --check "$(git_empty_tree)" <<< "$newline_files"
+try xargs misc/lint/test-attribute.sh <<< "$rust_files"
 
 if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
     try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"

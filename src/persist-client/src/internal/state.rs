@@ -1350,14 +1350,29 @@ where
         ret
     }
 
-    pub fn need_rollup(&self) -> Option<SeqNo> {
+    pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
-        if self.seqno.0.saturating_sub(latest_rollup_seqno.0) > PersistConfig::NEED_ROLLUP_THRESHOLD
+        let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
+
+        // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
+        // we avoid assigning rollups to every seqno past the threshold to avoid handles
+        // racing / performing redundant work.
+        if seqnos_since_last_rollup > 0 && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
         {
-            Some(self.seqno)
-        } else {
-            None
+            return Some(self.seqno);
         }
+
+        // however, since maintenance is best-effort and could fail, do assign rollup
+        // work to every seqno after a fallback threshold to ensure one is written.
+        if seqnos_since_last_rollup
+            > u64::cast_from(
+                threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
+            )
+        {
+            return Some(self.seqno);
+        }
+
+        None
     }
 
     pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
@@ -1454,6 +1469,7 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
+    use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
 
@@ -1631,7 +1647,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn downgrade_since() {
         let mut state = TypedState::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -1781,9 +1797,8 @@ pub(crate) mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn compare_and_append() {
-        mz_ore::test::init_logging();
         let state = &mut TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -1867,9 +1882,8 @@ pub(crate) mod tests {
             .is_continue());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn snapshot() {
-        mz_ore::test::init_logging();
         let now = SYSTEM_TIME.clone();
 
         let mut state = TypedState::<String, String, u64, i64>::new(
@@ -2033,10 +2047,8 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn next_listen_batch() {
-        mz_ore::test::init_logging();
-
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2105,10 +2117,8 @@ pub(crate) mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn expire_writer() {
-        mz_ore::test::init_logging();
-
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2184,9 +2194,8 @@ pub(crate) mod tests {
             .is_continue());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn maybe_gc() {
-        mz_ore::test::init_logging();
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2235,7 +2244,93 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
+    fn need_rollup() {
+        const ROLLUP_THRESHOLD: usize = 3;
+        mz_ore::test::init_logging();
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let rollup_seqno = SeqNo(5);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+
+        assert!(state
+            .collections
+            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .is_continue());
+
+        // shouldn't need a rollup at the seqno of the rollup
+        state.seqno = SeqNo(5);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+
+        // shouldn't need a rollup at seqnos less than our threshold
+        state.seqno = SeqNo(6);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        state.seqno = SeqNo(7);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(8);
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            SeqNo(8)
+        );
+
+        // but we don't need rollups for every seqno > the threshold
+        state.seqno = SeqNo(9);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+
+        // we only need a rollup each `ROLLUP_THRESHOLD` beyond our current seqno
+        state.seqno = SeqNo(11);
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            SeqNo(11)
+        );
+
+        // add another rollup and ensure we're always picking the latest
+        let rollup_seqno = SeqNo(6);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        assert!(state
+            .collections
+            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .is_continue());
+
+        state.seqno = SeqNo(8);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        state.seqno = SeqNo(9);
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            SeqNo(9)
+        );
+
+        // and ensure that after a fallback point, we assign every seqno work
+        let fallback_seqno = SeqNo(
+            rollup_seqno.0
+                * u64::cast_from(PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER),
+        );
+        state.seqno = fallback_seqno;
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            fallback_seqno
+        );
+        state.seqno = fallback_seqno.next();
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            fallback_seqno.next()
+        );
+    }
+
+    #[mz_ore::test]
     fn idempotency_token_sentinel() {
         assert_eq!(
             IdempotencyToken::SENTINEL.to_string(),
@@ -2251,7 +2346,7 @@ pub(crate) mod tests {
     ///
     /// This golden will have to be updated each time we change State, but
     /// that's a feature, not a bug.
-    #[test]
+    #[mz_ore::test]
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();

@@ -38,7 +38,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn record_without_fields() -> anyhow::Result<()> {
         let schema = r#"{
             "type": "record",
@@ -52,7 +52,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn basic_record() -> anyhow::Result<()> {
         let schema = r#"{
             "type": "record",
@@ -72,7 +72,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     /// Test that primitive Avro Schema types are allow Datums to be correctly
     /// serialized into Avro Values.

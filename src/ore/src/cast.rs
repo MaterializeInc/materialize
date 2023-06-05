@@ -238,7 +238,7 @@ impl CastLossy<u64> for f64 {
     }
 }
 
-#[test]
+#[mz_test_macro::test]
 fn test_try_cast_from() {
     let f64_i64_cases = vec![
         (0.0, Some(0)),

@@ -217,7 +217,7 @@ pub struct DecodeResult {
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }

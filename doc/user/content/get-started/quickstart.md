@@ -163,7 +163,7 @@ For this guide, you'll use a [built-in load generator](/sql/create-source/load-g
     ------------------------+----------------+------
      accounts               | subsource      |
      auction_house          | load-generator |
-     auction_house_progress | subsource      |
+     auction_house_progress | progress       |
      auctions               | subsource      |
      bids                   | subsource      |
      organizations          | subsource      |

@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 from typing import List, Optional, Sequence
 
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+    InconsistencyIgnoreFilter,
+)
 from materialize.output_consistency.output.format_constants import LI_PREFIX
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
@@ -26,8 +29,18 @@ class ValidationOutcome:
         self.warnings: List[ValidationWarning] = []
         self.remarks: List[ValidationRemark] = []
 
-    def add_error(self, error: ValidationError) -> None:
-        self.errors.append(error)
+    def add_error(
+        self, ignore_filter: InconsistencyIgnoreFilter, error: ValidationError
+    ) -> None:
+        if ignore_filter.shall_ignore_error(error):
+            self.add_warning(
+                ValidationWarning(
+                    f"Ignoring {error.error_type} ({error.message})",
+                    f"SQL is {error.query_execution.generic_sql}",
+                )
+            )
+        else:
+            self.errors.append(error)
 
     def add_warning(self, warning: ValidationWarning) -> None:
         self.warnings.append(warning)

@@ -77,6 +77,29 @@ impl AclMode {
         }
         Ok(acl_mode)
     }
+
+    pub fn to_error_string(&self) -> String {
+        let mut privileges = Vec::new();
+        if self.contains(AclMode::SELECT) {
+            privileges.push(SELECT_STR);
+        }
+        if self.contains(AclMode::INSERT) {
+            privileges.push(INSERT_STR);
+        }
+        if self.contains(AclMode::UPDATE) {
+            privileges.push(UPDATE_STR);
+        }
+        if self.contains(AclMode::DELETE) {
+            privileges.push(DELETE_STR);
+        }
+        if self.contains(AclMode::USAGE) {
+            privileges.push(USAGE_STR);
+        }
+        if self.contains(AclMode::CREATE) {
+            privileges.push(CREATE_STR);
+        }
+        privileges.join(", ")
+    }
 }
 
 impl FromStr for AclMode {
@@ -310,7 +333,7 @@ impl Default for PrivilegeMap {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mz_acl_parsing() {
     let s = "u42=rw/s666";
     let mz_acl: MzAclItem = s.parse().unwrap();
@@ -366,7 +389,7 @@ fn test_mz_acl_parsing() {
     assert!("u2=rw/s66=CU/u33".parse::<MzAclItem>().is_err());
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mz_acl_item_binary() {
     use std::ops::BitAnd;
 
@@ -417,7 +440,7 @@ fn test_mz_acl_item_binary() {
     assert!(MzAclItem::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]).is_err())
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mz_acl_item_binary_size() {
     assert_eq!(26, MzAclItem::binary_size());
 }

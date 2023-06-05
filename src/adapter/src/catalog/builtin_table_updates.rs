@@ -36,8 +36,8 @@ use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection
 use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS,
-    MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS,
+    MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
+    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
     MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS,
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
@@ -931,6 +931,19 @@ impl CatalogState {
                 ]),
                 diff,
             });
+
+            if let mz_sql::func::Func::Aggregate(_) = func.inner {
+                updates.push(BuiltinTableUpdate {
+                    id: self.resolve_builtin_table(&MZ_AGGREGATES),
+                    row: Row::pack_slice(&[
+                        Datum::UInt32(func_impl_details.oid),
+                        // TODO(materialize#3326): Support ordered-set aggregate functions.
+                        Datum::String("n"),
+                        Datum::Int16(0),
+                    ]),
+                    diff,
+                });
+            }
         }
         updates
     }
@@ -1200,7 +1213,7 @@ impl CatalogState {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::UInt32(*subscribe.conn_id));
+        packer.push(Datum::UInt32(subscribe.conn_id.unhandled()));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
@@ -1225,7 +1238,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
-                Datum::UInt32(**session.conn_id()),
+                Datum::UInt32(session.conn_id().unhandled()),
                 Datum::String(&session.session_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),

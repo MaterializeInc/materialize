@@ -82,16 +82,16 @@
       `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
 
   - signature: 'variance(x: T) -> U'
-    description: Historical alias for `variance_samp`. *(imprecise)*
+    description: Historical alias for `var_samp`. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
-  - signature: 'variance_pop(x: T) -> U'
+  - signature: 'var_pop(x: T) -> U'
     description: Population variance of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
-  - signature: 'variance_samp(x: T) -> U'
+  - signature: 'var_samp(x: T) -> U'
     description: Sample variance of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
@@ -323,6 +323,14 @@
 
   - signature: 'octet_length(b: bytea) -> int'
     description: Number of bytes in `b`
+
+  - signature: 'parse_ident(ident: str[, strict_mode: bool]) -> str[]'
+    description: >-
+      Splits qualified_identifier into an array of identifiers, removing any quoting of
+      individual identifiers. Extra characters after the last identifier are considered an error,
+      unless `strict_mode` is `false` or elided, then such extra characters are ignored. (This
+      behavior is useful for parsing names for objects like functions.) Note that this function does
+      not truncate over-length identifiers. (From [PG](https://www.postgresql.org/docs/current/functions-string.html))
 
   - signature: 'position(sub: str IN s: str) -> int'
     description: The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.
@@ -596,6 +604,10 @@
   functions:
   - signature: 'array_cat(a1: arrayany, a2: arrayany) -> arrayany'
     description: 'Concatenates `a1` and `a2`.'
+  - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible) -> int'
+    description: 'Returns the subscript of `needle` in `haystack`. Returns `null` if not found.'
+  - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible, skip: int) -> int'
+    description: 'Returns the subscript of `needle` in `haystack`, skipping the first `skip` elements. Returns `null` if not found.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: >-
       Concatenates the elements of `array` together separated by `sep`.
@@ -673,7 +685,7 @@
     description: Returns the number of the current row within its partition, counting from 1.
 
 - type: System information
-  description: Functions that return information about the system
+  description: Functions that return information about the system.
   functions:
   - signature: 'mz_environment_id() -> text'
     description: Returns a string containing a `uuid` uniquely identifying the Materialize environment.
@@ -707,6 +719,16 @@
     description: Returns the number of bytes used to store a row.
   - signature: 'is_rbac_enabled() -> boolean'
     description: Reports whether RBAC is enabled for the current session.
+
+- type: Access privilege inquiry
+  description: |
+    Functions that return information about access privileges.
+  functions:
+    - signature: 'has_table_privilege([role: text or oid, ]relation: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or `oid` has the
+        specified privileges on the relation with the specified relation name
+        or `oid`. If the role is omitted, the `current_role` is assumed.
 
 - type: PostgreSQL compatibility
   description: |
@@ -773,13 +795,3 @@
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
     unmaterializable: true
-
-- type: Access privilege inquiry
-  description: |
-    Functions that allow querying object access privileges.
-  functions:
-    - signature: 'has_table_privilege([role: text or oid, ]relation: text or oid, privileges: text) -> bool'
-      description: >-
-        Reports whether the role with the specified role name or OID has the privileges on
-        the relation with the specified relation name or OID. If the role is omitted then
-        the `current_role` is assumed.

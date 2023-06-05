@@ -21,6 +21,7 @@ use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
+use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -737,6 +738,28 @@ impl FromStr for SchemaId {
     }
 }
 
+impl RustType<proto::SchemaId> for SchemaId {
+    fn into_proto(&self) -> proto::SchemaId {
+        let value = match self {
+            SchemaId::User(id) => proto::schema_id::Value::User(*id),
+            SchemaId::System(id) => proto::schema_id::Value::System(*id),
+        };
+
+        proto::SchemaId { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::SchemaId) -> Result<Self, TryFromProtoError> {
+        let value = proto
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("SchemaId::value"))?;
+        let id = match value {
+            proto::schema_id::Value::User(id) => SchemaId::User(id),
+            proto::schema_id::Value::System(id) => SchemaId::System(id),
+        };
+        Ok(id)
+    }
+}
+
 /// The identifier for a database.
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
@@ -783,6 +806,25 @@ impl FromStr for DatabaseId {
                 "couldn't parse DatabaseId {}",
                 s
             ))),
+        }
+    }
+}
+
+impl RustType<proto::DatabaseId> for DatabaseId {
+    fn into_proto(&self) -> proto::DatabaseId {
+        let value = match self {
+            DatabaseId::User(id) => proto::database_id::Value::User(*id),
+            DatabaseId::System(id) => proto::database_id::Value::System(*id),
+        };
+
+        proto::DatabaseId { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::DatabaseId) -> Result<Self, TryFromProtoError> {
+        match proto.value {
+            Some(proto::database_id::Value::User(id)) => Ok(DatabaseId::User(id)),
+            Some(proto::database_id::Value::System(id)) => Ok(DatabaseId::System(id)),
+            None => Err(TryFromProtoError::missing_field("DatabaseId::value")),
         }
     }
 }
