@@ -26,6 +26,8 @@ use crate::attribute::unique_keys::UniqueKeys;
 use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
 use crate::symbolic::SymbolicExpression;
 
+use super::Arity;
+
 /// Compute the estimated cardinality of each subtree of a [MirRelationExpr] from the bottom up.
 #[allow(missing_debug_implementations)]
 pub struct Cardinality {
@@ -83,7 +85,8 @@ pub trait Factorizer {
         &self,
         equivalences: &Vec<Vec<MirScalarExpr>>,
         implementation: &JoinImplementation,
-        input_keys: Vec<&Vec<Vec<usize>>>,
+        keys: Vec<&Vec<Vec<usize>>>,
+        arities: Vec<usize>,
         inputs: Vec<&SymExp>,
     ) -> SymExp;
     /// Computes selectivity for a reduce
@@ -257,16 +260,19 @@ impl Factorizer for WorstCaseFactorizer {
         equivalences: &Vec<Vec<MirScalarExpr>>,
         _implementation: &JoinImplementation,
         input_keys: Vec<&Vec<Vec<usize>>>,
+        arities: Vec<usize>,
         inputs: Vec<&SymExp>,
     ) -> SymExp {
         let mut indexed_columns = BTreeMap::new();
+        let mut offset = 0;
         for (idx, keys) in input_keys.iter().enumerate() {
             for key in *keys {
                 if key.len() == 1 {
                     println!("key on column {} for source {idx}", key[0]);
-                    indexed_columns.insert(key[0], idx);
+                    indexed_columns.insert(offset + key[0], idx);
                 }
             }
+            offset += arities[idx];
         }
 
         let mut inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
@@ -402,13 +408,15 @@ impl Attribute for Cardinality {
                 ..
             } => {
                 let mut input_results = Vec::with_capacity(inputs.len());
+                let mut input_arities = Vec::with_capacity(inputs.len());
                 let mut input_keys = Vec::with_capacity(inputs.len());
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     let input = &self.results[n - offset];
+                    let arity = deps.get_results::<Arity>()[n - offset];
                     let keys = &deps.get_results::<UniqueKeys>()[n - offset];
                     input_results.push(input);
-                    // TODO(mgree): if this is correct, we can make this `extend`
+                    input_arities.push(arity);
                     input_keys.push(keys);
                     offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
@@ -417,6 +425,7 @@ impl Attribute for Cardinality {
                     equivalences,
                     implementation,
                     input_keys,
+                    input_arities,
                     input_results,
                 ));
             }
@@ -463,7 +472,8 @@ impl Attribute for Cardinality {
         Self: Sized,
     {
         builder.require::<SubtreeSize>();
-        builder.require::<UniqueKeys>()
+        builder.require::<Arity>();
+        builder.require::<UniqueKeys>();
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {
