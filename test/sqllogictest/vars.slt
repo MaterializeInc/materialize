@@ -178,7 +178,7 @@ SHOW transaction_isolation
 serializable
 
 statement ok
-SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+SET TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
 
 query T
 SHOW transaction_isolation
@@ -215,6 +215,9 @@ strict serializable
 
 statement error Expected transaction mode, found EOF
 SET TRANSACTION
+
+statement error SET TRANSACTION <access-mode> are not supported
+SET TRANSACTION READ ONLY
 
 # Test that a failed transaction will not commit var changes.
 
