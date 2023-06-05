@@ -131,13 +131,9 @@ impl SourceRender for KafkaSourceConnection {
             let mut data_cap = capabilities.pop().unwrap();
             assert!(capabilities.is_empty());
 
+            let group_id = self.group_id(config.id);
             let KafkaSourceConnection {
-                connection,
-                connection_id,
-                topic,
-                group_id_prefix,
-                environment_id,
-                ..
+                connection, topic, ..
             } = self;
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let health_status = Arc::new(Mutex::new(None));
@@ -184,13 +180,10 @@ impl SourceRender for KafkaSourceConnection {
                         // ensure that librdkafka does not try to perform its own
                         // consumer group balancing, which would wreak havoc with
                         // our careful partition assignment strategy.
-                        "group.id" => format!(
-                            "{}materialize-{}-{}-{}",
-                            group_id_prefix.unwrap_or_else(String::new),
-                            environment_id,
-                            connection_id,
-                            config.id,
-                        ),
+                        "group.id" => group_id.clone(),
+                        // We just use the `group.id` as the `client.id`, for simplicity,
+                        // as we present to kafka as a single consumer.
+                        "client.id" => group_id,
                     },
                 )
                 .await;

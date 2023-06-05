@@ -1430,6 +1430,22 @@ pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("offset", ScalarType::UInt64.nullable(true))
 });
 
+impl KafkaSourceConnection {
+    /// Returns the id for the consumer group the configured source will use.
+    ///
+    /// This has a weird API because `KafkaSourceConnection`'s are created
+    /// _before_ id allocation, so we can't store the id in the object itself.
+    pub fn group_id(&self, source_id: GlobalId) -> String {
+        format!(
+            "{}materialize-{}-{}-{}",
+            self.group_id_prefix.clone().unwrap_or_else(String::new),
+            self.environment_id,
+            self.connection_id,
+            source_id,
+        )
+    }
+}
+
 impl SourceConnection for KafkaSourceConnection {
     fn name(&self) -> &'static str {
         "kafka"

@@ -401,6 +401,10 @@ mz_dataflows_per_worker
 VIEW
 materialize
 mz_internal
+mz_kafka_sources
+BASE TABLE
+materialize
+mz_internal
 mz_message_counts
 VIEW
 materialize
