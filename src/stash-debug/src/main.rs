@@ -432,7 +432,7 @@ impl Usage {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_verify_all_usages() {
         Usage::verify_all_usages().unwrap();
     }

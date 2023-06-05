@@ -533,6 +533,15 @@ const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::blob_cache_mem_limit_bytes`].
+const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_blob_cache_mem_limit_bytes"),
+    value: &PersistConfig::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
+    description:
+        "Capacity of in-mem blob cache in bytes. Only takes effect on restart (Materialize).",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
@@ -817,6 +826,14 @@ const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_pubsub_push_diff_enabled"),
     value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
     description: "Whether to push state diffs to Persist PubSub.",
+    internal: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::rollup_threshold`].
+const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_rollup_threshold"),
+    value: &PersistConfig::DEFAULT_ROLLUP_THRESHOLD,
+    description: "The number of seqnos between rollups.",
     internal: true,
 };
 
@@ -1644,6 +1661,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
+            .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
@@ -1658,6 +1676,7 @@ impl SystemVars {
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+            .with_var(&PERSIST_ROLLUP_THRESHOLD)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
@@ -2010,6 +2029,11 @@ impl SystemVars {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
     }
 
+    /// Returns the `persist_blob_cache_mem_limit_bytes` configuration parameter.
+    pub fn persist_blob_cache_mem_limit_bytes(&self) -> usize {
+        *self.expect_value(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
+    }
+
     /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
     pub fn persist_next_listen_batch_retryer_initial_backoff(&self) -> Duration {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2103,6 +2127,11 @@ impl SystemVars {
     /// Returns the `persist_pubsub_push_diff_enabled` configuration parameter.
     pub fn persist_pubsub_push_diff_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+    }
+
+    /// Returns the `persist_rollup_threshold` configuration parameter.
+    pub fn persist_rollup_threshold(&self) -> usize {
+        *self.expect_value(&PERSIST_ROLLUP_THRESHOLD)
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -2969,7 +2998,7 @@ impl Value for Duration {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_value_duration() {
     fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
         let d = Duration::parse(&STATEMENT_TIMEOUT, VarInput::Flat(t)).expect("invalid duration");
@@ -3490,6 +3519,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
 /// Returns whether the named variable is a persist configuration parameter.
 fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
+        || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()

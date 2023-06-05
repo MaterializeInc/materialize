@@ -16,6 +16,9 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
+from materialize.output_consistency.enum.enum_operation_param import (
+    EnumConstantOperationParam,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -210,6 +213,9 @@ class ExpressionGenerator:
         must_use_aggregation: bool,
         nesting_level: int,
     ) -> Expression:
+        if isinstance(param, EnumConstantOperationParam):
+            return self._pick_enum_constant(param)
+
         if must_use_aggregation or self.randomized_picker.random_boolean(0.2):
             if must_use_aggregation:
                 allow_aggregation_in_arg = True
@@ -234,6 +240,12 @@ class ExpressionGenerator:
         else:
             return self._generate_simple_arg_for_param(param, storage_layout)
 
+    def _pick_enum_constant(self, param: EnumConstantOperationParam) -> Expression:
+        enum_constant_index = self.randomized_picker.random_number(
+            0, len(param.values) - 1
+        )
+        return param.get_enum_constant(enum_constant_index)
+
     def _generate_simple_arg_for_param(
         self, param: OperationParam, storage_layout: ValueStorageLayout
     ) -> LeafExpression:
@@ -249,11 +261,13 @@ class ExpressionGenerator:
 
         if storage_layout == ValueStorageLayout.VERTICAL:
             return type_with_values.create_vertical_storage_column()
-        else:
+        elif storage_layout == ValueStorageLayout.HORIZONTAL:
             if len(type_with_values.raw_values) == 0:
                 raise NoSuitableExpressionFound("No value in type")
 
             return self.randomized_picker.random_value(type_with_values.raw_values)
+        else:
+            raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
     def _generate_complex_arg_for_param(
         self,

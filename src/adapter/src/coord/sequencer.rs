@@ -173,7 +173,7 @@ impl Coordinator {
             }
             Plan::CreateMaterializedView(plan) => {
                 tx.send(
-                    self.sequence_create_materialized_view(&mut session, plan, depends_on)
+                    self.sequence_create_materialized_view(&mut session, plan)
                         .await,
                     session,
                 );
@@ -214,6 +214,9 @@ impl Coordinator {
             }
             Plan::ResetVariable(plan) => {
                 tx.send(self.sequence_reset_variable(&mut session, plan), session);
+            }
+            Plan::SetTransaction(plan) => {
+                tx.send(self.sequence_set_transaction(&mut session, plan), session);
             }
             Plan::StartTransaction(plan) => {
                 if matches!(session.transaction(), TransactionStatus::InTransaction(_)) {

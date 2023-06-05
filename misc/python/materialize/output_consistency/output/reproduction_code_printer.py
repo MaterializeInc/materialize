@@ -38,7 +38,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             self.__print_reproduction_code_of_error(error)
 
     def __print_reproduction_code_of_error(self, error: ValidationError) -> None:
-        query_template = error.query_template
+        query_template = error.query_execution.query_template
 
         if error.col_index is None:
             query_column_selection = ALL_QUERY_COLUMNS_BY_INDEX_SELECTION

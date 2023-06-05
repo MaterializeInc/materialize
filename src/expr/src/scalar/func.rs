@@ -24,6 +24,7 @@ use md5::{Digest, Md5};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::{cast, soft_assert};
@@ -83,6 +84,7 @@ pub enum UnmaterializableFunc {
     MzVersionNum,
     PgBackendPid,
     PgPostmasterStartTime,
+    SessionUser,
     Version,
     ViewableVariables,
 }
@@ -109,6 +111,7 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::MzVersionNum => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::SessionUser => ScalarType::String.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
             UnmaterializableFunc::ViewableVariables => ScalarType::Map {
                 value_type: Box::new(ScalarType::String),
@@ -138,6 +141,7 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::MzVersionNum => f.write_str("mz_version_num"),
             UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
             UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
+            UnmaterializableFunc::SessionUser => f.write_str("session_user"),
             UnmaterializableFunc::Version => f.write_str("version"),
             UnmaterializableFunc::ViewableVariables => f.write_str("viewable_variables"),
         }
@@ -163,6 +167,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::MzVersionNum => MzVersionNum(()),
             UnmaterializableFunc::PgBackendPid => PgBackendPid(()),
             UnmaterializableFunc::PgPostmasterStartTime => PgPostmasterStartTime(()),
+            UnmaterializableFunc::SessionUser => SessionUser(()),
             UnmaterializableFunc::Version => Version(()),
         };
         ProtoUnmaterializableFunc { kind: Some(kind) }
@@ -189,6 +194,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 MzVersionNum(()) => Ok(UnmaterializableFunc::MzVersionNum),
                 PgBackendPid(()) => Ok(UnmaterializableFunc::PgBackendPid),
                 PgPostmasterStartTime(()) => Ok(UnmaterializableFunc::PgPostmasterStartTime),
+                SessionUser(()) => Ok(UnmaterializableFunc::SessionUser),
                 Version(()) => Ok(UnmaterializableFunc::Version),
             }
         } else {
@@ -811,6 +817,22 @@ fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else {
         Ok(Datum::from(a))
     }
+}
+
+fn age_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamp();
+    let b_ts = b.unwrap_timestamp();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
+}
+
+fn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamptz();
+    let b_ts = b.unwrap_timestamptz();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
 }
 
 fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1841,6 +1863,104 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     Ok(contains.into())
 }
 
+// transliteration from postgres/src/backend/utils/adt/misc.c
+fn parse_ident<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    fn is_ident_start(c: char) -> bool {
+        matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX)
+    }
+
+    fn is_ident_cont(c: char) -> bool {
+        matches!(c, '0'..='9' | '$') || is_ident_start(c)
+    }
+
+    let ident = a.unwrap_str();
+    let strict = b.unwrap_bool();
+
+    let mut elems = vec![];
+    let buf = &mut LexBuf::new(ident);
+
+    let mut after_dot = false;
+
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
+    loop {
+        let mut missing_ident = true;
+
+        let c = buf.next();
+
+        if c == Some('"') {
+            let s = buf.take_while(|ch| !matches!(ch, '"'));
+
+            if buf.next() != Some('"') {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("String has unclosed double quotes.".to_string()),
+                });
+            }
+            elems.push(Datum::String(s));
+            missing_ident = false;
+        } else if c.map(is_ident_start).unwrap_or(false) {
+            buf.prev();
+            let s = buf.take_while(is_ident_cont);
+            let s = temp_storage.push_string(s.to_ascii_lowercase());
+            elems.push(Datum::String(s));
+            missing_ident = false;
+        }
+
+        if missing_ident {
+            if c == Some('.') {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("No valid identifier before \".\".".to_string()),
+                });
+            } else if after_dot {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("No valid identifier after \".\".".to_string()),
+                });
+            } else {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: None,
+                });
+            }
+        }
+
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+
+        match buf.next() {
+            Some('.') => {
+                after_dot = true;
+
+                buf.take_while(|ch| ch.is_ascii_whitespace());
+            }
+            Some(_) if strict => {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: None,
+                })
+            }
+            _ => break,
+        }
+    }
+
+    Ok(temp_storage.make_datum(|packer| {
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: elems.len(),
+                }],
+                elems,
+            )
+            .unwrap()
+    }))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -1858,6 +1978,8 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddNumeric,
+    AgeTimestamp,
+    AgeTimestampTz,
     BitAndInt16,
     BitAndInt32,
     BitAndInt64,
@@ -2024,6 +2146,7 @@ pub enum BinaryFunc {
     RangeDifference,
     UuidGenerateV5,
     MzAclItemContainsPrivilege,
+    ParseIdent,
 }
 
 impl BinaryFunc {
@@ -2059,6 +2182,8 @@ impl BinaryFunc {
             BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
             BinaryFunc::AddNumeric => add_numeric(a, b),
             BinaryFunc::AddInterval => add_interval(a, b),
+            BinaryFunc::AgeTimestamp => age_timestamp(a, b),
+            BinaryFunc::AgeTimestampTz => age_timestamptz(a, b),
             BinaryFunc::BitAndInt16 => Ok(bit_and_int16(a, b)),
             BinaryFunc::BitAndInt32 => Ok(bit_and_int32(a, b)),
             BinaryFunc::BitAndInt64 => Ok(bit_and_int64(a, b)),
@@ -2284,6 +2409,7 @@ impl BinaryFunc {
             BinaryFunc::RangeDifference => range_difference(a, b, temp_storage),
             BinaryFunc::UuidGenerateV5 => Ok(uuid_generate_v5(a, b)),
             BinaryFunc::MzAclItemContainsPrivilege => mz_acl_item_contains_privilege(a, b),
+            BinaryFunc::ParseIdent => parse_ident(a, b, temp_storage),
         }
     }
 
@@ -2353,6 +2479,8 @@ impl BinaryFunc {
 
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
+
+            AgeTimestamp | AgeTimestampTz => ScalarType::Interval.nullable(in_nullable),
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -2458,7 +2586,9 @@ impl BinaryFunc {
                 input1_type.scalar_type.without_modifiers().nullable(true)
             }
 
-            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable)
+            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
+
+            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
         }
     }
 
@@ -2500,6 +2630,8 @@ impl BinaryFunc {
             | AddDateTime
             | AddTimeInterval
             | AddNumeric
+            | AgeTimestamp
+            | AgeTimestampTz
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
@@ -2653,7 +2785,8 @@ impl BinaryFunc {
             | RangeIntersection
             | RangeDifference
             | UuidGenerateV5
-            | MzAclItemContainsPrivilege => false,
+            | MzAclItemContainsPrivilege
+            | ParseIdent => false,
             // can produce nulls inside the resulting array for missing keys, but always produces an outer array
             MapGetValues => false,
 
@@ -2810,6 +2943,8 @@ impl BinaryFunc {
             | RangeDifference => true,
             ToCharTimestamp
             | ToCharTimestampTz
+            | AgeTimestamp
+            | AgeTimestampTz
             | DateBinTimestamp
             | DateBinTimestampTz
             | ExtractInterval
@@ -2854,7 +2989,8 @@ impl BinaryFunc {
             | LikeEscape
             | UuidGenerateV5
             | GetByte
-            | MzAclItemContainsPrivilege => false,
+            | MzAclItemContainsPrivilege
+            | ParseIdent => false,
         }
     }
 
@@ -2999,6 +3135,7 @@ impl BinaryFunc {
             | BinaryFunc::IsRegexpMatch { .. } => (false, false),
             BinaryFunc::ToCharTimestamp | BinaryFunc::ToCharTimestampTz => (false, false),
             BinaryFunc::DateBinTimestamp | BinaryFunc::DateBinTimestampTz => (true, true),
+            BinaryFunc::AgeTimestamp | BinaryFunc::AgeTimestampTz => (true, true),
             // TODO: can these ever be treated as monotone? It's safe to treat the unary versions
             // as monotone in some cases, but only when extracting specific parts.
             BinaryFunc::ExtractInterval
@@ -3075,6 +3212,7 @@ impl BinaryFunc {
             | BinaryFunc::RangeDifference => (false, false),
             BinaryFunc::UuidGenerateV5 => (false, false),
             BinaryFunc::MzAclItemContainsPrivilege => (false, false),
+            BinaryFunc::ParseIdent => (false, false),
         }
     }
 }
@@ -3097,6 +3235,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddDateTime => f.write_str("+"),
             BinaryFunc::AddDateInterval => f.write_str("+"),
             BinaryFunc::AddTimeInterval => f.write_str("+"),
+            BinaryFunc::AgeTimestamp => f.write_str("age"),
+            BinaryFunc::AgeTimestampTz => f.write_str("age"),
             BinaryFunc::BitAndInt16 => f.write_str("&"),
             BinaryFunc::BitAndInt32 => f.write_str("&"),
             BinaryFunc::BitAndInt64 => f.write_str("&"),
@@ -3276,6 +3416,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeDifference => f.write_str("-"),
             BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
             BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
+            BinaryFunc::ParseIdent => f.write_str("parse_ident"),
         }
     }
 }
@@ -3308,6 +3449,8 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddDateTime).boxed(),
             Just(BinaryFunc::AddTimeInterval).boxed(),
             Just(BinaryFunc::AddNumeric).boxed(),
+            Just(BinaryFunc::AgeTimestamp).boxed(),
+            Just(BinaryFunc::AgeTimestampTz).boxed(),
             Just(BinaryFunc::BitAndInt16).boxed(),
             Just(BinaryFunc::BitAndInt32).boxed(),
             Just(BinaryFunc::BitAndInt64).boxed(),
@@ -3489,6 +3632,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::RangeUnion).boxed(),
             Just(BinaryFunc::RangeIntersection).boxed(),
             Just(BinaryFunc::RangeDifference).boxed(),
+            Just(BinaryFunc::ParseIdent).boxed(),
         ])
     }
 }
@@ -3512,6 +3656,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::AddDateTime => AddDateTime(()),
             BinaryFunc::AddTimeInterval => AddTimeInterval(()),
             BinaryFunc::AddNumeric => AddNumeric(()),
+            BinaryFunc::AgeTimestamp => AgeTimestamp(()),
+            BinaryFunc::AgeTimestampTz => AgeTimestampTz(()),
             BinaryFunc::BitAndInt16 => BitAndInt16(()),
             BinaryFunc::BitAndInt32 => BitAndInt32(()),
             BinaryFunc::BitAndInt64 => BitAndInt64(()),
@@ -3683,6 +3829,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeDifference => RangeDifference(()),
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
             BinaryFunc::MzAclItemContainsPrivilege => MzAclItemContainsPrivilege(()),
+            BinaryFunc::ParseIdent => ParseIdent(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3706,6 +3853,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 AddDateTime(()) => Ok(BinaryFunc::AddDateTime),
                 AddTimeInterval(()) => Ok(BinaryFunc::AddTimeInterval),
                 AddNumeric(()) => Ok(BinaryFunc::AddNumeric),
+                AgeTimestamp(()) => Ok(BinaryFunc::AgeTimestamp),
+                AgeTimestampTz(()) => Ok(BinaryFunc::AgeTimestampTz),
                 BitAndInt16(()) => Ok(BinaryFunc::BitAndInt16),
                 BitAndInt32(()) => Ok(BinaryFunc::BitAndInt32),
                 BitAndInt64(()) => Ok(BinaryFunc::BitAndInt64),
@@ -3883,6 +4032,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
                 MzAclItemContainsPrivilege(()) => Ok(BinaryFunc::MzAclItemContainsPrivilege),
+                ParseIdent(()) => Ok(BinaryFunc::ParseIdent),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -7392,7 +7542,7 @@ mod test {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn add_interval_months() {
         let dt = ym(2000, 1);
 
@@ -7452,7 +7602,7 @@ mod test {
     // `UnaryFunc::introduces_nulls` and `UnaryFunc::propagates_nulls`.
     // Currently, only unit variants of UnaryFunc are tested because those are
     // the easiest to construct in bulk.
-    #[test]
+    #[mz_ore::test]
     fn unary_func_introduces_nulls() {
         // Dummy columns to test the nullability of `UnaryFunc::output_type`.
         // It is ok that we're feeding these dummy columns into functions that
@@ -7494,28 +7644,28 @@ mod test {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn unary_func_protobuf_roundtrip(expect in any::<UnaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnaryFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn binary_func_protobuf_roundtrip(expect in any::<BinaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoBinaryFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
             assert!(actual.is_ok());

@@ -345,6 +345,7 @@ impl_display_t!(CopyStatement);
 pub struct UpdateStatement<T: AstInfo> {
     /// `FROM`
     pub table_name: T::ItemName,
+    pub alias: Option<TableAlias>,
     /// Column assignments
     pub assignments: Vec<Assignment<T>>,
     /// WHERE
@@ -355,6 +356,10 @@ impl<T: AstInfo> AstDisplay for UpdateStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("UPDATE ");
         f.write_node(&self.table_name);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
         if !self.assignments.is_empty() {
             f.write_str(" SET ");
             f.write_node(&display::comma_separated(&self.assignments));
@@ -2028,12 +2033,17 @@ impl_display!(StartTransactionStatement);
 /// `SET TRANSACTION ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SetTransactionStatement {
+    pub local: bool,
     pub modes: Vec<TransactionMode>,
 }
 
 impl AstDisplay for SetTransactionStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SET TRANSACTION");
+        f.write_str("SET ");
+        if !self.local {
+            f.write_str("SESSION CHARACTERISTICS AS ");
+        }
+        f.write_str("TRANSACTION");
         if !self.modes.is_empty() {
             f.write_str(" ");
             f.write_node(&display::comma_separated(&self.modes));

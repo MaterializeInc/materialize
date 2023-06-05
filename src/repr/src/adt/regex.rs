@@ -124,7 +124,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn regex_protobuf_roundtrip( expect in any_regex() ) {
             let actual =  protobuf_roundtrip::<_, ProtoRegex>(&expect);

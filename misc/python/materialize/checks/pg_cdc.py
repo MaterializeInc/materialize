@@ -73,7 +73,7 @@ class PgCdc(Check):
                 INSERT INTO postgres_source_table SELECT 'C', i, REPEAT('C', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                >[version>=4601] SELECT COUNT(*) > 0 FROM postgres_source_tableA
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableA
                 true
                 """,
                 """
@@ -119,9 +119,9 @@ class PgCdc(Check):
                 INSERT INTO postgres_source_table SELECT 'H', i, REPEAT('X', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                >[version>=4601] SELECT COUNT(*) > 0 FROM postgres_source_tableB
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableB
                 true
-                >[version>=4601] SELECT COUNT(*) > 0 FROM postgres_source_tableC
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableC
                 true
                 """,
             ]

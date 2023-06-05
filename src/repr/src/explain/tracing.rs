@@ -322,7 +322,7 @@ mod test {
 
     use super::{trace_plan, PlanTrace};
 
-    #[test]
+    #[mz_ore::test]
     fn test_optimizer_trace() {
         let subscriber = tracing_subscriber::registry().with(Some(PlanTrace::<String>::new()));
         let dispatch = dispatcher::Dispatch::new(subscriber);

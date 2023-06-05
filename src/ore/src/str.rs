@@ -295,7 +295,7 @@ impl fmt::Display for Indent {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_indent() {
         let mut indent = Indent::new('~', 3);
         indent += 1;

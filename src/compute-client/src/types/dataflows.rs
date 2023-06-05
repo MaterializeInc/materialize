@@ -628,7 +628,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
 
-        #[test]
+        #[mz_ore::test]
         fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
             assert!(actual.is_ok());

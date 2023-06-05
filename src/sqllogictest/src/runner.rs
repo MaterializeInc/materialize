@@ -1774,7 +1774,7 @@ fn mutate(sql: &str) -> Vec<String> {
     additional
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mutate() {
     let cases = vec![
         ("CREATE TABLE t ()", vec![r#"CREATE INDEX ON "t" ()"#]),

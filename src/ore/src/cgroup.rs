@@ -178,7 +178,7 @@ mod tests {
 
     use super::{CgroupEntry, Mountinfo};
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_cgroup_from_line() {
         // cgroups v2
         assert_eq!(
@@ -206,7 +206,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_mountinfo_from_line() {
         // Mount with optional field (master:305)
         assert_eq!(Mountinfo::from_line("863 758 0:63 / / rw,relatime master:305 - overlay overlay rw,seclabel,lowerdir=/var/lib/docker/overlay2/l/SUKWDHL7W7YZCJ6YI66I7Z5PR2:/var/lib/docker/overlay2/l/ORL2I23UNUGM7FYF4BSL5JUCAB:/var/lib/docker/overlay2/l/LLKK3J2EHGPF5IGGDSAQGRFHLV:/var/lib/docker/overlay2/l/JEQIUQIQTVNRBAGCU7SLV4KK4K:/var/lib/docker/overlay2/l/5DS7KSJCA7BHWAYWII7BI5DBC5:/var/lib/docker/overlay2/l/ZAGXZ62GNFPZFLNUDZ3JOZIMYR:/var/lib/docker/overlay2/l/6WVXMD372IA24ZXRWGGTIPEQPA,upperdir=/var/lib/docker/overlay2/5c7734eb769484f3469b234181365466eb30bcd7f31c912f4250c8d701637ee4/diff,workdir=/var/lib/docker/overlay2/5c7734eb769484f3469b234181365466eb30bcd7f31c912f4250c8d701637ee4/work".to_owned()),

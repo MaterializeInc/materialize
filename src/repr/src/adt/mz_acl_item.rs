@@ -333,7 +333,7 @@ impl Default for PrivilegeMap {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mz_acl_parsing() {
     let s = "u42=rw/s666";
     let mz_acl: MzAclItem = s.parse().unwrap();
@@ -389,7 +389,7 @@ fn test_mz_acl_parsing() {
     assert!("u2=rw/s66=CU/u33".parse::<MzAclItem>().is_err());
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mz_acl_item_binary() {
     use std::ops::BitAnd;
 
@@ -440,7 +440,7 @@ fn test_mz_acl_item_binary() {
     assert!(MzAclItem::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]).is_err())
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mz_acl_item_binary_size() {
     assert_eq!(26, MzAclItem::binary_size());
 }

@@ -144,7 +144,7 @@ impl<'a> DirectiveArgs<'a> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn trace() {
         use crate::internal::trace::datadriven as trace_dd;
 
@@ -173,7 +173,7 @@ mod tests {
         });
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn machine() {
         use crate::internal::machine::datadriven as machine_dd;

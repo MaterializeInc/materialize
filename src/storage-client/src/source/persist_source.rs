@@ -647,10 +647,9 @@ mod tests {
         assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip() {
-        mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip(scalar_type)

@@ -76,7 +76,7 @@
 use mz_sqllogictest::ast::{Location, Record};
 use mz_sqllogictest::parser;
 
-#[test]
+#[mz_ore::test]
 fn test_parser() {
     struct TestCase {
         input: &'static str,

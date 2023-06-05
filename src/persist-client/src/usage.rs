@@ -730,10 +730,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn size() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -830,10 +828,8 @@ mod tests {
 
     /// This is just a sanity check for the overall flow of computing ShardUsage.
     /// The edge cases are exercised in separate tests.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn usage_sanity() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -894,7 +890,7 @@ mod tests {
         assert!(shard_usage_audit.leaked_bytes > 0);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn usage_referenced() {
         mz_ore::test::init_logging();
 
@@ -1009,7 +1005,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn usage_kitchen_sink() {
         TestCase {
             // - Some data in current batches
@@ -1033,7 +1029,7 @@ mod tests {
         .run("21 3/18 6/12 10/2 1/1");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn usage_funnel() {
         // All data in current_state_batches_bytes
         TestCase {
@@ -1108,7 +1104,7 @@ mod tests {
         .run("0 0/0 0/0 0/0 0/0");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn usage_races() {
         // We took a snapshot of blob, and then before getting our states, a
         // bunch of interesting things happened to persist state. We adjust to
@@ -1190,7 +1186,7 @@ mod tests {
     /// A regression test for (part of) #17752, which led to seeing the "blob
     /// inputs should be cumulative" should be cumulative panic in
     /// staging/canary.
-    #[test]
+    #[mz_ore::test]
     fn usage_regression_referenced_greater_than_blob() {
         TestCase {
             current_state_batches_bytes: 0,
@@ -1210,9 +1206,8 @@ mod tests {
     /// This also tests a (hypothesized) race that's possible in prod where an
     /// initial rollup is written for a shard, but the initial CaS hasn't yet
     /// succeeded.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn usage_regression_shard_in_blob_not_consensus() {
-        mz_ore::test::init_logging();
         let client = new_test_client().await;
         let shard_id = ShardId::new();
 

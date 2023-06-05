@@ -552,7 +552,7 @@ pub fn plan_update_query(
     plan_mutation_query_inner(
         qcx,
         update_stmt.table_name,
-        None,
+        update_stmt.alias,
         vec![],
         update_stmt.assignments,
         update_stmt.selection,

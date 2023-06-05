@@ -928,7 +928,7 @@ pub mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn timeout_error() {
         assert!(ExternalError::new_timeout(Instant::now()).is_timeout());
         assert!(!ExternalError::from(anyhow!("foo")).is_timeout());

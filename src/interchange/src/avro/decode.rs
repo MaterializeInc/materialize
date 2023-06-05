@@ -46,7 +46,7 @@ mod tests {
 
     use crate::avro::Decoder;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_error_followed_by_success() {
         let schema = r#"{
 "type": "record",

@@ -147,6 +147,8 @@ pub mod thread;
 pub mod tracing;
 pub mod vec;
 
+pub use mz_test_macro::test;
+
 #[doc(hidden)]
 pub mod __private {
     #[cfg(feature = "tracing_")]

@@ -967,7 +967,7 @@ mod tests {
         207u8, 108u8, 180u8, 158u8, 57u8, 114u8, 40u8, 173u8, 199u8, 228u8, 239u8,
     ];
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_avro_datum() {
         let schema: Schema = SCHEMA.parse().unwrap();
         let mut encoded: &'static [u8] = &[54, 6, 102, 111, 111];
@@ -980,7 +980,7 @@ mod tests {
         assert_eq!(from_avro_datum(&schema, &mut encoded).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_null_union() {
         let schema: Schema = UNION_SCHEMA.parse().unwrap();
         let mut encoded: &'static [u8] = &[2, 0];
@@ -996,7 +996,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_reader_stream() {
         let schema: Schema = SCHEMA.parse().unwrap();
@@ -1017,14 +1017,14 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_reader_invalid_header() {
         let schema: Schema = SCHEMA.parse().unwrap();
         let invalid = ENCODED.iter().skip(1).copied().collect::<Vec<u8>>();
         assert!(Reader::with_schema(&schema, &invalid[..]).is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_reader_invalid_block() {
         let schema: Schema = SCHEMA.parse().unwrap();
@@ -1043,13 +1043,13 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_reader_empty_buffer() {
         let empty = Cursor::new(Vec::new());
         assert!(Reader::new(empty).is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_reader_only_header() {
         let invalid = ENCODED.iter().copied().take(165).collect::<Vec<u8>>();
         let reader = Reader::new(&invalid[..]).unwrap();
@@ -1058,7 +1058,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_resolution_nested_types_error() {
         let r = r#"
 {
@@ -1093,7 +1093,7 @@ mod tests {
         assert_eq!(&err_str, "Writer schema has type `Double`, but reader schema has type `Int` for field `com.materialize.bar.f1_1`");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_extra_fields_without_default_error() {
         let r = r#"
 {
@@ -1129,7 +1129,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_duplicate_field_error() {
         let r = r#"
 {
@@ -1165,7 +1165,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_decimal_field_mismatch_error() {
         let r = r#"
 {

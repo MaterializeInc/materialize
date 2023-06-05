@@ -32,7 +32,7 @@ use mz_sql::plan::{
     ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
     MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
     ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
-    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
     StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
@@ -134,6 +134,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::Execute { .. }
         | Command::Commit { .. }
         | Command::CancelRequest { .. }
+        | Command::PrivilegedCancelRequest { .. }
         | Command::CopyRows { .. }
         | Command::GetSystemVars { .. }
         | Command::SetSystemVars { .. }
@@ -149,13 +150,22 @@ pub fn check_plan(
     target_cluster_id: Option<ClusterId>,
     depends_on: &Vec<GlobalId>,
 ) -> Result<(), AdapterError> {
-    let role_id = session.role_id();
-    if catalog.try_get_role(role_id).is_none() {
+    let current_role_id = session.current_role_id();
+    if catalog.try_get_role(current_role_id).is_none() {
         // PostgreSQL allows users that have their role dropped to perform some actions,
         // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
         // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
         // role is dropped.
-        return Err(AdapterError::ConcurrentRoleDrop(role_id.clone()));
+        return Err(AdapterError::ConcurrentRoleDrop(current_role_id.clone()));
+    };
+
+    let session_role_id = session.session_role_id();
+    if catalog.try_get_role(session_role_id).is_none() {
+        // PostgreSQL allows users that have their role dropped to perform some actions,
+        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+        // role is dropped.
+        return Err(AdapterError::ConcurrentRoleDrop(session_role_id.clone()));
     };
 
     if !is_rbac_enabled_for_session(catalog.system_vars(), session) {
@@ -167,7 +177,7 @@ pub fn check_plan(
     }
 
     // Obtain all roles that the current session is a member of.
-    let role_membership = catalog.collect_role_membership(role_id);
+    let role_membership = catalog.collect_role_membership(current_role_id);
 
     // Validate that the current session has the required role membership to execute the provided
     // plan.
@@ -190,7 +200,7 @@ pub fn check_plan(
     let required_attributes = generate_required_plan_attribute(plan);
     let unheld_attributes: Vec<_> = required_attributes
         .into_iter()
-        .filter(|attribute| !attribute.check_role(role_id, catalog))
+        .filter(|attribute| !attribute.check_role(current_role_id, catalog))
         .collect();
     attribute_err(unheld_attributes, plan)?;
 
@@ -203,10 +213,15 @@ pub fn check_plan(
         .collect();
     ownership_err(unheld_ownership, catalog)?;
 
-    let required_privileges =
-        generate_required_privileges(catalog, plan, target_cluster_id, depends_on, *role_id);
+    let required_privileges = generate_required_privileges(
+        catalog,
+        plan,
+        target_cluster_id,
+        depends_on,
+        *current_role_id,
+    );
     let mut role_memberships = BTreeMap::new();
-    role_memberships.insert(*role_id, role_membership);
+    role_memberships.insert(*current_role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
 
     Ok(())
@@ -274,6 +289,7 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -370,6 +386,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -526,6 +543,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -1110,6 +1128,7 @@ fn generate_required_privileges(
             local: _,
         })
         | Plan::ResetVariable(ResetVariablePlan { name: _ })
+        | Plan::SetTransaction(SetTransactionPlan { local: _, modes: _ })
         | Plan::StartTransaction(StartTransactionPlan {
             access: _,
             isolation_level: _,

@@ -7,11 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     SchemaRegistry,
+    SshBastionHost,
     TestCerts,
     Testdrive,
     Zookeeper,
@@ -104,17 +105,36 @@ SERVICES = [
         # Required to install root certs above
         propagate_uid_gid=False,
     ),
+    SshBastionHost(),
 ]
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """ "Run testdrive against an SSL-enabled Confluent Platform."""
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default=["*.td"],
-        help="run against the specified files",
-    )
-    args = parser.parse_args()
+def workflow_default(c: Composition) -> None:
+    """Run testdrive against an SSL-enabled Confluent Platform."""
+    c.workflow("smoketest")
+    c.workflow("ssh-tunnel")
+
+
+def workflow_smoketest(c: Composition) -> None:
+    c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
-    c.run("testdrive", *args.files)
+    c.run("testdrive", "multi.td", "smoketest.td")
+
+
+def workflow_ssh_tunnel(c: Composition) -> None:
+    # NOTE(benesch): This workflow and supporting testdrive scripts duplicate
+    # too much code with the tests in test/ssh-bastion for my liking, but it
+    # was the best I could do on a tight deadline.
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host")
+    c.run("testdrive", "ssh-tunnel-setup.td")
+    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
+        0
+    ]
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+    c.run("testdrive", "--no-reset", "ssh-tunnel-test.td")

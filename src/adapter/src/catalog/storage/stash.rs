@@ -628,7 +628,7 @@ impl IdAllocator {
 mod test {
     use super::IdAllocator;
 
-    #[test]
+    #[mz_ore::test]
     fn smoke_test_id_allocator() {
         let mut allocator = IdAllocator::new();
 

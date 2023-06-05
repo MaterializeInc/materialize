@@ -23,6 +23,8 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
+materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
@@ -35,6 +37,7 @@ SERVICES = [
             "upsert_source_disk_default": "true",
             "enable_unmanaged_cluster_replicas": "true",
         },
+        environment_extra=materialized_environment_extra,
     ),
     Testdrive(),
     Clusterd(
@@ -47,10 +50,21 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--compaction-disabled",
+        action="store_true",
+        help="Run with MZ_PERSIST_COMPACTION_DISABLED",
+    )
+    args = parser.parse_args()
+
+    if args.compaction_disabled:
+        materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
+
     for name in [
         "rehydration",
         "testdrive",
         "failpoint",
+        "incident-49",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -95,6 +109,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--orchestrator-process-scratch-directory=/mzdata/source_data",
         ],
         additional_system_parameter_defaults={"upsert_source_disk_default": "true"},
+        environment_extra=materialized_environment_extra,
     )
 
     with c.override(testdrive, materialized):
@@ -155,9 +170,13 @@ def workflow_rehydration(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "upsert_source_disk_default": "true"
                 },
+                environment_extra=materialized_environment_extra,
             ),
         ),
-        ("without DISK", Materialized()),
+        (
+            "without DISK",
+            Materialized(environment_extra=materialized_environment_extra),
+        ),
     ]:
 
         with c.override(
@@ -240,3 +259,52 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
 
     c.run("testdrive", "failpoint/05-reset.td")
     c.kill("clusterd1")
+
+
+def workflow_incident_49(c: Composition) -> None:
+    """Regression test for incident 49."""
+
+    c.down(destroy_volumes=True)
+
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+    ]
+
+    for (style, mz) in [
+        (
+            "with DISK",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/mzdata/source_data",
+                ],
+                additional_system_parameter_defaults={
+                    "upsert_source_disk_default": "true"
+                },
+                environment_extra=materialized_environment_extra,
+            ),
+        ),
+        (
+            "without DISK",
+            Materialized(environment_extra=materialized_environment_extra),
+        ),
+    ]:
+
+        with c.override(
+            mz,
+            Testdrive(no_reset=True, consistent_seed=True),
+        ):
+            print(f"Running rehydration workflow {style}")
+
+            c.up(*dependencies)
+
+            c.run("testdrive", "incident-49/01-setup.td")
+
+            c.kill("materialized")
+            c.up("materialized")
+
+            c.run("testdrive", "incident-49/02-after-rehydration.td")
+
+        c.run("testdrive", "incident-49/03-reset.td")

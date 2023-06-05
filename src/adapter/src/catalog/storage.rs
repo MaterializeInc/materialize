@@ -2096,7 +2096,7 @@ pub const ALL_COLLECTIONS: &[&str] = &[
 mod test {
     use super::{DatabaseKey, DatabaseNamespace};
 
-    #[test]
+    #[mz_ore::test]
     fn test_database_key_roundtrips() {
         let k_none = DatabaseKey { id: 42, ns: None };
         let k_user = DatabaseKey {

@@ -148,7 +148,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn run_roundtrip_tests() {
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();

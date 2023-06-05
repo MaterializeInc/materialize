@@ -1892,7 +1892,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         fn mfp_plan_protobuf_roundtrip(expect in any::<MfpPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoMfpPlan>(&expect);
             assert!(actual.is_ok());

@@ -778,10 +778,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn empty_batches() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -819,10 +817,8 @@ mod tests {
         assert_eq!(count_after, count_before);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn compare_and_append_batch_multi() {
-        mz_ore::test::init_logging();
-
         let data0 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -856,7 +852,7 @@ mod tests {
         assert_eq!(actual, all_ok(&expected, 3));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn writer_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
@@ -888,10 +884,8 @@ mod tests {
         assert_eq!(container.writer_id, id);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn hollow_batch_roundtrip() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
