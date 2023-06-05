@@ -12,7 +12,10 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
 use crate::catalog::storage::{DefaultPrivilegesKey, DefaultPrivilegesValue};
-use crate::catalog::{RoleMembership, SerializedCatalogItem, SerializedRole};
+use crate::catalog::{
+    ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership, SerializedCatalogItem,
+    SerializedRole,
+};
 
 use super::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
@@ -150,6 +153,7 @@ impl RustType<proto::ClusterValue> for ClusterValue {
     fn into_proto(&self) -> proto::ClusterValue {
         proto::ClusterValue {
             name: self.name.to_string(),
+            config: Some(self.config.into_proto()),
             linked_object_id: self.linked_object_id.into_proto(),
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
@@ -159,6 +163,7 @@ impl RustType<proto::ClusterValue> for ClusterValue {
     fn from_proto(proto: proto::ClusterValue) -> Result<Self, TryFromProtoError> {
         Ok(ClusterValue {
             name: proto.name,
+            config: proto.config.unwrap_or_default().into_rust()?,
             linked_object_id: proto.linked_object_id.into_rust()?,
             owner_id: proto.owner_id.into_rust_if_some("ClusterValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
@@ -247,6 +252,61 @@ impl RustType<proto::ClusterReplicaValue> for ClusterReplicaValue {
     }
 }
 
+impl RustType<proto::ClusterConfig> for ClusterConfig {
+    fn into_proto(&self) -> proto::ClusterConfig {
+        proto::ClusterConfig {
+            variant: Some(self.variant.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            variant: proto.variant.into_rust_if_some("ClusterConfig::variant")?,
+        })
+    }
+}
+
+impl RustType<proto::cluster_config::Variant> for ClusterVariant {
+    fn into_proto(&self) -> proto::cluster_config::Variant {
+        match self {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                size,
+                availability_zones,
+                logging,
+                idle_arrangement_merge_effort,
+                replication_factor,
+            }) => proto::cluster_config::Variant::Managed(proto::cluster_config::ManagedCluster {
+                size: size.to_string(),
+                availability_zones: availability_zones.clone(),
+                logging: Some(logging.into_proto()),
+                idle_arrangement_merge_effort: idle_arrangement_merge_effort
+                    .map(|effort| proto::ReplicaMergeEffort { effort }),
+                replication_factor: *replication_factor,
+            }),
+            ClusterVariant::Unmanaged => proto::cluster_config::Variant::Unmanaged(proto::Empty {}),
+        }
+    }
+
+    fn from_proto(proto: proto::cluster_config::Variant) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::cluster_config::Variant::Unmanaged(_) => Ok(Self::Unmanaged),
+            proto::cluster_config::Variant::Managed(managed) => {
+                Ok(Self::Managed(ClusterVariantManaged {
+                    size: managed.size,
+                    availability_zones: managed.availability_zones,
+                    logging: managed
+                        .logging
+                        .into_rust_if_some("ManagedCluster::logging")?,
+                    idle_arrangement_merge_effort: managed
+                        .idle_arrangement_merge_effort
+                        .map(|e| e.effort),
+                    replication_factor: managed.replication_factor,
+                }))
+            }
+        }
+    }
+}
+
 impl RustType<proto::ReplicaConfig> for SerializedReplicaConfig {
     fn into_proto(&self) -> proto::ReplicaConfig {
         proto::ReplicaConfig {
@@ -254,7 +314,7 @@ impl RustType<proto::ReplicaConfig> for SerializedReplicaConfig {
             location: Some(self.location.into_proto()),
             idle_arrangement_merge_effort: self
                 .idle_arrangement_merge_effort
-                .map(|effort| proto::replica_config::MergeEffort { effort }),
+                .map(|effort| proto::ReplicaMergeEffort { effort }),
         }
     }
 
@@ -269,15 +329,15 @@ impl RustType<proto::ReplicaConfig> for SerializedReplicaConfig {
     }
 }
 
-impl RustType<proto::replica_config::Logging> for SerializedReplicaLogging {
-    fn into_proto(&self) -> proto::replica_config::Logging {
-        proto::replica_config::Logging {
+impl RustType<proto::ReplicaLogging> for SerializedReplicaLogging {
+    fn into_proto(&self) -> proto::ReplicaLogging {
+        proto::ReplicaLogging {
             log_logging: self.log_logging,
             interval: self.interval.into_proto(),
         }
     }
 
-    fn from_proto(proto: proto::replica_config::Logging) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: proto::ReplicaLogging) -> Result<Self, TryFromProtoError> {
         Ok(SerializedReplicaLogging {
             log_logging: proto.log_logging,
             interval: proto.interval.into_rust()?,

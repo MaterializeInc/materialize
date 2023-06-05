@@ -111,6 +111,7 @@ where
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
+        StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",

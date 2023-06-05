@@ -1718,7 +1718,10 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("managed", ScalarType::Bool.nullable(false))
+        .with_column("size", ScalarType::String.nullable(true))
+        .with_column("replication_factor", ScalarType::UInt32.nullable(true)),
     is_retained_metrics_object: false,
 });
 

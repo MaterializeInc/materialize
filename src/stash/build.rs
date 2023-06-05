@@ -196,6 +196,7 @@ fn main() -> anyhow::Result<()> {
         // get them to implement Eq, PartialEq, and Ord. If you define a new oneof you should add
         // it here.
         .enum_attribute("CatalogItem.value", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("ClusterConfig.variant", "#[derive(Eq, PartialOrd, Ord)]")
         .enum_attribute("GlobalId.value", "#[derive(Eq, PartialOrd, Ord)]")
         .enum_attribute("ClusterId.value", "#[derive(Eq, PartialOrd, Ord)]")
         .enum_attribute("DatabaseId.value", "#[derive(Eq, PartialOrd, Ord)]")

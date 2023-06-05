@@ -65,7 +65,6 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolic
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::Optimizer;
-use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -449,30 +448,6 @@ impl Coordinator {
         self.catalog_transact(Some(session), vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
-    }
-
-    // Utility function used by both `sequence_create_cluster` and
-    // `sequence_create_cluster_replica`. Chooses the availability zone for a
-    // replica arbitrarily based on some state (currently: the number of
-    // replicas of the given cluster per AZ).
-    //
-    // I put this in the `Coordinator`'s impl block in case we ever want to
-    // change the logic and make it depend on some other state, but for now it's
-    // a pure function of the `n_replicas_per_az` state.
-    pub(crate) fn choose_az<'a>(n_replicas_per_az: &'a BTreeMap<String, usize>) -> String {
-        let min = *n_replicas_per_az
-            .values()
-            .min()
-            .expect("Must have at least one availability zone");
-        let argmins = n_replicas_per_az
-            .iter()
-            .filter_map(|(k, v)| (*v == min).then_some(k))
-            .collect::<Vec<_>>();
-        let arbitrary_argmin = argmins
-            .choose(&mut rand::thread_rng())
-            .expect("Must have at least one value corresponding to `min`");
-
-        (*arbitrary_argmin).clone()
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

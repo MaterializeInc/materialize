@@ -386,6 +386,7 @@ pub async fn initialize(
                     linked_object_id: None,
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     privileges: cluster_privileges,
+                    config: Some(default_cluster_config(options)),
                 },
             )],
         )
@@ -625,6 +626,14 @@ pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, Stas
     Ok(value.map(|v| v.value))
 }
 
+/// Defines the default config for a Cluster.
+pub fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
+    // TODO: Use managed clusters by default.
+    proto::ClusterConfig {
+        variant: Some(proto::cluster_config::Variant::Unmanaged(proto::Empty {})),
+    }
+}
+
 /// Defines the default config for a Cluster Replica.
 pub fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
     proto::ReplicaConfig {
@@ -635,7 +644,7 @@ pub fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
                 az_user_specified: false,
             },
         )),
-        logging: Some(proto::replica_config::Logging {
+        logging: Some(proto::ReplicaLogging {
             log_logging: false,
             interval: Some(proto::Duration::from_secs(1)),
         }),
