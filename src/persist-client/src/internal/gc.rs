@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
@@ -21,7 +22,7 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, info, warn, Instrument, Span};
+use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
@@ -29,10 +30,9 @@ use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
 use crate::internal::machine::{retry_external, Machine};
-use crate::internal::maintenance;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
-use crate::internal::paths::{BlobKey, PartialBatchKey, PartialRollupKey};
+use crate::internal::paths::{BlobKey, PartialBatchKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 use crate::ShardId;
@@ -216,31 +216,26 @@ where
         };
         assert_eq!(req.shard_id, machine.shard_id());
 
-        // First, check the latest known state to see whether there is still relevant GC work
-        // for this seqno_since:
-        let rollups_lte_seqno: Vec<_> = machine.applier.rollups_lte_seqno(req.new_seqno_since);
+        // First, check the latest known state to this process to see
+        // if there's relevant GC work for this seqno_since
+        let gc_rollups =
+            GcRollups::new(machine.applier.rollups_lte_seqno(req.new_seqno_since), &req);
+        let rollups_to_remove_from_state = gc_rollups.rollups_to_remove_from_state();
+        report_step_timing(&machine.applier.metrics.gc.steps.find_removable_rollups);
 
-        let Some((rollup_to_keep, rollups_to_remove_from_state)) = rollups_lte_seqno.split_last() else {
-            // If `rollups_lte_seqno` is empty, then our `seqno_since` is old
-            // and everything can be assumed to have been GC'd already.
-            machine.applier.metrics.gc.noop.inc();
-            return RoutineMaintenance::default();
-        };
-
-        // If `rollups_to_remove_from_state` is empty, then there is only a single rollup
-        // <= `seqno_since`. This means there are no rollups that are safe to truncate to
-        // (we can only truncate ones < than the latest rollup <= seqno_since), so we can
-        // safely exit here as well.
         if rollups_to_remove_from_state.is_empty() {
+            // If there are no rollups to remove from state (either the work has already
+            // been done, or the there aren't enough rollups <= seqno_since to have any
+            // to delete), we can safely exit.
             machine.applier.metrics.gc.noop.inc();
             return RoutineMaintenance::default();
         }
 
-        // WIP: time fetching rollups to remove
-
-        info!(
-            "Finding all rollups <= ({}). Will remove rollups: ({:?}), truncating up to: {}",
-            req.new_seqno_since, rollups_to_remove_from_state, rollup_to_keep.0
+        debug!(
+            "Finding all rollups <= ({}). Will truncate: {:?}. Will remove rollups from state: {:?}",
+            req.new_seqno_since,
+            gc_rollups.truncate_seqnos().collect::<Vec<_>>(),
+            rollups_to_remove_from_state,
         );
 
         let mut states = machine
@@ -251,6 +246,7 @@ where
             .expect("state is initialized")
             .check_ts_codec()
             .expect("ts codec has not changed");
+        let initial_seqno = states.state().seqno;
         report_step_timing(&machine.applier.metrics.gc.steps.fetch_seconds);
 
         machine
@@ -265,20 +261,54 @@ where
             states.len()
         );
 
-        let initial_seqno = states.state().seqno;
-        let maintenance = Self::incrementally_gc(
-            &req.shard_id,
+        Self::incrementally_delete_and_truncate(
             &mut states,
-            req.new_seqno_since,
+            &gc_rollups,
             machine,
             &mut report_step_timing,
-            &rollups_lte_seqno,
-            rollups_to_remove_from_state,
         )
         .await;
 
-        // WIP: do we want to calculate the seqno_parts_held metric?
-        while let Some(_) = states.next(|_| {}) {}
+        // Now that the blobs are deleted / Consensus is truncated, remove
+        // the rollups from state. Doing this at the end ensures that if
+        // the process crashes part-way through, we still have a reference
+        // to these rollups (in the current state) to resume their deletion.
+        //
+        // Unfortunately this means that if GC crashes part-way through,
+        // it could repeat work it has already done. We could alternatively
+        // remove each rollup from state as we go, which has some tradeoffs:
+        // * We'd incur a CaS operation for each rollup removal
+        // * We'd have to figure out how to handle maintenance work here
+        //   promptly if the GC work is long running
+        let (removed_rollups, maintenance) =
+            machine.remove_rollups(rollups_to_remove_from_state).await;
+        report_step_timing(&machine.applier.metrics.gc.steps.remove_rollups_from_state);
+        debug!("CaS removed rollups from state: {:?}", removed_rollups);
+
+        // Everything here and below is not strictly needed for GC to complete,
+        // but it's a good opportunity, while we have all live states in hand,
+        // to run some metrics and assertions.
+
+        // Apply all remaining live states to rollup some metrics, like how many
+        // parts are being held (in Blob) that are not part of the latest state.
+        let mut seqno_held_parts = 0;
+        while let Some(_) = states.next(|diff| match diff {
+            InspectDiff::FromInitial(_) => {}
+            InspectDiff::Diff(diff) => {
+                diff.map_blob_deletes(|blob| match blob {
+                    HollowBlobRef::Batch(batch) => {
+                        seqno_held_parts += batch.parts.len();
+                    }
+                    HollowBlobRef::Rollup(_) => {}
+                });
+            }
+        }) {}
+
+        machine
+            .applier
+            .shard_metrics
+            .gc_seqno_held_parts
+            .set(u64::cast_from(seqno_held_parts));
 
         // verify that the "current" state (as of `fetch_all_live_states`) contains
         // a rollup to the earliest state we fetched. this invariant isn't affected
@@ -295,6 +325,15 @@ where
             initial_seqno
         );
 
+        report_step_timing(
+            &machine
+                .applier
+                .metrics
+                .gc
+                .steps
+                .post_gc_calculations_seconds,
+        );
+
         maintenance
     }
 
@@ -305,55 +344,49 @@ where
     /// Internally, performs deletions for each rollup encountered, ensuring that
     /// incremental progress is made even if the process is interrupted before
     /// completing all gc work.
-    async fn incrementally_gc<F>(
-        shard_id: &ShardId,
+    async fn incrementally_delete_and_truncate<F>(
         states: &mut StateVersionsIter<T>,
-        seqno_since: SeqNo,
+        gc_rollups: &GcRollups,
         machine: &mut Machine<K, V, T, D>,
         timer: &mut F,
-        rollups_lte_seqno: &Vec<(SeqNo, PartialRollupKey)>,
-        rollups_to_remove_from_state: &[(SeqNo, PartialRollupKey)],
-    ) -> RoutineMaintenance
-    where
+    ) where
         F: FnMut(&Counter),
     {
-        let rollup_seqnos = rollups_lte_seqno
-            .iter()
-            .map(|(x, _)| *x)
-            .collect::<HashSet<_>>();
-        let mut batch_parts_to_delete: Vec<PartialBatchKey> = vec![];
-        let mut rollups_to_delete: Vec<PartialRollupKey> = vec![];
+        assert_eq!(states.state().shard_id, machine.shard_id());
+        let shard_id = states.state().shard_id;
+        let mut batch_parts_to_delete: BTreeSet<PartialBatchKey> = BTreeSet::new();
+        let mut rollups_to_delete: BTreeSet<PartialRollupKey> = BTreeSet::new();
 
-        for (truncate_lt, _rollup) in rollups_lte_seqno {
-            assert!(*truncate_lt <= seqno_since);
+        for truncate_lt in gc_rollups.truncate_seqnos() {
             assert!(batch_parts_to_delete.is_empty());
             assert!(rollups_to_delete.is_empty());
 
             // our state is already past the truncation point. there's no work to do --
             // some process already truncated this far
-            if states.state().seqno >= *truncate_lt {
+            if states.state().seqno >= truncate_lt {
                 continue;
             }
 
             // By our invariant, `states` should always begin on a rollup.
             assert!(
-                rollup_seqnos.contains(&states.state().seqno),
+                gc_rollups.contains_seqno(&states.state().seqno),
                 "rollups = {:?}, state seqno = {}",
-                rollup_seqnos,
+                gc_rollups,
                 states.state().seqno
             );
 
             Self::find_removable_blobs(
                 states,
-                *truncate_lt,
+                truncate_lt,
                 &machine.applier.metrics.gc.steps,
                 timer,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
             );
 
-            // Our state should be exactly `truncate_lt`, to ensure we've seen all
-            // blob deletions through this seqno.
+            // After finding removable blobs, our state should be exactly `truncate_lt`,
+            // to ensure we've seen all blob deletions in the diffs needed to reach
+            // this seqno.
             //
             // That we can always reach `truncate_lt` given the live diffs we fetched
             // earlier is a little subtle:
@@ -363,25 +396,43 @@ where
             //   `seqno_since`, because the diffs were not yet truncated.
             // * `seqno_since` >= `truncate_lt`, therefore we must have enough live
             //   diffs to reach `truncate_lt`.
-            assert_eq!(states.state().seqno, *truncate_lt);
-            // It should be that `truncate_lt` _is_ the seqno of a rollup, but let's
-            // be very explicit that we're about to truncate everything less than a
-            // rollup.
+            assert_eq!(states.state().seqno, truncate_lt);
+            // `truncate_lt` _is_ the seqno of a rollup, but let's very explicitly
+            // assert that we're about to truncate everything less than a rollup
+            // to maintain our invariant.
             assert!(
-                rollup_seqnos.contains(&states.state().seqno),
+                gc_rollups.contains_seqno(&states.state().seqno),
                 "rollups = {:?}, state seqno = {}",
-                rollup_seqnos,
+                gc_rollups,
                 states.state().seqno
             );
 
-            info!(
-                "While truncating lt ({}), removing: {:?}",
-                truncate_lt, rollups_to_delete
-            );
+            // Extra paranoia: verify that none of the blobs we're about to delete
+            // are in our current state (we should only be truncating blobs from
+            // before this state!)
+            states.state().map_blobs(|blob| match blob {
+                HollowBlobRef::Batch(batch) => {
+                    for live_part in &batch.parts {
+                        assert!(batch_parts_to_delete.get(&live_part.key).is_none());
+                    }
+                }
+                HollowBlobRef::Rollup(live_rollup) => {
+                    assert!(rollups_to_delete.get(&live_rollup.key).is_none());
+                    // And double check that the rollups we're about to delete are
+                    // earlier than our truncation point:
+                    match BlobKey::parse_ids(&live_rollup.key.complete(&shard_id)) {
+                        Ok((_shard, PartialBlobKey::Rollup(rollup_seqno, _rollup))) => {
+                            assert!(rollup_seqno < truncate_lt);
+                        }
+                        _ => {
+                            panic!("invalid rollup during deletion: {:?}", live_rollup);
+                        }
+                    }
+                }
+            });
 
             Self::delete_and_truncate(
-                shard_id,
-                *truncate_lt,
+                truncate_lt,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
                 machine,
@@ -389,24 +440,6 @@ where
             )
             .await;
         }
-
-        // Now that the blobs are deleted, remove the rollups from state.
-        // Doing this at the end ensures that if the process crashes part-
-        // way through, we still have a reference to these rollups (in the
-        // current state) to resume their deletion.
-        //
-        // Unfortunately this means that if GC had a backlog and crashed
-        // part-way through, it could repeat work it has already done. We
-        // could alternatively remove each rollup from state as we go,
-        // which has some tradeoffs:
-        // * We'd incur a CaS operation for each rollup removal
-        // * We'd have to figure out how to handle maintenance work here
-        //   promptly if the GC work is long running
-        let (removed_rollups, maintenance) =
-            machine.remove_rollups(&rollups_to_remove_from_state).await;
-        info!("removed rollups: {:?}", removed_rollups);
-
-        maintenance
     }
 
     /// Iterates through `states`, accumulating all deleted blobs (both batch parts
@@ -419,8 +452,8 @@ where
         truncate_lt: SeqNo,
         metrics: &GcStepTimings,
         timer: &mut F,
-        batch_parts_to_delete: &mut Vec<PartialBatchKey>,
-        rollups_to_delete: &mut Vec<PartialRollupKey>,
+        batch_parts_to_delete: &mut BTreeSet<PartialBatchKey>,
+        rollups_to_delete: &mut BTreeSet<PartialRollupKey>,
     ) where
         F: FnMut(&Counter),
     {
@@ -431,11 +464,14 @@ where
                 diff.map_blob_deletes(|blob| match blob {
                     HollowBlobRef::Batch(batch) => {
                         for part in &batch.parts {
-                            batch_parts_to_delete.push(part.key.to_owned());
+                            // we use BTreeSets for fast lookups elsewhere, but we should never
+                            // see repeat blob insertions within a single GC run, otherwise we
+                            // have a logic error or our diffs are incorrect (!)
+                            assert!(batch_parts_to_delete.insert(part.key.to_owned()));
                         }
                     }
                     HollowBlobRef::Rollup(rollup) => {
-                        rollups_to_delete.push(rollup.key.to_owned());
+                        assert!(rollups_to_delete.insert(rollup.key.to_owned()));
                     }
                 });
             }
@@ -444,22 +480,21 @@ where
                 break;
             }
         }
-
         timer(&metrics.find_deletable_blobs_seconds);
     }
 
     /// Deletes `batch_parts` and `rollups` from Blob.
     /// Truncates Consensus to `truncate_lt`.
     async fn delete_and_truncate<F>(
-        shard_id: &ShardId,
         truncate_lt: SeqNo,
-        batch_parts: &mut Vec<PartialBatchKey>,
-        rollups: &mut Vec<PartialRollupKey>,
+        batch_parts: &mut BTreeSet<PartialBatchKey>,
+        rollups: &mut BTreeSet<PartialRollupKey>,
         machine: &mut Machine<K, V, T, D>,
         timer: &mut F,
     ) where
         F: FnMut(&Counter),
     {
+        let shard_id = machine.shard_id();
         let delete_semaphore = Semaphore::new(
             machine
                 .applier
@@ -470,30 +505,30 @@ where
 
         Self::delete_all(
             machine.applier.state_versions.blob.borrow(),
-            batch_parts.drain(..).map(|k| k.complete(shard_id)),
+            batch_parts.iter().map(|k| k.complete(&shard_id)),
             &machine.applier.metrics.retries.external.rollup_delete,
             debug_span!("rollup::delete"),
             &delete_semaphore,
         )
         .await;
+        batch_parts.clear();
         timer(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
 
         Self::delete_all(
             machine.applier.state_versions.blob.borrow(),
-            rollups.drain(..).map(|k| k.complete(shard_id)),
+            rollups.iter().map(|k| k.complete(&shard_id)),
             &machine.applier.metrics.retries.external.batch_delete,
             debug_span!("batch::delete"),
             &delete_semaphore,
         )
         .await;
+        rollups.clear();
         timer(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
-
-        // WIP: not a bad spot for a failpoint if we want to try that
 
         machine
             .applier
             .state_versions
-            .truncate_diffs(shard_id, truncate_lt)
+            .truncate_diffs(&shard_id, truncate_lt)
             .await;
         timer(&machine.applier.metrics.gc.steps.truncate_diff_seconds);
     }
@@ -527,5 +562,51 @@ where
         }
 
         futures.collect().await
+    }
+}
+
+#[derive(Debug)]
+struct GcRollups {
+    rollups_lte_seqno_since: Vec<(SeqNo, PartialRollupKey)>,
+    rollup_seqnos: HashSet<SeqNo>,
+}
+
+impl GcRollups {
+    fn new(rollups_lte_seqno_since: Vec<(SeqNo, PartialRollupKey)>, gc_req: &GcReq) -> Self {
+        assert!(rollups_lte_seqno_since
+            .iter()
+            .all(|(seqno, _rollup)| *seqno <= gc_req.new_seqno_since));
+        let rollup_seqnos = rollups_lte_seqno_since
+            .iter()
+            .map(|(x, _)| *x)
+            .collect::<HashSet<_>>();
+        Self {
+            rollups_lte_seqno_since,
+            rollup_seqnos,
+        }
+    }
+
+    fn contains_seqno(&self, seqno: &SeqNo) -> bool {
+        self.rollup_seqnos.contains(seqno)
+    }
+
+    /// Returns the seqnos we can safely truncate state to when performing
+    /// incremental GC (all rollups with seqnos <= seqno_since).
+    fn truncate_seqnos(&self) -> impl Iterator<Item = SeqNo> + '_ {
+        self.rollups_lte_seqno_since
+            .iter()
+            .map(|(seqno, _rollup)| *seqno)
+    }
+
+    /// Returns the rollups we can safely remove from state (all rollups
+    /// `<` than the latest rollup `<=` seqno_since).
+    ///
+    /// See the full explanation in [crate::internal::state_versions::StateVersions]
+    /// for how this is derived.
+    fn rollups_to_remove_from_state(&self) -> &[(SeqNo, PartialRollupKey)] {
+        match self.rollups_lte_seqno_since.split_last() {
+            None => &[],
+            Some((_rollup_to_keep, rollups_to_remove_from_state)) => rollups_to_remove_from_state,
+        }
     }
 }

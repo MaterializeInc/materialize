@@ -103,12 +103,6 @@ pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 #[derive(Debug, Clone)]
 pub struct AllLiveDiffs(pub Vec<VersionedData>);
 
-impl AllLiveDiffs {
-    pub(crate) fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct EncodedRollup {
     pub(crate) shard_id: ShardId,
