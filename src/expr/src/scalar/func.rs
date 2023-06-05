@@ -1571,7 +1571,11 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn map_get_values<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn map_get_values<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
     let map = a.unwrap_map();
     let values: Vec<Datum> = b
         .unwrap_array()
@@ -1585,17 +1589,15 @@ fn map_get_values<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) ->
         )
         .collect();
 
-    temp_storage.make_datum(|packer| {
-        packer
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: values.len(),
-                }],
-                values,
-            )
-            .unwrap()
-    })
+    Ok(temp_storage.try_make_datum(|packer| {
+        packer.push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: values.len(),
+            }],
+            values,
+        )
+    })?)
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
@@ -1948,17 +1950,15 @@ fn parse_ident<'a>(
         }
     }
 
-    Ok(temp_storage.make_datum(|packer| {
-        packer
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: elems.len(),
-                }],
-                elems,
-            )
-            .unwrap()
-    }))
+    Ok(temp_storage.try_make_datum(|packer| {
+        packer.push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: elems.len(),
+            }],
+            elems,
+        )
+    })?)
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -2350,7 +2350,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
             BinaryFunc::MapContainsKey => Ok(map_contains_key(a, b)),
             BinaryFunc::MapGetValue => Ok(map_get_value(a, b)),
-            BinaryFunc::MapGetValues => Ok(map_get_values(a, b, temp_storage)),
+            BinaryFunc::MapGetValues => map_get_values(a, b, temp_storage),
             BinaryFunc::MapContainsAllKeys => Ok(map_contains_all_keys(a, b)),
             BinaryFunc::MapContainsAnyKeys => Ok(map_contains_any_keys(a, b)),
             BinaryFunc::MapContainsMap => Ok(map_contains_map(a, b)),
@@ -7029,11 +7029,8 @@ fn array_fill<'a>(
             .collect()
     };
 
-    Ok(temp_storage.make_datum(|packer| {
-        packer
-            .push_array(&array_dimensions, vec![fill; fill_count])
-            .unwrap()
-    }))
+    Ok(temp_storage
+        .try_make_datum(|packer| packer.push_array(&array_dimensions, vec![fill; fill_count]))?)
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]

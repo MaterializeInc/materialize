@@ -314,6 +314,12 @@ SELECT array_fill(1, ARRAY[4, -199, 3]);
 query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(8, ARRAY[-1, -1, -1, -1]);
 
+query error db error: ERROR: number of array dimensions \(10\) exceeds the maximum allowed \(6\)
+SELECT array_fill(1, ARRAY[1,1,1,1,1,1,1,1,1,1]);
+
+query error db error: ERROR: number of array dimensions \(10\) exceeds the maximum allowed \(6\)
+SELECT array_fill(1, ARRAY[1,1,1,1,1,1,1,1,1,1], ARRAY[1,1,1,1,1,1,1,1,1,1]);
+
 # But large arrays are still ok
 
 query II
