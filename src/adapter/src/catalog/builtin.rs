@@ -3238,6 +3238,31 @@ AS SELECT
 WHERE false",
 };
 
+pub const PG_LOCKS: BuiltinView = BuiltinView {
+    name: "pg_locks",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_locks
+AS SELECT
+-- While there exist locks in Materialize, we don't expose them, so all of these fields are NULL.
+    NULL::pg_catalog.text AS locktype,
+    NULL::pg_catalog.oid AS database,
+    NULL::pg_catalog.oid AS relation,
+    NULL::pg_catalog.int4 AS page,
+    NULL::pg_catalog.int2 AS tuple,
+    NULL::pg_catalog.text AS virtualxid,
+    NULL::pg_catalog.text AS transactionid,
+    NULL::pg_catalog.oid AS classid,
+    NULL::pg_catalog.oid AS objid,
+    NULL::pg_catalog.int2 AS objsubid,
+    NULL::pg_catalog.text AS virtualtransaction,
+    NULL::pg_catalog.int4 AS pid,
+    NULL::pg_catalog.text AS mode,
+    NULL::pg_catalog.bool AS granted,
+    NULL::pg_catalog.bool AS fastpath,
+    NULL::pg_catalog.timestamptz AS waitstart
+WHERE false",
+};
+
 pub const PG_AUTHID: BuiltinView = BuiltinView {
     name: "pg_authid",
     schema: PG_CATALOG_SCHEMA,
@@ -3945,6 +3970,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TABLES),
         Builtin::View(&PG_TABLESPACE),
         Builtin::View(&PG_ACCESS_METHODS),
+        Builtin::View(&PG_LOCKS),
         Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),

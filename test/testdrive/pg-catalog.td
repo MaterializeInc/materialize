@@ -157,6 +157,26 @@ name                nullable    type
  grantor            false       oid
  admin_option       false       boolean
 
+> SHOW COLUMNS FROM pg_locks
+name                nullable    type
+------------------------------------------------------------
+ locktype           false       text
+ database           false       oid
+ relation           false       oid
+ page               false       integer
+ tuple              false       smallint
+ virtualxid         false       text
+ transactionid      false       text
+ classid            false       oid
+ objid              false       oid
+ objsubid           false       smallint
+ virtualtransaction false       text
+ pid                false       integer
+ mode               false       text
+ granted            false       boolean
+ fastpath           false       boolean
+ waitstart          false       "timestamp with time zone"
+
 > SHOW COLUMNS FROM pg_tablespace
 name                nullable    type
 ------------------------------------------------------------

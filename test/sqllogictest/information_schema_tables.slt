@@ -589,6 +589,10 @@ pg_inherits
 VIEW
 materialize
 pg_catalog
+pg_locks
+VIEW
+materialize
+pg_catalog
 pg_matviews
 VIEW
 materialize
