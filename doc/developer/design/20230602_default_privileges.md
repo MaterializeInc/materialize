@@ -87,6 +87,8 @@ only one is:
 - `(<id>, <reserved-role-id-for-all-roles>, NULL, NULL, T, {=U/mz_system})`. i.e. `PUBLIC` is
   granted `USAGE` on every type.
 
+Roles cannot be deleted while it is referenced in the `mz_default_privilges` table.
+
 `ALTER DEFAULT PRIVILEGES` is a command that will have the following syntax (formatted the same way
 that PostgreSQL formats SQL syntax in their documentation):
 
