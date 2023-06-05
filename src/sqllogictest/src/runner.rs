@@ -337,8 +337,12 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
     }
 }
 
+struct QueryInfo {
+    is_select: bool,
+}
+
 enum PrepareQueryOutcome<'a> {
-    QueryPrepared,
+    QueryPrepared(QueryInfo),
     Outcome(Outcome<'a>),
 }
 
@@ -355,6 +359,7 @@ pub struct RunnerInner {
     system_client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
+    auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
     _shutdown_trigger: oneshot::Sender<()>,
@@ -1014,6 +1019,7 @@ impl RunnerInner {
             system_client,
             clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
+            auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
             enable_table_keys: config.enable_table_keys,
         })
@@ -1185,6 +1191,11 @@ impl RunnerInner {
             [statement] => statement,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
+        let mut is_select = false;
+        match statement {
+            Statement::Select { .. } => is_select = true,
+            _ => (),
+        }
 
         match output {
             Ok(_) => {
@@ -1214,7 +1225,7 @@ impl RunnerInner {
             }
             _ => (),
         }
-        Ok(PrepareQueryOutcome::QueryPrepared)
+        Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo { is_select }))
     }
 
     async fn execute_query<'a>(
@@ -1366,8 +1377,12 @@ impl RunnerInner {
             .prepare_query(sql, output, location.clone(), in_transaction)
             .await?;
         match prepare_outcome {
-            PrepareQueryOutcome::QueryPrepared => {
-                self.execute_query(sql, output, location.clone()).await
+            PrepareQueryOutcome::QueryPrepared(QueryInfo { is_select }) => {
+                if is_select && self.auto_index_selects {
+                    unimplemented!("auto_index_selects")
+                } else {
+                    self.execute_query(sql, output, location.clone()).await
+                }
             }
             PrepareQueryOutcome::Outcome(outcome) => Ok(outcome),
         }
@@ -1470,6 +1485,7 @@ pub struct RunConfig<'a> {
     pub no_fail: bool,
     pub fail_fast: bool,
     pub auto_index_tables: bool,
+    pub auto_index_selects: bool,
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
