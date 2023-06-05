@@ -779,8 +779,12 @@
     description: Returns the underlying SELECT command for the given view.
   - signature: 'pg_get_viewdef(view_oid: oid[, wrap_column: integer]) -> text'
     description: Returns the underlying SELECT command for the given view.
+  - signature: 'pg_is_in_recovery() -> bool'
+    description: Returns if the a recovery is still in progress.
   - signature: 'pg_table_is_visible(relation: oid) -> boolean'
     description: Reports whether the relation with the specified OID is visible in the search path.
+  - signature: 'pg_tablespace_location(tablespace: oid) -> text'
+    description: Returns the path in the file system that the provided tablespace is on.
   - signature: 'pg_type_is_visible(relation: oid) -> boolean'
     description: Reports whether the type with the specified OID is visible in the search path.
   - signature: 'pg_function_is_visible(relation: oid) -> boolean'
