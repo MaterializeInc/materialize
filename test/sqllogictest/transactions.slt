@@ -688,7 +688,6 @@ SET TRANSACTION_ISOLATION TO serializable
 statement ok
 SELECT * FROM t
 
-# PostgreSQL does not return an error here (though it might be a bug).
 statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
 RESET TRANSACTION_ISOLATION
 
