@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -16,8 +18,11 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::halt;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist_types::stats::ProtoStructStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use proptest::prelude::Arbitrary;
+use proptest::strategy::Strategy;
 use prost::Message;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -59,6 +64,103 @@ impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
             key: Arc::clone(&self.key),
             val: Arc::clone(&self.val),
         }
+    }
+}
+
+/// A proto that is decoded on use.
+///
+/// Because of the way prost works, decoding a large protobuf may result in a
+/// number of very short lived allocations in our RustType/ProtoType decode path
+/// (e.g. this happens for a repeated embedded message). Not every use of
+/// persist State needs every transitive bit of it to be decoded, so we opt
+/// certain parts of it (initially stats) to be decoded on use.
+///
+/// This has the dual benefit of only paying for the short-lived allocs when
+/// necessary and also allowing decoding to be gated by a feature flag. The
+/// tradeoffs are that we might decode more than once and that we have to handle
+/// invalid proto errors in more places.
+///
+/// Mechanically, this is accomplished by making the field a proto `bytes` types
+/// instead of `ProtoFoo`. These bytes then contain the serialization of
+/// ProtoFoo. NB: Swapping between the two is actually a forward and backward
+/// compatible change.
+///
+/// > Embedded messages are compatible with bytes if the bytes contain an
+/// > encoded version of the message.
+///
+/// (See <https://protobuf.dev/programming-guides/proto3/#updating>)
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LazyProto<T> {
+    buf: Bytes,
+    _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T: Message + Default> Debug for LazyProto<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.decode() {
+            Ok(proto) => Debug::fmt(&proto, f),
+            Err(err) => f
+                .debug_struct(&format!("LazyProto<{}>", std::any::type_name::<T>()))
+                .field("err", &err)
+                .finish(),
+        }
+    }
+}
+
+impl<T> PartialEq for LazyProto<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl<T> Eq for LazyProto<T> {}
+
+impl<T> PartialOrd for LazyProto<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for LazyProto<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let LazyProto {
+            buf: self_buf,
+            _phantom: _,
+        } = self;
+        let LazyProto {
+            buf: other_buf,
+            _phantom: _,
+        } = other;
+        self_buf.cmp(other_buf)
+    }
+}
+
+impl<T: Message + Default> From<&T> for LazyProto<T> {
+    fn from(value: &T) -> Self {
+        let buf = Bytes::from(value.encode_to_vec());
+        LazyProto {
+            buf,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: Message + Default> LazyProto<T> {
+    pub fn decode(&self) -> Result<T, prost::DecodeError> {
+        T::decode(&*self.buf)
+    }
+}
+
+impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
+    fn into_proto(&self) -> Bytes {
+        self.buf.clone()
+    }
+
+    fn from_proto(buf: Bytes) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            buf,
+            _phantom: PhantomData,
+        })
     }
 }
 
@@ -919,29 +1021,78 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
 
 impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
     fn into_proto(&self) -> ProtoHollowBatchPart {
-        let key_stats = self.stats.as_ref().map(|x| x.key.into_proto());
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
-            key_stats,
+            key_stats: self.stats.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
-        let stats = match proto.key_stats {
-            Some(x) => Some(Arc::new(PartStats {
-                key: x.into_rust()?,
-            })),
-            None => None,
-        };
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
-            stats,
+            stats: proto.key_stats.into_rust()?,
         })
     }
 }
 
+/// Aggregate statistics about data contained in a part.
+///
+/// These are "lazy" in the sense that we don't decode them (or even validate
+/// the encoded version) until they're used.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct LazyPartStats {
+    key: LazyProto<ProtoStructStats>,
+}
+
+impl From<&PartStats> for LazyPartStats {
+    fn from(x: &PartStats) -> Self {
+        let PartStats { key } = x;
+        LazyPartStats {
+            key: LazyProto::from(&ProtoStructStats::from_rust(key)),
+        }
+    }
+}
+
+impl LazyPartStats {
+    /// Decodes and returns PartStats from the encoded representation.
+    ///
+    /// This does not cache the returned value, it decodes each time it's
+    /// called.
+    pub fn decode(&self) -> PartStats {
+        let key = self.key.decode().expect("valid proto");
+        PartStats {
+            key: key.into_rust().expect("valid stats"),
+        }
+    }
+}
+
+impl RustType<Bytes> for LazyPartStats {
+    fn into_proto(&self) -> Bytes {
+        let LazyPartStats { key } = self;
+        key.into_proto()
+    }
+
+    fn from_proto(proto: Bytes) -> Result<Self, TryFromProtoError> {
+        Ok(LazyPartStats {
+            key: proto.into_rust()?,
+        })
+    }
+}
+
+#[allow(unused_parens)]
+impl Arbitrary for LazyPartStats {
+    type Parameters = ();
+    type Strategy =
+        proptest::strategy::Map<(<PartStats as Arbitrary>::Strategy), fn((PartStats)) -> Self>;
+
+    fn arbitrary_with(_: ()) -> Self::Strategy {
+        Strategy::prop_map((proptest::prelude::any::<PartStats>()), |(x)| {
+            LazyPartStats::from(&x)
+        })
+    }
+}
 impl RustType<ProtoHollowRollup> for HollowRollup {
     fn into_proto(&self) -> ProtoHollowRollup {
         ProtoHollowRollup {

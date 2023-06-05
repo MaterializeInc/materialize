@@ -15,7 +15,6 @@ use std::marker::PhantomData;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::slice;
-use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -35,12 +34,11 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::{Determinacy, InvalidUsage};
-use crate::internal::encoding::parse_id;
+use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
-use crate::stats::PartStats;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -158,48 +156,15 @@ pub struct HandleDebugState {
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
-#[derive(Arbitrary, Clone, Debug, Serialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct HollowBatchPart {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
     /// Aggregate statistics about data contained in this part.
-    ///
-    /// Stored inside an Arc because HollowBatchPart needs to be cheaply
-    /// clone-able.
-    pub stats: Option<Arc<PartStats>>,
-}
-
-impl PartialEq for HollowBatchPart {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for HollowBatchPart {}
-
-impl PartialOrd for HollowBatchPart {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for HollowBatchPart {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // TODO(mfp): Extremely sus, but it's not clear what else we can do.
-        let HollowBatchPart {
-            key: self_key,
-            encoded_size_bytes: _,
-            stats: _,
-        } = self;
-        let HollowBatchPart {
-            key: other_key,
-            encoded_size_bytes: _,
-            stats: _,
-        } = other;
-        self_key.cmp(other_key)
-    }
+    #[serde(serialize_with = "serialize_part_stats")]
+    pub stats: Option<LazyPartStats>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -1383,6 +1348,14 @@ where
             f(HollowBlobRef::Rollup(x));
         }
     }
+}
+
+fn serialize_part_stats<S: Serializer>(
+    val: &Option<LazyPartStats>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    let val = val.as_ref().map(|x| x.decode().key);
+    val.serialize(s)
 }
 
 // This Serialize impl is used for debugging/testing and exposed via SQL. It's

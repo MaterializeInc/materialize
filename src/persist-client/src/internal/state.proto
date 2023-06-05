@@ -27,9 +27,8 @@ message ProtoHollowBatchPart {
     string key = 1;
     uint64 encoded_size_bytes = 2;
 
-    // TODO(mfp): This is definitely not the final way for us to store this.
-    mz_persist_types.stats.ProtoStructStats key_stats = 536870909;
-    reserved 536870910, 536870911;
+    optional bytes key_stats = 536870908;
+    reserved 536870909 to 536870911;
 }
 
 message ProtoHollowBatch {

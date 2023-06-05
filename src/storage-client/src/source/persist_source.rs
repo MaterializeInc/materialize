@@ -316,7 +316,7 @@ impl PendingWork {
         P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
         YFn: Fn(Instant, usize) -> bool,
     {
-        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit().cloned();
+        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit();
         while let Some(((key, val), time, diff)) = self.fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
@@ -334,11 +334,8 @@ impl PendingWork {
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
-                            if let Some(key) = is_filter_pushdown_audit {
-                                // Ideally we'd be able to include the part stats here, but that
-                                // would require us to exchange them around. It's unclear if that's
-                                // worth it for work that's already known to be unnecessary.
-                                panic!("persist filter pushdown correctness violation! {} {} val={:?} mfp={:?}", name, key, result, map_filter_project);
+                            if let Some(stats) = is_filter_pushdown_audit {
+                                panic!("persist filter pushdown correctness violation! {} val={:?} mfp={:?} stats={:?}", name, result, map_filter_project, stats);
                             }
                             match result {
                                 Ok((row, time, diff)) => {
@@ -400,7 +397,7 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
 }
 
 impl PersistSourceDataStats<'_> {
-    fn json_spec(stats: &JsonStats) -> ResultSpec {
+    fn json_spec(len: usize, stats: &JsonStats) -> ResultSpec {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
             JsonStats::Bools(bools) => {
@@ -424,12 +421,13 @@ impl PersistSourceDataStats<'_> {
                 ResultSpec::map_spec(
                     maps.into_iter()
                         .map(|(k, v)| {
-                            // TODO(mfp): we can't prove that a field is always present based on the stats
-                            // we keep, so we assume that accessing any field might return null.
-                            (
-                                k.as_str().into(),
-                                Self::json_spec(v).union(ResultSpec::null()),
-                            )
+                            let mut v_spec = Self::json_spec(v.len, &v.stats);
+                            if v.len != len {
+                                // This field is not always present, so assume
+                                // that accessing it might be null.
+                                v_spec = v_spec.union(ResultSpec::null());
+                            }
+                            (k.as_str().into(), v_spec)
                         })
                         .collect(),
                 )
@@ -454,7 +452,9 @@ impl PersistSourceDataStats<'_> {
                     .expect("stats type should match column");
                 if let Some(byte_stats) = stats {
                     let value_range = match byte_stats {
-                        BytesStats::Json(json_stats) => Self::json_spec(json_stats),
+                        BytesStats::Json(json_stats) => {
+                            Self::json_spec(self.stats.key.len, json_stats)
+                        }
                         BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
                     };
                     value_range
@@ -477,7 +477,9 @@ impl PersistSourceDataStats<'_> {
                         _ => ResultSpec::null(),
                     };
                     let value_range = match &option_stats.some {
-                        BytesStats::Json(json_stats) => Self::json_spec(json_stats),
+                        BytesStats::Json(json_stats) => {
+                            Self::json_spec(self.stats.key.len, json_stats)
+                        }
                         BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
                     };
                     null_range.union(value_range)

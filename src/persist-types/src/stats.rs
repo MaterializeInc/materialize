@@ -50,9 +50,6 @@ pub trait ColumnStats<T: Data>: DynStats {
 }
 
 /// Type-erased aggregate statistics about a column of data.
-///
-/// TODO(mfp): It feels like we haven't hit a global maximum here, both with
-/// this `DynStats` trait and also with ProtoOptionStats.
 pub trait DynStats: StatsCost + std::fmt::Debug + Send + Sync + 'static {
     /// Returns self as a `dyn Any` for downcasting.
     fn as_any(&self) -> &dyn Any;
@@ -258,7 +255,24 @@ pub enum JsonStats {
     Lists,
     /// Recursive statistics about the set of keys present in any maps/objects
     /// in the column, or None if there were no maps/objects.
-    Maps(BTreeMap<String, JsonStats>),
+    Maps(BTreeMap<String, JsonMapElementStats>),
+}
+
+#[derive(Default, Debug)]
+#[cfg_attr(any(test), derive(Clone))]
+pub struct JsonMapElementStats {
+    pub len: usize,
+    pub stats: JsonStats,
+}
+
+impl JsonMapElementStats {
+    fn cost(&self) -> usize {
+        std::mem::size_of_val(&self.len) + self.stats.cost()
+    }
+
+    fn trim(&mut self) {
+        self.stats.trim()
+    }
 }
 
 impl Default for JsonStats {
@@ -406,7 +420,7 @@ mod impls {
     use arrow2::compute::aggregate::SimdOrd;
     use arrow2::types::simd::Simd;
     use arrow2::types::NativeType;
-    use mz_proto::{ProtoType, RustType, TryFromProtoError};
+    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use proptest::prelude::*;
     use serde::Serialize;
 
@@ -415,8 +429,9 @@ mod impls {
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
         truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
-        JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats, ProtoBytesStats,
-        ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats,
+        JsonMapElementStats, JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats,
+        ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats, ProtoJsonMapStats,
+        ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats,
         ProtoStructStats, StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
@@ -578,6 +593,22 @@ mod impls {
             ProtoDynStats {
                 option: None,
                 kind: Some(proto_dyn_stats::Kind::Primitive(RustType::into_proto(self))),
+            }
+        }
+    }
+
+    impl DynStats for PrimitiveStats<Vec<u8>> {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn into_proto(&self) -> ProtoDynStats {
+            ProtoDynStats {
+                option: None,
+                kind: Some(proto_dyn_stats::Kind::Bytes(ProtoBytesStats {
+                    kind: Some(proto_bytes_stats::Kind::Primitive(RustType::into_proto(
+                        self,
+                    ))),
+                })),
             }
         }
     }
@@ -879,7 +910,11 @@ mod impls {
                     JsonStats::Maps(x) => proto_json_stats::Kind::Maps(ProtoJsonMapStats {
                         elements: x
                             .iter()
-                            .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
+                            .map(|(k, v)| ProtoJsonMapElementStats {
+                                name: k.into_proto(),
+                                len: v.len.into_proto(),
+                                stats: Some(RustType::into_proto(&v.stats)),
+                            })
                             .collect(),
                     }),
                 }),
@@ -896,11 +931,15 @@ mod impls {
                 Some(proto_json_stats::Kind::Numerics(x)) => JsonStats::Numerics(x.into_rust()?),
                 Some(proto_json_stats::Kind::Lists(())) => JsonStats::Lists,
                 Some(proto_json_stats::Kind::Maps(x)) => {
-                    let mut map = BTreeMap::new();
-                    for (k, v) in x.elements {
-                        map.insert(k.into_rust()?, v.into_rust()?);
+                    let mut elements = BTreeMap::new();
+                    for x in x.elements {
+                        let stats = JsonMapElementStats {
+                            len: x.len.into_rust()?,
+                            stats: x.stats.into_rust_if_some("JsonMapElementStats::stats")?,
+                        };
+                        elements.insert(x.name.into_rust()?, stats);
                     }
-                    JsonStats::Maps(map)
+                    JsonStats::Maps(elements)
                 }
                 None => return Err(TryFromProtoError::missing_field("ProtoJsonStats::values")),
             })
@@ -1035,9 +1074,6 @@ mod impls {
                 Some(proto_primitive_stats::Lower::LowerF64(_)) => {
                     f.call(PrimitiveStats::<f64>::from_proto(x)?)
                 }
-                Some(proto_primitive_stats::Lower::LowerBytes(_)) => {
-                    f.call(PrimitiveStats::<Vec<u8>>::from_proto(x)?)
-                }
                 Some(proto_primitive_stats::Lower::LowerString(_)) => {
                     f.call(PrimitiveStats::<String>::from_proto(x)?)
                 }
@@ -1102,8 +1138,22 @@ mod impls {
     primitive_stats_rust_type!(i64, LowerI64, UpperI64);
     primitive_stats_rust_type!(f32, LowerF32, UpperF32);
     primitive_stats_rust_type!(f64, LowerF64, UpperF64);
-    primitive_stats_rust_type!(Vec<u8>, LowerBytes, UpperBytes);
     primitive_stats_rust_type!(String, LowerString, UpperString);
+
+    impl RustType<ProtoPrimitiveBytesStats> for PrimitiveStats<Vec<u8>> {
+        fn into_proto(&self) -> ProtoPrimitiveBytesStats {
+            ProtoPrimitiveBytesStats {
+                lower: self.lower.into_proto(),
+                upper: self.upper.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoPrimitiveBytesStats) -> Result<Self, TryFromProtoError> {
+            let lower = proto.lower.into_rust()?;
+            let upper = proto.upper.into_rust()?;
+            Ok(PrimitiveStats { lower, upper })
+        }
+    }
 
     #[allow(unused_parens)]
     impl Arbitrary for StructStats {
@@ -1392,7 +1442,7 @@ mod tests {
         });
         testcase(col.clone());
         let mut cols = BTreeMap::new();
-        cols.insert("col".into(), col);
+        cols.insert("col".into(), JsonMapElementStats { len: 1, stats: col });
         testcase(JsonStats::Maps(cols));
     }
 }

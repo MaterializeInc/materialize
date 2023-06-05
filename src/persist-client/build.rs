@@ -91,6 +91,7 @@ fn main() {
         .btree_map(["."])
         .bytes([
             ".mz_persist_client.internal.diff.ProtoStateFieldDiffs",
+            ".mz_persist_client.internal.state.ProtoHollowBatchPart",
             ".mz_persist_client.internal.service.ProtoPushDiff",
         ]);
 
