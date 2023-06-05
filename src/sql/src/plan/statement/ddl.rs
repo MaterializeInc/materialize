@@ -2900,7 +2900,9 @@ pub fn plan_create_cluster_replica(
         of_cluster,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
+    let cluster = scx
+        .catalog
+        .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
         && cluster.replica_ids().len() > 0
