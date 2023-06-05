@@ -5985,11 +5985,13 @@ impl Catalog {
                             builtin_table_updates.extend(state.pack_item_update(id, -1));
                             let entry = state.get_entry_mut(&id);
                             update_privilege_fn(&mut entry.privileges, privilege);
-                            tx.update_item(
-                                id,
-                                &entry.name().item,
-                                &Self::serialize_item(entry.item()),
-                            )?;
+                            if !entry.item().is_temporary() {
+                                tx.update_item(
+                                    id,
+                                    &entry.name().item,
+                                    &Self::serialize_item(entry.item()),
+                                )?;
+                            }
                             builtin_table_updates.extend(state.pack_item_update(id, 1));
                         }
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
@@ -6226,11 +6228,13 @@ impl Catalog {
                             new_owner,
                         );
                         entry.owner_id = new_owner;
-                        tx.update_item(
-                            id,
-                            &entry.name().item,
-                            &Self::serialize_item(entry.item()),
-                        )?;
+                        if !entry.item().is_temporary() {
+                            tx.update_item(
+                                id,
+                                &entry.name().item,
+                                &Self::serialize_item(entry.item()),
+                            )?;
+                        }
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
