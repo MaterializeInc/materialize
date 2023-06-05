@@ -1688,6 +1688,15 @@ pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("return_type_id", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
 });
+pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_aggregates",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("agg_kind", ScalarType::String.nullable(false))
+        .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
+    is_retained_metrics_object: false,
+});
 
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
@@ -3296,6 +3305,38 @@ AS SELECT
 FROM mz_catalog.mz_roles r",
 };
 
+pub const PG_AGGREGATE: BuiltinView = BuiltinView {
+    name: "pg_aggregate",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_aggregate
+AS SELECT
+    a.oid as aggfnoid,
+    -- Currently Materialize only support 'normal' aggregate functions.
+    a.agg_kind as aggkind,
+    a.agg_num_direct_args as aggnumdirectargs,
+    -- Materialize doesn't support these fields.
+    NULL::pg_catalog.regproc as aggtransfn,
+    '0'::pg_catalog.regproc as aggfinalfn,
+    '0'::pg_catalog.regproc as aggcombinefn,
+    '0'::pg_catalog.regproc as aggserialfn,
+    '0'::pg_catalog.regproc as aggdeserialfn,
+    '0'::pg_catalog.regproc as aggmtransfn,
+    '0'::pg_catalog.regproc as aggminvtransfn,
+    '0'::pg_catalog.regproc as aggmfinalfn,
+    false as aggfinalextra,
+    false as aggmfinalextra,
+    NULL::pg_catalog.\"char\" AS aggfinalmodify,
+    NULL::pg_catalog.\"char\" AS aggmfinalmodify,
+    '0'::pg_catalog.oid as aggsortop,
+    NULL::pg_catalog.oid as aggtranstype,
+    NULL::pg_catalog.int4 as aggtransspace,
+    '0'::pg_catalog.oid as aggmtranstype,
+    NULL::pg_catalog.int4 as aggmtransspace,
+    NULL::pg_catalog.text as agginitval,
+    NULL::pg_catalog.text as aggminitval
+FROM mz_internal.mz_aggregates a",
+};
+
 pub const PG_TRIGGER: BuiltinView = BuiltinView {
     name: "pg_trigger",
     schema: PG_CATALOG_SCHEMA,
@@ -3887,6 +3928,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
+        Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
@@ -3978,6 +4020,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
+        Builtin::View(&PG_AGGREGATE),
         Builtin::View(&PG_TRIGGER),
         Builtin::View(&PG_REWRITE),
         Builtin::View(&PG_EXTENSION),

@@ -185,6 +185,10 @@ mz_active_peeks_per_worker
 SOURCE
 materialize
 mz_internal
+mz_aggregates
+BASE TABLE
+materialize
+mz_internal
 mz_arrangement_batches_raw
 SOURCE
 materialize
@@ -531,6 +535,10 @@ materialize
 mz_internal
 mz_view_keys
 BASE TABLE
+materialize
+pg_catalog
+pg_aggregate
+VIEW
 materialize
 pg_catalog
 pg_am
