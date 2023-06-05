@@ -10,6 +10,7 @@
 //! Connection types.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -565,6 +566,12 @@ impl CsrConnection {
             client_config = client_config.auth(username, password);
         }
 
+        // `net::lookup_host` requires a port but the port will be ignored when
+        // passed to `resolve_to_addrs`. We use a dummy port that will be easy
+        // to spot in the logs to make it obvious if some component downstream
+        // incorrectly starts using this port.
+        const DUMMY_PORT: u16 = 11111;
+
         match &self.tunnel {
             Tunnel::Direct => {}
             Tunnel::Ssh(ssh_tunnel) => {
@@ -584,29 +591,43 @@ impl CsrConnection {
                     )
                     .await?;
 
-                // Install the SSH tunnel as a proxy whose URL is dynamically
-                // computed for every request. This ensures that, if the tunnel
-                // fails and restarts at a new address, requests will start
-                // using the new tunnel address.
+                // Carefully inject the SSH tunnel into the client
+                // configuration. This is delicate because we need TLS
+                // verification to continue to use the remote hostname rather
+                // than the tunnel hostname.
 
-                let remote_url = self.url.clone();
-                client_config = client_config.dynamic_url(move || {
-                    let addr = ssh_tunnel.local_addr();
-                    let mut url = remote_url.clone();
-                    url.set_host(Some(&addr.ip().to_string()))
-                        .expect("cannot fail");
-                    url.set_port(Some(addr.port())).expect("cannot fail");
-                    url
-                });
+                client_config = client_config
+                    // `resolve_to_addrs` allows us to rewrite the hostname
+                    // at the DNS level, which means the TCP connection is
+                    // correctly routed through the tunnel, but TLS verification
+                    // is still performed against the remote hostname.
+                    // Unfortunately the port here is ignored...
+                    .resolve_to_addrs(
+                        host,
+                        &[SocketAddr::new(ssh_tunnel.local_addr().ip(), DUMMY_PORT)],
+                    )
+                    // ...so we also dynamically rewrite the URL to use the
+                    // current port for the SSH tunnel.
+                    //
+                    // WARNING: this is brittle, because we only dynamically
+                    // update the client configuration with the tunnel *port*,
+                    // and not the hostname This works fine in practice, because
+                    // only the SSH tunnel port will change if the tunnel fails
+                    // and has to be restarted (the hostname is always
+                    // 127.0.0.1)--but this is an an implementation detail of
+                    // the SSH tunnel code that we're relying on.
+                    .dynamic_url({
+                        let remote_url = self.url.clone();
+                        move || {
+                            let mut url = remote_url.clone();
+                            url.set_port(Some(ssh_tunnel.local_addr().port()))
+                                .expect("cannot fail");
+                            url
+                        }
+                    });
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
-
-                // `net::lookup_host` requires a port but the port will be ignored
-                // when passed to `resolve_to_addrs`. We use a dummy port that will
-                // be easy to spot in the logs to make it obvious if some component
-                // downstream incorrectly starts using this port.
-                const DUMMY_PORT: u16 = 11111;
 
                 // TODO: use types to enforce that the URL has a string hostname.
                 let host = self
