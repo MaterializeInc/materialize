@@ -208,7 +208,9 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{Data, PartEncoder};
     use mz_persist_types::part::PartBuilder;
-    use mz_persist_types::stats::{ColumnStats, DynStats, StructStats};
+    use mz_persist_types::stats::{
+        ColumnStats, DynStats, ProtoStructStats, StructStats, TrimStats,
+    };
     use mz_proto::RustType;
     use proptest::prelude::*;
 
@@ -231,13 +233,14 @@ mod tests {
         }
         let part = part.finish().unwrap();
         let expected = part.key_stats().unwrap();
-        let mut actual = StructStats::from_proto(RustType::into_proto(&expected)).unwrap();
+        let mut actual: ProtoStructStats = RustType::into_proto(&expected);
         // It's not particularly easy to give StructStats a PartialEq impl, but
         // verifying that there weren't any panics gets us pretty far.
 
         // Sanity check that trimming the stats doesn't cause them to be invalid
         // (regression for a bug we had that caused panic at stats usage time).
-        actual.trim_to_budget(0, |_| true);
+        actual.trim();
+        let actual: StructStats = RustType::from_proto(actual).unwrap();
         for (name, typ) in schema.iter() {
             struct ColMinMaxNulls<'a>(&'a dyn DynStats);
             impl<'a> DatumToPersistFn<()> for ColMinMaxNulls<'a> {
