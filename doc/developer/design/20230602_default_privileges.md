@@ -121,6 +121,18 @@ When an object is first created materialize will do the following in order:
 1. Grant the owner all privileges on that object.
 2. Grant any privileges that match a privilege in the `mz_default_privileges` table on that object.
 
+### Differences from PostgreSQL
+
+This section will highlight the differences between PostgreSQL default privileges and the proposed
+default privileges for Materialize.
+
+- This proposal has no special system privileges that are hard-coded into the system. Instead, we
+  pre-populate the user default privileges table with some initial default privileges.
+- This proposal allows defining default privileges for all current and future roles.
+- This proposal allows defining default privileges for multiple databases at once.
+- This proposal does not differentiate between global and non-global default privilege revokes.
+- This proposal has no way to override default owner privileges.
+
 ## Alternatives
 
 - Match PostgreSQL exactly.
