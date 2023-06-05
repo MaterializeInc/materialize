@@ -285,6 +285,9 @@ class ResultComparator:
         for row_index in range(0, row_length):
             result_value1 = result1.result_rows[row_index][col_index]
             result_value2 = result2.result_rows[row_index][col_index]
+            expression = query_execution.query_template.select_expressions[
+                col_index
+            ].to_sql()
 
             if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(
@@ -300,7 +303,7 @@ class ResultComparator:
                         sql1=result1.sql,
                         sql2=result2.sql,
                         col_index=col_index,
-                        location=f"row index {row_index}, column index {col_index}",
+                        location=f"row index {row_index}, column index {col_index} ('{expression}')",
                     ),
                 )
 
