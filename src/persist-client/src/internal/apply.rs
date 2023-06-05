@@ -207,10 +207,7 @@ where
             })
     }
 
-    /// Returns all rollups that are safe to remove.
-    ///
-    /// The full definition of which rollups are safe to remove is discussed in [StateVersions].
-    /// In short, this fn returns rollups for seqnos `<` than the latest rollup `<= seqno_since`.
+    /// Returns all rollups that are <= the given `seqno_since`.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
@@ -225,19 +222,6 @@ where
                     .map(|(seqno, rollup)| (*seqno, rollup.key.clone()))
                     .collect::<Vec<(SeqNo, PartialRollupKey)>>()
             })
-
-        // // The latest rollup <= seqno_since is not removable.
-        // let (latest_rollup_lte_seqno_since, _) = rollups.pop().expect(&format!(
-        //     "shard {} must have rollup <= seqno_since({})",
-        //     self.shard_id, seqno_since
-        // ));
-        // assert!(latest_rollup_lte_seqno_since <= seqno_since);
-        //
-        // // All remaining rollups are removable, as they are all `<` than the
-        // // latest rollup `<= seqno_since`.
-        // assert!(rollups
-        //     .iter()
-        //     .all(|(seqno, _)| *seqno < latest_rollup_lte_seqno_since));
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
