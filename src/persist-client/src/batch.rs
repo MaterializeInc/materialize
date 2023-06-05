@@ -25,6 +25,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
+use mz_persist_types::stats::trim_to_budget;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::order::Reverse;
 use timely::progress::{Antichain, Timestamp};
@@ -742,9 +743,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         let stats = if stats_collection_enabled {
                             let stats_start = Instant::now();
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
-                                Ok(mut x) => {
-                                    x.key.trim_to_budget(stats_budget, force_keep_stats_col);
-                                    let x = LazyPartStats::from(&x);
+                                Ok(x) => {
+                                    let x = LazyPartStats::encode(&x, |s| {
+                                        trim_to_budget(s, stats_budget, force_keep_stats_col);
+                                    });
                                     Some((x, stats_start.elapsed()))
                                 }
                                 Err(err) => {

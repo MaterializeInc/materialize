@@ -1046,16 +1046,15 @@ pub struct LazyPartStats {
     key: LazyProto<ProtoStructStats>,
 }
 
-impl From<&PartStats> for LazyPartStats {
-    fn from(x: &PartStats) -> Self {
+impl LazyPartStats {
+    pub fn encode(x: &PartStats, map_proto: impl FnOnce(&mut ProtoStructStats)) -> Self {
         let PartStats { key } = x;
+        let mut proto_stats = ProtoStructStats::from_rust(key);
+        map_proto(&mut proto_stats);
         LazyPartStats {
-            key: LazyProto::from(&ProtoStructStats::from_rust(key)),
+            key: LazyProto::from(&proto_stats),
         }
     }
-}
-
-impl LazyPartStats {
     /// Decodes and returns PartStats from the encoded representation.
     ///
     /// This does not cache the returned value, it decodes each time it's
@@ -1089,7 +1088,7 @@ impl Arbitrary for LazyPartStats {
 
     fn arbitrary_with(_: ()) -> Self::Strategy {
         Strategy::prop_map((proptest::prelude::any::<PartStats>()), |(x)| {
-            LazyPartStats::from(&x)
+            LazyPartStats::encode(&x, |_| {})
         })
     }
 }
