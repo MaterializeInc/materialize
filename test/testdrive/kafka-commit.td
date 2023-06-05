@@ -39,9 +39,9 @@ three
 
 $ set-from-sql var=consumer-group-id
 SELECT
-  'materialize-' || mz_environment_id() || '-' || c.id || '-' || s.id
+  ks.group_id_base
 FROM mz_sources s
-JOIN mz_connections c ON c.id = s.connection_id
+JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0
@@ -65,9 +65,9 @@ three
 
 $ set-from-sql var=consumer-group-id
 SELECT
-  'OVERRIDE-materialize-' || mz_environment_id() || '-' || c.id || '-' || s.id
+  ks.group_id_base
 FROM mz_sources s
-JOIN mz_connections c ON c.id = s.connection_id
+JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0
