@@ -5066,17 +5066,20 @@ impl<'a> Parser<'a> {
                 variable,
                 to,
             }))
-        } else if
-        // SET TRANSACTION transaction_mode
-        (variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none())
-            ||
-            // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
-            (modifier == Some(SESSION)
-                && variable.as_str().parse() == Ok(CHARACTERISTICS)
-                && self.parse_keywords(&[AS, TRANSACTION]))
-        {
+        } else if variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none() {
+            // SET TRANSACTION transaction_mode
             Ok(Statement::SetTransaction(SetTransactionStatement {
-                modes: self.parse_transaction_modes()?,
+                local: true,
+                modes: self.parse_transaction_modes(true)?,
+            }))
+        } else if modifier == Some(SESSION)
+            && variable.as_str().parse() == Ok(CHARACTERISTICS)
+            && self.parse_keywords(&[AS, TRANSACTION])
+        {
+            // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
+            Ok(Statement::SetTransaction(SetTransactionStatement {
+                local: false,
+                modes: self.parse_transaction_modes(true)?,
             }))
         } else {
             self.expected(self.peek_pos(), "equals sign or TO", self.peek_token())
@@ -5676,20 +5679,22 @@ impl<'a> Parser<'a> {
     fn parse_start_transaction(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(TRANSACTION)?;
         Ok(Statement::StartTransaction(StartTransactionStatement {
-            modes: self.parse_transaction_modes()?,
+            modes: self.parse_transaction_modes(false)?,
         }))
     }
 
     fn parse_begin(&mut self) -> Result<Statement<Raw>, ParserError> {
         let _ = self.parse_one_of_keywords(&[TRANSACTION, WORK]);
         Ok(Statement::StartTransaction(StartTransactionStatement {
-            modes: self.parse_transaction_modes()?,
+            modes: self.parse_transaction_modes(false)?,
         }))
     }
 
-    fn parse_transaction_modes(&mut self) -> Result<Vec<TransactionMode>, ParserError> {
+    fn parse_transaction_modes(
+        &mut self,
+        mut required: bool,
+    ) -> Result<Vec<TransactionMode>, ParserError> {
         let mut modes = vec![];
-        let mut required = false;
         loop {
             let mode = if self.parse_keywords(&[ISOLATION, LEVEL]) {
                 let iso_level = if self.parse_keywords(&[READ, UNCOMMITTED]) {
@@ -5700,6 +5705,8 @@ impl<'a> Parser<'a> {
                     TransactionIsolationLevel::RepeatableRead
                 } else if self.parse_keyword(SERIALIZABLE) {
                     TransactionIsolationLevel::Serializable
+                } else if self.parse_keywords(&[STRICT, SERIALIZABLE]) {
+                    TransactionIsolationLevel::StrictSerializable
                 } else {
                     self.expected(self.peek_pos(), "isolation level", self.peek_token())?
                 };

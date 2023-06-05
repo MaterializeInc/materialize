@@ -337,6 +337,7 @@ Stdout
 Storage
 Storagectl
 Strategy
+Strict
 String
 Subscribe
 Subsource

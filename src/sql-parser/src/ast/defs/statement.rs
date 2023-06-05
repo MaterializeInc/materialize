@@ -2033,12 +2033,17 @@ impl_display!(StartTransactionStatement);
 /// `SET TRANSACTION ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SetTransactionStatement {
+    pub local: bool,
     pub modes: Vec<TransactionMode>,
 }
 
 impl AstDisplay for SetTransactionStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SET TRANSACTION");
+        f.write_str("SET ");
+        if !self.local {
+            f.write_str("SESSION CHARACTERISTICS AS ");
+        }
+        f.write_str("TRANSACTION");
         if !self.modes.is_empty() {
             f.write_str(" ");
             f.write_node(&display::comma_separated(&self.modes));

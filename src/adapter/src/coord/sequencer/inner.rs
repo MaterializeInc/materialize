@@ -55,13 +55,16 @@ use mz_sql::plan::{
     CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
     GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
     PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
-    RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
+    RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan,
+    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
+    VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::TransactionMode;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -1856,6 +1859,31 @@ impl Coordinator {
             .vars_mut()
             .reset(Some(self.catalog().system_config()), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
+    }
+
+    pub(super) fn sequence_set_transaction(
+        &self,
+        session: &mut Session,
+        plan: SetTransactionPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO(jkosh44) Only supports isolation levels for now.
+        for mode in plan.modes {
+            match mode {
+                TransactionMode::AccessMode(_) => {
+                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
+                }
+                TransactionMode::IsolationLevel(isolation_level) => session.vars_mut().set(
+                    Some(self.catalog().system_config()),
+                    TRANSACTION_ISOLATION_VAR_NAME.as_str(),
+                    VarInput::Flat(&isolation_level.to_ast_string_stable()),
+                    plan.local,
+                )?,
+            }
+        }
+        Ok(ExecuteResponse::SetVariable {
+            name: TRANSACTION_ISOLATION_VAR_NAME.to_string(),
+            reset: false,
+        })
     }
 
     pub(super) fn sequence_end_transaction(

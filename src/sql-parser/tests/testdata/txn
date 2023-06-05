@@ -122,14 +122,14 @@ SET TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE
 ----
 SET TRANSACTION READ ONLY, READ WRITE, ISOLATION LEVEL SERIALIZABLE
 =>
-SetTransaction(SetTransactionStatement { modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] })
+SetTransaction(SetTransactionStatement { local: true, modes: [AccessMode(ReadOnly), AccessMode(ReadWrite), IsolationLevel(Serializable)] })
 
 parse-statement
 SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 ----
-SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 =>
-SetTransaction(SetTransactionStatement { modes: [IsolationLevel(ReadUncommitted)] })
+SetTransaction(SetTransactionStatement { local: false, modes: [IsolationLevel(ReadUncommitted)] })
 
 parse-statement
 COMMIT

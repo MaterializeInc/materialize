@@ -32,7 +32,7 @@ use mz_sql::plan::{
     ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
     MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
     ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
-    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
     StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
@@ -275,6 +275,7 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -371,6 +372,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -527,6 +529,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -1111,6 +1114,7 @@ fn generate_required_privileges(
             local: _,
         })
         | Plan::ResetVariable(ResetVariablePlan { name: _ })
+        | Plan::SetTransaction(SetTransactionPlan { local: _, modes: _ })
         | Plan::StartTransaction(StartTransactionPlan {
             access: _,
             isolation_level: _,

@@ -164,6 +164,61 @@ SET transaction_isolation = 'snapshot isolation'
 statement ok
 SET transaction_isolation = 'strict serializable'
 
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement ok
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+statement ok
+SET TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+statement ok
+BEGIN;
+
+statement ok
+SET TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement ok
+COMMIT
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+## Last isolation level write wins
+statement ok
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE, ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement error Expected transaction mode, found EOF
+SET TRANSACTION
+
+statement error SET TRANSACTION <access-mode> are not supported
+SET TRANSACTION READ ONLY
+
 # Test that a failed transaction will not commit var changes.
 
 statement ok
