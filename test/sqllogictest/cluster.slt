@@ -453,6 +453,18 @@ statement ok
 DROP CLUSTER REPLICA default."foo-bar"
 
 statement ok
+CREATE CLUSTER "foo-bar" REPLICAS ()
+
+statement ok
+CREATE CLUSTER REPLICA "foo-bar"."foo-bar" SIZE '1'
+
+statement ok
+DROP CLUSTER REPLICA "foo-bar"."foo-bar"
+
+statement ok
+DROP CLUSTER "foo-bar"
+
+statement ok
 CREATE CLUSTER REPLICA default."好-好" SIZE '1'
 
 statement ok
