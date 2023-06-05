@@ -1799,9 +1799,8 @@ impl Coordinator {
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let (name, local) = (plan.name, plan.local);
-
-        if &name == TRANSACTION_ISOLATION_VAR_NAME && session.transaction().contains_ops() {
-            return Err(AdapterError::InvalidSetIsolationLevel);
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
         }
 
         let vars = session.vars_mut();
@@ -1860,6 +1859,9 @@ impl Coordinator {
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let name = plan.name;
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
         session
             .vars_mut()
             .reset(Some(self.catalog().system_config()), &name, false)?;
@@ -1878,9 +1880,7 @@ impl Coordinator {
                     return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
                 }
                 TransactionMode::IsolationLevel(isolation_level) => {
-                    if session.transaction().contains_ops() {
-                        return Err(AdapterError::InvalidSetIsolationLevel);
-                    }
+                    self.validate_set_isolation_level(session)?;
 
                     session.vars_mut().set(
                         Some(self.catalog().system_config()),
@@ -1895,6 +1895,14 @@ impl Coordinator {
             name: TRANSACTION_ISOLATION_VAR_NAME.to_string(),
             reset: false,
         })
+    }
+
+    fn validate_set_isolation_level(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.transaction().contains_ops() {
+            Err(AdapterError::InvalidSetIsolationLevel)
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) fn sequence_end_transaction(
