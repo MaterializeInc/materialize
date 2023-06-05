@@ -136,7 +136,14 @@ class PreExecutionInconsistencyIgnoreFilter:
         all_involved_characteristics: Set[ExpressionCharacteristics],
     ) -> bool:
         # Note that function names are always provided in lower case.
-        if db_function.function_name in {"sum", "avg", "stddev_samp", "stddev_pop"}:
+        if db_function.function_name in {
+            "sum",
+            "avg",
+            "stddev_samp",
+            "stddev_pop",
+            "var_samp",
+            "var_pop",
+        }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return True
@@ -147,6 +154,11 @@ class PreExecutionInconsistencyIgnoreFilter:
             ):
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return True
+
+        if db_function.function_name in {"array_agg", "string_agg"}:
+            # They would require a special comparison because the order of items in the resulting array differs.
+            # related to https://github.com/MaterializeInc/materialize/issues/17189
+            return True
 
         return False
 
