@@ -3658,7 +3658,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.57.2"
+version = "0.57.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -3809,7 +3809,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.57.2"
+version = "0.57.3"
 dependencies = [
  "anyhow",
  "askama",
@@ -4338,7 +4338,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.57.2"
+version = "0.57.3"
 dependencies = [
  "anyhow",
  "async-stream",
