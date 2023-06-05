@@ -902,6 +902,7 @@ pub struct GrantPrivilegesPlan {
 
 #[derive(Debug)]
 pub struct RevokePrivilegesPlan {
+    /// Description of each privilege being revoked.
     pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will have privileges revoked.
     pub revokees: Vec<RoleId>,

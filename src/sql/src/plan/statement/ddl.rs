@@ -34,9 +34,10 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, GrantPrivilegesStatement, GrantRoleStatement, Privilege,
-    PrivilegeSpecification, ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement,
-    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    DropOwnedStatement, GrantObjectSpecification, GrantObjectSpecificationInner,
+    GrantPrivilegesStatement, GrantRoleStatement, Privilege, PrivilegeSpecification,
+    ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement, SshConnectionOption,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -92,7 +93,7 @@ use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, ObjectId, PartialItemName, QualifiedItemName, RawDatabaseSpecifier,
     ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
-    ResolvedObjectName, ResolvedRoleName, SchemaSpecifier,
+    ResolvedRoleName, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -4597,12 +4598,11 @@ pub fn plan_grant_privileges(
     scx: &StatementContext,
     GrantPrivilegesStatement {
         privileges,
-        object_type,
-        names,
+        objects,
         roles,
     }: GrantPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, object_type, names, roles)?;
+    let plan = plan_update_privilege(scx, privileges, objects, roles)?;
     Ok(Plan::GrantPrivileges(plan.into()))
 }
 
@@ -4617,12 +4617,11 @@ pub fn plan_revoke_privileges(
     scx: &StatementContext,
     RevokePrivilegesStatement {
         privileges,
-        object_type,
-        names,
+        objects,
         roles,
     }: RevokePrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, object_type, names, roles)?;
+    let plan = plan_update_privilege(scx, privileges, objects, roles)?;
     Ok(Plan::RevokePrivileges(plan.into()))
 }
 
@@ -4662,16 +4661,36 @@ impl From<UpdatePrivilegesPlan> for RevokePrivilegesPlan {
 fn plan_update_privilege(
     scx: &StatementContext,
     privileges: PrivilegeSpecification,
-    object_type: ObjectType,
-    names: Vec<ResolvedObjectName>,
+    objects: GrantObjectSpecification<Aug>,
     roles: Vec<ResolvedRoleName>,
 ) -> Result<UpdatePrivilegesPlan, PlanError> {
-    let mut update_privileges = Vec::with_capacity(names.len());
+    let object_type = objects.object_type;
+    let object_ids: Vec<ObjectId> = match objects.object_spec_inner {
+        GrantObjectSpecificationInner::All { schemas } => schemas
+            .into_iter()
+            .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
+            .flat_map(|schema| schema.item_ids().values())
+            .map(|item_id| (*item_id).into())
+            .filter(|object_id| {
+                if object_type == ObjectType::Table {
+                    scx.get_object_type(object_id).is_relation()
+                } else {
+                    object_type == scx.get_object_type(object_id)
+                }
+            })
+            .collect(),
+        GrantObjectSpecificationInner::Objects { names } => names
+            .into_iter()
+            .map(|name| {
+                name.try_into()
+                    .expect("name resolution should handle invalid objects")
+            })
+            .collect(),
+    };
 
-    for name in names {
-        let object_id = name
-            .try_into()
-            .expect("name resolution should handle invalid objects");
+    let mut update_privileges = Vec::with_capacity(object_ids.len());
+
+    for object_id in object_ids {
         let actual_object_type = scx.get_object_type(&object_id);
         let mut reference_object_type = actual_object_type.clone();
 
