@@ -795,3 +795,47 @@
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
     unmaterializable: true
+
+- type: Access privilege inquiry
+  description: |
+    Functions that allow querying object access privileges. All of the following functions have
+    limitations involved in resolving the text names passed in. None of the object names can have
+    any schema or database qualifiers. For example, `has_table_privilege('public.t', 'SELECT')`
+    will not work properly. Additionally, the name lookup does not consider the current search path
+    or active database.
+  functions:
+    - signature: 'has_cluster_privilege([role: text or oid,] cluster: text, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the cluster with the specified cluster name. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_connection_privilege([role: text or oid,] connection: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the connection with the specified connection name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_database_privilege([role: text or oid,] database: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the database with the specified database name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_schema_privilege([role: text or oid,] schema: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the schema with the specified schema name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_secret_privilege([role: text or oid,] secret: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the secret with the specified secret name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_table_privilege([role: text or oid,] relation: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the relation with the specified relation name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_type_privilege([role: text or oid,] type: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the type with the specified type name or OID. If the role is omitted then
+        the `current_role` is assumed.

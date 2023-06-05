@@ -1053,8 +1053,48 @@ GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE s TO joe
 
 ## Type
 
+query B
+SELECT has_type_privilege('joe', 'ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
+
 statement ok
 GRANT USAGE on TYPE ty TO joe
+
+query B
+SELECT has_type_privilege('joe', 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+true
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'ty'
@@ -1084,6 +1124,26 @@ DROP ROLE joe
 
 statement ok
 REVOKE USAGE on TYPE ty FROM joe
+
+query B
+SELECT has_type_privilege('joe', 'ty', 'SELECT')
+----
+false
+
+query B
+SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'ty'
@@ -1129,8 +1189,48 @@ GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON TYPE ty TO joe
 
 ## Secret
 
+query B
+SELECT has_secret_privilege('joe', 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('joe', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
+
 statement ok
 GRANT USAGE on SECRET se TO joe
+
+query B
+SELECT has_secret_privilege('joe', 'se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('joe', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+true
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'se'
@@ -1169,6 +1269,26 @@ DROP ROLE joe
 statement ok
 REVOKE USAGE on SECRET se FROM joe
 
+query B
+SELECT has_secret_privilege('joe', 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('joe', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
+
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'se'
 ----
@@ -1204,6 +1324,26 @@ GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON SECRET se TO joe
 
 ## Connection
 
+query B
+SELECT has_connection_privilege('joe', 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('joe', (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
+
 statement ok
 GRANT USAGE on CONNECTION conn TO joe
 
@@ -1212,6 +1352,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 'conn'
 ----
 conn  joe=U/materialize
 conn  materialize=U/materialize
+
+query B
+SELECT has_connection_privilege('joe', 'conn', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege('joe', (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'conn', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -1250,6 +1410,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 'conn'
 conn  =U/materialize
 conn  materialize=U/materialize
 
+query B
+SELECT has_connection_privilege('joe', 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('joe', (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
+
 ### Duplicate revokes have no effect
 statement ok
 REVOKE USAGE on CONNECTION conn FROM joe
@@ -1279,6 +1459,16 @@ GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON CONNECTION conn TO joe
 
 ## Cluster
 
+query B
+SELECT has_cluster_privilege('joe', 'c', 'USAGE')
+----
+false
+
+query B
+SELECT has_cluster_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'c', 'USAGE')
+----
+false
+
 statement ok
 GRANT USAGE on CLUSTER c TO joe
 
@@ -1287,6 +1477,16 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=U/materialize
 c  materialize=UC/materialize
+
+query B
+SELECT has_cluster_privilege('joe', 'c', 'USAGE')
+----
+true
+
+query B
+SELECT has_cluster_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'c', 'USAGE')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -1325,6 +1525,16 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 c  =UC/materialize
 c  materialize=UC/materialize
 
+query B
+SELECT has_cluster_privilege('joe', 'c', 'USAGE')
+----
+false
+
+query B
+SELECT has_cluster_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'c', 'USAGE')
+----
+false
+
 ### Duplicate revokes have no effect
 statement ok
 REVOKE USAGE on CLUSTER c FROM joe
@@ -1354,6 +1564,26 @@ GRANT INSERT, SELECT, UPDATE, DELETE ON CLUSTER c TO joe
 
 ## Database
 
+query B
+SELECT has_database_privilege('joe', 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege('joe', (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
 statement ok
 GRANT USAGE on DATABASE d TO joe
 
@@ -1362,6 +1592,26 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  joe=U/materialize
 d  materialize=UC/materialize
+
+query B
+SELECT has_database_privilege('joe', 'd', 'USAGE')
+----
+true
+
+query B
+SELECT has_database_privilege('joe', (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+true
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'd', 'USAGE')
+----
+true
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -1400,6 +1650,26 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 d  =UC/materialize
 d  materialize=UC/materialize
 
+query B
+SELECT has_database_privilege('joe', 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege('joe', (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
 ### Duplicate revokes have no effect
 statement ok
 REVOKE USAGE on DATABASE d FROM joe
@@ -1429,6 +1699,26 @@ GRANT INSERT, SELECT, UPDATE, DELETE ON DATABASE d TO joe
 
 ## Schema
 
+query B
+SELECT has_schema_privilege('joe', 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege('joe', (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
+
 statement ok
 GRANT USAGE on SCHEMA sch TO joe
 
@@ -1437,6 +1727,26 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=U/materialize
 sch  materialize=UC/materialize
+
+query B
+SELECT has_schema_privilege('joe', 'sch', 'USAGE')
+----
+true
+
+query B
+SELECT has_schema_privilege('joe', (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+true
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'sch', 'USAGE')
+----
+true
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -1474,6 +1784,26 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  materialize=UC/materialize
+
+query B
+SELECT has_schema_privilege('joe', 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege('joe', (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1733,6 +2063,93 @@ db error: ERROR: system cluster 'mz_introspection' cannot be modified
 
 ## If any input is NULL then the result is NULL.
 
+### Cluster
+
+query B
+SELECT has_cluster_privilege(NULL, 'c', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_cluster_privilege('joe', NULL, 'USAGE')
+----
+NULL
+
+query B
+SELECT has_cluster_privilege('joe', 'c', NULL)
+----
+NULL
+
+### Connection
+
+query B
+SELECT has_connection_privilege(NULL, 'conn', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_connection_privilege('joe', NULL, 'USAGE')
+----
+NULL
+
+query B
+SELECT has_connection_privilege('joe', 'conn', NULL)
+----
+NULL
+
+### Database
+
+query B
+SELECT has_database_privilege(NULL, 'd', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_database_privilege('joe', NULL, 'USAGE')
+----
+NULL
+
+query B
+SELECT has_database_privilege('joe', 'd', NULL)
+----
+NULL
+
+### Schema
+
+query B
+SELECT has_schema_privilege(NULL, 'sch', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_schema_privilege('joe', NULL, 'USAGE')
+----
+NULL
+
+query B
+SELECT has_schema_privilege('joe', 'sch', NULL)
+----
+NULL
+
+### Secret
+
+query B
+SELECT has_secret_privilege(NULL, 'se', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_secret_privilege('joe', NULL, 'USAGE')
+----
+NULL
+
+query B
+SELECT has_secret_privilege('joe', 'se', NULL)
+----
+NULL
+
+### Table
+
 query B
 SELECT has_table_privilege(NULL, 't', 'SELECT')
 ----
@@ -1748,7 +2165,81 @@ SELECT has_table_privilege('joe', 't', NULL)
 ----
 NULL
 
+### Type
+
+query B
+SELECT has_type_privilege(NULL, 'ty', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_type_privilege('joe', NULL, 'USAGE')
+----
+NULL
+
+query B
+SELECT has_type_privilege('joe', 'ty', NULL)
+----
+NULL
+
 ## If any of the text inputs are invalid then the query should error.
+
+### Cluster
+
+query error role "fake-role" does not exist
+SELECT has_cluster_privilege('fake-role', 'c', 'USAGE')
+
+query error cluster "fake-cluster" does not exist
+SELECT has_cluster_privilege('joe', 'fake-cluster', 'USAGE')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_cluster_privilege('joe', 'c', 'fake privilege')
+
+### Connection
+
+query error role "fake-role" does not exist
+SELECT has_connection_privilege('fake-role', 'conn', 'USAGE')
+
+query error object "fake-connection" does not exist
+SELECT has_connection_privilege('joe', 'fake-connection', 'USAGE')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_connection_privilege('joe', 'conn', 'fake privilege')
+
+### Database
+
+query error role "fake-role" does not exist
+SELECT has_database_privilege('fake-role', 'd', 'USAGE')
+
+query error database "fake-database" does not exist
+SELECT has_database_privilege('joe', 'fake-database', 'USAGE')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_database_privilege('joe', 'd', 'fake privilege')
+
+### Schema
+
+query error role "fake-role" does not exist
+SELECT has_schema_privilege('fake-role', 'sch', 'USAGE')
+
+query error schema "fake-schema" does not exist
+SELECT has_schema_privilege('joe', 'fake-schema', 'USAGE')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_schema_privilege('joe', 'sch', 'fake privilege')
+
+### Secret
+
+query error role "fake-role" does not exist
+SELECT has_secret_privilege('fake-role', 'se', 'USAGE')
+
+query error object "fake-secret" does not exist
+SELECT has_secret_privilege('joe', 'fake-secret', 'USAGE')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_secret_privilege('joe', 'se', 'fake privilege')
+
+### Table
 
 query error role "fake-role" does not exist
 SELECT has_table_privilege('fake-role', 't', 'SELECT')
@@ -1759,7 +2250,75 @@ SELECT has_table_privilege('joe', 'fake-table', 'SELECT')
 query error unrecognized privilege type: "fake privilege"
 SELECT has_table_privilege('joe', 't', 'fake privilege')
 
+### Type
+
+query error role "fake-role" does not exist
+SELECT has_type_privilege('fake-role', 'ty', 'USAGE')
+
+query error object "fake-type" does not exist
+SELECT has_type_privilege('joe', 'fake-type', 'USAGE')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_type_privilege('joe', 'ty', 'fake privilege')
+
 ## If any of the oid inputs are invalid then the query should be NULL.
+
+### Cluster
+
+query B
+SELECT has_cluster_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'c', 'USAGE')
+----
+NULL
+
+### Connection
+
+query B
+SELECT has_connection_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'conn', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_connection_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1)::text::oid, 'USAGE')
+----
+NULL
+
+### Database
+
+query B
+SELECT has_database_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'd', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_database_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1)::text::oid, 'USAGE')
+----
+NULL
+
+### Schema
+
+query B
+SELECT has_schema_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'sch', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_schema_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1)::text::oid, 'USAGE')
+----
+NULL
+
+### Secret
+
+query B
+SELECT has_secret_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'se', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_secret_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1)::text::oid, 'USAGE')
+----
+NULL
+
+### Table
 
 query B
 SELECT has_table_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 't', 'SELECT')
@@ -1771,7 +2330,106 @@ SELECT has_table_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1):
 ----
 NULL
 
+### Type
+
+query B
+SELECT has_type_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'ty', 'USAGE')
+----
+NULL
+
+query B
+SELECT has_type_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1)::text::oid, 'USAGE')
+----
+NULL
+
 ## The function should return true if ANY of the privileges exist, not all.
+
+### Cluster
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON CLUSTER c FROM joe, materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER c TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_cluster_privilege('joe', 'c', 'USAGE, CREATE')
+----
+true
+
+### Connection
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON CONNECTION conn FROM joe, materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CONNECTION conn TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_connection_privilege('joe', 'conn', 'USAGE, CREATE')
+----
+true
+
+### Database
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON DATABASE d FROM joe, materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE d TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_database_privilege('joe', 'd', 'USAGE, CREATE')
+----
+true
+
+### Schema
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SCHEMA sch FROM joe, materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA sch TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_schema_privilege('joe', 'sch', 'USAGE, CREATE')
+----
+true
+
+### Secret
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SECRET se FROM joe, materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET se TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_secret_privilege('joe', 'se', 'USAGE, CREATE')
+----
+true
+
+### Table
 
 simple conn=mz_system,user=mz_system
 REVOKE ALL PRIVILEGES ON t FROM joe, materialize;
@@ -1788,7 +2446,241 @@ SELECT has_table_privilege('joe', 't', 'SELECT, INSERT')
 ----
 true
 
+### Type
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON TYPE ty FROM joe, materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_type_privilege('joe', 'ty', 'USAGE, CREATE')
+----
+true
+
 ## Test two input variants.
+
+### Cluster
+
+query B
+SELECT has_cluster_privilege('materialize', 'c', 'USAGE')
+----
+false
+
+query B
+SELECT has_cluster_privilege('c', 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER c TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_cluster_privilege('materialize', 'c', 'USAGE')
+----
+true
+
+query B
+SELECT has_cluster_privilege('c', 'USAGE')
+----
+true
+
+### Connection
+
+query B
+SELECT has_connection_privilege('materialize', 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('materialize', (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CONNECTION conn TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_connection_privilege('materialize', 'conn', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege('conn', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege('materialize', (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+true
+
+### Database
+
+query B
+SELECT has_database_privilege('materialize', 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege('d', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege('materialize', (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE d TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_database_privilege('materialize', 'd', 'USAGE')
+----
+true
+
+query B
+SELECT has_database_privilege('d', 'USAGE')
+----
+true
+
+query B
+SELECT has_database_privilege('materialize', (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+true
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+true
+
+### Schema
+
+query B
+SELECT has_schema_privilege('materialize', 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege('sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege('materialize', (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA sch TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_schema_privilege('materialize', 'sch', 'USAGE')
+----
+true
+
+query B
+SELECT has_schema_privilege('sch', 'USAGE')
+----
+true
+
+query B
+SELECT has_schema_privilege('materialize', (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+true
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+true
+
+### Secret
+
+query B
+SELECT has_secret_privilege('materialize', 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('materialize', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET se TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_secret_privilege('materialize', 'se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('materialize', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+true
+
+### Table
 
 query B
 SELECT has_table_privilege('materialize', 't', 'SELECT')
@@ -1832,6 +2724,53 @@ true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+true
+
+### Type
+
+query B
+SELECT has_type_privilege('materialize', 'ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('materialize', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_type_privilege('materialize', 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('materialize', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
 ----
 true
 
