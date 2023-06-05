@@ -10,6 +10,7 @@
 
 from materialize.checks.aggregation import *  # noqa: F401 F403
 from materialize.checks.alter_index import *  # noqa: F401 F403
+from materialize.checks.array_type import *  # noqa: F401 F403
 from materialize.checks.boolean_type import *  # noqa: F401 F403
 from materialize.checks.cast import *  # noqa: F401 F403
 from materialize.checks.cluster import *  # noqa: F401 F403
