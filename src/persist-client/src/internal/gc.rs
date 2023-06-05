@@ -13,7 +13,6 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
-use std::ops::Not;
 use std::sync::Arc;
 use std::time::Instant;
 

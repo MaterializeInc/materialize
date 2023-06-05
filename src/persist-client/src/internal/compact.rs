@@ -11,7 +11,6 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::Not;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

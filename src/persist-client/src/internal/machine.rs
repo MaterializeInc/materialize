@@ -1798,7 +1798,7 @@ pub mod tests {
                 .expect("invalid usage")
                 .expect("unexpected upper");
             writer_maintenance
-                .perform(&write.machine, &write.gc, write.compact.as_ref())
+                .perform(&write.machine, &write.gc, &write.compact)
                 .await;
         }
         let live_diffs = write

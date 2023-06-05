@@ -902,7 +902,7 @@ mod tests {
         ];
 
         let shard_id = ShardId::new();
-        let mut client = new_test_client().await;
+        let client = new_test_client().await;
         let mut params = PersistParameters::default();
         // make things interesting and create multiple parts per batch
         params.blob_target_size = Some(0);

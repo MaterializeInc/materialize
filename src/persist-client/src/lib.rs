@@ -708,7 +708,6 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
-    use crate::cfg::DynamicConfig;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
@@ -780,7 +779,7 @@ mod tests {
     pub fn new_test_client_cache() -> PersistClientCache {
         // Configure an aggressively small blob_target_size so we get some
         // amount of coverage of that in tests. Similarly, for max_outstanding.
-        let mut cache = PersistClientCache::new_no_metrics();
+        let cache = PersistClientCache::new_no_metrics();
         cache.cfg.dynamic.set_blob_target_size(10);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(1);
         // Enable compaction in tests to ensure we get coverage.
