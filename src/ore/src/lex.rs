@@ -160,6 +160,3 @@ impl<'a> Iterator for LexBuf<'a> {
         c
     }
 }
-
-#[test]
-fn test_nested() {}
