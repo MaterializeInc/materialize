@@ -577,6 +577,10 @@ pg_enum
 VIEW
 materialize
 pg_catalog
+pg_extension
+VIEW
+materialize
+pg_catalog
 pg_index
 VIEW
 materialize
@@ -606,6 +610,10 @@ VIEW
 materialize
 pg_catalog
 pg_range
+VIEW
+materialize
+pg_catalog
+pg_rewrite
 VIEW
 materialize
 pg_catalog

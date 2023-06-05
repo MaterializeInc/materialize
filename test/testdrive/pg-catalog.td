@@ -188,3 +188,27 @@ name                nullable    type
  tgqual             false       text
  tgoldtable         false       text
  tgnewtable         false       text
+
+> SHOW COLUMNS FROM pg_rewrite
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ rulename           false       text
+ ev_class           false       oid
+ ev_type            false       char
+ ev_enabled         false       char
+ is_instead         false       boolean
+ ev_qual            false       text
+ ev_action          false       text
+
+> SHOW COLUMNS FROM pg_extension
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ extname            false       text
+ extowner           false       oid
+ extnamespace       false       oid
+ extrelocatable     false       boolean
+ extversion         false       text
+ extconfig          false       oid[]
+ extcondition       false       text[]
