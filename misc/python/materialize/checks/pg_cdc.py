@@ -7,19 +7,31 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from random import Random
 from textwrap import dedent
-from typing import List
+from typing import Any, List, Optional
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, CheckDisabled
 from materialize.util import MzVersion
 
 
-class PgCdc(Check):
+class PgCdcBase:
+    base_version: MzVersion
+    wait: bool
+    repeats: int
+    expects: int
+
+    def __init__(self, wait: bool, **kwargs: Any) -> None:
+        self.wait = wait
+        self.repeats = 1024 if wait else 16384
+        self.expects = 97350 if wait else 1633350
+        super().__init__(**kwargs)  # foward unused args to Check/CheckDisabled
+
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
-                """
+                f"""
                 > CREATE SECRET pgpass1 AS 'postgres';
 
                 > CREATE CONNECTION pg1 FOR POSTGRES
@@ -38,7 +50,7 @@ class PgCdc(Check):
                 CREATE TABLE postgres_source_table (f1 TEXT, f2 INTEGER, f3 TEXT UNIQUE NOT NULL, PRIMARY KEY(f1, f2));
                 ALTER TABLE postgres_source_table REPLICA IDENTITY FULL;
 
-                INSERT INTO postgres_source_table SELECT 'A', i, REPEAT('A', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM generate_series(1,100) AS i;
 
                 CREATE PUBLICATION postgres_source FOR ALL TABLES;
                 """
@@ -49,7 +61,7 @@ class PgCdc(Check):
         return [
             Testdrive(dedent(s))
             for s in [
-                """
+                f"""
                 > CREATE SOURCE postgres_source1
                   FROM POSTGRES CONNECTION pg1
                   (PUBLICATION 'postgres_source')
@@ -58,7 +70,7 @@ class PgCdc(Check):
                 > CREATE DEFAULT INDEX ON postgres_source_tableA;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'B', i, REPEAT('B', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'B', i, REPEAT('B', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 > CREATE SECRET pgpass2 AS 'postgres';
@@ -70,18 +82,24 @@ class PgCdc(Check):
                   PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'C', i, REPEAT('C', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
+                """
+                + (
+                    """
                 # Wait until Pg snapshot is complete in order to avoid #18940
                 > SELECT COUNT(*) > 0 FROM postgres_source_tableA
                 true
-                """,
                 """
+                    if self.wait
+                    else ""
+                ),
+                f"""
                 $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 GRANT USAGE ON CONNECTION pg2 TO materialize
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'D', i, REPEAT('D', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'D', i, REPEAT('D', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 > CREATE SOURCE postgres_source2
@@ -90,11 +108,11 @@ class PgCdc(Check):
                   FOR TABLES (postgres_source_table AS postgres_source_tableB);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'E', i, REPEAT('E', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'F', i, REPEAT('F', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'F', i, REPEAT('F', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 > CREATE SECRET pgpass3 AS 'postgres';
@@ -111,60 +129,66 @@ class PgCdc(Check):
                   FOR TABLES (postgres_source_table AS postgres_source_tableC);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'G', i, REPEAT('G', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'G', i, REPEAT('G', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
 
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'H', i, REPEAT('X', 1024 - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table SELECT 'H', i, REPEAT('X', {self.repeats} - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
+                """
+                + (
+                    """
                 # Wait until Pg snapshot is complete in order to avoid #18940
                 > SELECT COUNT(*) > 0 FROM postgres_source_tableB
                 true
                 > SELECT COUNT(*) > 0 FROM postgres_source_tableC
                 true
-                """,
+                """
+                    if self.wait
+                    else ""
+                ),
             ]
         ]
 
     def validate(self) -> Testdrive:
         return Testdrive(
             dedent(
-                """
+                f"""
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 GRANT SELECT ON postgres_source_tableA TO materialize
                 GRANT SELECT ON postgres_source_tableB TO materialize
                 GRANT SELECT ON postgres_source_tableC TO materialize
 
                 > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA GROUP BY f1;
-                A 800 97350
-                B 800 97350
-                C 700 97350
-                D 600 97350
-                E 500 97350
-                F 400 97350
-                G 300 97350
-                H 200 97350
+                A 800 {self.expects}
+                B 800 {self.expects}
+                C 700 {self.expects}
+                D 600 {self.expects}
+                E 500 {self.expects}
+                F 400 {self.expects}
+                G 300 {self.expects}
+                H 200 {self.expects}
 
                 > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableB GROUP BY f1;
-                A 800 97350
-                B 800 97350
-                C 700 97350
-                D 600 97350
-                E 500 97350
-                F 400 97350
-                G 300 97350
-                H 200 97350
+                A 800 {self.expects}
+                B 800 {self.expects}
+                C 700 {self.expects}
+                D 600 {self.expects}
+                E 500 {self.expects}
+                F 400 {self.expects}
+                G 300 {self.expects}
+                H 200 {self.expects}
 
                 > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableC GROUP BY f1;
-                A 800 97350
-                B 800 97350
-                C 700 97350
-                D 600 97350
-                E 500 97350
-                F 400 97350
-                G 300 97350
-                H 200 97350
+                A 800 {self.expects}
+                B 800 {self.expects}
+                C 700 {self.expects}
+                D 600 {self.expects}
+                E 500 {self.expects}
+                F 400 {self.expects}
+                G 300 {self.expects}
+                H 200 {self.expects}
                 """
             )
             + (
@@ -187,6 +211,17 @@ class PgCdc(Check):
                 else ""
             )
         )
+
+
+class PgCdc(PgCdcBase, Check):
+    def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
+        super().__init__(wait=True, base_version=base_version, rng=rng)
+
+
+# TODO(def-) Enable this check (with an adequate version limitation) when #18940 is fixed
+class PgCdcNoWait(PgCdcBase, CheckDisabled):
+    def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
+        super().__init__(wait=False, base_version=base_version, rng=rng)
 
 
 class PgCdcMzNow(Check):
