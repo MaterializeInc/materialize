@@ -134,6 +134,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::Execute { .. }
         | Command::Commit { .. }
         | Command::CancelRequest { .. }
+        | Command::PrivilegedCancelRequest { .. }
         | Command::CopyRows { .. }
         | Command::GetSystemVars { .. }
         | Command::SetSystemVars { .. }

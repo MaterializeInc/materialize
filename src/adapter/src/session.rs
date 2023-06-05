@@ -42,7 +42,7 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
-const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::new_static(0);
+const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 const DUMMY_CONNECT_TIME: EpochMillis = 0;
 
 /// A session holds per-connection state.

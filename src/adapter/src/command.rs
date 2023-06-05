@@ -27,7 +27,7 @@ use mz_sql::plan::{ExecuteTimeout, PlanKind};
 use mz_sql::session::vars::Var;
 use tokio::sync::{oneshot, watch};
 
-use crate::client::ConnectionIdType;
+use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -77,10 +77,12 @@ pub enum Command {
     },
 
     CancelRequest {
-        /// Note: This is a [`ConnectionIdType`] and not a `ConnetionId` to support external
-        /// clients.
         conn_id: ConnectionIdType,
         secret_key: u32,
+    },
+
+    PrivilegedCancelRequest {
+        conn_id: ConnectionId,
     },
 
     DumpCatalog {
@@ -127,7 +129,7 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } => None,
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 
@@ -144,7 +146,7 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } => None,
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 
@@ -162,7 +164,7 @@ impl Command {
             Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
             Command::Commit { tx, session, .. } => send(tx, session, e),
-            Command::CancelRequest { .. } => {}
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
             Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
             Command::CopyRows { tx, session, .. } => send(tx, session, e),
             Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
@@ -184,7 +186,7 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
-/// The response to [`ConnClient::startup`](crate::ConnClient::startup).
+/// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
     /// Notifications associated with session startup.
