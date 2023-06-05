@@ -2360,6 +2360,14 @@ query T
 SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
 ----
 
+## Test dropping temporary objects
+
+statement ok
+CREATE TEMP VIEW v AS SELECT 1
+
+statement ok
+DROP OWNED BY materialize
+
 ## Test dropping system objects
 
 simple conn=mz_system,user=mz_system
@@ -2494,6 +2502,19 @@ SELECT mz_roles.name
   WHERE mz_cluster_replicas.name = 'replica1'
 ----
 group1
+
+## Test reassigning temporary objects. It's weird that this is allowed, but it is.
+
+simple conn=mz_system,user=mz_system
+GRANT joe TO materialize
+----
+COMPLETE 0
+
+statement ok
+CREATE TEMPORARY VIEW v AS SELECT 1
+
+statement ok
+REASSIGN OWNED BY materialize TO joe
 
 ## Test reassigning system objects
 
