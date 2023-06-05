@@ -337,6 +337,11 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
     }
 }
 
+enum PrepareQueryOutcome<'a> {
+    QueryPrepared,
+    Outcome(Outcome<'a>),
+}
+
 pub struct Runner<'a> {
     config: &'a RunConfig<'a>,
     inner: Option<RunnerInner>,
@@ -1096,7 +1101,7 @@ impl RunnerInner {
     }
 
     async fn run_statement<'a>(
-        &mut self,
+        &self,
         expected_error: Option<&'a str>,
         expected_rows_affected: Option<u64>,
         sql: &'a str,
@@ -1146,31 +1151,31 @@ impl RunnerInner {
         }
     }
 
-    async fn run_query<'a>(
-        &mut self,
+    async fn prepare_query<'a>(
+        &self,
         sql: &'a str,
         output: &'a Result<QueryOutput<'_>, &'a str>,
         location: Location,
         in_transaction: &mut bool,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<PrepareQueryOutcome<'a>, anyhow::Error> {
         // get statement
         let statements = match mz_sql::parse::parse(sql) {
             Ok(statements) => statements,
             Err(e) => match output {
                 Ok(_) => {
-                    return Ok(Outcome::ParseFailure {
+                    return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
                         error: e.into(),
                         location,
-                    });
+                    }));
                 }
                 Err(expected_error) => {
                     if Regex::new(expected_error)?.is_match(&format!("{:#}", e)) {
-                        return Ok(Outcome::Success);
+                        return Ok(PrepareQueryOutcome::Outcome(Outcome::Success));
                     } else {
-                        return Ok(Outcome::ParseFailure {
+                        return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
                             error: e.into(),
                             location,
-                        });
+                        }));
                     }
                 }
             },
@@ -1209,7 +1214,15 @@ impl RunnerInner {
             }
             _ => (),
         }
+        Ok(PrepareQueryOutcome::QueryPrepared)
+    }
 
+    async fn execute_query<'a>(
+        &self,
+        sql: &'a str,
+        output: &'a Result<QueryOutput<'_>, &'a str>,
+        location: Location,
+    ) -> Result<Outcome<'a>, anyhow::Error> {
         let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
@@ -1340,6 +1353,24 @@ impl RunnerInner {
         }
 
         Ok(Outcome::Success)
+    }
+
+    async fn run_query<'a>(
+        &self,
+        sql: &'a str,
+        output: &'a Result<QueryOutput<'_>, &'a str>,
+        location: Location,
+        in_transaction: &mut bool,
+    ) -> Result<Outcome<'a>, anyhow::Error> {
+        let prepare_outcome = self
+            .prepare_query(sql, output, location.clone(), in_transaction)
+            .await?;
+        match prepare_outcome {
+            PrepareQueryOutcome::QueryPrepared => {
+                self.execute_query(sql, output, location.clone()).await
+            }
+            PrepareQueryOutcome::Outcome(outcome) => Ok(outcome),
+        }
     }
 
     async fn get_conn(
