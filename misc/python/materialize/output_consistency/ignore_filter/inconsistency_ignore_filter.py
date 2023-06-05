@@ -148,6 +148,11 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return True
 
+        if db_function.function_name in {"array_agg", "string_agg"}:
+            # They would require a special comparison because the order of items in the resulting array differs.
+            # related to https://github.com/MaterializeInc/materialize/issues/17189
+            return True
+
         return False
 
 
