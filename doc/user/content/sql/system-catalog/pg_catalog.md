@@ -10,6 +10,7 @@ menu:
 Materialize has compatibility shims for the following relations from [PostgreSQL's
 system catalog](https://www.postgresql.org/docs/current/catalogs.html):
 
+  * [`pg_aggregate`](https://www.postgresql.org/docs/current/catalog-pg-aggregate.html)
   * [`pg_am`](https://www.postgresql.org/docs/current/catalog-pg-am.html)
   * [`pg_attribute`](https://www.postgresql.org/docs/current/catalog-pg-attribute.html)
   * [`pg_auth_members`](https://www.postgresql.org/docs/current/catalog-pg-auth-members.html)
@@ -22,6 +23,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_extension`](https://www.postgresql.org/docs/current/catalog-pg-extension.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
   * [`pg_inherits`](https://www.postgresql.org/docs/current/catalog-pg-inherits.html)
+  * [`pg_locks`](https://www.postgresql.org/docs/current/view-pg-locks.html)
   * [`pg_matviews`](https://www.postgresql.org/docs/current/view-pg-matviews.html)
   * [`pg_namespace`](https://www.postgresql.org/docs/current/catalog-pg-namespace.html)
   * [`pg_policy`](https://www.postgresql.org/docs/current/catalog-pg-policy.html)
@@ -32,6 +34,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_settings`](https://www.postgresql.org/docs/current/view-pg-settings.html)
   * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
   * [`pg_tablespace`](https://www.postgresql.org/docs/current/catalog-pg-tablespace.html)
+  * [`pg_trigger`](https://www.postgresql.org/docs/current/catalog-pg-trigger.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
   * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)
   * [`pg_authid`](https://www.postgresql.org/docs/current/catalog-pg-authid.html)

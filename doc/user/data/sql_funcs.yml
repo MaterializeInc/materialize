@@ -445,6 +445,9 @@
   description: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
     [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
   functions:
+  - signature: 'age(timestamp, timestamp) -> interval'
+    description: 'Subtracts one timestamp from another, producing a "symbolic" result that uses years and months, rather than just days.'
+
   - signature: current_timestamp() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.'
     unmaterializable: true
