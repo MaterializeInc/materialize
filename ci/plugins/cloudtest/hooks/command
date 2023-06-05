@@ -27,6 +27,11 @@ fi
 
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
+ci_collapsed_heading "kail: Clean up running instances, start a new instance"
+pkill -9 -f "^kail$"
+rm "kail-output.log"
+kail > "kail-output.log"
+
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
