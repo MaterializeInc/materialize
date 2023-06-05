@@ -2335,6 +2335,13 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 END"
             ) => String, 1642;
         },
+        // pg_is_in_recovery indicates whether a recovery is still in progress. Materialize does
+        // not have a concept of recovery, so we default to always returning false.
+        "pg_is_in_recovery" => Scalar {
+            params!() => Operation::nullary(|_ecx| {
+                Ok(HirScalarExpr::literal_false())
+            }) => Bool, 3810;
+        },
         "pg_postmaster_start_time" => Scalar {
             params!() => UnmaterializableFunc::PgPostmasterStartTime => TimestampTz, 2560;
         },
@@ -2358,6 +2365,14 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                      FROM mz_catalog.mz_functions f JOIN mz_catalog.mz_schemas s ON f.schema_id = s.id
                      WHERE f.oid = $1)"
             ) => Bool, 2081;
+        },
+        // pg_tablespace_location indicates what path in the filesystem that a given tablespace is
+        // located in. This concept does not make sense though in Materialize which is a cloud
+        // native database, so we just return the null value.
+        "pg_tablespace_location" => Scalar {
+            params!(Oid) => Operation::unary(|_ecx, _e| {
+                Ok(HirScalarExpr::literal_null(ScalarType::String))
+            }) => String, 3778;
         },
         "pg_typeof" => Scalar {
             params!(Any) => Operation::new(|ecx, exprs, params, _order_by| {
