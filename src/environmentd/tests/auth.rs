@@ -773,7 +773,7 @@ fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
         .unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
@@ -868,11 +868,9 @@ fn test_auth_expiry() {
 }
 
 #[allow(clippy::unit_arg)]
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_base() {
-    mz_ore::test::init_logging();
-
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1445,7 +1443,7 @@ fn test_auth_base() {
     drop(server);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_intermediate_ca() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
@@ -1532,11 +1530,9 @@ fn test_auth_intermediate_ca() {
     drop(server);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_admin() {
-    mz_ore::test::init_logging();
-
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])

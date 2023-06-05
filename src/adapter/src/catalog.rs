@@ -119,7 +119,7 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::new_static(0);
+pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
 
 const CREATE_SQL_TODO: &str = "TODO";
 
@@ -2581,19 +2581,7 @@ impl CatalogEntry {
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
     pub fn is_relation(&self) -> bool {
-        match self.item {
-            CatalogItem::Table(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_) => true,
-            CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
-        }
+        mz_sql::ast::ObjectType::from(self.item_type()).is_relation()
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
@@ -6910,6 +6898,7 @@ impl Catalog {
         let config = self.system_config();
         PersistParameters {
             blob_target_size: Some(config.persist_blob_target_size()),
+            blob_cache_mem_limit_bytes: Some(config.persist_blob_cache_mem_limit_bytes()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
             consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
@@ -6927,6 +6916,7 @@ impl Catalog {
             stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
             pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
             pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
+            rollup_threshold: Some(config.persist_rollup_threshold()),
         }
     }
 
@@ -8026,7 +8016,7 @@ mod tests {
     /// Dummy (and ostensibly client) sessions contain system schemas in their
     /// search paths, so do not require schema qualification on system objects such
     /// as types.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_minimal_qualification() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             struct TestCase {
@@ -8098,7 +8088,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_catalog_revision() {
         let debug_stash_factory = DebugStashFactory::new().await;
         {
@@ -8133,7 +8123,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_effective_search_path() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             let mz_catalog_schema = (
@@ -8278,7 +8268,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_builtin_migration() {
         enum ItemNamespace {
             System,
@@ -8932,7 +8922,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_normalized_create() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| {
             let catalog = catalog.for_system_session();
@@ -8958,7 +8948,7 @@ mod tests {
     }
 
     // Test that if a large catalog item is somehow committed, then we can still load the catalog.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // slow
     async fn test_large_catalog_item() {
         let view_def = "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1 FROM (SELECT 1";
@@ -9020,7 +9010,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_update_privilege_owners() {
         let old_owner = RoleId::User(1);
         let new_owner = RoleId::User(2);
@@ -9116,7 +9106,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_object_type() {
         let debug_stash_factory = DebugStashFactory::new().await;
         let stash = debug_stash_factory.open_debug().await;
@@ -9135,7 +9125,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_get_privileges() {
         let debug_stash_factory = DebugStashFactory::new().await;
         let stash = debug_stash_factory.open_debug().await;

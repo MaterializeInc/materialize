@@ -104,7 +104,7 @@ class Benchmark:
             ), f"Second timestamp reported not greater than first: scenario: {scenario}, timestamps: {timestamps}"
 
             measurement = timestamps[1] - timestamps[0]
-            if self._filter and getattr(self._filter, "filter")(measurement):
+            if self._filter and self._filter.filter(measurement):
                 continue
 
             print(f"Measurement {i}: {measurement}")

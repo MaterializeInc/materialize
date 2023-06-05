@@ -244,7 +244,7 @@ mod tests {
     use tower::{Service, ServiceBuilder, ServiceExt};
     use tower_http::cors::CorsLayer;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_cors() {
         async fn test_request(cors: &CorsLayer, origin: &HeaderValue) -> Option<HeaderValue> {
             let mut service = ServiceBuilder::new()

@@ -19,6 +19,10 @@ from materialize.util import MzVersion
 
 ROOT = Path(os.environ["MZ_ROOT"])
 
+INVALID_VERSIONS = [
+    MzVersion.parse_mz("v0.56.0"),  # not released on Docker
+]
+
 
 class VersionList:
     def __init__(self) -> None:
@@ -103,7 +107,9 @@ class VersionsFromDocs(VersionList):
             current_patch = metadata.get("patch", 0)
 
             for patch in range(current_patch + 1):
-                self.versions.append(MzVersion.parse_mz(f"{base}.{patch}"))
+                version = MzVersion.parse_mz(f"{base}.{patch}")
+                if version not in INVALID_VERSIONS:
+                    self.versions.append(version)
 
         assert len(self.versions) > 0
         self.versions.sort()

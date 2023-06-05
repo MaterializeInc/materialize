@@ -20,6 +20,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 datadriven = "0.6.0"
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 unicode-width = "0.1.10"
 
 [build-dependencies]

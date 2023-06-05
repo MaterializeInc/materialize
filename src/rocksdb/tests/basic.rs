@@ -89,7 +89,7 @@ fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
     }))
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn basic() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;

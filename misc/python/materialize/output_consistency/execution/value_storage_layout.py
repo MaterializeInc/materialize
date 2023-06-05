@@ -15,6 +15,8 @@ class ValueStorageLayout(Enum):
     """Column per value: Each value has its own column, only one row exists"""
     VERTICAL = 2
     """Column per type: Each data type has its own column, rows contain the values"""
+    ANY = 3
+    """Constant that is not stored in a database object"""
 
 
 VERTICAL_LAYOUT_ROW_INDEX_COL_NAME = "row_index"

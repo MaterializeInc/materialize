@@ -15,13 +15,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
-    DOUBLE_TYPE,
-    INT8_TYPE,
     NUMERIC_DATA_TYPES,
-    REAL_TYPE,
-    UINT2_TYPE,
-    UINT4_TYPE,
-    UINT8_TYPE,
     NumberDataType,
 )
 
@@ -82,43 +76,6 @@ for num_data_type in NUMERIC_DATA_TYPES:
         )
 
 for type_definition, values_of_type in VALUES_PER_NUMERIC_DATA_TYPE.items():
-    if type_definition.is_decimal:
-        values_of_type.add_characteristic_to_all_values(
-            ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED
-        )
-
     for value in values_of_type.raw_values:
         if ExpressionCharacteristics.MAX_VALUE in value.own_characteristics:
             value.own_characteristics.add(ExpressionCharacteristics.LARGE_VALUE)
-
-VALUES_PER_NUMERIC_DATA_TYPE[UINT4_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[INT8_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[INT8_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.TYPE_INT8_SIZED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[UINT8_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[UINT8_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.TYPE_INT8_SIZED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[REAL_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.FLOAT_TYPED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[DOUBLE_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.FLOAT_TYPED
-)
-
-VALUES_PER_NUMERIC_DATA_TYPE[UINT2_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.UNSIGNED_TYPED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[UINT4_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.UNSIGNED_TYPED
-)
-VALUES_PER_NUMERIC_DATA_TYPE[UINT8_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.UNSIGNED_TYPED
-)

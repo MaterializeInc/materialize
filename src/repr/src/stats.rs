@@ -212,12 +212,12 @@ mod tests {
     ) {
         let mut part = PartBuilder::new(schema, &UnitSchema);
         {
-            let part_mut = part.get_mut();
+            let mut part_mut = part.get_mut();
             let mut encoder = schema.encoder(part_mut.key).unwrap();
             for datum in datums {
                 encoder.encode(datum);
-                part_mut.ts.push(1);
-                part_mut.diff.push(1);
+                part_mut.ts.push(1u64);
+                part_mut.diff.push(1i64);
             }
         }
         let part = part.finish().unwrap();
@@ -277,10 +277,9 @@ mod tests {
 
     // Ideally, this test would live in persist-types next to the stats <->
     // proto code, but it's much easier to proptest them from Datums.
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip_trim() {
-        mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip_trim(scalar_type)

@@ -161,7 +161,7 @@ impl MockHttpServer {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_no_block() {
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
@@ -239,10 +239,9 @@ fn test_no_block() {
 
 /// Test that dropping a connection while a source is undergoing purification
 /// does not crash the server.
-#[test]
+#[mz_ore::test]
 fn test_drop_connection_race() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
-    mz_ore::test::init_logging();
     info!("test_drop_connection_race: server started");
 
     server.runtime.block_on(async {
@@ -318,7 +317,7 @@ fn test_drop_connection_race() {
     });
 }
 
-#[test]
+#[mz_ore::test]
 fn test_time() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -361,7 +360,7 @@ fn test_time() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_consolidation() {
     let config = util::Config::default().workers(2);
     let server = util::start_server(config).unwrap();
@@ -391,7 +390,7 @@ fn test_subscribe_consolidation() {
     assert_eq!(row.get::<_, String>("data"), data);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_negative_diffs() {
     let config = util::Config::default().workers(2);
     let server = util::start_server(config).unwrap();
@@ -443,7 +442,7 @@ fn test_subscribe_negative_diffs() {
     assert_eq!(row.get::<_, i64>("count"), 2);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_empty_subscribe_notice() {
     let config = util::Config::default().with_now(NOW_ZERO.clone());
     let server = util::start_server(config).unwrap();
@@ -474,7 +473,7 @@ fn test_empty_subscribe_notice() {
         .unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_empty_subscribe_error() {
     let config = util::Config::default().with_now(NOW_ZERO.clone());
     let server = util::start_server(config).unwrap();
@@ -489,7 +488,7 @@ fn test_empty_subscribe_error() {
     assert!(e.code().code() == "22000")
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_basic() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
@@ -658,7 +657,7 @@ fn test_subscribe_basic() {
 /// observe it. Since SUBSCRIBE always sends a progressed message at the end of its
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
-#[test]
+#[mz_ore::test]
 fn test_subscribe_progress() {
     mz_ore::test::init_logging();
 
@@ -773,7 +772,7 @@ fn test_subscribe_progress() {
 
 // Verifies that subscribing to non-nullable columns with progress information
 // turns them into nullable columns. See #6304.
-#[test]
+#[mz_ore::test]
 fn test_subscribe_progress_non_nullable_columns() {
     let config = util::Config::default().workers(2);
     let server = util::start_server(config).unwrap();
@@ -824,7 +823,7 @@ fn test_subscribe_progress_non_nullable_columns() {
 
 /// Verifies that we get continuous progress messages, regardless of if we
 /// receive data or not.
-#[test]
+#[mz_ore::test]
 fn test_subcribe_continuous_progress() {
     let config = util::Config::default().workers(2);
     let server = util::start_server(config).unwrap();
@@ -909,7 +908,7 @@ fn test_subcribe_continuous_progress() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_fetch_timeout() {
     let config = util::Config::default().workers(2);
     let server = util::start_server(config).unwrap();
@@ -1006,7 +1005,7 @@ fn test_subscribe_fetch_timeout() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_fetch_wait() {
     let config = util::Config::default().workers(2);
     let server = util::start_server(config).unwrap();
@@ -1069,7 +1068,7 @@ fn test_subscribe_fetch_wait() {
     assert_eq!(rows.len(), 0);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_empty_upper_frontier() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1090,7 +1089,7 @@ fn test_subscribe_empty_upper_frontier() {
 
 // Tests that a client that launches a non-terminating SUBSCRIBE and disconnects
 // does not keep the server alive forever.
-#[test]
+#[mz_ore::test]
 fn test_subscribe_shutdown() {
     let server = util::start_server(util::Config::default()).unwrap();
 
@@ -1130,7 +1129,7 @@ fn test_subscribe_shutdown() {
     // function exits, things are working correctly.
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_table_rw_timestamps() {
     let config = util::Config::default().workers(3);
     let server = util::start_server(config).unwrap();
@@ -1215,7 +1214,7 @@ fn test_subscribe_table_rw_timestamps() {
 
 // Tests that temporary views created by one connection cannot be viewed
 // by another connection.
-#[test]
+#[mz_ore::test]
 fn test_temporary_views() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client_a = server.connect(postgres::NoTls).unwrap();
@@ -1245,7 +1244,7 @@ fn test_temporary_views() {
 }
 
 // Test EXPLAIN TIMESTAMP with tables.
-#[test]
+#[mz_ore::test]
 fn test_explain_timestamp_table() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1275,7 +1274,7 @@ source materialize.public.t1 (u1, storage):
 }
 
 // Test `EXPLAIN TIMESTAMP AS JSON`
-#[test]
+#[mz_ore::test]
 fn test_explain_timestamp_json() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1296,7 +1295,7 @@ fn test_explain_timestamp_json() {
 // 2. Acquires read holds for all objects within the same time domain
 // 3. Errors during a write-only transaction
 // 4. Errors when an object outside the chosen time domain is referenced
-#[test]
+#[mz_ore::test]
 fn test_github_18950() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
@@ -1420,7 +1419,7 @@ fn test_github_18950() {
 //
 // Feel free to modify this test if that product requirement changes,
 // but please at least keep _something_ that tests that custom compaction windows are working.
-#[test]
+#[mz_ore::test]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
 fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
@@ -1546,7 +1545,7 @@ fn test_utilization_hold() {
 // the panic and allow the compute instance to restart (instead of crash loop
 // forever) when a client is terminated (disconnects from the server) instead
 // of cancelled (sends a pgwire cancel request on a new connection).
-#[test]
+#[mz_ore::test]
 fn test_github_12546() {
     let config = util::Config::default().with_propagate_crashes(false);
     let server = util::start_server(config).unwrap();
@@ -1598,7 +1597,7 @@ fn test_github_12546() {
         .unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_github_12951() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1657,7 +1656,7 @@ fn test_github_12951() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 // Tests github issue #13100
 fn test_subscribe_outlive_cluster() {
     let config = util::Config::default();
@@ -1693,7 +1692,7 @@ fn test_subscribe_outlive_cluster() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn test_read_then_write_serializability() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1744,7 +1743,7 @@ fn test_read_then_write_serializability() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_timestamp_recovery() {
     let now = Arc::new(Mutex::new(1));
     let now_fn = {
@@ -1776,7 +1775,7 @@ fn test_timestamp_recovery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_timeline_read_holds() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
@@ -1828,7 +1827,7 @@ fn test_timeline_read_holds() {
     cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime).unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_linearizability() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
@@ -1898,7 +1897,7 @@ fn test_linearizability() {
     cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime).unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_internal_users() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1925,7 +1924,7 @@ fn test_internal_users() {
         .is_err());
 }
 
-#[test]
+#[mz_ore::test]
 fn test_internal_users_cluster() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1947,7 +1946,7 @@ fn test_internal_users_cluster() {
 
 // Tests that you can have simultaneous connections on the internal and external ports without
 // crashing
-#[test]
+#[mz_ore::test]
 fn test_internal_ports() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -2005,7 +2004,7 @@ fn test_internal_ports() {
 // This really belongs in the resource-limits.td testdrive, but testdrive
 // doesn't allow you to specify a connection and expect a failure which is
 // needed for this test.
-#[test]
+#[mz_ore::test]
 fn test_alter_system_invalid_param() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -2033,7 +2032,7 @@ fn test_alter_system_invalid_param() {
         .contains("unrecognized configuration parameter \"invalid_param\""));
 }
 
-#[test]
+#[mz_ore::test]
 fn test_concurrent_writes() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -2091,7 +2090,7 @@ fn test_concurrent_writes() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_load_generator() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2127,7 +2126,7 @@ fn test_load_generator() {
         .unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_introspection_user_permissions() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -2195,7 +2194,7 @@ fn test_introspection_user_permissions() {
         .is_ok());
 }
 
-#[test]
+#[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -2277,7 +2276,7 @@ fn test_idle_in_transaction_session_timeout() {
     client.batch_execute("COMMIT").unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));
@@ -2337,7 +2336,7 @@ fn test_coord_startup_blocking() {
     rx.recv().unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_cancel_on_dropped_cluster() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -2382,7 +2381,7 @@ fn test_cancel_on_dropped_cluster() {
     handle.join().unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_emit_timestamp_notice() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -2445,7 +2444,7 @@ fn test_emit_timestamp_notice() {
         .unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_isolation_level_notice() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -2482,7 +2481,7 @@ fn test_isolation_level_notice() {
         .unwrap();
 }
 
-#[test]
+#[test] // allow(test-attribute)
 fn test_emit_tracing_notice() {
     let config = util::Config::default().with_enable_tracing(true);
     let server = util::start_server(config).unwrap();
@@ -2516,7 +2515,7 @@ fn test_emit_tracing_notice() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_subscribe_on_dropped_source() {
     fn test_subscribe_on_dropped_source_inner(
         server: &Server,
@@ -2630,7 +2629,7 @@ fn test_subscribe_on_dropped_source() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn test_dont_drop_sinks_twice() {
     let config = util::Config::default().workers(4);
     let server = util::start_server(config).unwrap();
@@ -2688,7 +2687,7 @@ fn test_dont_drop_sinks_twice() {
     assert!(msg.message().starts_with("subscribe has been terminated"));
 }
 
-#[test]
+#[mz_ore::test]
 fn test_timelines_persist_after_failed_transaction() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -2731,7 +2730,7 @@ fn test_timelines_persist_after_failed_transaction() {
 
 // This can almost be tested with SLT using the simple directive, but
 // we have no way to disconnect sessions using SLT.
-#[test]
+#[mz_ore::test]
 fn test_mz_sessions() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
@@ -2861,7 +2860,7 @@ fn test_mz_sessions() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn test_auto_run_on_introspection_feature_enabled() {
     // unsafe_mode enables the feature as a whole
     let config = util::Config::default().unsafe_mode();
@@ -2954,7 +2953,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
     assert_introspection_notice(false);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_auto_run_on_introspection_feature_disabled() {
     // unsafe_mode enables the feature as a whole
     let config = util::Config::default().unsafe_mode();
@@ -3038,7 +3037,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
     assert_introspection_notice(false);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_auto_run_on_introspection_per_replica_relations() {
     // unsafe_mode enables the feature as a whole
     let config = util::Config::default().unsafe_mode();
@@ -3117,7 +3116,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
     assert_introspection_notice(false);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_max_connections() {
     mz_ore::test::init_logging();
     let config = util::Config::default();

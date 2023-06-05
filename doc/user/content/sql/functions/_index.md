@@ -85,7 +85,7 @@ Operator | Computes
 <code>&vert;&vert;</code> | Concatenation
 `~` | Matches regular expression, case sensitive
 `~*` | Matches regular expression, case insensitive
-`!~` | Does not match regular expression, case insensitive
+`!~` | Does not match regular expression, case sensitive
 `!~*` | Does not match regular expression, case insensitive
 
 The regular expression syntax supported by Materialize is documented by the

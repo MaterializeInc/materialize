@@ -132,7 +132,7 @@ def _run_output_consistency_tests_internal(
     query_generator = QueryGenerator(
         config, randomized_picker, input_data, ignore_filter
     )
-    output_comparator = ResultComparator()
+    output_comparator = ResultComparator(ignore_filter)
     sql_executor = create_sql_executor(config, connection, output_printer)
 
     if config.skip_postgres_incompatible_types:
@@ -149,6 +149,8 @@ def _run_output_consistency_tests_internal(
         output_printer,
     )
     test_runner.setup()
+
+    output_printer.start_section("Test execution")
 
     if not config.verbose_output:
         output_printer.print_info(

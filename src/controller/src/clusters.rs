@@ -83,7 +83,7 @@ pub struct ReplicaAllocation {
     pub credits_per_hour: Numeric,
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 // We test this particularly because we deserialize values from strings.
 fn test_replica_allocation_deserialization() {

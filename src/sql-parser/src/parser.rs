@@ -5053,11 +5053,11 @@ impl<'a> Parser<'a> {
         }
         if variable.as_str().parse() == Ok(SCHEMA) {
             variable = Ident::new("search_path");
-            let to = self.parse_set_variable_value()?;
+            let to = self.parse_set_schema_to()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
-                to: SetVariableTo::Values(vec![to]),
+                to,
             }))
         } else if normal {
             let to = self.parse_set_variable_to()?;
@@ -5083,6 +5083,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_set_schema_to(&mut self) -> Result<SetVariableTo, ParserError> {
+        if self.parse_keyword(DEFAULT) {
+            Ok(SetVariableTo::Default)
+        } else {
+            let to = self.parse_set_variable_value()?;
+            Ok(SetVariableTo::Values(vec![to]))
+        }
+    }
+
     fn parse_set_variable_to(&mut self) -> Result<SetVariableTo, ParserError> {
         if self.parse_keyword(DEFAULT) {
             Ok(SetVariableTo::Default)
@@ -5104,7 +5113,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let variable = self.parse_identifier()?;
+        let mut variable = self.parse_identifier()?;
+        if variable.as_str().parse() == Ok(SCHEMA) {
+            variable = Ident::new("search_path");
+        }
         Ok(Statement::ResetVariable(ResetVariableStatement {
             variable,
         }))
@@ -5521,6 +5533,13 @@ impl<'a> Parser<'a> {
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
         let table_name = RawItemName::Name(self.parse_item_name()?);
+        // The alias here doesn't support columns, so don't use parse_optional_table_alias.
+        let alias = self.parse_optional_alias(Keyword::is_reserved_in_table_alias)?;
+        let alias = alias.map(|name| TableAlias {
+            name,
+            columns: Vec::new(),
+            strict: false,
+        });
 
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
@@ -5532,6 +5551,7 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Update(UpdateStatement {
             table_name,
+            alias,
             assignments,
             selection,
         }))
@@ -6036,13 +6056,14 @@ impl<'a> Parser<'a> {
                     | ObjectType::Database
                     | ObjectType::Schema => {}
                 }
-                let name = self.parse_object_name(object_type)?;
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 self.expect_keyword(TO)?;
                 let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
+                Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
                     privileges,
                     object_type,
-                    name,
+                    names,
                     roles,
                 }))
             }
@@ -6093,13 +6114,14 @@ impl<'a> Parser<'a> {
                     | ObjectType::Database
                     | ObjectType::Schema => {}
                 }
-                let name = self.parse_object_name(object_type)?;
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 self.expect_keyword(FROM)?;
                 let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
+                Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
                     privileges,
                     object_type,
-                    name,
+                    names,
                     roles,
                 }))
             }

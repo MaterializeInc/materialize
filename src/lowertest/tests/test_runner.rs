@@ -285,7 +285,7 @@ mod tests {
         Ok(format!("{:?}", result))
     }
 
-    #[test]
+    #[mz_ore::test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
             f.run(move |s| -> String {

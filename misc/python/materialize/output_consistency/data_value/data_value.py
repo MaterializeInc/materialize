@@ -13,10 +13,11 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
+from materialize.output_consistency.expression.expression import LeafExpression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -32,16 +33,23 @@ class DataValue(LeafExpression):
     ):
         column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
         super().__init__(
-            column_name, characteristics, ValueStorageLayout.HORIZONTAL, False, False
+            column_name,
+            data_type,
+            characteristics,
+            ValueStorageLayout.HORIZONTAL,
+            False,
+            False,
         )
         self.value = value
-        self.data_type = data_type
+
+    def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        return self.data_type.resolve_return_type_spec(self.own_characteristics)
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
     def to_sql_as_value(self) -> str:
-        return f"{self.value}::{self.data_type.type_name}"
+        return self.data_type.value_to_sql(self.value)
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection

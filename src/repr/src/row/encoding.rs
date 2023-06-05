@@ -849,7 +849,7 @@ mod tests {
     // TODO: datadriven golden tests for various interesting Datums and Rows to
     // catch any changes in the encoding.
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn roundtrip() {
         let mut row = Row::default();
@@ -984,7 +984,7 @@ mod tests {
         (schema, row)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn columnar_roundtrip() {
         let (schema, row) = schema_and_row();
         assert_eq!(
@@ -993,7 +993,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn parquet_roundtrip() {
         let (schema, row) = schema_and_row();
         assert_eq!(
@@ -1023,10 +1023,9 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_columnar_roundtrip() {
-        mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_columnar_roundtrip(scalar_type)

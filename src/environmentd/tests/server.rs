@@ -107,7 +107,7 @@ use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
-#[test]
+#[mz_ore::test]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
     let config = util::Config::default()
@@ -187,7 +187,7 @@ fn test_persistence() {
 
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
 // unsafe mode.
-#[test]
+#[mz_ore::test]
 fn test_source_sink_size_required() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -237,7 +237,7 @@ fn test_source_sink_size_required() {
 }
 
 // Test the POST and WS server endpoints.
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
@@ -327,7 +327,7 @@ fn test_http_sql() {
 }
 
 // Test that the server properly handles cancellation requests.
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_running_query() {
     let config = util::Config::default().unsafe_mode();
@@ -439,19 +439,19 @@ fn test_cancellation_cancels_dataflows(query: &str) {
 }
 
 // Test that dataflow uninstalls cancelled peeks.
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_dataflow_removal() {
     test_cancellation_cancels_dataflows("SELECT * FROM t AS OF 9223372036854775807");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_select() {
     test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_insert_select() {
     test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
@@ -546,21 +546,19 @@ fn test_closing_connection_cancels_dataflows(query: String) {
     );
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_long_select() {
-    mz_ore::test::init_logging();
     test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_insert_select() {
-    mz_ore::test::init_logging();
     test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
     /// timestamp at which the collection occurred. The timestamp of the last
@@ -625,8 +623,6 @@ fn test_storage_usage_collection_interval() {
         row.get::<_, UInt8>("size").0
     }
 
-    mz_ore::test::init_logging();
-
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
     let server = util::start_server(config).unwrap();
@@ -683,7 +679,7 @@ fn test_storage_usage_collection_interval() {
     assert_eq!(after_drop_storage_usage, 0);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_updates_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(3);
@@ -732,7 +728,7 @@ fn test_storage_usage_updates_between_restarts() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18896
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
@@ -791,7 +787,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(5));
@@ -814,10 +810,8 @@ fn test_storage_usage_collection_interval_timestamps() {
     }).unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_old_storage_usage_records_are_reaped_on_restart() {
-    mz_ore::test::init_logging();
-
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
         let timestamp = Arc::clone(&now);
@@ -906,7 +900,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     };
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
@@ -938,7 +932,7 @@ fn test_default_cluster_sizes() {
     assert_eq!(builtin_size, "2");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
@@ -996,7 +990,7 @@ fn test_max_request_size() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
@@ -1078,7 +1072,7 @@ fn test_max_statement_batch_size() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_mz_system_user_admin() {
     let config = util::Config::default();
@@ -1097,7 +1091,7 @@ fn test_mz_system_user_admin() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_passes_options() {
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1143,7 +1137,7 @@ fn test_ws_passes_options() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_notifies_for_bad_options() {
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1193,7 +1187,7 @@ struct Notice {
     _severity: String,
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_http_options_param() {
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1265,10 +1259,9 @@ fn test_http_options_param() {
         .contains(r#"startup setting not_a_session_var not set"#));
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_connections_on_all_interfaces() {
-    mz_ore::test::init_logging();
     let query = "SELECT 1";
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
 
@@ -1366,7 +1359,7 @@ fn test_max_connections_on_all_interfaces() {
     assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_concurrent_id_reuse() {
     let server = util::start_server(util::Config::default()).unwrap();

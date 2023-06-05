@@ -24,6 +24,7 @@ use md5::{Digest, Md5};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::{cast, soft_assert};
@@ -811,6 +812,22 @@ fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else {
         Ok(Datum::from(a))
     }
+}
+
+fn age_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamp();
+    let b_ts = b.unwrap_timestamp();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
+}
+
+fn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamptz();
+    let b_ts = b.unwrap_timestamptz();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
 }
 
 fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1841,6 +1858,104 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     Ok(contains.into())
 }
 
+// transliteration from postgres/src/backend/utils/adt/misc.c
+fn parse_ident<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    fn is_ident_start(c: char) -> bool {
+        matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX)
+    }
+
+    fn is_ident_cont(c: char) -> bool {
+        matches!(c, '0'..='9' | '$') || is_ident_start(c)
+    }
+
+    let ident = a.unwrap_str();
+    let strict = b.unwrap_bool();
+
+    let mut elems = vec![];
+    let buf = &mut LexBuf::new(ident);
+
+    let mut after_dot = false;
+
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
+    loop {
+        let mut missing_ident = true;
+
+        let c = buf.next();
+
+        if c == Some('"') {
+            let s = buf.take_while(|ch| !matches!(ch, '"'));
+
+            if buf.next() != Some('"') {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("String has unclosed double quotes.".to_string()),
+                });
+            }
+            elems.push(Datum::String(s));
+            missing_ident = false;
+        } else if c.map(is_ident_start).unwrap_or(false) {
+            buf.prev();
+            let s = buf.take_while(is_ident_cont);
+            let s = temp_storage.push_string(s.to_ascii_lowercase());
+            elems.push(Datum::String(s));
+            missing_ident = false;
+        }
+
+        if missing_ident {
+            if c == Some('.') {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("No valid identifier before \".\".".to_string()),
+                });
+            } else if after_dot {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("No valid identifier after \".\".".to_string()),
+                });
+            } else {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: None,
+                });
+            }
+        }
+
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+
+        match buf.next() {
+            Some('.') => {
+                after_dot = true;
+
+                buf.take_while(|ch| ch.is_ascii_whitespace());
+            }
+            Some(_) if strict => {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: None,
+                })
+            }
+            _ => break,
+        }
+    }
+
+    Ok(temp_storage.make_datum(|packer| {
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: elems.len(),
+                }],
+                elems,
+            )
+            .unwrap()
+    }))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -1858,6 +1973,8 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddNumeric,
+    AgeTimestamp,
+    AgeTimestampTz,
     BitAndInt16,
     BitAndInt32,
     BitAndInt64,
@@ -2024,6 +2141,7 @@ pub enum BinaryFunc {
     RangeDifference,
     UuidGenerateV5,
     MzAclItemContainsPrivilege,
+    ParseIdent,
 }
 
 impl BinaryFunc {
@@ -2034,320 +2152,259 @@ impl BinaryFunc {
         a_expr: &'a MirScalarExpr,
         b_expr: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
-        macro_rules! eager {
-            ($func:expr $(, $args:expr)*) => {{
-                let a = a_expr.eval(datums, temp_storage)?;
-                let b = b_expr.eval(datums, temp_storage)?;
-                if self.propagates_nulls() && (a.is_null() || b.is_null()) {
-                    return Ok(Datum::Null);
-                }
-                $func(a, b $(, $args)*)
-            }}
+        let a = a_expr.eval(datums, temp_storage)?;
+        let b = b_expr.eval(datums, temp_storage)?;
+        if self.propagates_nulls() && (a.is_null() || b.is_null()) {
+            return Ok(Datum::Null);
         }
-
         match self {
-            BinaryFunc::AddInt16 => eager!(add_int16),
-            BinaryFunc::AddInt32 => eager!(add_int32),
-            BinaryFunc::AddInt64 => eager!(add_int64),
-            BinaryFunc::AddUInt16 => eager!(add_uint16),
-            BinaryFunc::AddUInt32 => eager!(add_uint32),
-            BinaryFunc::AddUInt64 => eager!(add_uint64),
-            BinaryFunc::AddFloat32 => eager!(add_float32),
-            BinaryFunc::AddFloat64 => eager!(add_float64),
+            BinaryFunc::AddInt16 => add_int16(a, b),
+            BinaryFunc::AddInt32 => add_int32(a, b),
+            BinaryFunc::AddInt64 => add_int64(a, b),
+            BinaryFunc::AddUInt16 => add_uint16(a, b),
+            BinaryFunc::AddUInt32 => add_uint32(a, b),
+            BinaryFunc::AddUInt64 => add_uint64(a, b),
+            BinaryFunc::AddFloat32 => add_float32(a, b),
+            BinaryFunc::AddFloat64 => add_float64(a, b),
             BinaryFunc::AddTimestampInterval => {
-                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
-                    a.unwrap_timestamp(),
-                    b.unwrap_interval(),
-                ))
+                add_timestamplike_interval(a.unwrap_timestamp(), b.unwrap_interval())
             }
             BinaryFunc::AddTimestampTzInterval => {
-                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
-                    a.unwrap_timestamptz(),
-                    b.unwrap_interval(),
-                ))
+                add_timestamplike_interval(a.unwrap_timestamptz(), b.unwrap_interval())
             }
-            BinaryFunc::AddDateTime => eager!(add_date_time),
-            BinaryFunc::AddDateInterval => eager!(add_date_interval),
-            BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
-            BinaryFunc::AddNumeric => eager!(add_numeric),
-            BinaryFunc::AddInterval => eager!(add_interval),
-            BinaryFunc::BitAndInt16 => Ok(eager!(bit_and_int16)),
-            BinaryFunc::BitAndInt32 => Ok(eager!(bit_and_int32)),
-            BinaryFunc::BitAndInt64 => Ok(eager!(bit_and_int64)),
-            BinaryFunc::BitAndUInt16 => Ok(eager!(bit_and_uint16)),
-            BinaryFunc::BitAndUInt32 => Ok(eager!(bit_and_uint32)),
-            BinaryFunc::BitAndUInt64 => Ok(eager!(bit_and_uint64)),
-            BinaryFunc::BitOrInt16 => Ok(eager!(bit_or_int16)),
-            BinaryFunc::BitOrInt32 => Ok(eager!(bit_or_int32)),
-            BinaryFunc::BitOrInt64 => Ok(eager!(bit_or_int64)),
-            BinaryFunc::BitOrUInt16 => Ok(eager!(bit_or_uint16)),
-            BinaryFunc::BitOrUInt32 => Ok(eager!(bit_or_uint32)),
-            BinaryFunc::BitOrUInt64 => Ok(eager!(bit_or_uint64)),
-            BinaryFunc::BitXorInt16 => Ok(eager!(bit_xor_int16)),
-            BinaryFunc::BitXorInt32 => Ok(eager!(bit_xor_int32)),
-            BinaryFunc::BitXorInt64 => Ok(eager!(bit_xor_int64)),
-            BinaryFunc::BitXorUInt16 => Ok(eager!(bit_xor_uint16)),
-            BinaryFunc::BitXorUInt32 => Ok(eager!(bit_xor_uint32)),
-            BinaryFunc::BitXorUInt64 => Ok(eager!(bit_xor_uint64)),
-            BinaryFunc::BitShiftLeftInt16 => Ok(eager!(bit_shift_left_int16)),
-            BinaryFunc::BitShiftLeftInt32 => Ok(eager!(bit_shift_left_int32)),
-            BinaryFunc::BitShiftLeftInt64 => Ok(eager!(bit_shift_left_int64)),
-            BinaryFunc::BitShiftLeftUInt16 => Ok(eager!(bit_shift_left_uint16)),
-            BinaryFunc::BitShiftLeftUInt32 => Ok(eager!(bit_shift_left_uint32)),
-            BinaryFunc::BitShiftLeftUInt64 => Ok(eager!(bit_shift_left_uint64)),
-            BinaryFunc::BitShiftRightInt16 => Ok(eager!(bit_shift_right_int16)),
-            BinaryFunc::BitShiftRightInt32 => Ok(eager!(bit_shift_right_int32)),
-            BinaryFunc::BitShiftRightInt64 => Ok(eager!(bit_shift_right_int64)),
-            BinaryFunc::BitShiftRightUInt16 => Ok(eager!(bit_shift_right_uint16)),
-            BinaryFunc::BitShiftRightUInt32 => Ok(eager!(bit_shift_right_uint32)),
-            BinaryFunc::BitShiftRightUInt64 => Ok(eager!(bit_shift_right_uint64)),
-            BinaryFunc::SubInt16 => eager!(sub_int16),
-            BinaryFunc::SubInt32 => eager!(sub_int32),
-            BinaryFunc::SubInt64 => eager!(sub_int64),
-            BinaryFunc::SubUInt16 => eager!(sub_uint16),
-            BinaryFunc::SubUInt32 => eager!(sub_uint32),
-            BinaryFunc::SubUInt64 => eager!(sub_uint64),
-            BinaryFunc::SubFloat32 => eager!(sub_float32),
-            BinaryFunc::SubFloat64 => eager!(sub_float64),
-            BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
-            BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
-            BinaryFunc::SubTimestampInterval => {
-                eager!(|a: Datum, b: Datum| sub_timestamplike_interval(a.unwrap_timestamp(), b))
-            }
+            BinaryFunc::AddDateTime => add_date_time(a, b),
+            BinaryFunc::AddDateInterval => add_date_interval(a, b),
+            BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
+            BinaryFunc::AddNumeric => add_numeric(a, b),
+            BinaryFunc::AddInterval => add_interval(a, b),
+            BinaryFunc::AgeTimestamp => age_timestamp(a, b),
+            BinaryFunc::AgeTimestampTz => age_timestamptz(a, b),
+            BinaryFunc::BitAndInt16 => Ok(bit_and_int16(a, b)),
+            BinaryFunc::BitAndInt32 => Ok(bit_and_int32(a, b)),
+            BinaryFunc::BitAndInt64 => Ok(bit_and_int64(a, b)),
+            BinaryFunc::BitAndUInt16 => Ok(bit_and_uint16(a, b)),
+            BinaryFunc::BitAndUInt32 => Ok(bit_and_uint32(a, b)),
+            BinaryFunc::BitAndUInt64 => Ok(bit_and_uint64(a, b)),
+            BinaryFunc::BitOrInt16 => Ok(bit_or_int16(a, b)),
+            BinaryFunc::BitOrInt32 => Ok(bit_or_int32(a, b)),
+            BinaryFunc::BitOrInt64 => Ok(bit_or_int64(a, b)),
+            BinaryFunc::BitOrUInt16 => Ok(bit_or_uint16(a, b)),
+            BinaryFunc::BitOrUInt32 => Ok(bit_or_uint32(a, b)),
+            BinaryFunc::BitOrUInt64 => Ok(bit_or_uint64(a, b)),
+            BinaryFunc::BitXorInt16 => Ok(bit_xor_int16(a, b)),
+            BinaryFunc::BitXorInt32 => Ok(bit_xor_int32(a, b)),
+            BinaryFunc::BitXorInt64 => Ok(bit_xor_int64(a, b)),
+            BinaryFunc::BitXorUInt16 => Ok(bit_xor_uint16(a, b)),
+            BinaryFunc::BitXorUInt32 => Ok(bit_xor_uint32(a, b)),
+            BinaryFunc::BitXorUInt64 => Ok(bit_xor_uint64(a, b)),
+            BinaryFunc::BitShiftLeftInt16 => Ok(bit_shift_left_int16(a, b)),
+            BinaryFunc::BitShiftLeftInt32 => Ok(bit_shift_left_int32(a, b)),
+            BinaryFunc::BitShiftLeftInt64 => Ok(bit_shift_left_int64(a, b)),
+            BinaryFunc::BitShiftLeftUInt16 => Ok(bit_shift_left_uint16(a, b)),
+            BinaryFunc::BitShiftLeftUInt32 => Ok(bit_shift_left_uint32(a, b)),
+            BinaryFunc::BitShiftLeftUInt64 => Ok(bit_shift_left_uint64(a, b)),
+            BinaryFunc::BitShiftRightInt16 => Ok(bit_shift_right_int16(a, b)),
+            BinaryFunc::BitShiftRightInt32 => Ok(bit_shift_right_int32(a, b)),
+            BinaryFunc::BitShiftRightInt64 => Ok(bit_shift_right_int64(a, b)),
+            BinaryFunc::BitShiftRightUInt16 => Ok(bit_shift_right_uint16(a, b)),
+            BinaryFunc::BitShiftRightUInt32 => Ok(bit_shift_right_uint32(a, b)),
+            BinaryFunc::BitShiftRightUInt64 => Ok(bit_shift_right_uint64(a, b)),
+            BinaryFunc::SubInt16 => sub_int16(a, b),
+            BinaryFunc::SubInt32 => sub_int32(a, b),
+            BinaryFunc::SubInt64 => sub_int64(a, b),
+            BinaryFunc::SubUInt16 => sub_uint16(a, b),
+            BinaryFunc::SubUInt32 => sub_uint32(a, b),
+            BinaryFunc::SubUInt64 => sub_uint64(a, b),
+            BinaryFunc::SubFloat32 => sub_float32(a, b),
+            BinaryFunc::SubFloat64 => sub_float64(a, b),
+            BinaryFunc::SubTimestamp => Ok(sub_timestamp(a, b)),
+            BinaryFunc::SubTimestampTz => Ok(sub_timestamptz(a, b)),
+            BinaryFunc::SubTimestampInterval => sub_timestamplike_interval(a.unwrap_timestamp(), b),
             BinaryFunc::SubTimestampTzInterval => {
-                eager!(|a: Datum, b: Datum| sub_timestamplike_interval(a.unwrap_timestamptz(), b))
+                sub_timestamplike_interval(a.unwrap_timestamptz(), b)
             }
-            BinaryFunc::SubInterval => eager!(sub_interval),
-            BinaryFunc::SubDate => Ok(eager!(sub_date)),
-            BinaryFunc::SubDateInterval => eager!(sub_date_interval),
-            BinaryFunc::SubTime => Ok(eager!(sub_time)),
-            BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
-            BinaryFunc::SubNumeric => eager!(sub_numeric),
-            BinaryFunc::MulInt16 => eager!(mul_int16),
-            BinaryFunc::MulInt32 => eager!(mul_int32),
-            BinaryFunc::MulInt64 => eager!(mul_int64),
-            BinaryFunc::MulUInt16 => eager!(mul_uint16),
-            BinaryFunc::MulUInt32 => eager!(mul_uint32),
-            BinaryFunc::MulUInt64 => eager!(mul_uint64),
-            BinaryFunc::MulFloat32 => eager!(mul_float32),
-            BinaryFunc::MulFloat64 => eager!(mul_float64),
-            BinaryFunc::MulNumeric => eager!(mul_numeric),
-            BinaryFunc::MulInterval => eager!(mul_interval),
-            BinaryFunc::DivInt16 => eager!(div_int16),
-            BinaryFunc::DivInt32 => eager!(div_int32),
-            BinaryFunc::DivInt64 => eager!(div_int64),
-            BinaryFunc::DivUInt16 => eager!(div_uint16),
-            BinaryFunc::DivUInt32 => eager!(div_uint32),
-            BinaryFunc::DivUInt64 => eager!(div_uint64),
-            BinaryFunc::DivFloat32 => eager!(div_float32),
-            BinaryFunc::DivFloat64 => eager!(div_float64),
-            BinaryFunc::DivNumeric => eager!(div_numeric),
-            BinaryFunc::DivInterval => eager!(div_interval),
-            BinaryFunc::ModInt16 => eager!(mod_int16),
-            BinaryFunc::ModInt32 => eager!(mod_int32),
-            BinaryFunc::ModInt64 => eager!(mod_int64),
-            BinaryFunc::ModUInt16 => eager!(mod_uint16),
-            BinaryFunc::ModUInt32 => eager!(mod_uint32),
-            BinaryFunc::ModUInt64 => eager!(mod_uint64),
-            BinaryFunc::ModFloat32 => eager!(mod_float32),
-            BinaryFunc::ModFloat64 => eager!(mod_float64),
-            BinaryFunc::ModNumeric => eager!(mod_numeric),
-            BinaryFunc::Eq => Ok(eager!(eq)),
-            BinaryFunc::NotEq => Ok(eager!(not_eq)),
-            BinaryFunc::Lt => Ok(eager!(lt)),
-            BinaryFunc::Lte => Ok(eager!(lte)),
-            BinaryFunc::Gt => Ok(eager!(gt)),
-            BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::LikeEscape => eager!(like_escape, temp_storage),
+            BinaryFunc::SubInterval => sub_interval(a, b),
+            BinaryFunc::SubDate => Ok(sub_date(a, b)),
+            BinaryFunc::SubDateInterval => sub_date_interval(a, b),
+            BinaryFunc::SubTime => Ok(sub_time(a, b)),
+            BinaryFunc::SubTimeInterval => Ok(sub_time_interval(a, b)),
+            BinaryFunc::SubNumeric => sub_numeric(a, b),
+            BinaryFunc::MulInt16 => mul_int16(a, b),
+            BinaryFunc::MulInt32 => mul_int32(a, b),
+            BinaryFunc::MulInt64 => mul_int64(a, b),
+            BinaryFunc::MulUInt16 => mul_uint16(a, b),
+            BinaryFunc::MulUInt32 => mul_uint32(a, b),
+            BinaryFunc::MulUInt64 => mul_uint64(a, b),
+            BinaryFunc::MulFloat32 => mul_float32(a, b),
+            BinaryFunc::MulFloat64 => mul_float64(a, b),
+            BinaryFunc::MulNumeric => mul_numeric(a, b),
+            BinaryFunc::MulInterval => mul_interval(a, b),
+            BinaryFunc::DivInt16 => div_int16(a, b),
+            BinaryFunc::DivInt32 => div_int32(a, b),
+            BinaryFunc::DivInt64 => div_int64(a, b),
+            BinaryFunc::DivUInt16 => div_uint16(a, b),
+            BinaryFunc::DivUInt32 => div_uint32(a, b),
+            BinaryFunc::DivUInt64 => div_uint64(a, b),
+            BinaryFunc::DivFloat32 => div_float32(a, b),
+            BinaryFunc::DivFloat64 => div_float64(a, b),
+            BinaryFunc::DivNumeric => div_numeric(a, b),
+            BinaryFunc::DivInterval => div_interval(a, b),
+            BinaryFunc::ModInt16 => mod_int16(a, b),
+            BinaryFunc::ModInt32 => mod_int32(a, b),
+            BinaryFunc::ModInt64 => mod_int64(a, b),
+            BinaryFunc::ModUInt16 => mod_uint16(a, b),
+            BinaryFunc::ModUInt32 => mod_uint32(a, b),
+            BinaryFunc::ModUInt64 => mod_uint64(a, b),
+            BinaryFunc::ModFloat32 => mod_float32(a, b),
+            BinaryFunc::ModFloat64 => mod_float64(a, b),
+            BinaryFunc::ModNumeric => mod_numeric(a, b),
+            BinaryFunc::Eq => Ok(eq(a, b)),
+            BinaryFunc::NotEq => Ok(not_eq(a, b)),
+            BinaryFunc::Lt => Ok(lt(a, b)),
+            BinaryFunc::Lte => Ok(lte(a, b)),
+            BinaryFunc::Gt => Ok(gt(a, b)),
+            BinaryFunc::Gte => Ok(gte(a, b)),
+            BinaryFunc::LikeEscape => like_escape(a, b, temp_storage),
             BinaryFunc::IsLikeMatch { case_insensitive } => {
-                eager!(is_like_match_dynamic, *case_insensitive)
+                is_like_match_dynamic(a, b, *case_insensitive)
             }
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
-                eager!(is_regexp_match_dynamic, *case_insensitive)
+                is_regexp_match_dynamic(a, b, *case_insensitive)
             }
-            BinaryFunc::ToCharTimestamp => Ok(eager!(|a: Datum, b: Datum| to_char_timestamplike(
+            BinaryFunc::ToCharTimestamp => Ok(to_char_timestamplike(
                 a.unwrap_timestamp().deref(),
                 b.unwrap_str(),
-                temp_storage
-            ))),
-            BinaryFunc::ToCharTimestampTz => {
-                Ok(eager!(|a: Datum, b: Datum| to_char_timestamplike(
-                    a.unwrap_timestamptz().deref(),
-                    b.unwrap_str(),
-                    temp_storage
-                )))
-            }
-            BinaryFunc::DateBinTimestamp => {
-                eager!(|a: Datum, b: Datum| date_bin(
-                    a.unwrap_interval(),
-                    b.unwrap_timestamp(),
-                    CheckedTimestamp::from_timestamplike(
-                        NaiveDateTime::from_timestamp_opt(0, 0).unwrap()
-                    )
-                    .expect("must fit")
+                temp_storage,
+            )),
+            BinaryFunc::ToCharTimestampTz => Ok(to_char_timestamplike(
+                a.unwrap_timestamptz().deref(),
+                b.unwrap_str(),
+                temp_storage,
+            )),
+            BinaryFunc::DateBinTimestamp => date_bin(
+                a.unwrap_interval(),
+                b.unwrap_timestamp(),
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
+                )
+                .expect("must fit"),
+            ),
+            BinaryFunc::DateBinTimestampTz => date_bin(
+                a.unwrap_interval(),
+                b.unwrap_timestamptz(),
+                CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
+                    NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
+                    Utc,
                 ))
-            }
-            BinaryFunc::DateBinTimestampTz => {
-                eager!(|a: Datum, b: Datum| date_bin(
-                    a.unwrap_interval(),
-                    b.unwrap_timestamptz(),
-                    CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
-                        NaiveDateTime::from_timestamp_opt(0, 0).unwrap(),
-                        Utc
-                    ))
-                    .expect("must fit")
-                ))
-            }
-            BinaryFunc::ExtractInterval => {
-                eager!(date_part_interval::<Numeric>)
-            }
-            BinaryFunc::ExtractTime => {
-                eager!(date_part_time::<Numeric>)
-            }
+                .expect("must fit"),
+            ),
+            BinaryFunc::ExtractInterval => date_part_interval::<Numeric>(a, b),
+            BinaryFunc::ExtractTime => date_part_time::<Numeric>(a, b),
             BinaryFunc::ExtractTimestamp => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(
-                    a,
-                    b.unwrap_timestamp().deref()
-                ))
+                date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamp().deref())
             }
             BinaryFunc::ExtractTimestampTz => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, Numeric>(
-                    a,
-                    b.unwrap_timestamptz().deref()
-                ))
+                date_part_timestamp::<_, Numeric>(a, b.unwrap_timestamptz().deref())
             }
-            BinaryFunc::ExtractDate => {
-                eager!(extract_date)
-            }
-            BinaryFunc::DatePartInterval => {
-                eager!(date_part_interval::<f64>)
-            }
-            BinaryFunc::DatePartTime => {
-                eager!(date_part_time::<f64>)
-            }
+            BinaryFunc::ExtractDate => extract_date(a, b),
+            BinaryFunc::DatePartInterval => date_part_interval::<f64>(a, b),
+            BinaryFunc::DatePartTime => date_part_time::<f64>(a, b),
             BinaryFunc::DatePartTimestamp => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(a, b.unwrap_timestamp().deref()))
+                date_part_timestamp::<_, f64>(a, b.unwrap_timestamp().deref())
             }
             BinaryFunc::DatePartTimestampTz => {
-                eager!(|a, b: Datum| date_part_timestamp::<_, f64>(
-                    a,
-                    b.unwrap_timestamptz().deref()
-                ))
+                date_part_timestamp::<_, f64>(a, b.unwrap_timestamptz().deref())
             }
-            BinaryFunc::DateTruncTimestamp => {
-                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp().deref()))
-            }
-            BinaryFunc::DateTruncInterval => {
-                eager!(date_trunc_interval)
-            }
-            BinaryFunc::DateTruncTimestampTz => {
-                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz().deref()))
-            }
-            BinaryFunc::TimezoneTimestamp => {
-                eager!(
-                    |a: Datum, b: Datum| parse_timezone(a.unwrap_str())
-                        .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into())
-                            .map(Into::into))
-                )
-            }
-            BinaryFunc::TimezoneTimestampTz => {
-                eager!(
-                    |a: Datum, b: Datum| parse_timezone(a.unwrap_str()).and_then(|tz| {
-                        Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into()).try_into()?)
-                    })
-                )
-            }
-            BinaryFunc::TimezoneTime { wall_time } => {
-                eager!(
-                    |a: Datum, b: Datum| parse_timezone(a.unwrap_str()).map(|tz| timezone_time(
-                        tz,
-                        b.unwrap_time(),
-                        wall_time
-                    )
-                    .into())
-                )
-            }
-            BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
-            BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
-            BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),
-            BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
+            BinaryFunc::DateTruncTimestamp => date_trunc(a, b.unwrap_timestamp().deref()),
+            BinaryFunc::DateTruncInterval => date_trunc_interval(a, b),
+            BinaryFunc::DateTruncTimestampTz => date_trunc(a, b.unwrap_timestamptz().deref()),
+            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str())
+                .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
+            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str()).and_then(|tz| {
+                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into()).try_into()?)
+            }),
+            BinaryFunc::TimezoneTime { wall_time } => parse_timezone(a.unwrap_str())
+                .map(|tz| timezone_time(tz, b.unwrap_time(), wall_time).into()),
+            BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
+            BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
+            BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
+            BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
             BinaryFunc::JsonbGetInt64 { stringify } => {
-                Ok(eager!(jsonb_get_int64, temp_storage, *stringify))
+                Ok(jsonb_get_int64(a, b, temp_storage, *stringify))
             }
             BinaryFunc::JsonbGetString { stringify } => {
-                Ok(eager!(jsonb_get_string, temp_storage, *stringify))
+                Ok(jsonb_get_string(a, b, temp_storage, *stringify))
             }
             BinaryFunc::JsonbGetPath { stringify } => {
-                Ok(eager!(jsonb_get_path, temp_storage, *stringify))
+                Ok(jsonb_get_path(a, b, temp_storage, *stringify))
             }
-            BinaryFunc::JsonbContainsString => Ok(eager!(jsonb_contains_string)),
-            BinaryFunc::JsonbConcat => Ok(eager!(jsonb_concat, temp_storage)),
-            BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
-            BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
-            BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
-            BinaryFunc::MapContainsKey => Ok(eager!(map_contains_key)),
-            BinaryFunc::MapGetValue => Ok(eager!(map_get_value)),
-            BinaryFunc::MapGetValues => Ok(eager!(map_get_values, temp_storage)),
-            BinaryFunc::MapContainsAllKeys => Ok(eager!(map_contains_all_keys)),
-            BinaryFunc::MapContainsAnyKeys => Ok(eager!(map_contains_any_keys)),
-            BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
-            BinaryFunc::RoundNumeric => eager!(round_numeric_binary),
-            BinaryFunc::ConvertFrom => eager!(convert_from),
-            BinaryFunc::Encode => eager!(encode, temp_storage),
-            BinaryFunc::Decode => eager!(decode, temp_storage),
-            BinaryFunc::Left => eager!(left),
-            BinaryFunc::Position => eager!(position),
-            BinaryFunc::Right => eager!(right),
-            BinaryFunc::Trim => Ok(eager!(trim)),
-            BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
-            BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
-            BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
-            BinaryFunc::ListLengthMax { max_layer } => eager!(list_length_max, *max_layer),
-            BinaryFunc::ArrayLength => eager!(array_length),
-            BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
-            BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
-            BinaryFunc::ArrayRemove => eager!(array_remove, temp_storage),
-            BinaryFunc::ArrayUpper => eager!(array_upper),
-            BinaryFunc::ArrayArrayConcat => eager!(array_array_concat, temp_storage),
-            BinaryFunc::ListListConcat => Ok(eager!(list_list_concat, temp_storage)),
-            BinaryFunc::ListElementConcat => Ok(eager!(list_element_concat, temp_storage)),
-            BinaryFunc::ElementListConcat => Ok(eager!(element_list_concat, temp_storage)),
-            BinaryFunc::ListRemove => Ok(eager!(list_remove, temp_storage)),
-            BinaryFunc::DigestString => eager!(digest_string, temp_storage),
-            BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
-            BinaryFunc::MzRenderTypmod => eager!(mz_render_typmod, temp_storage),
-            BinaryFunc::LogNumeric => eager!(log_base_numeric),
-            BinaryFunc::Power => eager!(power),
-            BinaryFunc::PowerNumeric => eager!(power_numeric),
-            BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
-            BinaryFunc::GetByte => eager!(get_byte),
+            BinaryFunc::JsonbContainsString => Ok(jsonb_contains_string(a, b)),
+            BinaryFunc::JsonbConcat => Ok(jsonb_concat(a, b, temp_storage)),
+            BinaryFunc::JsonbContainsJsonb => Ok(jsonb_contains_jsonb(a, b)),
+            BinaryFunc::JsonbDeleteInt64 => Ok(jsonb_delete_int64(a, b, temp_storage)),
+            BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
+            BinaryFunc::MapContainsKey => Ok(map_contains_key(a, b)),
+            BinaryFunc::MapGetValue => Ok(map_get_value(a, b)),
+            BinaryFunc::MapGetValues => Ok(map_get_values(a, b, temp_storage)),
+            BinaryFunc::MapContainsAllKeys => Ok(map_contains_all_keys(a, b)),
+            BinaryFunc::MapContainsAnyKeys => Ok(map_contains_any_keys(a, b)),
+            BinaryFunc::MapContainsMap => Ok(map_contains_map(a, b)),
+            BinaryFunc::RoundNumeric => round_numeric_binary(a, b),
+            BinaryFunc::ConvertFrom => convert_from(a, b),
+            BinaryFunc::Encode => encode(a, b, temp_storage),
+            BinaryFunc::Decode => decode(a, b, temp_storage),
+            BinaryFunc::Left => left(a, b),
+            BinaryFunc::Position => position(a, b),
+            BinaryFunc::Right => right(a, b),
+            BinaryFunc::Trim => Ok(trim(a, b)),
+            BinaryFunc::TrimLeading => Ok(trim_leading(a, b)),
+            BinaryFunc::TrimTrailing => Ok(trim_trailing(a, b)),
+            BinaryFunc::EncodedBytesCharLength => encoded_bytes_char_length(a, b),
+            BinaryFunc::ListLengthMax { max_layer } => list_length_max(a, b, *max_layer),
+            BinaryFunc::ArrayLength => array_length(a, b),
+            BinaryFunc::ArrayContains => Ok(array_contains(a, b)),
+            BinaryFunc::ArrayLower => Ok(array_lower(a, b)),
+            BinaryFunc::ArrayRemove => array_remove(a, b, temp_storage),
+            BinaryFunc::ArrayUpper => array_upper(a, b),
+            BinaryFunc::ArrayArrayConcat => array_array_concat(a, b, temp_storage),
+            BinaryFunc::ListListConcat => Ok(list_list_concat(a, b, temp_storage)),
+            BinaryFunc::ListElementConcat => Ok(list_element_concat(a, b, temp_storage)),
+            BinaryFunc::ElementListConcat => Ok(element_list_concat(a, b, temp_storage)),
+            BinaryFunc::ListRemove => Ok(list_remove(a, b, temp_storage)),
+            BinaryFunc::DigestString => digest_string(a, b, temp_storage),
+            BinaryFunc::DigestBytes => digest_bytes(a, b, temp_storage),
+            BinaryFunc::MzRenderTypmod => mz_render_typmod(a, b, temp_storage),
+            BinaryFunc::LogNumeric => log_base_numeric(a, b),
+            BinaryFunc::Power => power(a, b),
+            BinaryFunc::PowerNumeric => power_numeric(a, b),
+            BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
+            BinaryFunc::GetByte => get_byte(a, b),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
-                ScalarType::Int32 => eager!(contains_range_elem::<i32>),
-                ScalarType::Int64 => eager!(contains_range_elem::<i64>),
-                ScalarType::Date => eager!(contains_range_elem::<Date>),
-                ScalarType::Numeric { .. } => {
-                    eager!(contains_range_elem::<OrderedDecimal<Numeric>>)
-                }
+                ScalarType::Int32 => contains_range_elem::<i32>(a, b),
+                ScalarType::Int64 => contains_range_elem::<i64>(a, b),
+                ScalarType::Date => contains_range_elem::<Date>(a, b),
+                ScalarType::Numeric { .. } => contains_range_elem::<OrderedDecimal<Numeric>>(a, b),
                 ScalarType::Timestamp => {
-                    eager!(contains_range_elem::<CheckedTimestamp<NaiveDateTime>>)
+                    contains_range_elem::<CheckedTimestamp<NaiveDateTime>>(a, b)
                 }
                 ScalarType::TimestampTz => {
-                    eager!(contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>)
+                    contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>(a, b)
                 }
                 _ => unreachable!(),
             }),
-            BinaryFunc::RangeContainsRange { rev: _ } => Ok(eager!(range_contains_range)),
-            BinaryFunc::RangeOverlaps => Ok(eager!(range_overlaps)),
-            BinaryFunc::RangeAfter => Ok(eager!(range_after)),
-            BinaryFunc::RangeBefore => Ok(eager!(range_before)),
-            BinaryFunc::RangeOverleft => Ok(eager!(range_overleft)),
-            BinaryFunc::RangeOverright => Ok(eager!(range_overright)),
-            BinaryFunc::RangeAdjacent => Ok(eager!(range_adjacent)),
-            BinaryFunc::RangeUnion => eager!(range_union, temp_storage),
-            BinaryFunc::RangeIntersection => eager!(range_intersection, temp_storage),
-            BinaryFunc::RangeDifference => eager!(range_difference, temp_storage),
-            BinaryFunc::UuidGenerateV5 => Ok(eager!(uuid_generate_v5)),
-            BinaryFunc::MzAclItemContainsPrivilege => eager!(mz_acl_item_contains_privilege),
+            BinaryFunc::RangeContainsRange { rev: _ } => Ok(range_contains_range(a, b)),
+            BinaryFunc::RangeOverlaps => Ok(range_overlaps(a, b)),
+            BinaryFunc::RangeAfter => Ok(range_after(a, b)),
+            BinaryFunc::RangeBefore => Ok(range_before(a, b)),
+            BinaryFunc::RangeOverleft => Ok(range_overleft(a, b)),
+            BinaryFunc::RangeOverright => Ok(range_overright(a, b)),
+            BinaryFunc::RangeAdjacent => Ok(range_adjacent(a, b)),
+            BinaryFunc::RangeUnion => range_union(a, b, temp_storage),
+            BinaryFunc::RangeIntersection => range_intersection(a, b, temp_storage),
+            BinaryFunc::RangeDifference => range_difference(a, b, temp_storage),
+            BinaryFunc::UuidGenerateV5 => Ok(uuid_generate_v5(a, b)),
+            BinaryFunc::MzAclItemContainsPrivilege => mz_acl_item_contains_privilege(a, b),
+            BinaryFunc::ParseIdent => parse_ident(a, b, temp_storage),
         }
     }
 
@@ -2417,6 +2474,8 @@ impl BinaryFunc {
 
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
+
+            AgeTimestamp | AgeTimestampTz => ScalarType::Interval.nullable(in_nullable),
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -2522,7 +2581,9 @@ impl BinaryFunc {
                 input1_type.scalar_type.without_modifiers().nullable(true)
             }
 
-            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable)
+            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
+
+            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
         }
     }
 
@@ -2564,6 +2625,8 @@ impl BinaryFunc {
             | AddDateTime
             | AddTimeInterval
             | AddNumeric
+            | AgeTimestamp
+            | AgeTimestampTz
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
@@ -2717,7 +2780,8 @@ impl BinaryFunc {
             | RangeIntersection
             | RangeDifference
             | UuidGenerateV5
-            | MzAclItemContainsPrivilege => false,
+            | MzAclItemContainsPrivilege
+            | ParseIdent => false,
             // can produce nulls inside the resulting array for missing keys, but always produces an outer array
             MapGetValues => false,
 
@@ -2874,6 +2938,8 @@ impl BinaryFunc {
             | RangeDifference => true,
             ToCharTimestamp
             | ToCharTimestampTz
+            | AgeTimestamp
+            | AgeTimestampTz
             | DateBinTimestamp
             | DateBinTimestampTz
             | ExtractInterval
@@ -2918,7 +2984,8 @@ impl BinaryFunc {
             | LikeEscape
             | UuidGenerateV5
             | GetByte
-            | MzAclItemContainsPrivilege => false,
+            | MzAclItemContainsPrivilege
+            | ParseIdent => false,
         }
     }
 
@@ -3063,6 +3130,7 @@ impl BinaryFunc {
             | BinaryFunc::IsRegexpMatch { .. } => (false, false),
             BinaryFunc::ToCharTimestamp | BinaryFunc::ToCharTimestampTz => (false, false),
             BinaryFunc::DateBinTimestamp | BinaryFunc::DateBinTimestampTz => (true, true),
+            BinaryFunc::AgeTimestamp | BinaryFunc::AgeTimestampTz => (true, true),
             // TODO: can these ever be treated as monotone? It's safe to treat the unary versions
             // as monotone in some cases, but only when extracting specific parts.
             BinaryFunc::ExtractInterval
@@ -3139,6 +3207,7 @@ impl BinaryFunc {
             | BinaryFunc::RangeDifference => (false, false),
             BinaryFunc::UuidGenerateV5 => (false, false),
             BinaryFunc::MzAclItemContainsPrivilege => (false, false),
+            BinaryFunc::ParseIdent => (false, false),
         }
     }
 }
@@ -3161,6 +3230,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddDateTime => f.write_str("+"),
             BinaryFunc::AddDateInterval => f.write_str("+"),
             BinaryFunc::AddTimeInterval => f.write_str("+"),
+            BinaryFunc::AgeTimestamp => f.write_str("age"),
+            BinaryFunc::AgeTimestampTz => f.write_str("age"),
             BinaryFunc::BitAndInt16 => f.write_str("&"),
             BinaryFunc::BitAndInt32 => f.write_str("&"),
             BinaryFunc::BitAndInt64 => f.write_str("&"),
@@ -3340,6 +3411,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeDifference => f.write_str("-"),
             BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
             BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
+            BinaryFunc::ParseIdent => f.write_str("parse_ident"),
         }
     }
 }
@@ -3372,6 +3444,8 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddDateTime).boxed(),
             Just(BinaryFunc::AddTimeInterval).boxed(),
             Just(BinaryFunc::AddNumeric).boxed(),
+            Just(BinaryFunc::AgeTimestamp).boxed(),
+            Just(BinaryFunc::AgeTimestampTz).boxed(),
             Just(BinaryFunc::BitAndInt16).boxed(),
             Just(BinaryFunc::BitAndInt32).boxed(),
             Just(BinaryFunc::BitAndInt64).boxed(),
@@ -3553,6 +3627,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::RangeUnion).boxed(),
             Just(BinaryFunc::RangeIntersection).boxed(),
             Just(BinaryFunc::RangeDifference).boxed(),
+            Just(BinaryFunc::ParseIdent).boxed(),
         ])
     }
 }
@@ -3576,6 +3651,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::AddDateTime => AddDateTime(()),
             BinaryFunc::AddTimeInterval => AddTimeInterval(()),
             BinaryFunc::AddNumeric => AddNumeric(()),
+            BinaryFunc::AgeTimestamp => AgeTimestamp(()),
+            BinaryFunc::AgeTimestampTz => AgeTimestampTz(()),
             BinaryFunc::BitAndInt16 => BitAndInt16(()),
             BinaryFunc::BitAndInt32 => BitAndInt32(()),
             BinaryFunc::BitAndInt64 => BitAndInt64(()),
@@ -3747,6 +3824,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeDifference => RangeDifference(()),
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
             BinaryFunc::MzAclItemContainsPrivilege => MzAclItemContainsPrivilege(()),
+            BinaryFunc::ParseIdent => ParseIdent(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3770,6 +3848,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 AddDateTime(()) => Ok(BinaryFunc::AddDateTime),
                 AddTimeInterval(()) => Ok(BinaryFunc::AddTimeInterval),
                 AddNumeric(()) => Ok(BinaryFunc::AddNumeric),
+                AgeTimestamp(()) => Ok(BinaryFunc::AgeTimestamp),
+                AgeTimestampTz(()) => Ok(BinaryFunc::AgeTimestampTz),
                 BitAndInt16(()) => Ok(BinaryFunc::BitAndInt16),
                 BitAndInt32(()) => Ok(BinaryFunc::BitAndInt32),
                 BitAndInt64(()) => Ok(BinaryFunc::BitAndInt64),
@@ -3947,6 +4027,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
                 MzAclItemContainsPrivilege(()) => Ok(BinaryFunc::MzAclItemContainsPrivilege),
+                ParseIdent(()) => Ok(BinaryFunc::ParseIdent),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -6327,6 +6408,37 @@ fn create_range<'a>(
     }))
 }
 
+fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
+    let array = match datums[0] {
+        Datum::Null => return Ok(Datum::Null),
+        o => o.unwrap_array(),
+    };
+
+    if array.dims().len() > 1 {
+        return Err(EvalError::MultiDimensionalArraySearch);
+    }
+
+    let search = datums[1];
+    if search == Datum::Null {
+        return Ok(Datum::Null);
+    }
+
+    let skip: usize = match datums.get(2) {
+        Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".to_string())),
+        None => 0,
+        Some(o) => usize::try_from(o.unwrap_int32())
+            .unwrap_or(0)
+            .saturating_sub(1),
+    };
+
+    let r = array.elements().iter().skip(skip).position(|d| d == search);
+
+    Ok(Datum::from(r.map(|p| {
+        // Adjust count for the amount we skipped, plus 1 for adjustng to PG indexing scheme.
+        i32::try_from(p + skip + 1).expect("fewer than i32::MAX elements in array")
+    })))
+}
+
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
@@ -6867,6 +6979,7 @@ pub enum VariadicFunc {
     },
     MakeMzAclItem,
     Translate,
+    ArrayPosition,
 }
 
 impl VariadicFunc {
@@ -6876,63 +6989,74 @@ impl VariadicFunc {
         temp_storage: &'a RowArena,
         exprs: &'a [MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
-        macro_rules! eager {
-            ($func:expr $(, $args:expr)*) => {{
-                let ds = exprs.iter()
-                    .map(|e| e.eval(datums, temp_storage))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
-                    return Ok(Datum::Null);
-                }
-                $func(&ds $(, $args)*)
-            }}
+        // Evaluate all non-eager functions directly
+        match self {
+            VariadicFunc::Coalesce => return coalesce(datums, temp_storage, exprs),
+            VariadicFunc::Greatest => return greatest(datums, temp_storage, exprs),
+            VariadicFunc::And => return and(datums, temp_storage, exprs),
+            VariadicFunc::Or => return or(datums, temp_storage, exprs),
+            VariadicFunc::ErrorIfNull => return error_if_null(datums, temp_storage, exprs),
+            VariadicFunc::Least => return least(datums, temp_storage, exprs),
+            _ => {}
+        };
+
+        // Compute parameters to eager functions
+        let ds = exprs
+            .iter()
+            .map(|e| e.eval(datums, temp_storage))
+            .collect::<Result<Vec<_>, _>>()?;
+        // Check NULL propagation
+        if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
+            return Ok(Datum::Null);
         }
 
+        // Evaluate eager functions
         match self {
-            VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
-            VariadicFunc::Greatest => greatest(datums, temp_storage, exprs),
-            VariadicFunc::Least => least(datums, temp_storage, exprs),
-            VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
-            VariadicFunc::MakeTimestamp => eager!(make_timestamp),
-            VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
-            VariadicFunc::Substr => eager!(substr),
-            VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
-            VariadicFunc::Translate => Ok(eager!(translate, temp_storage)),
-            VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
-            VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::And
+            | VariadicFunc::Or
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::Least => unreachable!(),
+            VariadicFunc::Concat => Ok(text_concat_variadic(&ds, temp_storage)),
+            VariadicFunc::MakeTimestamp => make_timestamp(&ds),
+            VariadicFunc::PadLeading => pad_leading(&ds, temp_storage),
+            VariadicFunc::Substr => substr(&ds),
+            VariadicFunc::Replace => Ok(replace(&ds, temp_storage)),
+            VariadicFunc::Translate => Ok(translate(&ds, temp_storage)),
+            VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(&ds, temp_storage)),
+            VariadicFunc::JsonbBuildObject => Ok(jsonb_build_object(&ds, temp_storage)),
             VariadicFunc::ArrayCreate {
                 elem_type: ScalarType::Array(_),
-            } => eager!(array_create_multidim, temp_storage),
-            VariadicFunc::ArrayCreate { .. } => eager!(array_create_scalar, temp_storage),
+            } => array_create_multidim(&ds, temp_storage),
+            VariadicFunc::ArrayCreate { .. } => array_create_scalar(&ds, temp_storage),
             VariadicFunc::ArrayToString { elem_type } => {
-                eager!(array_to_string, elem_type, temp_storage)
+                array_to_string(&ds, elem_type, temp_storage)
             }
-            VariadicFunc::ArrayIndex { offset } => Ok(eager!(array_index, *offset)),
+            VariadicFunc::ArrayIndex { offset } => Ok(array_index(&ds, *offset)),
 
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
-                Ok(eager!(list_create, temp_storage))
+                Ok(list_create(&ds, temp_storage))
             }
-            VariadicFunc::ListIndex => Ok(eager!(list_index)),
-            VariadicFunc::ListSliceLinear => Ok(eager!(list_slice_linear, temp_storage)),
-            VariadicFunc::SplitPart => eager!(split_part),
-            VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
-            VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
-            VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
-            VariadicFunc::ErrorIfNull => error_if_null(datums, temp_storage, exprs),
-            VariadicFunc::DateBinTimestamp => eager!(|d: &[Datum]| date_bin(
-                d[0].unwrap_interval(),
-                d[1].unwrap_timestamp(),
-                d[2].unwrap_timestamp(),
-            )),
-            VariadicFunc::DateBinTimestampTz => eager!(|d: &[Datum]| date_bin(
-                d[0].unwrap_interval(),
-                d[1].unwrap_timestamptz(),
-                d[2].unwrap_timestamptz(),
-            )),
-            VariadicFunc::And => and(datums, temp_storage, exprs),
-            VariadicFunc::Or => or(datums, temp_storage, exprs),
-            VariadicFunc::RangeCreate { .. } => eager!(create_range, temp_storage),
-            VariadicFunc::MakeMzAclItem => eager!(make_mz_acl_item),
+            VariadicFunc::ListIndex => Ok(list_index(&ds)),
+            VariadicFunc::ListSliceLinear => Ok(list_slice_linear(&ds, temp_storage)),
+            VariadicFunc::SplitPart => split_part(&ds),
+            VariadicFunc::RegexpMatch => regexp_match_dynamic(&ds, temp_storage),
+            VariadicFunc::HmacString => hmac_string(&ds, temp_storage),
+            VariadicFunc::HmacBytes => hmac_bytes(&ds, temp_storage),
+            VariadicFunc::DateBinTimestamp => date_bin(
+                ds[0].unwrap_interval(),
+                ds[1].unwrap_timestamp(),
+                ds[2].unwrap_timestamp(),
+            ),
+            VariadicFunc::DateBinTimestampTz => date_bin(
+                ds[0].unwrap_interval(),
+                ds[1].unwrap_timestamptz(),
+                ds[2].unwrap_timestamptz(),
+            ),
+            VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
+            VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
+            VariadicFunc::ArrayPosition => array_position(&ds),
         }
     }
 
@@ -6967,7 +7091,8 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestamp
             | VariadicFunc::DateBinTimestampTz
             | VariadicFunc::RangeCreate { .. }
-            | VariadicFunc::MakeMzAclItem => false,
+            | VariadicFunc::MakeMzAclItem
+            | VariadicFunc::ArrayPosition => false,
         }
     }
 
@@ -7042,6 +7167,7 @@ impl VariadicFunc {
             }
             .nullable(false),
             MakeMzAclItem => ScalarType::MzAclItem.nullable(true),
+            ArrayPosition => ScalarType::Int32.nullable(true),
         }
     }
 
@@ -7065,6 +7191,7 @@ impl VariadicFunc {
                 | VariadicFunc::ArrayToString { .. }
                 | VariadicFunc::ErrorIfNull
                 | VariadicFunc::RangeCreate { .. }
+                | VariadicFunc::ArrayPosition
         )
     }
 
@@ -7097,7 +7224,8 @@ impl VariadicFunc {
             | RangeCreate { .. }
             | And
             | Or
-            | MakeMzAclItem => false,
+            | MakeMzAclItem
+            | ArrayPosition => false,
             Coalesce
             | Greatest
             | Least
@@ -7194,7 +7322,8 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestampTz
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
-            | VariadicFunc::Translate => false,
+            | VariadicFunc::Translate
+            | VariadicFunc::ArrayPosition => false,
         }
     }
 }
@@ -7240,6 +7369,7 @@ impl fmt::Display for VariadicFunc {
                 _ => unreachable!(),
             }),
             VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
+            VariadicFunc::ArrayPosition => f.write_str("array_position"),
         }
     }
 }
@@ -7297,6 +7427,7 @@ impl Arbitrary for VariadicFunc {
             mz_repr::arb_range_type()
                 .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
                 .boxed(),
+            Just(VariadicFunc::ArrayPosition).boxed(),
         ])
     }
 }
@@ -7337,6 +7468,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::Or => Or(()),
             VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
             VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
+            VariadicFunc::ArrayPosition => ArrayPosition(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7387,6 +7519,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                     elem_type: elem_type.into_rust()?,
                 }),
                 MakeMzAclItem(()) => Ok(VariadicFunc::MakeMzAclItem),
+                ArrayPosition(()) => Ok(VariadicFunc::ArrayPosition),
             }
         } else {
             Err(TryFromProtoError::missing_field(
@@ -7404,7 +7537,7 @@ mod test {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn add_interval_months() {
         let dt = ym(2000, 1);
 
@@ -7464,7 +7597,7 @@ mod test {
     // `UnaryFunc::introduces_nulls` and `UnaryFunc::propagates_nulls`.
     // Currently, only unit variants of UnaryFunc are tested because those are
     // the easiest to construct in bulk.
-    #[test]
+    #[mz_ore::test]
     fn unary_func_introduces_nulls() {
         // Dummy columns to test the nullability of `UnaryFunc::output_type`.
         // It is ok that we're feeding these dummy columns into functions that
@@ -7506,28 +7639,28 @@ mod test {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn unary_func_protobuf_roundtrip(expect in any::<UnaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnaryFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn binary_func_protobuf_roundtrip(expect in any::<BinaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoBinaryFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
             assert!(actual.is_ok());

@@ -173,7 +173,7 @@ impl Coordinator {
             }
             Plan::CreateMaterializedView(plan) => {
                 tx.send(
-                    self.sequence_create_materialized_view(&mut session, plan, depends_on)
+                    self.sequence_create_materialized_view(&mut session, plan)
                         .await,
                     session,
                 );
@@ -437,15 +437,15 @@ impl Coordinator {
             Plan::RotateKeys(RotateKeysPlan { id }) => {
                 tx.send(self.sequence_rotate_keys(&session, id).await, session);
             }
-            Plan::GrantPrivilege(plan) => {
+            Plan::GrantPrivileges(plan) => {
                 tx.send(
-                    self.sequence_grant_privilege(&mut session, plan).await,
+                    self.sequence_grant_privileges(&mut session, plan).await,
                     session,
                 );
             }
-            Plan::RevokePrivilege(plan) => {
+            Plan::RevokePrivileges(plan) => {
                 tx.send(
-                    self.sequence_revoke_privilege(&mut session, plan).await,
+                    self.sequence_revoke_privileges(&mut session, plan).await,
                     session,
                 );
             }

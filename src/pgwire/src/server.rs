@@ -101,7 +101,7 @@ impl Server {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
-        let adapter_client = self.adapter_client.new_conn();
+        let mut adapter_client = self.adapter_client.clone();
         let frontegg = self.frontegg.clone();
         let tls = self.tls.clone();
         let internal = self.internal;
@@ -110,8 +110,7 @@ impl Server {
         async move {
             let result = (|| {
                 async move {
-                    let mut adapter_client = adapter_client?;
-                    let conn_id = adapter_client.conn_id();
+                    let conn_id = adapter_client.new_conn_id()?;
                     let mut conn = Conn::Unencrypted(conn);
                     loop {
                         let message = codec::decode_startup(&mut conn).await?;

@@ -359,6 +359,42 @@ rules by setting the following options:
 * `imports.granularity.group` = `module`
 * `imports.prefix` = `crate`
 
+### Tests
+
+Use the `mz_ore::test` macro instead of `test`, since it automatically
+initializes logging. For tokio tests you can use
+`#[mz_ore::test(tokio::test)]`.
+
+Before:
+```rust
+#[test]
+fn test_auth_base() {
+    mz_ore::test::init_logging();
+    // Test body here
+}
+```
+
+After:
+```rust
+#[mz_ore::test]
+fn test_auth_base() {
+    // Test body here
+}
+```
+
+For tokio tests with parameters:
+```rust
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+async fn state_cache_concurrency() {
+    // Test body here
+}
+```
+
+By default the `"info"` logging level is used. You can still set a different
+logging level inside your test manually if you wish:
+```rust
+mz_ore::test::init_logging_default("warn");
+```
 
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt

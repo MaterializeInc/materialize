@@ -1,10 +1,14 @@
 [
   {
     "name": "objects.proto",
-    "md5": "3a25fb4cad8890a1a3a5ad57276ac743"
+    "md5": "d8ee933409304c9de12382110b5ac2aa"
   },
   {
     "name": "objects_v15.proto",
-    "md5": "95978e4e48a52f63b339af3be8f8f386"
+    "md5": "5c9f6ee4c4b5d514dca25f5167cdaf3f"
+  },
+  {
+    "name": "objects_v16.proto",
+    "md5": "2066353b300d6c2cc2243c5a6c864541"
   }
 ]

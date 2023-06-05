@@ -131,7 +131,7 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn var_char_max_length_protobuf_roundtrip(expect in any::<VarCharMaxLength>()) {
             let actual = protobuf_roundtrip::<_, ProtoVarCharMaxLength>(&expect);
             assert!(actual.is_ok());

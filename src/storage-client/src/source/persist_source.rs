@@ -611,10 +611,10 @@ mod tests {
 
             let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
             {
-                let part_mut = part.get_mut();
+                let mut part_mut = part.get_mut();
                 <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
-                part_mut.ts.push(1);
-                part_mut.diff.push(1);
+                part_mut.ts.push(1u64);
+                part_mut.diff.push(1i64);
             }
             let part = part.finish()?;
             let stats = part.key_stats::<SourceData, _>(&schema)?;
@@ -647,10 +647,9 @@ mod tests {
         assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip() {
-        mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip(scalar_type)

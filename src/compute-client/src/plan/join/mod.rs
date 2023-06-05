@@ -420,7 +420,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
             assert!(actual.is_ok());

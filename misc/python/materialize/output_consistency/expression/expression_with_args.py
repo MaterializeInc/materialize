@@ -8,11 +8,15 @@
 # by the Apache License, Version 2.0.
 from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
-from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression import (
+    Expression,
+    LeafExpression,
+)
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -20,6 +24,7 @@ from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
     DbOperationOrFunction,
 )
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -41,8 +46,11 @@ class ExpressionWithArgs(Expression):
         )
         self.operation = operation
         self.pattern = operation.to_pattern(len(args))
-        self.return_type_category = operation.return_type_category
+        self.return_type_spec = operation.return_type_spec
         self.args = args
+
+    def has_args(self) -> bool:
+        return len(self.args) > 0
 
     def to_sql(self) -> str:
         sql: str = self.pattern
@@ -57,23 +65,22 @@ class ExpressionWithArgs(Expression):
 
         return sql
 
+    def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        return self.return_type_spec
+
     def resolve_return_type_category(self) -> DataTypeCategory:
-        if self.return_type_category == DataTypeCategory.DYNAMIC:
-            if len(self.args) == 0:
-                raise RuntimeError(
-                    f"Expression {self.pattern} uses {DataTypeCategory.ANY} as return type, which is not allowed"
-                )
+        first_arg_type_category_hint = None
 
-        if self.return_type_category == DataTypeCategory.DYNAMIC:
-            if len(self.args) == 0:
-                raise RuntimeError(
-                    f"Expression {self.pattern} uses return {DataTypeCategory.DYNAMIC} as return type but has no "
-                    "arguments"
-                )
-            else:
-                return self.args[0].resolve_return_type_category()
+        if self.return_type_spec.type_category == DataTypeCategory.DYNAMIC:
+            # Only compute the hint for this category
+            first_arg_type_category_hint = (
+                self.args[0].resolve_return_type_category() if self.has_args() else None
+            )
 
-        return self.return_type_category
+        return self.return_type_spec.resolve_type_category(first_arg_type_category_hint)
+
+    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+        return self.operation.try_resolve_exact_data_type(self.args)
 
     def __str__(self) -> str:
         args_desc = ", ".join(arg.__str__() for arg in self.args)
@@ -94,7 +101,7 @@ class ExpressionWithArgs(Expression):
 
         return involved_characteristics
 
-    def collect_leaves(self) -> List[Expression]:
+    def collect_leaves(self) -> List[LeafExpression]:
         leaves = []
 
         for arg in self.args:
@@ -122,11 +129,14 @@ def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
     storage_layout: Optional[ValueStorageLayout] = None
 
     for arg in args:
+        if arg.storage_layout == ValueStorageLayout.ANY:
+            continue
+
         if storage_layout is None:
             storage_layout = arg.storage_layout
         elif storage_layout != arg.storage_layout:
             raise RuntimeError(
-                "It is not allowed to mix storage layouts in an expression"
+                f"It is not allowed to mix storage layouts in an expression (current={storage_layout}, got={arg.storage_layout})"
             )
 
     if storage_layout is None:

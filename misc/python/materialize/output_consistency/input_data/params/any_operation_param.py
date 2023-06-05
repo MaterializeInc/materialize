@@ -9,6 +9,7 @@
 
 from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -31,3 +32,6 @@ class AnyOperationParam(OperationParam):
             incompatibilities,
             incompatibility_combinations,
         )
+
+    def supports_type(self, data_type: DataType) -> bool:
+        return True

@@ -16,6 +16,9 @@ class Filter:
     def __init__(self) -> None:
         self._data: List[float] = []
 
+    def filter(self, measurement: float) -> bool:
+        raise NotImplementedError
+
 
 class RemoveOutliers(Filter):
     def filter(self, measurement: float) -> bool:

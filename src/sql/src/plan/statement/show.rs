@@ -257,7 +257,7 @@ pub fn show_databases<'a>(
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
 pub fn show_schemas<'a>(
@@ -280,7 +280,7 @@ pub fn show_schemas<'a>(
         FROM mz_catalog.mz_schemas
         WHERE database_id IS NULL OR database_id = '{database_id}'",
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
 pub fn show_objects<'a>(
@@ -338,7 +338,7 @@ fn show_connections<'a>(
         FROM mz_catalog.mz_connections
         WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type"]))
 }
 
 fn show_tables<'a>(
@@ -352,7 +352,7 @@ fn show_tables<'a>(
         FROM mz_catalog.mz_tables
         WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
 fn show_sources<'a>(
@@ -366,7 +366,7 @@ fn show_sources<'a>(
         FROM mz_catalog.mz_sources
         WHERE schema_id = '{schema_spec}'"
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size"]))
 }
 
 fn show_views<'a>(
@@ -380,7 +380,7 @@ fn show_views<'a>(
         FROM mz_catalog.mz_views
         WHERE schema_id = '{schema_spec}'"
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
 fn show_materialized_views<'a>(
@@ -403,7 +403,7 @@ fn show_materialized_views<'a>(
          WHERE {where_clause}"
     );
 
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "cluster"]))
 }
 
 fn show_sinks<'a>(
@@ -421,7 +421,7 @@ fn show_sinks<'a>(
          FROM mz_catalog.mz_sinks AS sinks
          WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size"]))
 }
 
 fn show_types<'a>(
@@ -435,7 +435,7 @@ fn show_types<'a>(
         FROM mz_catalog.mz_types
         WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
 fn show_all_objects<'a>(
@@ -449,7 +449,7 @@ fn show_all_objects<'a>(
         FROM mz_catalog.mz_objects
         WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type"]))
 }
 
 pub fn show_indexes<'a>(
@@ -499,7 +499,13 @@ pub fn show_indexes<'a>(
         itertools::join(query_filter.iter(), " AND ")
     );
 
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "on", "cluster", "key"]),
+    )
 }
 
 pub fn show_columns<'a>(
@@ -549,7 +555,7 @@ pub fn show_clusters<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let query = "SELECT mz_clusters.name FROM mz_catalog.mz_clusters".to_string();
 
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
 pub fn show_cluster_replicas<'a>(
@@ -559,7 +565,13 @@ pub fn show_cluster_replicas<'a>(
     let query = "SELECT cluster, replica, size, ready FROM mz_internal.mz_show_cluster_replicas"
         .to_string();
 
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["cluster", "replica", "size", "ready"]),
+    )
 }
 
 pub fn show_secrets<'a>(
@@ -575,7 +587,7 @@ pub fn show_secrets<'a>(
         WHERE schema_id = '{schema_spec}'",
     );
 
-    ShowSelect::new(scx, query, filter, None, None)
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
 /// An intermediate result when planning a `SHOW` query.

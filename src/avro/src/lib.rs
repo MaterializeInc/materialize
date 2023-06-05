@@ -433,7 +433,7 @@ mod tests {
     use super::*;
 
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_default() {
         let writer_raw_schema = r#"
@@ -487,7 +487,7 @@ mod tests {
     }
 
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_string_value() {
         let raw_schema = r#"
@@ -531,7 +531,7 @@ mod tests {
     }
 
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_resolution() {
         let writer_raw_schema = r#"
@@ -588,7 +588,7 @@ mod tests {
     }
 
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
     fn test_enum_no_reader_schema() {
         let writer_raw_schema = r#"
             {
@@ -628,7 +628,7 @@ mod tests {
             ])
         );
     }
-    #[test]
+    #[mz_ore::test]
     fn test_datetime_value() {
         let writer_raw_schema = r#"{
         "type": "record",
@@ -657,7 +657,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_malformed_length() {
         let raw_schema = r#"
             {

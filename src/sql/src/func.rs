@@ -1733,6 +1733,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "array_lower" => Scalar {
             params!(ArrayAny, Int64) => BinaryFunc::ArrayLower => Int32, 2091;
         },
+        "array_position" => Scalar {
+            params!(ArrayAnyCompatible, AnyCompatible) => VariadicFunc::ArrayPosition => Int32, 3277;
+            params!(ArrayAnyCompatible, AnyCompatible, Int32) => VariadicFunc::ArrayPosition => Int32, 3278;
+        },
         "array_remove" => Scalar {
             params!(ArrayAnyCompatible, AnyCompatible) => BinaryFunc::ArrayRemove => ArrayAnyCompatible, 3167;
         },
@@ -2223,6 +2227,14 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 Ok(e.call_unary(UnaryFunc::MzRowSize(func::MzRowSize)))
             }) => Int32, oid::FUNC_MZ_ROW_SIZE;
         },
+        "parse_ident" => Scalar {
+            params!(String) => Operation::unary(|_ecx, ident| {
+                Ok(ident.call_binary(HirScalarExpr::literal_true(), BinaryFunc::ParseIdent))
+            }) => ScalarType::Array(Box::new(ScalarType::String)),
+                oid::FUNC_PARSE_IDENT_DEFAULT_STRICT;
+            params!(String, Bool) => BinaryFunc::ParseIdent
+                => ScalarType::Array(Box::new(ScalarType::String)), 1268;
+        },
         "pg_encoding_to_char" => Scalar {
             // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
             // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
@@ -2483,6 +2495,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "atanh" => Scalar {
             params!(Float64) => UnaryFunc::Atanh(func::Atanh) => Float64, 2467;
+        },
+        "age" => Scalar {
+            params!(Timestamp, Timestamp) => BinaryFunc::AgeTimestamp => Interval, 2058;
+            params!(TimestampTz, TimestampTz) => BinaryFunc::AgeTimestampTz => Interval, 1199;
         },
         "timezone" => Scalar {
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
@@ -3240,6 +3256,25 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // If the first argument is NULL, returns an EvalError::Internal whose error
             // message is the second argument.
             params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
+        },
+        "mz_get_subsources" => Table {
+            params!(String) => sql_impl_table_func("
+                SELECT
+                    mz_internal.mz_global_id_to_name(d.object_id) AS source,
+                    mz_internal.mz_global_id_to_name(d.subsource) AS subsource,
+                    s.type AS type
+                FROM
+                    mz_sources AS s
+                    JOIN (
+                        SELECT object_id, referenced_object_id AS subsource
+                        FROM
+                        mz_internal.mz_object_dependencies AS d
+                            JOIN
+                            mz_internal.mz_name_to_global_id($1) AS g (id)
+                            ON d.object_id = g.id
+                    ) AS d
+                    ON s.id = d.subsource
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
         },
         "mz_name_to_global_id" => Table {
             // If the user wants to specify a database, we also require them to specify which

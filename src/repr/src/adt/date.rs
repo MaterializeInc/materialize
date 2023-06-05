@@ -167,7 +167,7 @@ impl fmt::Display for Date {
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_date() {
         let pgepoch = Date::from_pg_epoch(0).unwrap();
         let unixepoch = Date::from_unix_epoch(0).unwrap();

@@ -712,7 +712,7 @@ mod tests {
     use super::*;
 
     /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.
-    #[test]
+    #[mz_ore::test]
     fn decode_text_error_smoke_test() {
         let bool_array = Value::Array {
             dims: vec![ArrayDimension {
