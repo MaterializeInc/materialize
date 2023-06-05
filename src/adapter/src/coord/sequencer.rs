@@ -173,7 +173,7 @@ impl Coordinator {
             }
             Plan::CreateMaterializedView(plan) => {
                 tx.send(
-                    self.sequence_create_materialized_view(&mut session, plan, depends_on)
+                    self.sequence_create_materialized_view(&mut session, plan)
                         .await,
                     session,
                 );
@@ -214,6 +214,9 @@ impl Coordinator {
             }
             Plan::ResetVariable(plan) => {
                 tx.send(self.sequence_reset_variable(&mut session, plan), session);
+            }
+            Plan::SetTransaction(plan) => {
+                tx.send(self.sequence_set_transaction(&mut session, plan), session);
             }
             Plan::StartTransaction(plan) => {
                 if matches!(session.transaction(), TransactionStatus::InTransaction(_)) {
@@ -437,15 +440,15 @@ impl Coordinator {
             Plan::RotateKeys(RotateKeysPlan { id }) => {
                 tx.send(self.sequence_rotate_keys(&session, id).await, session);
             }
-            Plan::GrantPrivilege(plan) => {
+            Plan::GrantPrivileges(plan) => {
                 tx.send(
-                    self.sequence_grant_privilege(&mut session, plan).await,
+                    self.sequence_grant_privileges(&mut session, plan).await,
                     session,
                 );
             }
-            Plan::RevokePrivilege(plan) => {
+            Plan::RevokePrivileges(plan) => {
                 tx.send(
-                    self.sequence_revoke_privilege(&mut session, plan).await,
+                    self.sequence_revoke_privileges(&mut session, plan).await,
                     session,
                 );
             }

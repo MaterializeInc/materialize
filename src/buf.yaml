@@ -20,6 +20,8 @@ breaking:
     - storage-client
     # does not currently require backward-compatibility
     - stash
+    # still under active development
+    - persist-types
 lint:
   use:
     - DEFAULT

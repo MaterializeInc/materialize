@@ -73,7 +73,7 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_row() {
         let error_message = "error message";
         let hint = "hint message";
@@ -103,7 +103,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_row_without_hint() {
         let error_message = "error message";
         let id = GlobalId::User(1);
@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(row.iter().nth(4).unwrap(), Datum::Null);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_row_without_error() {
         let id = GlobalId::User(1);
         let status = "dropped";

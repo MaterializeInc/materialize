@@ -38,7 +38,7 @@ AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "array_arg",
+        "array_agg",
         [AnyOperationParam()],
         ReturnTypeSpec(DataTypeCategory.DYNAMIC_ARRAY),
         is_aggregation=True,
@@ -128,7 +128,7 @@ AGGREGATE_OPERATION_TYPES.append(
 )
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "variance_pop",
+        "var_pop",
         [NumericOperationParam()],
         NumericReturnTypeSpec(),
         is_aggregation=True,
@@ -138,7 +138,7 @@ AGGREGATE_OPERATION_TYPES.append(
 # equal to variance
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "variance_samp",
+        "var_samp",
         [NumericOperationParam()],
         NumericReturnTypeSpec(),
         is_aggregation=True,

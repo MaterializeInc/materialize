@@ -143,8 +143,8 @@ pub fn describe(
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
         Statement::GrantRole(stmt) => ddl::describe_grant_role(&scx, stmt)?,
         Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
-        Statement::GrantPrivilege(stmt) => ddl::describe_grant_privilege(&scx, stmt)?,
-        Statement::RevokePrivilege(stmt) => ddl::describe_revoke_privilege(&scx, stmt)?,
+        Statement::GrantPrivileges(stmt) => ddl::describe_grant_privileges(&scx, stmt)?,
+        Statement::RevokePrivileges(stmt) => ddl::describe_revoke_privileges(&scx, stmt)?,
         Statement::ReassignOwned(stmt) => ddl::describe_reassign_owned(&scx, stmt)?,
 
         // `SHOW` statements.
@@ -280,8 +280,8 @@ pub fn plan(
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
         Statement::GrantRole(stmt) => ddl::plan_grant_role(scx, stmt),
         Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
-        Statement::GrantPrivilege(stmt) => ddl::plan_grant_privilege(scx, stmt),
-        Statement::RevokePrivilege(stmt) => ddl::plan_revoke_privilege(scx, stmt),
+        Statement::GrantPrivileges(stmt) => ddl::plan_grant_privileges(scx, stmt),
+        Statement::RevokePrivileges(stmt) => ddl::plan_revoke_privileges(scx, stmt),
         Statement::ReassignOwned(stmt) => ddl::plan_reassign_owned(scx, stmt),
 
         // DML statements.
@@ -702,14 +702,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn get_object_type(&self, id: &ObjectId) -> ObjectType {
-        match id {
-            ObjectId::Cluster(_) => ObjectType::Cluster,
-            ObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-            ObjectId::Database(_) => ObjectType::Database,
-            ObjectId::Schema(_) => ObjectType::Schema,
-            ObjectId::Role(_) => ObjectType::Role,
-            ObjectId::Item(item_id) => self.get_item(item_id).item_type().into(),
-        }
+        self.catalog.get_object_type(id)
     }
 
     /// Returns an error if the named `FeatureFlag` is not set to `on`.

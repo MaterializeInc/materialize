@@ -27,3 +27,6 @@ class DataType:
         self, characteristics: Set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
         return ReturnTypeSpec(self.category)
+
+    def value_to_sql(self, string_value: str) -> str:
+        return f"{string_value}::{self.type_name}"

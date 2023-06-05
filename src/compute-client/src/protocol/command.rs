@@ -511,14 +511,14 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
             let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());

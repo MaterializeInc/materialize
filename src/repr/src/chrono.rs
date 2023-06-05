@@ -163,7 +163,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn naive_date_protobuf_roundtrip(expect in any_naive_date() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDate>(&expect);
@@ -171,7 +171,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn naive_date_time_protobuf_roundtrip(expect in any_naive_datetime() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
@@ -179,7 +179,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn date_time_protobuf_roundtrip(expect in any_datetime() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
@@ -187,7 +187,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn fixed_offset_protobuf_roundtrip(expect in any_fixed_offset() ) {
             let actual = protobuf_roundtrip::<_, ProtoFixedOffset>(&expect);

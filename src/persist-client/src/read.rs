@@ -1167,7 +1167,7 @@ mod tests {
     use super::*;
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn drop_unused_subscribe() {
         let data = vec![
@@ -1197,9 +1197,8 @@ mod tests {
     }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn seqno_leases() {
-        mz_ore::test::init_logging();
         let mut data = vec![];
         for i in 0..20 {
             data.push(((i.to_string(), i.to_string()), i, 1))
@@ -1354,7 +1353,7 @@ mod tests {
         drop(subscribe);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn reader_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
@@ -1390,9 +1389,8 @@ mod tests {
     // Verifies performance optimizations where a Listener doesn't fetch the
     // latest Consensus state if the one it currently has can serve the next
     // request.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn skip_consensus_fetch_optimization() {
-        mz_ore::test::init_logging();
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("1".to_owned(), "one".to_owned()), 1, 1),

@@ -49,7 +49,6 @@ message ProtoPrimitiveStats {
         int64 lower_i64 = 9;
         float lower_f32 = 10;
         double lower_f64 = 11;
-        bytes lower_bytes = 12;
         string lower_string = 13;
     }
     oneof upper {
@@ -64,9 +63,14 @@ message ProtoPrimitiveStats {
         int64 upper_i64 = 22;
         float upper_f32 = 23;
         double upper_f64 = 24;
-        bytes upper_bytes = 25;
         string upper_string = 26;
     }
+}
+
+
+message ProtoPrimitiveBytesStats {
+    bytes lower = 1;
+    bytes upper = 2;
 }
 
 message ProtoJsonStats {
@@ -83,13 +87,18 @@ message ProtoJsonStats {
 }
 
 message ProtoJsonMapStats {
-    map<string, ProtoJsonStats> elements = 1;
+    repeated ProtoJsonMapElementStats elements = 1;
+}
+
+message ProtoJsonMapElementStats {
+    string name = 1;
+    uint64 len = 2;
+    ProtoJsonStats stats = 3;
 }
 
 message ProtoBytesStats {
     oneof kind {
-        // TODO(mfp): Pull bytes out of ProtoPrimitiveStats and inline it here?
-        ProtoPrimitiveStats primitive = 1;
+        ProtoPrimitiveBytesStats primitive = 1;
         ProtoJsonStats json = 2;
         ProtoAtomicBytesStats atomic = 3;
     }

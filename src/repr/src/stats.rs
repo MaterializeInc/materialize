@@ -177,7 +177,8 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
                 JsonStats::Maps(stats) => {
                     for (k, v) in val.iter() {
                         let key_stats = stats.entry(k.to_owned()).or_default();
-                        let () = jsonb_stats_datum(key_stats, v)?;
+                        key_stats.len += 1;
+                        let () = jsonb_stats_datum(&mut key_stats.stats, v)?;
                     }
                 }
                 _ => {
@@ -277,10 +278,9 @@ mod tests {
 
     // Ideally, this test would live in persist-types next to the stats <->
     // proto code, but it's much easier to proptest them from Datums.
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip_trim() {
-        mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip_trim(scalar_type)

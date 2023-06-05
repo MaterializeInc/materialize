@@ -35,7 +35,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
@@ -52,16 +52,19 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan,
+    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
     GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
     PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
-    RevokePrivilegePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
+    RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan,
+    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
+    VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::TransactionMode;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -197,7 +200,7 @@ impl Coordinator {
                 oid: source_oid,
                 name: plan.name.clone(),
                 item: CatalogItem::Source(source.clone()),
-                owner_id: *session.role_id(),
+                owner_id: *session.current_role_id(),
             });
             sources.push((source_id, source));
         }
@@ -325,7 +328,7 @@ impl Coordinator {
                 connection: connection.clone(),
                 depends_on,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -392,7 +395,7 @@ impl Coordinator {
             name: plan.name.clone(),
             oid: db_oid,
             public_schema_oid: schema_oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
@@ -418,7 +421,7 @@ impl Coordinator {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
             oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
@@ -495,7 +498,7 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: None,
             introspection_sources,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         let azs = self.catalog().state().availability_zones();
@@ -590,7 +593,7 @@ impl Coordinator {
                 id: self.catalog_mut().allocate_replica_id().await?,
                 name: replica_name.clone(),
                 config,
-                owner_id: *session.role_id(),
+                owner_id: *session.current_role_id(),
             });
         }
 
@@ -738,7 +741,7 @@ impl Coordinator {
             id,
             name: name.clone(),
             config,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -804,7 +807,7 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
@@ -883,7 +886,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -966,7 +969,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         let from = self.catalog().get_entry(&catalog_sink.from);
@@ -1156,7 +1159,7 @@ impl Coordinator {
             oid: view_oid,
             name: name.clone(),
             item: CatalogItem::View(view),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         Ok(ops)
@@ -1167,7 +1170,6 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateMaterializedViewPlan,
-        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateMaterializedViewPlan {
             name,
@@ -1194,8 +1196,12 @@ impl Coordinator {
             return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
-        self.validate_timeline_context(depends_on.clone())?;
+        // Generate the optimized expression, which allows us to know exacly what we depend on.
+        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
+        let depends_on: Vec<_> = optimized_expr.depends_on().into_iter().collect();
 
+        // Validate after generating the optimized expression.
+        self.validate_timeline_context(depends_on.clone())?;
         self.validate_system_column_references(ambiguous_columns, &depends_on)?;
 
         // Materialized views are not allowed to depend on log sources, as replicas
@@ -1221,7 +1227,6 @@ impl Coordinator {
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
 
-        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
 
         // Pick the least valid read timestamp as the as-of for the view
@@ -1249,7 +1254,7 @@ impl Coordinator {
                 depends_on,
                 cluster_id,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         match self
@@ -1402,7 +1407,7 @@ impl Coordinator {
             oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
@@ -1577,7 +1582,8 @@ impl Coordinator {
             && !session.is_superuser()
         {
             // Obtain all roles that the current session is a member of.
-            let role_membership = session_catalog.collect_role_membership(session.role_id());
+            let role_membership =
+                session_catalog.collect_role_membership(session.current_role_id());
             let invalid_revokes: BTreeSet<_> = revokes
                 .drain_filter_swapping(|(_, privilege)| {
                     !role_membership.contains(&privilege.grantor)
@@ -1793,8 +1799,12 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
+
+        let vars = session.vars_mut();
         let values = match plan.value {
             VariableValue::Default => None,
             VariableValue::Values(values) => Some(values),
@@ -1850,10 +1860,50 @@ impl Coordinator {
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let name = plan.name;
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
         session
             .vars_mut()
             .reset(Some(self.catalog().system_config()), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
+    }
+
+    pub(super) fn sequence_set_transaction(
+        &self,
+        session: &mut Session,
+        plan: SetTransactionPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO(jkosh44) Only supports isolation levels for now.
+        for mode in plan.modes {
+            match mode {
+                TransactionMode::AccessMode(_) => {
+                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
+                }
+                TransactionMode::IsolationLevel(isolation_level) => {
+                    self.validate_set_isolation_level(session)?;
+
+                    session.vars_mut().set(
+                        Some(self.catalog().system_config()),
+                        TRANSACTION_ISOLATION_VAR_NAME.as_str(),
+                        VarInput::Flat(&isolation_level.to_ast_string_stable()),
+                        plan.local,
+                    )?
+                }
+            }
+        }
+        Ok(ExecuteResponse::SetVariable {
+            name: TRANSACTION_ISOLATION_VAR_NAME.to_string(),
+            reset: false,
+        })
+    }
+
+    fn validate_set_isolation_level(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.transaction().contains_ops() {
+            Err(AdapterError::InvalidSetIsolationLevel)
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) fn sequence_end_transaction(
@@ -3979,126 +4029,150 @@ impl Coordinator {
         session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
     }
 
-    pub(super) async fn sequence_grant_privilege(
+    pub(super) async fn sequence_grant_privileges(
         &mut self,
         session: &mut Session,
-        GrantPrivilegePlan {
-            acl_mode,
-            object_id,
+        GrantPrivilegesPlan {
+            update_privileges,
             grantees,
-            grantor,
-        }: GrantPrivilegePlan,
+        }: GrantPrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             grantees,
-            grantor,
             UpdatePrivilegeVariant::Grant,
         )
         .await
     }
 
-    pub(super) async fn sequence_revoke_privilege(
+    pub(super) async fn sequence_revoke_privileges(
         &mut self,
         session: &mut Session,
-        RevokePrivilegePlan {
-            acl_mode,
-            object_id,
+        RevokePrivilegesPlan {
+            update_privileges,
             revokees,
-            grantor,
-        }: RevokePrivilegePlan,
+        }: RevokePrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             revokees,
-            grantor,
             UpdatePrivilegeVariant::Revoke,
         )
         .await
     }
 
-    async fn sequence_update_privilege(
+    async fn sequence_update_privileges(
         &mut self,
         session: &mut Session,
-        acl_mode: AclMode,
-        object_id: ObjectId,
+        update_privileges: Vec<UpdatePrivilege>,
         grantees: Vec<RoleId>,
-        grantor: RoleId,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog()
-            .ensure_not_reserved_object(&object_id, session.conn_id())?;
-        for grantee in &grantees {
-            self.catalog().ensure_not_system_role(grantee)?;
-        }
+        let mut ops = Vec::with_capacity(update_privileges.len() * grantees.len());
+        let mut warnings = Vec::new();
+        let catalog = self.catalog().for_session(session);
 
-        let privileges = self
-            .catalog()
-            .get_privileges(&object_id, session.conn_id())
-            .expect("cannot grant privileges on objects without privileges");
+        for UpdatePrivilege {
+            acl_mode,
+            object_id,
+            grantor,
+        } in update_privileges
+        {
+            self.catalog()
+                .ensure_not_reserved_object(&object_id, session.conn_id())?;
 
-        let mut ops = Vec::with_capacity(grantees.len());
-        for grantee in grantees {
-            let existing_privilege = privileges
-                .0
-                .get(&grantee)
-                .and_then(|privileges| {
-                    privileges
-                        .into_iter()
-                        .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-                })
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
-
-            match variant {
-                UpdatePrivilegeVariant::Grant
-                    if !existing_privilege.acl_mode.contains(acl_mode) =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+            let actual_object_type = catalog.get_object_type(&object_id);
+            // For all relations we allow all applicable table privileges, but send a warning if the
+            // privilege isn't actually applicable to the object type.
+            if actual_object_type.is_relation() {
+                let applicable_privileges = rbac::all_object_privileges(actual_object_type);
+                let non_applicable_privileges = acl_mode.difference(applicable_privileges);
+                if !non_applicable_privileges.is_empty() {
+                    let object_name = catalog.get_object_name(&object_id);
+                    warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
+                        non_applicable_privileges,
+                        object_type: actual_object_type,
+                        object_name,
+                    })
                 }
-                UpdatePrivilegeVariant::Revoke
-                    if !existing_privilege
-                        .acl_mode
-                        .intersection(acl_mode)
-                        .is_empty() =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+            }
+
+            let privileges = self
+                .catalog()
+                .get_privileges(&object_id, session.conn_id())
+                // Should be unreachable since the parser will refuse to parse grant/revoke
+                // statements on objects without privileges.
+                .ok_or(AdapterError::Unsupported(
+                    "GRANTs/REVOKEs on an object type with no privileges",
+                ))?;
+
+            for grantee in &grantees {
+                self.catalog().ensure_not_system_role(grantee)?;
+                let existing_privilege = privileges
+                    .0
+                    .get(grantee)
+                    .and_then(|privileges| {
+                        privileges
+                            .into_iter()
+                            .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+                    })
+                    .map(Cow::Borrowed)
+                    .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
+
+                match variant {
+                    UpdatePrivilegeVariant::Grant
+                        if !existing_privilege.acl_mode.contains(acl_mode) =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            object_id: object_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    UpdatePrivilegeVariant::Revoke
+                        if !existing_privilege
+                            .acl_mode
+                            .intersection(acl_mode)
+                            .is_empty() =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            object_id: object_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    // no-op
+                    _ => {}
                 }
-                // no-op
-                _ => {}
             }
         }
 
         if ops.is_empty() {
+            session.add_notices(warnings);
             return Ok(variant.into());
         }
 
-        self.catalog_transact(Some(session), ops)
+        let res = self
+            .catalog_transact(Some(session), ops)
             .await
             .map(|_| match variant {
                 UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
                 UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
-            })
+            });
+        if res.is_ok() {
+            session.add_notices(warnings);
+        }
+        res
     }
 
     pub(super) async fn sequence_grant_role(
@@ -4285,9 +4359,9 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
             introspection_sources,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
-        self.create_linked_cluster_replica_op(id, size, ops, *session.role_id())
+        self.create_linked_cluster_replica_op(id, size, ops, *session.current_role_id())
             .await?;
         Ok(id)
     }

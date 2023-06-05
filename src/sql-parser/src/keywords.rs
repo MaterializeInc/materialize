@@ -91,6 +91,8 @@ impl Keyword {
             // These keywords are ambiguous when used as a table alias, as they
             // conflict with the syntax for joins.
             ON | JOIN | INNER | CROSS | FULL | LEFT | RIGHT | NATURAL | USING |
+            // Needed for UPDATE.
+            SET |
             // `OUTER` is not strictly ambiguous, but it prevents `a OUTER JOIN
             // b` from parsing as `a AS outer JOIN b`, instead producing a nice
             // syntax error.

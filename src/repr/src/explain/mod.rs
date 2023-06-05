@@ -645,7 +645,7 @@ mod tests {
         expr.explain(&format, &context)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_mutable_context() {
         let mut env = Environment::default();
         let frontiers = Frontiers::<u64>::new(3, 7);

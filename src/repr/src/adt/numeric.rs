@@ -431,7 +431,7 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     Ok(d)
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_roundtrip() {
     fn inner(s: &str) {
@@ -467,7 +467,7 @@ fn test_twos_complement_roundtrip() {
     inner("-7.2e-35");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_comp_numeric_primitive() {
     fn inner_inner<P>(i: P, i_be_bytes: &mut [u8])
@@ -595,7 +595,7 @@ fn test_twos_comp_numeric_primitive() {
     inner_i128(i128::MIN / 7 + 7);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_to_numeric_fail() {
     fn inner(b: &mut [u8]) {
@@ -613,7 +613,7 @@ fn test_twos_complement_to_numeric_fail() {
     inner(&mut e);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_wide_twos_complement_roundtrip() {
     fn inner(s: &str) {
@@ -770,14 +770,14 @@ mod tests {
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn numeric_max_scale_protobuf_roundtrip(expect in any::<NumericMaxScale>()) {
             let actual = protobuf_roundtrip::<_, ProtoNumericMaxScale>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
             assert!(actual.is_ok());

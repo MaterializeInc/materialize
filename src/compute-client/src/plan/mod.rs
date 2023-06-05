@@ -38,10 +38,12 @@ use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
+pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
+pub mod transform;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
 
@@ -2183,7 +2185,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
@@ -2194,7 +2196,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]
-        #[test]
+        #[mz_ore::test]
         fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
             assert!(actual.is_ok());
@@ -2204,7 +2206,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
-        #[test]
+        #[mz_ore::test]
         fn plan_protobuf_roundtrip(expect in any::<Plan>()) {
             let actual = protobuf_roundtrip::<_, ProtoPlan>(&expect);
             assert!(actual.is_ok());

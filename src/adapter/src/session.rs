@@ -42,8 +42,17 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
-const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::new_static(0);
+const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 const DUMMY_CONNECT_TIME: EpochMillis = 0;
+
+/// Metadata about a Session's role.
+#[derive(Debug, Clone)]
+struct RoleMetadata {
+    /// The role of the current execution context.
+    current_role: RoleId,
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    session_role: RoleId,
+}
 
 /// A session holds per-connection state.
 #[derive(Debug)]
@@ -55,19 +64,19 @@ pub struct Session<T = mz_repr::Timestamp> {
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
-    /// The role ID of the current user.
+    /// The role metadata of the current session.
     ///
-    /// Invariant: role_id must be `Some` after the user has
+    /// Invariant: role_metadata must be `Some` after the user has
     /// successfully connected to and authenticated with Materialize.
     ///
     /// Prefer using this value over [`Self.user.name`].
     //
     // It would be better for this not to be an Option, but the
     // `Session` is initialized before the user has connected to
-    // Materialize and is able to look up the `RoleId`. The `Session`
+    // Materialize and is able to look up the `RoleMetadata`. The `Session`
     // is also used to return an error when no role exists and
-    // therefore there is no valid `RoleId`.
-    role_id: Option<RoleId>,
+    // therefore there is no valid `RoleMetadata`.
+    role_metadata: Option<RoleMetadata>,
     vars: SessionVars,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
@@ -100,7 +109,7 @@ impl<T: TimestampManipulation> Session<T> {
             SYSTEM_USER.clone(),
             DUMMY_CONNECT_TIME,
         );
-        dummy.set_role_id(RoleId::User(0));
+        dummy.initialize_role_metadata(RoleId::User(0));
         dummy
     }
 
@@ -126,7 +135,7 @@ impl<T: TimestampManipulation> Session<T> {
             pcx: None,
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
-            role_id: None,
+            role_metadata: None,
             vars,
             notices_tx,
             notices_rx,
@@ -368,7 +377,14 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Adds a notice to the session.
     pub fn add_notice(&self, notice: AdapterNotice) {
-        let _ = self.notices_tx.send(notice);
+        self.add_notices([notice])
+    }
+
+    /// Adds multiple notices to the session.
+    pub fn add_notices(&self, notices: impl IntoIterator<Item = AdapterNotice>) {
+        for notice in notices {
+            let _ = self.notices_tx.send(notice);
+        }
     }
 
     /// Awaits a possible notice.
@@ -667,17 +683,36 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Initializes the session's role ID.
-    pub fn set_role_id(&mut self, role_id: RoleId) {
-        self.role_id = Some(role_id);
+    /// Initializes the session's role metadata.
+    pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
+        self.role_metadata = Some(RoleMetadata {
+            current_role: role_id,
+            session_role: role_id,
+        });
     }
 
-    /// Returns the session's role ID.
+    /// Returns the session's current role ID.
     ///
     /// # Panics
     /// If the session has not connected successfully.
-    pub fn role_id(&self) -> &RoleId {
-        self.role_id.as_ref().expect("role_id invariant violated")
+    pub fn current_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .current_role
+    }
+
+    /// Returns the session's session role ID.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn session_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .session_role
     }
 }
 
@@ -881,6 +916,14 @@ impl<T> TransactionStatus<T> {
             | TransactionStatus::Failed(txn) => txn.timeline(),
         }
     }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    pub fn contains_ops(&self) -> bool {
+        match self.inner() {
+            Some(txn) => txn.contains_ops(),
+            None => false,
+        }
+    }
 }
 
 /// An abstraction allowing us to identify different transactions.
@@ -927,6 +970,11 @@ impl<T> Transaction<T> {
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_) => None,
         }
+    }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    fn contains_ops(&self) -> bool {
+        !matches!(self.ops, TransactionOps::None)
     }
 }
 

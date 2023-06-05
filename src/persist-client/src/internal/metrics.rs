@@ -79,6 +79,8 @@ pub struct Metrics {
     pub pubsub_client: PubSubClientMetrics,
     /// Metrics for mfp/filter pushdown.
     pub pushdown: PushdownMetrics,
+    /// Metrics for blob caching.
+    pub blob_cache_mem: BlobMemCache,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -123,6 +125,7 @@ impl Metrics {
             watch: WatchMetrics::new(registry),
             pubsub_client: PubSubClientMetrics::new(registry),
             pushdown: PushdownMetrics::new(registry),
+            blob_cache_mem: BlobMemCache::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -1110,6 +1113,7 @@ pub struct ShardsMetrics {
     rollup_count: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    seqnos_since_last_rollup: mz_ore::metrics::UIntGaugeVec,
     gc_seqno_held_parts: mz_ore::metrics::UIntGaugeVec,
     gc_live_diffs: mz_ore::metrics::UIntGaugeVec,
     gc_finished: mz_ore::metrics::IntCounterVec,
@@ -1200,6 +1204,11 @@ impl ShardsMetrics {
             seqnos_held: registry.register(metric!(
                 name: "mz_persist_shard_seqnos_held",
                 help: "maximum count of gc-ineligible states by shard",
+                var_labels: ["shard"],
+            )),
+            seqnos_since_last_rollup: registry.register(metric!(
+                name: "mz_persist_shard_seqnos_since_last_rollup",
+                help: "count of seqnos since last rollup",
                 var_labels: ["shard"],
             )),
             gc_seqno_held_parts: registry.register(metric!(
@@ -1330,6 +1339,7 @@ pub struct ShardMetrics {
     pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub seqnos_since_last_rollup: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1386,6 +1396,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            seqnos_since_last_rollup: shards_metrics
+                .seqnos_since_last_rollup
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             gc_seqno_held_parts: shards_metrics
                 .gc_seqno_held_parts
@@ -1888,6 +1901,47 @@ impl PushdownMetrics {
             parts_audited_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_audited_bytes",
                 help: "total size of parts fetched only for pushdown audit",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BlobMemCache {
+    pub(crate) size_blobs: UIntGauge,
+    pub(crate) size_bytes: UIntGauge,
+    pub(crate) hits_blobs: IntCounter,
+    pub(crate) hits_bytes: IntCounter,
+    pub(crate) evictions: IntCounter,
+}
+
+impl BlobMemCache {
+    fn new(registry: &MetricsRegistry) -> Self {
+        BlobMemCache {
+            size_blobs: registry.register(metric!(
+                name: "mz_persist_blob_cache_size_blobs",
+                help: "count of blobs in the cache",
+                const_labels: {"cache" => "mem"},
+            )),
+            size_bytes: registry.register(metric!(
+                name: "mz_persist_blob_cache_size_bytes",
+                help: "total size of blobs in the cache",
+                const_labels: {"cache" => "mem"},
+            )),
+            hits_blobs: registry.register(metric!(
+                name: "mz_persist_blob_cache_hits_blobs",
+                help: "count of blobs served via cache instead of s3",
+                const_labels: {"cache" => "mem"},
+            )),
+            hits_bytes: registry.register(metric!(
+                name: "mz_persist_blob_cache_hits_bytes",
+                help: "total size of blobs served via cache instead of s3",
+                const_labels: {"cache" => "mem"},
+            )),
+            evictions: registry.register(metric!(
+                name: "mz_persist_blob_cache_evictions",
+                help: "count of capacity-based cache evictions",
+                const_labels: {"cache" => "mem"},
             )),
         }
     }

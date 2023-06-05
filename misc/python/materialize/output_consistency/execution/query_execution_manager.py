@@ -159,6 +159,7 @@ class QueryExecutionManager:
 
                 if self.shall_retry_with_smaller_query(query_template):
                     # abort and retry with smaller query
+                    # this will discard the outcomes of all strategies
                     return self.split_and_retry_queries(
                         query_template, query_id, evaluation_strategies
                     )

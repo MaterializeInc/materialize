@@ -1026,7 +1026,7 @@ mod tests {
     // Test all versions of events. This test hard codes bytes so that
     // programmers are not able to change data structures here without this test
     // failing. Instead of changing data structures, add new variants.
-    #[test]
+    #[mz_ore::test]
     fn test_audit_log() -> Result<(), anyhow::Error> {
         let cases: Vec<(VersionedEvent, &'static str)> = vec![(
             VersionedEvent::V1(EventV1::new(
@@ -1058,7 +1058,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow
         fn proptest_audit_log_roundtrips(event: VersionedEvent) {
             let proto = event.into_proto();
@@ -1067,7 +1067,7 @@ mod tests {
             prop_assert_eq!(event, roundtrip);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow
         fn proptest_storage_usage_roundtrips(usage: VersionedStorageUsage) {
             let proto = usage.into_proto();

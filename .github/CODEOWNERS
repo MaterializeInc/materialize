@@ -84,6 +84,7 @@
 /src/stash-debug                    @MaterializeInc/surfaces
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
+/src/test-macro                     @MaterializeInc/qa
 /src/testdrive                      @MaterializeInc/qa
 /src/timely-util                    @MaterializeInc/compute
 /src/transform                      @MaterializeInc/compute

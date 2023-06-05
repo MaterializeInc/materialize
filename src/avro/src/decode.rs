@@ -117,7 +117,7 @@ mod tests {
 
     use super::build_ts_value;
 
-    #[test]
+    #[mz_ore::test]
     fn test_negative_timestamps() {
         assert_eq!(
             build_ts_value(-1, TsUnit::Millis).unwrap(),

@@ -166,7 +166,7 @@ mod tests {
     use super::*;
 
     proptest! {
-       #[test]
+       #[mz_ore::test]
         fn threshold_plan_protobuf_roundtrip(expect in any::<ThresholdPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoThresholdPlan>(&expect);
             assert!(actual.is_ok());

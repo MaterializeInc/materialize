@@ -5066,17 +5066,20 @@ impl<'a> Parser<'a> {
                 variable,
                 to,
             }))
-        } else if
-        // SET TRANSACTION transaction_mode
-        (variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none())
-            ||
-            // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
-            (modifier == Some(SESSION)
-                && variable.as_str().parse() == Ok(CHARACTERISTICS)
-                && self.parse_keywords(&[AS, TRANSACTION]))
-        {
+        } else if variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none() {
+            // SET TRANSACTION transaction_mode
             Ok(Statement::SetTransaction(SetTransactionStatement {
-                modes: self.parse_transaction_modes()?,
+                local: true,
+                modes: self.parse_transaction_modes(true)?,
+            }))
+        } else if modifier == Some(SESSION)
+            && variable.as_str().parse() == Ok(CHARACTERISTICS)
+            && self.parse_keywords(&[AS, TRANSACTION])
+        {
+            // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
+            Ok(Statement::SetTransaction(SetTransactionStatement {
+                local: false,
+                modes: self.parse_transaction_modes(true)?,
             }))
         } else {
             self.expected(self.peek_pos(), "equals sign or TO", self.peek_token())
@@ -5533,6 +5536,13 @@ impl<'a> Parser<'a> {
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
         let table_name = RawItemName::Name(self.parse_item_name()?);
+        // The alias here doesn't support columns, so don't use parse_optional_table_alias.
+        let alias = self.parse_optional_alias(Keyword::is_reserved_in_table_alias)?;
+        let alias = alias.map(|name| TableAlias {
+            name,
+            columns: Vec::new(),
+            strict: false,
+        });
 
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
@@ -5544,6 +5554,7 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Update(UpdateStatement {
             table_name,
+            alias,
             assignments,
             selection,
         }))
@@ -5668,20 +5679,22 @@ impl<'a> Parser<'a> {
     fn parse_start_transaction(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(TRANSACTION)?;
         Ok(Statement::StartTransaction(StartTransactionStatement {
-            modes: self.parse_transaction_modes()?,
+            modes: self.parse_transaction_modes(false)?,
         }))
     }
 
     fn parse_begin(&mut self) -> Result<Statement<Raw>, ParserError> {
         let _ = self.parse_one_of_keywords(&[TRANSACTION, WORK]);
         Ok(Statement::StartTransaction(StartTransactionStatement {
-            modes: self.parse_transaction_modes()?,
+            modes: self.parse_transaction_modes(false)?,
         }))
     }
 
-    fn parse_transaction_modes(&mut self) -> Result<Vec<TransactionMode>, ParserError> {
+    fn parse_transaction_modes(
+        &mut self,
+        mut required: bool,
+    ) -> Result<Vec<TransactionMode>, ParserError> {
         let mut modes = vec![];
-        let mut required = false;
         loop {
             let mode = if self.parse_keywords(&[ISOLATION, LEVEL]) {
                 let iso_level = if self.parse_keywords(&[READ, UNCOMMITTED]) {
@@ -5692,6 +5705,8 @@ impl<'a> Parser<'a> {
                     TransactionIsolationLevel::RepeatableRead
                 } else if self.parse_keyword(SERIALIZABLE) {
                     TransactionIsolationLevel::Serializable
+                } else if self.parse_keywords(&[STRICT, SERIALIZABLE]) {
+                    TransactionIsolationLevel::StrictSerializable
                 } else {
                     self.expected(self.peek_pos(), "isolation level", self.peek_token())?
                 };
@@ -6048,13 +6063,14 @@ impl<'a> Parser<'a> {
                     | ObjectType::Database
                     | ObjectType::Schema => {}
                 }
-                let name = self.parse_object_name(object_type)?;
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 self.expect_keyword(TO)?;
                 let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
+                Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
                     privileges,
                     object_type,
-                    name,
+                    names,
                     roles,
                 }))
             }
@@ -6105,13 +6121,14 @@ impl<'a> Parser<'a> {
                     | ObjectType::Database
                     | ObjectType::Schema => {}
                 }
-                let name = self.parse_object_name(object_type)?;
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 self.expect_keyword(FROM)?;
                 let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
+                Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
                     privileges,
                     object_type,
-                    name,
+                    names,
                     roles,
                 }))
             }

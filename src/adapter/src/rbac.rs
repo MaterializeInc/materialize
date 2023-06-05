@@ -29,11 +29,11 @@ use mz_sql::plan::{
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
-    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegePlan, GrantRolePlan, InsertPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
     MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
-    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan,
-    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    StartTransactionPlan, SubscribePlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
+    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -134,6 +134,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::Execute { .. }
         | Command::Commit { .. }
         | Command::CancelRequest { .. }
+        | Command::PrivilegedCancelRequest { .. }
         | Command::CopyRows { .. }
         | Command::GetSystemVars { .. }
         | Command::SetSystemVars { .. }
@@ -149,13 +150,22 @@ pub fn check_plan(
     target_cluster_id: Option<ClusterId>,
     depends_on: &Vec<GlobalId>,
 ) -> Result<(), AdapterError> {
-    let role_id = session.role_id();
-    if catalog.try_get_role(role_id).is_none() {
+    let current_role_id = session.current_role_id();
+    if catalog.try_get_role(current_role_id).is_none() {
         // PostgreSQL allows users that have their role dropped to perform some actions,
         // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
         // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
         // role is dropped.
-        return Err(AdapterError::ConcurrentRoleDrop(role_id.clone()));
+        return Err(AdapterError::ConcurrentRoleDrop(current_role_id.clone()));
+    };
+
+    let session_role_id = session.session_role_id();
+    if catalog.try_get_role(session_role_id).is_none() {
+        // PostgreSQL allows users that have their role dropped to perform some actions,
+        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+        // role is dropped.
+        return Err(AdapterError::ConcurrentRoleDrop(session_role_id.clone()));
     };
 
     if !is_rbac_enabled_for_session(catalog.system_vars(), session) {
@@ -167,7 +177,7 @@ pub fn check_plan(
     }
 
     // Obtain all roles that the current session is a member of.
-    let role_membership = catalog.collect_role_membership(role_id);
+    let role_membership = catalog.collect_role_membership(current_role_id);
 
     // Validate that the current session has the required role membership to execute the provided
     // plan.
@@ -190,7 +200,7 @@ pub fn check_plan(
     let required_attributes = generate_required_plan_attribute(plan);
     let unheld_attributes: Vec<_> = required_attributes
         .into_iter()
-        .filter(|attribute| !attribute.check_role(role_id, catalog))
+        .filter(|attribute| !attribute.check_role(current_role_id, catalog))
         .collect();
     attribute_err(unheld_attributes, plan)?;
 
@@ -203,10 +213,15 @@ pub fn check_plan(
         .collect();
     ownership_err(unheld_ownership, catalog)?;
 
-    let required_privileges =
-        generate_required_privileges(catalog, plan, target_cluster_id, depends_on, *role_id);
+    let required_privileges = generate_required_privileges(
+        catalog,
+        plan,
+        target_cluster_id,
+        depends_on,
+        *current_role_id,
+    );
     let mut role_memberships = BTreeMap::new();
-    role_memberships.insert(*role_id, role_membership);
+    role_memberships.insert(*current_role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
 
     Ok(())
@@ -274,6 +289,7 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -305,8 +321,8 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
-        | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => Vec::new(),
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_) => Vec::new(),
     }
 }
 
@@ -370,6 +386,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -399,8 +416,8 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::Deallocate(_)
         | Plan::Raise(_)
         | Plan::RotateKeys(_)
-        | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
         | Plan::ReassignOwned(_) => Vec::new(),
     }
 }
@@ -526,6 +543,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
@@ -568,8 +586,16 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
         Plan::RotateKeys(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterOwner(plan) => vec![plan.id.clone()],
-        Plan::GrantPrivilege(plan) => vec![plan.object_id.clone()],
-        Plan::RevokePrivilege(plan) => vec![plan.object_id.clone()],
+        Plan::GrantPrivileges(plan) => plan
+            .update_privileges
+            .iter()
+            .map(|update_privilege| update_privilege.object_id.clone())
+            .collect(),
+        Plan::RevokePrivileges(plan) => plan
+            .update_privileges
+            .iter()
+            .map(|update_privilege| update_privilege.object_id.clone())
+            .collect(),
     }
 }
 
@@ -1046,37 +1072,39 @@ fn generate_required_privileges(
             }
             ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
         },
-        Plan::GrantPrivilege(GrantPrivilegePlan {
-            acl_mode: _,
-            object_id,
+        Plan::GrantPrivileges(GrantPrivilegesPlan {
+            update_privileges,
             grantees: _,
-            grantor: _,
         })
-        | Plan::RevokePrivilege(RevokePrivilegePlan {
-            acl_mode: _,
-            object_id,
+        | Plan::RevokePrivileges(RevokePrivilegesPlan {
+            update_privileges,
             revokees: _,
-            grantor: _,
-        }) => match object_id {
-            ObjectId::ClusterReplica((cluster_id, _)) => {
-                vec![(cluster_id.into(), AclMode::USAGE, role_id)]
-            }
-            ObjectId::Schema((database_spec, _)) => match database_spec {
-                ResolvedDatabaseSpecifier::Ambient => Vec::new(),
-                ResolvedDatabaseSpecifier::Id(database_id) => {
-                    vec![(database_id.into(), AclMode::USAGE, role_id)]
+        }) => {
+            let mut privleges = Vec::with_capacity(update_privileges.len());
+            for UpdatePrivilege { object_id, .. } in update_privileges {
+                match object_id {
+                    ObjectId::ClusterReplica((cluster_id, _)) => {
+                        privleges.push((cluster_id.into(), AclMode::USAGE, role_id));
+                    }
+                    ObjectId::Schema((database_spec, _)) => match database_spec {
+                        ResolvedDatabaseSpecifier::Ambient => {}
+                        ResolvedDatabaseSpecifier::Id(database_id) => {
+                            privleges.push((database_id.into(), AclMode::USAGE, role_id));
+                        }
+                    },
+                    ObjectId::Item(item_id) => {
+                        let item = catalog.get_item(item_id);
+                        privleges.push((
+                            item.name().qualifiers.clone().into(),
+                            AclMode::USAGE,
+                            role_id,
+                        ))
+                    }
+                    ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => {}
                 }
-            },
-            ObjectId::Item(item_id) => {
-                let item = catalog.get_item(item_id);
-                vec![(
-                    item.name().qualifiers.clone().into(),
-                    AclMode::USAGE,
-                    role_id,
-                )]
             }
-            ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
-        },
+            privleges
+        }
         Plan::CreateDatabase(CreateDatabasePlan {
             name: _,
             if_not_exists: _,
@@ -1100,6 +1128,7 @@ fn generate_required_privileges(
             local: _,
         })
         | Plan::ResetVariable(ResetVariablePlan { name: _ })
+        | Plan::SetTransaction(SetTransactionPlan { local: _, modes: _ })
         | Plan::StartTransaction(StartTransactionPlan {
             access: _,
             isolation_level: _,

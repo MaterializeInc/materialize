@@ -34,7 +34,7 @@ use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey};
@@ -665,7 +665,7 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<Arc<PartStats>>)>)>,
+    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<LazyPartStats>)>)>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
 }
@@ -744,7 +744,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
                                 Ok(mut x) => {
                                     x.key.trim_to_budget(stats_budget, force_keep_stats_col);
-                                    Some((Arc::new(x), stats_start.elapsed()))
+                                    let x = LazyPartStats::from(&x);
+                                    Some((x, stats_start.elapsed()))
                                 }
                                 Err(err) => {
                                     error!("failed to construct part stats: {}", err);
@@ -865,10 +866,9 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_flushing() {
-        mz_ore::test::init_logging();
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -959,11 +959,9 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_keys() {
-        mz_ore::test::init_logging();
-
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);
@@ -1003,11 +1001,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_partial_order() {
-        mz_ore::test::init_logging();
-
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);

@@ -268,7 +268,6 @@ impl Factorizer for WorstCaseFactorizer {
         for (idx, keys) in input_keys.iter().enumerate() {
             for key in *keys {
                 if key.len() == 1 {
-                    println!("key on column {} for source {idx}", key[0]);
                     indexed_columns.insert(offset + key[0], idx);
                 }
             }

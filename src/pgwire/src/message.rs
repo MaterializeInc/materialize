@@ -333,6 +333,7 @@ impl ErrorResponse {
             AdapterError::InvalidLogDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidSetIsolationLevel => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
@@ -436,6 +437,7 @@ impl ErrorResponse {
             AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
             AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
             AdapterNotice::CannotRevoke { .. } => SqlState::WARNING,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -601,6 +603,7 @@ impl Severity {
             AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
             AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
             AdapterNotice::CannotRevoke { .. } => Severity::Warning,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
         }
     }
 }
@@ -641,7 +644,7 @@ pub fn encode_row_description(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_should_output_to_client() {
         #[rustfmt::skip]
         let test_cases = [

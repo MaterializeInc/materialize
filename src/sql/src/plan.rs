@@ -44,7 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ast::{TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,7 @@ pub enum Plan {
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
+    SetTransaction(SetTransactionPlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction(CommitTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
@@ -139,8 +140,8 @@ pub enum Plan {
     RotateKeys(RotateKeysPlan),
     GrantRole(GrantRolePlan),
     RevokeRole(RevokeRolePlan),
-    GrantPrivilege(GrantPrivilegePlan),
-    RevokePrivilege(RevokePrivilegePlan),
+    GrantPrivileges(GrantPrivilegesPlan),
+    RevokePrivileges(RevokePrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
 }
 
@@ -198,18 +199,18 @@ impl Plan {
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
-            StatementKind::GrantPrivilege => vec![PlanKind::GrantPrivilege],
+            StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
             StatementKind::ReassignOwned => vec![PlanKind::ReassignOwned],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
-            StatementKind::RevokePrivilege => vec![PlanKind::RevokePrivilege],
+            StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
             StatementKind::Select => vec![PlanKind::Peek],
-            StatementKind::SetTransaction => vec![],
+            StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
                 PlanKind::Peek,
@@ -267,6 +268,7 @@ impl Plan {
             Plan::ShowVariable(_) => "show variable",
             Plan::SetVariable(_) => "set variable",
             Plan::ResetVariable(_) => "reset variable",
+            Plan::SetTransaction(_) => "set transaction",
             Plan::StartTransaction(_) => "start transaction",
             Plan::CommitTransaction(_) => "commit",
             Plan::AbortTransaction(_) => "abort",
@@ -335,8 +337,8 @@ impl Plan {
             Plan::RotateKeys(_) => "rotate keys",
             Plan::GrantRole(_) => "grant role",
             Plan::RevokeRole(_) => "revoke role",
-            Plan::GrantPrivilege(_) => "grant privilege",
-            Plan::RevokePrivilege(_) => "revoke privilege",
+            Plan::GrantPrivileges(_) => "grant privilege",
+            Plan::RevokePrivileges(_) => "revoke privilege",
             Plan::ReassignOwned(_) => "reassign owned",
         }
     }
@@ -617,6 +619,12 @@ pub struct ResetVariablePlan {
     pub name: String,
 }
 
+#[derive(Debug)]
+pub struct SetTransactionPlan {
+    pub local: bool,
+    pub modes: Vec<TransactionMode>,
+}
+
 #[derive(Clone, Debug)]
 pub struct PeekPlan {
     pub source: MirRelationExpr,
@@ -875,27 +883,28 @@ pub struct RevokeRolePlan {
 }
 
 #[derive(Debug)]
-pub struct GrantPrivilegePlan {
-    /// /// The privileges being granted on an object.
+pub struct UpdatePrivilege {
+    /// The privileges being granted/revoked on an object.
     pub acl_mode: AclMode,
     /// The ID of the object.
     pub object_id: ObjectId,
-    /// The roles that will granted the privileges.
-    pub grantees: Vec<RoleId>,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }
 
 #[derive(Debug)]
-pub struct RevokePrivilegePlan {
-    /// The privileges being revoked.
-    pub acl_mode: AclMode,
-    /// The ID of the object.
-    pub object_id: ObjectId,
+pub struct GrantPrivilegesPlan {
+    /// Description of each privilege being granted.
+    pub update_privileges: Vec<UpdatePrivilege>,
+    /// The roles that will granted the privileges.
+    pub grantees: Vec<RoleId>,
+}
+
+#[derive(Debug)]
+pub struct RevokePrivilegesPlan {
+    pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will have privileges revoked.
     pub revokees: Vec<RoleId>,
-    /// The role that will revoke the privileges.
-    pub grantor: RoleId,
 }
 
 #[derive(Debug)]
