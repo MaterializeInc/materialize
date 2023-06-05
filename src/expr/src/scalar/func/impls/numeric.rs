@@ -218,7 +218,7 @@ sqlfunc!(
     fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
         let i = a.to_string().parse::<f32>().unwrap();
         if i.is_infinite() {
-            Err(EvalError::Float32OutOfRange)
+            Err(EvalError::Float32OutOfRange(i.to_string()))
         } else {
             Ok(i)
         }
@@ -233,7 +233,7 @@ sqlfunc!(
     fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
         let i = a.to_string().parse::<f64>().unwrap();
         if i.is_infinite() {
-            Err(EvalError::Float64OutOfRange)
+            Err(EvalError::Float64OutOfRange(i.to_string()))
         } else {
             Ok(i)
         }

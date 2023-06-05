@@ -710,6 +710,9 @@ message ProtoEvalError {
         string ident = 1;
         optional string detail = 2;
     }
+    message ProtoValueOutOfRange {
+        string value = 1;
+    }
     oneof kind {
         int32 character_not_valid_for_encoding = 1;
         int32 character_too_large_for_encoding = 2;
@@ -719,8 +722,8 @@ message ProtoEvalError {
         google.protobuf.Empty float_overflow = 6;
         google.protobuf.Empty float_underflow = 7;
         google.protobuf.Empty numeric_field_overflow = 8;
-        google.protobuf.Empty float32_out_of_range = 9;
-        google.protobuf.Empty float64_out_of_range = 10;
+        ProtoValueOutOfRange float32_out_of_range = 9;
+        ProtoValueOutOfRange float64_out_of_range = 10;
         google.protobuf.Empty int16_out_of_range = 11;
         google.protobuf.Empty int32_out_of_range = 12;
         google.protobuf.Empty int64_out_of_range = 13;
