@@ -888,6 +888,14 @@ impl<T> TransactionStatus<T> {
             | TransactionStatus::Failed(txn) => txn.timeline(),
         }
     }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    pub fn contains_ops(&self) -> bool {
+        match self.inner() {
+            Some(txn) => txn.contains_ops(),
+            None => false,
+        }
+    }
 }
 
 /// An abstraction allowing us to identify different transactions.
@@ -934,6 +942,11 @@ impl<T> Transaction<T> {
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_) => None,
         }
+    }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    fn contains_ops(&self) -> bool {
+        !matches!(self.ops, TransactionOps::None)
     }
 }
 
