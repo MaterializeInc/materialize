@@ -87,8 +87,6 @@ pub struct PersistConfig {
     pub now: NowFn,
     /// Configurations that can be dynamically updated.
     pub(crate) dynamic: Arc<DynamicConfig>,
-    /// Whether to physically and logically compact batches in blob storage.
-    pub compaction_enabled: bool,
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
     /// compaction requests that can execute for a given shard.
     pub compaction_concurrency_limit: usize,
@@ -125,8 +123,6 @@ pub struct PersistConfig {
 impl PersistConfig {
     /// Returns a new instance of [PersistConfig] with default tuning.
     pub fn new(build_info: &BuildInfo, now: NowFn) -> Self {
-        // Escape hatch in case we need to disable compaction.
-        let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         Self {
             build_version: build_info.semver_version(),
             now,
@@ -136,6 +132,7 @@ impl PersistConfig {
                 blob_cache_mem_limit_bytes: AtomicUsize::new(
                     Self::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
                 ),
+                compaction_enabled: AtomicBool::new(Self::DEFAULT_COMPACTION_ENABLED),
                 compaction_heuristic_min_inputs: AtomicUsize::new(8),
                 compaction_heuristic_min_parts: AtomicUsize::new(8),
                 compaction_heuristic_min_updates: AtomicUsize::new(1024),
@@ -145,6 +142,7 @@ impl PersistConfig {
                 consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
                 consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
                 consensus_tcp_user_timeout: RwLock::new(Self::DEFAULT_CRDB_TCP_USER_TIMEOUT),
+                gc_enabled: AtomicBool::new(Self::DEFAULT_GC_ENABLED),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(
                     30 * Self::DEFAULT_ROLLUP_THRESHOLD,
@@ -164,7 +162,6 @@ impl PersistConfig {
                 pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
             }),
-            compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
             consensus_connection_pool_max_size: 50,
@@ -220,12 +217,16 @@ pub(crate) const MB: usize = 1024 * 1024;
 impl PersistConfig {
     /// Default value for [`DynamicConfig::blob_target_size`].
     pub const DEFAULT_BLOB_TARGET_SIZE: usize = 128 * MB;
+    /// Default value for [`DynamicConfig::compaction_enabled`].
+    pub const DEFAULT_COMPACTION_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::compaction_minimum_timeout`].
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     /// Default value for [`DynamicConfig::consensus_tcp_user_timeout`].
     pub const DEFAULT_CRDB_TCP_USER_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Default value for [`DynamicConfig::gc_enabled`].
+    pub const DEFAULT_GC_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::stats_audit_percent`].
     pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
@@ -329,10 +330,12 @@ pub struct DynamicConfig {
     batch_builder_max_outstanding_parts: AtomicUsize,
     blob_target_size: AtomicUsize,
     blob_cache_mem_limit_bytes: AtomicUsize,
+    pub(crate) compaction_enabled: AtomicBool,
     compaction_heuristic_min_inputs: AtomicUsize,
     compaction_heuristic_min_parts: AtomicUsize,
     compaction_heuristic_min_updates: AtomicUsize,
     compaction_memory_bound_bytes: AtomicUsize,
+    gc_enabled: AtomicBool,
     gc_blob_delete_concurrency_limit: AtomicUsize,
     state_versions_recent_live_diffs_limit: AtomicUsize,
     usage_state_fetch_concurrency_limit: AtomicUsize,
@@ -429,6 +432,11 @@ impl DynamicConfig {
         self.blob_cache_mem_limit_bytes.load(Self::LOAD_ORDERING)
     }
 
+    /// Whether to physically and logically compact batches in blob storage.
+    pub fn compaction_enabled(&self) -> bool {
+        self.compaction_enabled.load(Self::LOAD_ORDERING)
+    }
+
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of inputs is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
@@ -500,6 +508,11 @@ impl DynamicConfig {
             .consensus_tcp_user_timeout
             .read()
             .expect("lock poisoned")
+    }
+
+    /// Whether to delete unreferenced blobs from Blob + truncate live diffs in Consensus.
+    pub fn gc_enabled(&self) -> bool {
+        self.gc_enabled.load(Self::LOAD_ORDERING)
     }
 
     /// The maximum number of concurrent blob deletes during garbage collection.
@@ -629,12 +642,16 @@ pub struct PersistParameters {
     pub blob_target_size: Option<usize>,
     /// Configures [`DynamicConfig::blob_cache_mem_limit_bytes`].
     pub blob_cache_mem_limit_bytes: Option<usize>,
+    /// Configures [`DynamicConfig::compaction_enabled`].
+    pub compaction_enabled: Option<bool>,
     /// Configures [`DynamicConfig::compaction_minimum_timeout`].
     pub compaction_minimum_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_connect_timeout`].
     pub consensus_connect_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_tcp_user_timeout`].
     pub consensus_tcp_user_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::gc_enabled`].
+    pub gc_enabled: Option<bool>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
@@ -663,9 +680,11 @@ impl PersistParameters {
         let Self {
             blob_target_size: self_blob_target_size,
             blob_cache_mem_limit_bytes: self_blob_cache_mem_limit_bytes,
+            compaction_enabled: self_compaction_enabled,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
             consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
+            gc_enabled: self_gc_enabled,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
@@ -679,9 +698,11 @@ impl PersistParameters {
         let Self {
             blob_target_size: other_blob_target_size,
             blob_cache_mem_limit_bytes: other_blob_cache_mem_limit_bytes,
+            compaction_enabled: other_compaction_enabled,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
             consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
+            gc_enabled: other_gc_enabled,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
@@ -698,6 +719,9 @@ impl PersistParameters {
         if let Some(v) = other_blob_cache_mem_limit_bytes {
             *self_blob_cache_mem_limit_bytes = Some(v);
         }
+        if let Some(v) = other_compaction_enabled {
+            *self_compaction_enabled = Some(v);
+        }
         if let Some(v) = other_compaction_minimum_timeout {
             *self_compaction_minimum_timeout = Some(v);
         }
@@ -706,6 +730,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_consensus_tcp_user_timeout {
             *self_consensus_tcp_user_timeout = Some(v);
+        }
+        if let Some(v) = other_gc_enabled {
+            *self_gc_enabled = Some(v);
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
@@ -745,9 +772,11 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             blob_cache_mem_limit_bytes,
+            compaction_enabled,
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
+            gc_enabled,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -760,9 +789,11 @@ impl PersistParameters {
         } = self;
         blob_target_size.is_none()
             && blob_cache_mem_limit_bytes.is_none()
+            && compaction_enabled.is_none()
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
             && consensus_tcp_user_timeout.is_none()
+            && gc_enabled.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
@@ -784,9 +815,11 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             blob_cache_mem_limit_bytes,
+            compaction_enabled,
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
+            gc_enabled,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -807,6 +840,11 @@ impl PersistParameters {
                 .blob_cache_mem_limit_bytes
                 .store(*blob_cache_mem_limit_bytes, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(enabled) = compaction_enabled {
+            cfg.dynamic
+                .compaction_enabled
+                .store(*enabled, DynamicConfig::STORE_ORDERING);
+        }
         if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
             // TODO: Figure out how to represent Durations in DynamicConfig.
         }
@@ -825,6 +863,11 @@ impl PersistParameters {
                 .write()
                 .expect("lock poisoned");
             *timeout = *consensus_tcp_user_timeout;
+        }
+        if let Some(enabled) = gc_enabled {
+            cfg.dynamic
+                .gc_enabled
+                .store(*enabled, DynamicConfig::STORE_ORDERING);
         }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
@@ -883,9 +926,11 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         ProtoPersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
             blob_cache_mem_limit_bytes: self.blob_cache_mem_limit_bytes.into_proto(),
+            compaction_enabled: self.compaction_enabled.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             consensus_tcp_user_timeout: self.consensus_tcp_user_timeout.into_proto(),
+            gc_enabled: self.gc_enabled.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
@@ -904,9 +949,11 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         Ok(Self {
             blob_target_size: proto.blob_target_size.into_rust()?,
             blob_cache_mem_limit_bytes: proto.blob_cache_mem_limit_bytes.into_rust()?,
+            compaction_enabled: proto.compaction_enabled.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             consensus_tcp_user_timeout: proto.consensus_tcp_user_timeout.into_rust()?,
+            gc_enabled: proto.gc_enabled.into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates

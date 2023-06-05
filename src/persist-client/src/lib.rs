@@ -583,16 +583,14 @@ impl PersistClient {
             key: key_schema,
             val: val_schema,
         };
-        let compact = self.cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.cpu_heavy_runtime),
-                writer_id.clone(),
-                schemas.clone(),
-                gc.clone(),
-            )
-        });
+        let compact = Compactor::new(
+            self.cfg.clone(),
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.cpu_heavy_runtime),
+            writer_id.clone(),
+            schemas.clone(),
+            gc.clone(),
+        );
         let heartbeat_ts = (self.cfg.now)();
         let (shard_upper, _, maintenance) = machine
             .register_writer(
@@ -710,6 +708,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
+    use crate::cfg::DynamicConfig;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
@@ -784,9 +783,12 @@ mod tests {
         let mut cache = PersistClientCache::new_no_metrics();
         cache.cfg.dynamic.set_blob_target_size(10);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(1);
-
         // Enable compaction in tests to ensure we get coverage.
-        cache.cfg.compaction_enabled = true;
+        cache
+            .cfg
+            .dynamic
+            .compaction_enabled
+            .store(true, Ordering::SeqCst);
         cache
     }
 

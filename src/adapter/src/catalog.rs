@@ -6899,9 +6899,11 @@ impl Catalog {
         PersistParameters {
             blob_target_size: Some(config.persist_blob_target_size()),
             blob_cache_mem_limit_bytes: Some(config.persist_blob_cache_mem_limit_bytes()),
+            compaction_enabled: Some(config.persist_compaction_enabled()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
             consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
+            gc_enabled: Some(config.persist_gc_enabled()),
             sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
             storage_sink_minimum_batch_updates: Some(
                 config.storage_persist_sink_minimum_batch_updates(),

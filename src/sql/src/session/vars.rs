@@ -542,12 +542,28 @@ const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_enabled`].
+const PERSIST_COMPACTION_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_compaction_enabled"),
+    value: &PersistConfig::DEFAULT_COMPACTION_ENABLED,
+    description: "Whether physical and logical compaction of persist shards is enabled.",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
     value: &PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
     description: "The minimum amount of time to allow a persist compaction request to run before \
                   timing it out (Materialize).",
+    internal: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::gc_enabled`].
+const PERSIST_GC_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_gc_enabled"),
+    value: &PersistConfig::DEFAULT_GC_ENABLED,
+    description: "Whether unreferenced blobs are deleted && Consensus states are truncated.",
     internal: true,
 };
 
@@ -1662,10 +1678,12 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
+            .with_var(&PERSIST_COMPACTION_ENABLED)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
+            .with_var(&PERSIST_GC_ENABLED)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2032,6 +2050,16 @@ impl SystemVars {
     /// Returns the `persist_blob_cache_mem_limit_bytes` configuration parameter.
     pub fn persist_blob_cache_mem_limit_bytes(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
+    }
+
+    /// Returns the `persist_compaction_enabled` configuration parameter.
+    pub fn persist_compaction_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_COMPACTION_ENABLED)
+    }
+
+    /// Returns the `persist_gc_enabled` configuration parameter.
+    pub fn persist_gc_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_GC_ENABLED)
     }
 
     /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
@@ -3520,9 +3548,11 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
 fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
+        || name == PERSIST_COMPACTION_ENABLED.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
+        || name == PERSIST_GC_ENABLED.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()

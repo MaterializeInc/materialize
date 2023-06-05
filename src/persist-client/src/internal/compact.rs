@@ -11,6 +11,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::ops::Not;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -225,6 +226,10 @@ where
         req: CompactReq<T>,
         machine: &Machine<K, V, T, D>,
     ) -> Option<oneshot::Receiver<Result<ApplyMergeResult, anyhow::Error>>> {
+        if !self.cfg.dynamic.compaction_enabled() {
+            return None;
+        }
+
         // Run some initial heuristics to ignore some requests for compaction.
         // We don't gain much from e.g. compacting two very small batches that
         // were just written, but it does result in non-trivial blob traffic

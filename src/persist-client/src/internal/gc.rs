@@ -13,8 +13,11 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
+use std::ops::Not;
+use std::sync::Arc;
 use std::time::Instant;
 
+use crate::cfg::DynamicConfig;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::stream::FuturesUnordered;
@@ -42,6 +45,7 @@ pub struct GcReq {
 
 #[derive(Debug)]
 pub struct GarbageCollector<K, V, T, D> {
+    dynamic_cfg: Arc<DynamicConfig>,
     sender: UnboundedSender<(GcReq, oneshot::Sender<RoutineMaintenance>)>,
     _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
@@ -49,6 +53,7 @@ pub struct GarbageCollector<K, V, T, D> {
 impl<K, V, T, D> Clone for GarbageCollector<K, V, T, D> {
     fn clone(&self) -> Self {
         GarbageCollector {
+            dynamic_cfg: Arc::clone(&self.dynamic_cfg),
             sender: self.sender.clone(),
             _phantom: PhantomData,
         }
@@ -111,6 +116,7 @@ where
     D: Semigroup + Codec64,
 {
     pub fn new(mut machine: Machine<K, V, T, D>) -> Self {
+        let dynamic_cfg = Arc::clone(&machine.applier.cfg.dynamic);
         let (gc_req_sender, mut gc_req_recv) =
             mpsc::unbounded_channel::<(GcReq, oneshot::Sender<RoutineMaintenance>)>();
 
@@ -172,6 +178,7 @@ where
         });
 
         GarbageCollector {
+            dynamic_cfg,
             sender: gc_req_sender,
             _phantom: PhantomData,
         }
@@ -184,6 +191,10 @@ where
         &self,
         req: GcReq,
     ) -> Option<oneshot::Receiver<RoutineMaintenance>> {
+        if !self.dynamic_cfg.gc_enabled() {
+            return None;
+        }
+
         let (gc_completed_sender, gc_completed_receiver) = oneshot::channel();
         let new_gc_sender = self.sender.clone();
         let send = new_gc_sender.send((req, gc_completed_sender));

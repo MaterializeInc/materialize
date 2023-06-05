@@ -23,7 +23,10 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
+materialized_additional_system_parameter_defaults = {
+    "upsert_source_disk_default": "true",
+    "enable_unmanaged_cluster_replicas": "true",
+}
 
 SERVICES = [
     Zookeeper(),
@@ -33,11 +36,7 @@ SERVICES = [
         options=[
             "--orchestrator-process-scratch-directory=/mzdata/source_data",
         ],
-        additional_system_parameter_defaults={
-            "upsert_source_disk_default": "true",
-            "enable_unmanaged_cluster_replicas": "true",
-        },
-        environment_extra=materialized_environment_extra,
+        additional_system_parameter_defaults=materialized_additional_system_parameter_defaults,
     ),
     Testdrive(),
     Clusterd(
@@ -53,12 +52,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--compaction-disabled",
         action="store_true",
-        help="Run with MZ_PERSIST_COMPACTION_DISABLED",
+        help="Run with `persist_compaction_enabled: false`",
     )
     args = parser.parse_args()
 
     if args.compaction_disabled:
-        materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
+        materialized_additional_system_parameter_defaults[
+            "persist_compaction_enabled"
+        ] = "false"
 
     for name in [
         "rehydration",

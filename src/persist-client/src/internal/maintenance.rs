@@ -180,7 +180,7 @@ where
         self,
         machine: &Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
-        compactor: Option<&Compactor<K, V, T, D>>,
+        compactor: &Compactor<K, V, T, D>,
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -188,9 +188,9 @@ where
     {
         let machine = machine.clone();
         let gc = gc.clone();
-        let compactor = compactor.cloned();
+        let compactor = compactor.clone();
         mz_ore::task::spawn(|| "writer-maintenance", async move {
-            self.perform(&machine, &gc, compactor.as_ref()).await
+            self.perform(&machine, &gc, &compactor).await
         });
     }
 
@@ -200,7 +200,7 @@ where
         self,
         machine: &Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
-        compactor: Option<&Compactor<K, V, T, D>>,
+        compactor: &Compactor<K, V, T, D>,
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -215,13 +215,11 @@ where
             more_maintenance.merge(future.await);
         }
 
-        if let Some(compactor) = compactor {
-            for req in compaction {
-                if let Some(receiver) = compactor.compact_and_apply_background(req, machine) {
-                    // it's safe to ignore errors on the receiver. in the
-                    // case of shutdown, the sender may have been dropped
-                    let _ = receiver.await;
-                }
+        for req in compaction {
+            if let Some(receiver) = compactor.compact_and_apply_background(req, machine) {
+                // it's safe to ignore errors on the receiver. in the
+                // case of shutdown, the sender may have been dropped
+                let _ = receiver.await;
             }
         }
 

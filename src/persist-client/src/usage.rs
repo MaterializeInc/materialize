@@ -903,11 +903,11 @@ mod tests {
 
         let shard_id = ShardId::new();
         let mut client = new_test_client().await;
-        // make our bookkeeping simple by skipping compaction blobs writes
-        client.cfg.compaction_enabled = false;
-        // make things interesting and create multiple parts per batch
         let mut params = PersistParameters::default();
+        // make things interesting and create multiple parts per batch
         params.blob_target_size = Some(0);
+        // make our bookkeeping simple by skipping compaction blobs writes
+        params.compaction_enabled = Some(false);
         params.apply(&client.cfg);
 
         let (mut write, _read) = client
