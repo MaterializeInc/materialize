@@ -545,6 +545,7 @@ mz_storage_shards                            source <null>
 > SHOW TABLES FROM mz_internal
 name
 ----
+mz_aggregates
 mz_cluster_links
 mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
@@ -624,7 +625,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-43
+44
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
