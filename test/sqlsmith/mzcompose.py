@@ -60,7 +60,6 @@ known_errors = [
     "value too long for type",
     "list_agg on char not yet supported",
     "does not allow subqueries",
-    "range constructor flags argument must not be null",  # expected after https://github.com/MaterializeInc/materialize/issues/18036 has been fixed
     "function array_remove(",  # insufficient type system, parameter types have to match
     "function array_cat(",  # insufficient type system, parameter types have to match
     "function array_position(",  # insufficient type system, parameter types have to match
@@ -107,6 +106,8 @@ known_errors = [
     "null character not permitted",
     "is defined for numbers between",
     "field position must be greater than zero",
+    "array_fill on ",  # Not yet supported
+    "must not be null",  # Expected with array_fill, array_position
     "' not recognized",  # Expected, see https://github.com/MaterializeInc/materialize/issues/17981
     "must appear in the GROUP BY clause or be used in an aggregate function",
     "Expected joined table, found",  # Should fix for multi table join
@@ -122,7 +123,6 @@ known_errors = [
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
     "string is not a valid identifier:",  # Expected in parse_ident
-    "initial position must not be null",  # "expected in array_position
 ]
 
 
