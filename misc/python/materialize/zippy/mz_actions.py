@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from textwrap import dedent
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
@@ -81,3 +82,67 @@ class KillClusterd(Action):
     def run(self, c: Composition) -> None:
         # Depending on the workload, clusterd may not be running, hence the || true
         c.exec("materialized", "bash", "-c", "kill -9 `pidof clusterd` || true")
+
+
+class ComputeStartDisabledCluster(Action):
+    """Start a compute cluster that is then made unresponsive.
+    Such a cluster should not have any adverse effects, such as memory
+    leaks in other parts of the system.
+    """
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {CockroachIsRunning, MinioIsRunning}
+
+    def run(self, c: Composition) -> None:
+        c.up("cluster_disabled")
+
+        c.testdrive(
+            dedent(
+                """
+                > CREATE CLUSTER cluster_disabled REPLICAS (cluster_disabled (
+                  STORAGECTL ADDRESSES ['cluster_disabled:2100'],
+                  STORAGE ADDRESSES ['cluster_disabled:2103'],
+                  COMPUTECTL ADDRESSES ['cluster_disabled:2101'],
+                  COMPUTE ADDRESSES ['cluster_disabled:2102'],
+                  WORKERS 1))
+                """
+            )
+        )
+
+        c.pause("cluster_disabled")
+
+    def provides(self) -> List[Capability]:
+        return []
+
+
+class ComputeStartDisabledReplica(Action):
+    """Start a compute cluster replica that is then made unresponsive.
+    Such a replica should not have any adverse effects, such as memory
+    leaks in other parts of the system.
+    """
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {CockroachIsRunning, MinioIsRunning}
+
+    def run(self, c: Composition) -> None:
+        c.up("compute_replica_disabled")
+
+        c.testdrive(
+            dedent(
+                """
+                > CREATE CLUSTER REPLICA default.compute_replica_disabled
+                  STORAGECTL ADDRESSES ['compute_replica_disabled:2100'],
+                  STORAGE ADDRESSES ['compute_replica_disabled:2103'],
+                  COMPUTECTL ADDRESSES ['compute_replica_disabled:2101'],
+                  COMPUTE ADDRESSES ['compute_replica_disabled:2102'],
+                  WORKERS 1
+                """
+            )
+        )
+
+        c.pause("compute_replica_disabled")
+
+    def provides(self) -> List[Capability]:
+        return []

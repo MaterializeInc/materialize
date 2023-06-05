@@ -10,5 +10,5 @@
 from materialize.zippy.framework import Capability
 
 
-class StoragedRunning(Capability):
+class StorageRunning(Capability):
     pass

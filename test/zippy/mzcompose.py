@@ -40,7 +40,10 @@ SERVICES = [
     Minio(setup_materialize=True),
     # Those two are overriden below
     Materialized(),
-    Clusterd(name="storaged"),
+    Clusterd(name="storage"),
+    Clusterd(name="storage_replica_disabled"),
+    Clusterd(name="compute_replica_disabled"),
+    Clusterd(name="cluster_disabled"),
     Testdrive(),
     Grafana(),
     Prometheus(),
@@ -167,11 +170,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sql(
             """
-            CREATE CLUSTER storaged REPLICAS (r2 (
-                STORAGECTL ADDRESSES ['storaged:2100'],
-                STORAGE ADDRESSES ['storaged:2103'],
-                COMPUTECTL ADDRESSES ['storaged:2101'],
-                COMPUTE ADDRESSES ['storaged:2102'],
+            CREATE CLUSTER storage REPLICAS (r2 (
+                STORAGECTL ADDRESSES ['storage:2100'],
+                STORAGE ADDRESSES ['storage:2103'],
+                COMPUTECTL ADDRESSES ['storage:2101'],
+                COMPUTE ADDRESSES ['storage:2102'],
                 WORKERS 4
             ))
         """

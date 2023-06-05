@@ -17,7 +17,7 @@ from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTableExists
-from materialize.zippy.storaged_capabilities import StoragedRunning
+from materialize.zippy.storage_capabilities import StorageRunning
 
 
 class CreatePostgresCdcTable(Action):
@@ -25,7 +25,7 @@ class CreatePostgresCdcTable(Action):
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, StoragedRunning, PostgresRunning, PostgresTableExists}
+        return {MzIsRunning, StorageRunning, PostgresRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         postgres_table = random.choice(capabilities.get(PostgresTableExists))
@@ -74,7 +74,7 @@ class CreatePostgresCdcTable(Action):
                       );
 
                     > CREATE SOURCE {name}_source
-                      IN CLUSTER storaged
+                      IN CLUSTER storage
                       FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication')
                       FOR TABLES ({self.postgres_cdc_table.postgres_table.name} AS {name})
                     """
