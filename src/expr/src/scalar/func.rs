@@ -84,6 +84,7 @@ pub enum UnmaterializableFunc {
     MzVersionNum,
     PgBackendPid,
     PgPostmasterStartTime,
+    SessionUser,
     Version,
     ViewableVariables,
 }
@@ -110,6 +111,7 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::MzVersionNum => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::SessionUser => ScalarType::String.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
             UnmaterializableFunc::ViewableVariables => ScalarType::Map {
                 value_type: Box::new(ScalarType::String),
@@ -139,6 +141,7 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::MzVersionNum => f.write_str("mz_version_num"),
             UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
             UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
+            UnmaterializableFunc::SessionUser => f.write_str("session_user"),
             UnmaterializableFunc::Version => f.write_str("version"),
             UnmaterializableFunc::ViewableVariables => f.write_str("viewable_variables"),
         }
@@ -164,6 +167,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::MzVersionNum => MzVersionNum(()),
             UnmaterializableFunc::PgBackendPid => PgBackendPid(()),
             UnmaterializableFunc::PgPostmasterStartTime => PgPostmasterStartTime(()),
+            UnmaterializableFunc::SessionUser => SessionUser(()),
             UnmaterializableFunc::Version => Version(()),
         };
         ProtoUnmaterializableFunc { kind: Some(kind) }
@@ -190,6 +194,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 MzVersionNum(()) => Ok(UnmaterializableFunc::MzVersionNum),
                 PgBackendPid(()) => Ok(UnmaterializableFunc::PgBackendPid),
                 PgPostmasterStartTime(()) => Ok(UnmaterializableFunc::PgPostmasterStartTime),
+                SessionUser(()) => Ok(UnmaterializableFunc::SessionUser),
                 Version(()) => Ok(UnmaterializableFunc::Version),
             }
         } else {

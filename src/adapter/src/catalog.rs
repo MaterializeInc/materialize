@@ -660,7 +660,7 @@ impl CatalogState {
         }
     }
 
-    fn get_role(&self, id: &RoleId) -> &Role {
+    pub fn get_role(&self, id: &RoleId) -> &Role {
         self.roles_by_id.get(id).expect("catalog out of sync")
     }
 
@@ -4225,7 +4225,7 @@ impl Catalog {
             cluster: session.vars().cluster().into(),
             database,
             search_path,
-            role_id: session.role_id().clone(),
+            role_id: session.current_role_id().clone(),
             prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
         }
     }
@@ -5885,7 +5885,7 @@ impl Catalog {
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
                             executed_by: session
-                                .map(|session| session.role_id())
+                                .map(|session| session.current_role_id())
                                 .unwrap_or(&MZ_SYSTEM_ROLE_ID)
                                 .to_string(),
                         }),
@@ -5917,7 +5917,7 @@ impl Catalog {
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
                             executed_by: session
-                                .map(|session| session.role_id())
+                                .map(|session| session.current_role_id())
                                 .unwrap_or(&MZ_SYSTEM_ROLE_ID)
                                 .to_string(),
                         }),

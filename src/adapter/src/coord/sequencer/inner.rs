@@ -200,7 +200,7 @@ impl Coordinator {
                 oid: source_oid,
                 name: plan.name.clone(),
                 item: CatalogItem::Source(source.clone()),
-                owner_id: *session.role_id(),
+                owner_id: *session.current_role_id(),
             });
             sources.push((source_id, source));
         }
@@ -328,7 +328,7 @@ impl Coordinator {
                 connection: connection.clone(),
                 depends_on,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -395,7 +395,7 @@ impl Coordinator {
             name: plan.name.clone(),
             oid: db_oid,
             public_schema_oid: schema_oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
@@ -421,7 +421,7 @@ impl Coordinator {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
             oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
@@ -498,7 +498,7 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: None,
             introspection_sources,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         let azs = self.catalog().state().availability_zones();
@@ -593,7 +593,7 @@ impl Coordinator {
                 id: self.catalog_mut().allocate_replica_id().await?,
                 name: replica_name.clone(),
                 config,
-                owner_id: *session.role_id(),
+                owner_id: *session.current_role_id(),
             });
         }
 
@@ -741,7 +741,7 @@ impl Coordinator {
             id,
             name: name.clone(),
             config,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -807,7 +807,7 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
@@ -886,7 +886,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -969,7 +969,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         let from = self.catalog().get_entry(&catalog_sink.from);
@@ -1159,7 +1159,7 @@ impl Coordinator {
             oid: view_oid,
             name: name.clone(),
             item: CatalogItem::View(view),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         Ok(ops)
@@ -1254,7 +1254,7 @@ impl Coordinator {
                 depends_on,
                 cluster_id,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         match self
@@ -1407,7 +1407,7 @@ impl Coordinator {
             oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
@@ -1582,7 +1582,8 @@ impl Coordinator {
             && !session.is_superuser()
         {
             // Obtain all roles that the current session is a member of.
-            let role_membership = session_catalog.collect_role_membership(session.role_id());
+            let role_membership =
+                session_catalog.collect_role_membership(session.current_role_id());
             let invalid_revokes: BTreeSet<_> = revokes
                 .drain_filter_swapping(|(_, privilege)| {
                     !role_membership.contains(&privilege.grantor)
@@ -4339,9 +4340,9 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
             introspection_sources,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
-        self.create_linked_cluster_replica_op(id, size, ops, *session.role_id())
+        self.create_linked_cluster_replica_op(id, size, ops, *session.current_role_id())
             .await?;
         Ok(id)
     }

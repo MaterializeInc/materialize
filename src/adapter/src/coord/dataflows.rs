@@ -33,7 +33,7 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogRole, SessionCatalog};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
@@ -773,7 +773,12 @@ fn eval_unmaterializable_func(
             let t: Datum = session.pcx().wall_time.try_into()?;
             pack(t)
         }
-        UnmaterializableFunc::CurrentUser => pack(Datum::from(&*session.user().name)),
+        UnmaterializableFunc::CurrentUser => pack(Datum::from(
+            state.get_role(session.current_role_id()).name(),
+        )),
+        UnmaterializableFunc::SessionUser => pack(Datum::from(
+            state.get_role(session.session_role_id()).name(),
+        )),
         UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
             rbac::is_rbac_enabled_for_session(state.system_config(), session),
         )),
