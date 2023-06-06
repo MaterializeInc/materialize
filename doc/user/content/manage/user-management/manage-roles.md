@@ -33,6 +33,16 @@ To change a role's attributes, use the `ALTER ROLE` statement:
 ALTER ROLE <new_role> WITH CREATEROLE;
 ```
 
+Materialize roles have the following available attributes:
+
+| Name            | Description                                                                     |
+|-----------------|---------------------------------------------------------------------------------|
+| `CREATEDB`      | Can create a database.                                                          |
+| `CREATEROLE`    | Can create, alter, drop, grant membership to, and revoke membership from roles. |
+| `INHERIT`       | **Read-only.** Can inherit the privileges of roles that it is a member of. On by default.      |
+| `CREATECLUSTER` | Can create a cluster.                                                           |
+
+
 ## Drop a role
 
 To remove a role, use the `DROP ROLE` statement:

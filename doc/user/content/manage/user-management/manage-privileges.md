@@ -18,6 +18,21 @@ object you want to grant privileges to:
 GRANT USAGE ON DATABASE <database> TO <new_role>;
 ```
 
+Materialize objects allow for the following privileges:
+
+| Object Type          | Privileges                          |
+|----------------------|-------------------------------------|
+| `DATABASE`           | `USAGE` `CREATE`                    |
+| `SCHEMA`             | `USAGE` `CREATE`                    |
+| `TABLE`              | `INSERT` `SELECT` `UPDATE` `DELETE` |
+| `VIEW`               | `SELECT`                            |
+| `MATERIALIZED  VIEW` | `SELECT`                            |
+| `TYPE`               | `USAGE`                             |
+| `SOURCE`             | `SELECT`                            |
+| `CONNECTION`         | `USAGE`                             |
+| `SECRET`             | `USAGE`                             |
+| `CLUSTER`            | `USAGE` `CREATE`                    |
+
 ## Revoke privileges 
 
 To remove privileges from a role, use the `REVOKE` statement:
