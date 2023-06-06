@@ -21,7 +21,7 @@ pub enum SymbolicExpression<V> {
     /// A constant expression
     Constant(OrderedFloat<f64>),
     /// `Variable(x, n)` represents `x^n`
-    Variable(V, usize),
+    Symbolic(V, usize),
     /// `Sum([e_1, ..., e_m])` represents e_1 + ... + e_m
     Sum(Vec<SymbolicExpression<V>>),
     /// `Product([e_1, ..., e_m])` represents e_1 * ... * e_m
@@ -40,7 +40,7 @@ impl<V> SymbolicExpression<V> {
     {
         use SymbolicExpression::*;
         match self {
-            Constant(_) | Variable(_, _) => self.clone(),
+            Constant(_) | Symbolic(_, _) => self.clone(),
             Sum(ss) => SymbolicExpression::sum(ss.into_iter().map(|s| s.normalize()).collect()),
             Product(ps) => {
                 SymbolicExpression::product(ps.into_iter().map(|p| p.normalize()).collect())
@@ -61,11 +61,11 @@ impl<V> SymbolicExpression<V> {
     }
 
     /// References a variable (with a default exponent of 1)
-    pub fn var(v: V) -> Self
+    pub fn symbolic(v: V) -> Self
     where
         V: Ord,
     {
-        Self::Variable(v, 1)
+        Self::Symbolic(v, 1)
     }
 
     /// Computes the maximum of two symbolic expressions
@@ -128,7 +128,7 @@ impl<V> SymbolicExpression<V> {
         while let Some(e) = summands.pop() {
             match e {
                 Constant(n) => constant += n,
-                Variable(v, n) => {
+                Symbolic(v, n) => {
                     variables.entry((v, n)).and_modify(|e| *e += 1).or_insert(1);
                 }
                 Max(_, _) | Min(_, _) => {
@@ -156,7 +156,7 @@ impl<V> SymbolicExpression<V> {
         result.extend(
             variables
                 .into_iter()
-                .map(|((v, n), scalar)| Variable(v, n) * SymbolicExpression::usize(scalar)),
+                .map(|((v, n), scalar)| Symbolic(v, n) * SymbolicExpression::usize(scalar)),
         );
 
         if constant.0 != 0.0 {
@@ -188,7 +188,7 @@ impl<V> SymbolicExpression<V> {
         while let Some(e) = products.pop() {
             match e {
                 Constant(n) => constant *= n,
-                Variable(v, n) => {
+                Symbolic(v, n) => {
                     variables.entry((v, n)).and_modify(|e| *e += 1).or_insert(1);
                 }
                 Max(_, _) | Min(_, _) => {
@@ -215,7 +215,7 @@ impl<V> SymbolicExpression<V> {
         result.extend(
             variables
                 .into_iter()
-                .map(|((v, n), scalar)| Variable(v, n) * SymbolicExpression::usize(scalar)),
+                .map(|((v, n), scalar)| Symbolic(v, n) * SymbolicExpression::usize(scalar)),
         );
 
         if constant.0 == 0.0 {
@@ -359,9 +359,9 @@ where
             (Constant(OrderedFloat(n)), _) | (_, Constant(OrderedFloat(n))) if n == 0.0 => {
                 Constant(OrderedFloat(n))
             }
-            (Variable(v1, mut n1), Variable(v2, n2)) if v1 == v2 => {
+            (Symbolic(v1, mut n1), Symbolic(v2, n2)) if v1 == v2 => {
                 n1 += n2;
-                Variable(v1, n1)
+                Symbolic(v1, n1)
             }
             (Product(mut ps1), Product(ps2)) => {
                 // TODO(mgree): we could check for exponent increases on variables, but whatever

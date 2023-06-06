@@ -1,0 +1,69 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t2 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE INDEX t_x ON t (x);
+
+statement ok
+CREATE INDEX tt_x ON t2 (x);
+
+statement ok
+CREATE TABLE cities (name TEXT NOT NULL, state TEXT NOT NULL, pop integer);
+
+statement ok
+CREATE TABLE states (state TEXT NOT NULL, pop integer);
+
+statement ok
+CREATE INDEX cities_name ON cities (name);
+
+statement ok
+CREATE INDEX cities_state ON cities (state);
+
+statement ok
+CREATE INDEX cities_name_and_state ON cities (name, state);
+
+statement ok
+CREATE INDEX state_state ON states (state);
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT DISTINCT x FROM t
+----
+Explained Query:
+  Distinct group_by=[#0] // { cardinality: "materialize.public.t" }
+    Project (#0) // { cardinality: "materialize.public.t" }
+      Get materialize.public.t // { cardinality: "materialize.public.t" }
+
+Used Indexes:
+  - materialize.public.t_x
+
+EOF
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT * FROM (SELECT DISTINCT ON(t.x) t.x, t.y FROM t) WHERE x = y
+----
+Explained Query:
+  Filter (#0 = #1) // { cardinality: "materialize.public.t * icard(#0)^1" }
+    TopK group_by=[#0] limit=1 // { cardinality: "materialize.public.t" }
+      Get materialize.public.t // { cardinality: "materialize.public.t" }
+
+Used Indexes:
+  - materialize.public.t_x
+
+EOF
+

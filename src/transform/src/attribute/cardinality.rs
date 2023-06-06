@@ -81,12 +81,13 @@ pub trait Factorizer {
         input: &SymExp,
     ) -> SymExp;
     /// Computes selectivity for a join; the cardinality estimate for each input is paired with the keys on that input
+    ///
+    /// `indexed_columns` maps column references (with indices) to their index in `inputs`
     fn join(
         &self,
         equivalences: &Vec<Vec<MirScalarExpr>>,
         implementation: &JoinImplementation,
-        keys: Vec<&Vec<Vec<usize>>>,
-        arities: Vec<usize>,
+        indexed_columns: BTreeMap<usize, usize>,
         inputs: Vec<&SymExp>,
     ) -> SymExp;
     /// Computes selectivity for a reduce
@@ -134,7 +135,9 @@ impl Factorizer for WorstCaseFactorizer {
             match expr {
                 MirScalarExpr::Column(col) => {
                     if indexed_columns.contains(col) {
-                        Some(SymbolicExpression::var(FactorizerVariable::Index(*col)))
+                        Some(SymbolicExpression::symbolic(FactorizerVariable::Index(
+                            *col,
+                        )))
                     } else {
                         None
                     }
@@ -259,49 +262,56 @@ impl Factorizer for WorstCaseFactorizer {
         &self,
         equivalences: &Vec<Vec<MirScalarExpr>>,
         _implementation: &JoinImplementation,
-        input_keys: Vec<&Vec<Vec<usize>>>,
-        arities: Vec<usize>,
+        indexed_columns: BTreeMap<usize, usize>,
         inputs: Vec<&SymExp>,
     ) -> SymExp {
-        let mut indexed_columns = BTreeMap::new();
-        let mut offset = 0;
-        for (idx, keys) in input_keys.iter().enumerate() {
-            for key in *keys {
-                if key.len() == 1 {
-                    indexed_columns.insert(offset + key[0], idx);
-                }
-            }
-            offset += arities[idx];
-        }
-
         let mut inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
 
         for equiv in equivalences {
-            let sources = equiv
-                .iter()
-                .map(|expr| {
-                    if let MirScalarExpr::Column(col) = expr {
-                        indexed_columns.get(col)
+            // those sources which have a unique key
+            let mut unique_sources = BTreeSet::new();
+            let mut all_unique = true;
+
+            for expr in equiv {
+                if let MirScalarExpr::Column(col) = expr {
+                    if let Some(idx) = indexed_columns.get(col) {
+                        unique_sources.insert(*idx);
                     } else {
-                        None
+                        all_unique = false;
                     }
-                })
-                .collect::<Option<Vec<_>>>();
+                } else {
+                    all_unique = false;
+                }
+            }
 
-            // these inputs have unique keys for all of the equivalence, so they're a bound on how many rows we'll get from those sources
-            // we'll find the leftmost such input and use it to hold the minimum; the other sources we set to 1.0 (so they have no effect)
-            if let Some(sources) = sources {
-                // TODO(mgree): currently this code isn't getting exercised because the uniquekeys attribute is showing up empty (because it's just trying to read things off of `Get.typ` rather than consulting the catalog)
-                let mut sources = sources.iter();
+            // no unique columns in this equivalence
+            if unique_sources.is_empty() {
+                continue;
+            }
 
-                let lhs_idx = **sources.next().unwrap();
+            // ALL unique columns in this equivalence
+            if all_unique {
+                // these inputs have unique keys for _all_ of the equivalence, so they're a bound on how many rows we'll get from those sources
+                // we'll find the leftmost such input and use it to hold the minimum; the other sources we set to 1.0 (so they have no effect)
+                let mut sources = unique_sources.iter();
+
+                let lhs_idx = *sources.next().unwrap();
                 let mut lhs = std::mem::replace(&mut inputs[lhs_idx], SymExp::f64(1.0));
-                for &&rhs_idx in sources {
+                for &rhs_idx in sources {
                     let rhs = std::mem::replace(&mut inputs[rhs_idx], SymExp::f64(1.0));
                     lhs = SymExp::min(lhs, rhs);
                 }
 
                 inputs[lhs_idx] = lhs;
+
+                // best option! go look at the next equivalence
+                continue;
+            }
+
+            // some unique columns in this equivalence
+            for idx in unique_sources {
+                // when joining R and S on R.x = S.x, if R.x is unique and S.x is not, we're bounded above by the cardinality of S
+                inputs[idx] = SymExp::f64(1.0);
             }
         }
 
@@ -372,7 +382,7 @@ impl Attribute for Cardinality {
                 },
                 Id::Global(id) => self
                     .results
-                    .push(SymbolicExpression::var(FactorizerVariable::Id(*id))),
+                    .push(SymbolicExpression::symbolic(FactorizerVariable::Id(*id))),
             },
             Let { .. } | Project { .. } | Map { .. } | ArrangeBy { .. } | Negate { .. } => {
                 let input = self.results[n - 1].clone();
@@ -407,24 +417,32 @@ impl Attribute for Cardinality {
                 ..
             } => {
                 let mut input_results = Vec::with_capacity(inputs.len());
-                let mut input_arities = Vec::with_capacity(inputs.len());
-                let mut input_keys = Vec::with_capacity(inputs.len());
+
+                // maps a column to the index in `inputs` that it belongs to
+                let mut indexed_columns = BTreeMap::new();
+                let mut key_offset = 0;
+
                 let mut offset = 1;
-                for _ in 0..inputs.len() {
+                for idx in 0..inputs.len() {
                     let input = &self.results[n - offset];
+                    input_results.push(input);
+
                     let arity = deps.get_results::<Arity>()[n - offset];
                     let keys = &deps.get_results::<UniqueKeys>()[n - offset];
-                    input_results.push(input);
-                    input_arities.push(arity);
-                    input_keys.push(keys);
+                    for key in keys {
+                        if key.len() == 1 {
+                            indexed_columns.insert(key_offset + key[0], idx);
+                        }
+                    }
+                    key_offset += arity;
+
                     offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
 
                 self.results.push(self.factorize.join(
                     equivalences,
                     implementation,
-                    input_keys,
-                    input_arities,
+                    indexed_columns,
                     input_results,
                 ));
             }
@@ -550,7 +568,7 @@ impl SymExp {
         use SymbolicExpression::*;
         match self {
             Constant(OrderedFloat::<f64>(n)) => write!(f, "{n}"),
-            Variable(FactorizerVariable::Id(v), n) => {
+            Symbolic(FactorizerVariable::Id(v), n) => {
                 let id = h.humanize_id(*v).unwrap_or_else(|| format!("{v:?}"));
                 write!(f, "{id}")?;
 
@@ -560,7 +578,7 @@ impl SymExp {
 
                 Ok(())
             }
-            Variable(FactorizerVariable::Index(col), n) => {
+            Symbolic(FactorizerVariable::Index(col), n) => {
                 write!(f, "icard(#{col})^{n}")
             }
             Max(e1, e2) => {
