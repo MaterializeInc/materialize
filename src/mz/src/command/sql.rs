@@ -21,10 +21,15 @@ use std::os::unix::process::CommandExt;
 
 use crate::{context::RegionContext, error::Error};
 
+/// Represents the structure containing the args to run the SQL shell.
 pub struct RunArgs {
+    /// Contains all the arguments to pass into the shell.
+    /// Take into account that they are added at the end of the statement.
     pub psql_args: Vec<String>,
 }
 
+/// Creates an interactive SQL shell connection to the profile context environment.
+/// The SQL shell command is running `psql` behind the scenes.
 pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Result<(), Error> {
     let sql_client = cx.sql_client();
     let claims = cx.admin_client().claims();

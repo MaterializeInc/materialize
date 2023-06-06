@@ -43,8 +43,7 @@ pub enum RegionSubcommand {
 
 pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
     let cx = cx
-        .activate_profile(cmd.profile.profile)
-        .await?
+        .activate_profile(cmd.profile.profile)?
         .activate_region(cmd.region.region)?;
     match cmd.subcommand {
         RegionSubcommand::Enable => mz::command::region::enable(cx).await,

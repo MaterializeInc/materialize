@@ -7,11 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+
+//! This module defines custom error types and structs related to MZ.
+//!
+//! [`ApiError`] is an error struct that represents an error returned by the
+//! Materialize cloud API. It contains information about the HTTP status code and
+//! a vector of error messages.
+//!
+//! [`Error`](`enum@Error`) is a custom error type containing multiple variants
+//! for erros produced by the self crate, internal crates and external crates.
+
+
 use thiserror::Error;
 use url::ParseError;
 
 /// A custom error type for `mz` extending the `Error` enums in
-/// the `mz-frontegg-auth` and `cloud-api` crate.
+/// the internal crates `mz-frontegg-auth`, `cloud-api` and
+/// `mz_frontegg_auth` and external crates like `serde_json`,
+/// `toml_edit`, `uuid`, `std::io` and `csv`.
 #[derive(Error, Debug)]
 pub enum Error {
     /// An authentication error from the [`mz_frontegg_client`] crate.

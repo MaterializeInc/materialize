@@ -23,11 +23,16 @@ use tabled::Tabled;
 
 use crate::{context::ProfileContext, error::Error};
 
+/// Represents the structure to create a user in the profile organization.
 pub struct CreateArgs<'a> {
+    /// Represents the new user email to add into the profile organization.
+    /// This value must be unique in the profile organization.
     pub email: &'a str,
+    /// Represents the new user name to add into the profile organization.
     pub name: &'a str,
 }
 
+/// Creates a user in the profile organization.
 pub async fn create(
     cx: &mut ProfileContext,
     CreateArgs { email, name }: CreateArgs<'_>,
@@ -49,6 +54,7 @@ pub async fn create(
     Ok(())
 }
 
+/// Lists all the users in the profile organization.
 pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
     let output_formatter = cx.output_formatter();
 
@@ -72,10 +78,13 @@ pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
     Ok(())
 }
 
+/// Represents the args structure to remove a user from Materialize.
 pub struct RemoveArgs<'a> {
+    /// Represents the email of the user to remove.
     pub email: &'a str,
 }
 
+/// Removes a user from the profile context using the admin client.
 pub async fn remove(
     cx: &mut ProfileContext,
     RemoveArgs { email }: RemoveArgs<'_>,

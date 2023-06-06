@@ -80,7 +80,7 @@ impl Context {
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
-    pub async fn activate_profile(self, name: Option<String>) -> Result<ProfileContext, Error> {
+    pub fn activate_profile(self, name: Option<String>) -> Result<ProfileContext, Error> {
         let profile_name = name.unwrap_or_else(|| self.config_file.profile().into());
         let config_file = self.config_file.clone();
         let profile = config_file.load_profile(&profile_name)?;
@@ -104,7 +104,7 @@ impl Context {
         }
 
         let cloud_client = cloud_client_builder.build(CloudClientConfig {
-            auth_client: admin_client.clone(),
+            auth_client: Arc::clone(&admin_client),
         });
 
         // The sql client is created here to avoid having to handle the config around. E.g. reading config from config_file
@@ -143,6 +143,7 @@ pub struct ProfileContext {
 }
 
 impl ProfileContext {
+    /// Loads the profile and returns a region context.
     pub fn activate_region(self, name: Option<String>) -> Result<RegionContext, Error> {
         let profile = self
             .context
@@ -203,6 +204,7 @@ impl RegionContext {
         &self.context.sql_client
     }
 
+    /// Returns the cloud provider from the profile context.
     pub async fn get_cloud_provider(&self) -> Result<CloudProvider, Error> {
         let client = &self.context.cloud_client;
         let cloud_providers = client.list_cloud_providers().await?;
@@ -215,6 +217,7 @@ impl RegionContext {
         Ok(provider)
     }
 
+    /// Returns the cloud provider region of the context.
     pub async fn get_region(&self) -> Result<Region, Error> {
         let client = self.cloud_client();
         let cloud_provider = self.get_cloud_provider().await?;
@@ -223,6 +226,7 @@ impl RegionContext {
         Ok(region)
     }
 
+    /// Returns the environment from the region of the context.
     pub async fn get_environment(&self, region: Region) -> Result<Environment, Error> {
         let client = &self.context.cloud_client;
         let environment = client.get_environment(region).await?;

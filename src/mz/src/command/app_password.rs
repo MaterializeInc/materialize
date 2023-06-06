@@ -24,10 +24,15 @@ use tabled::Tabled;
 use crate::context::ProfileContext;
 use crate::error::Error;
 
+/// Represents the args to create an app-password
 pub struct CreateArgs<'a> {
+    /// Represents the description used for the app-password.
+    /// The description tends to be related to its usage.
+    /// E.g.: `production`, `staging`, `bi_tools`, `ci_cd`, etc.
     pub description: &'a str,
 }
 
+/// Creates and shows a new app-password for the profile.
 pub async fn create(
     cx: &mut ProfileContext,
     params: CreateAppPasswordRequest<'_>,
@@ -37,6 +42,8 @@ pub async fn create(
     Ok(())
 }
 
+/// Lists all the profile app-password descriptions available
+/// and their creation date.
 pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()

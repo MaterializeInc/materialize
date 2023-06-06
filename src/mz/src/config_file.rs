@@ -167,6 +167,7 @@ impl ConfigFile {
         self.parsed.profiles.clone()
     }
 
+    /// Returns a list of all the possible profile configuration values
     pub fn list_profile_params(&self) -> Result<Vec<(&str, Option<String>)>, Error> {
         // Use the parsed profile rather than reading from the editable.
         // If there is a missing field it is more difficult to detect.
@@ -274,33 +275,45 @@ static PROFILE_PARAMS: Lazy<BTreeMap<&'static str, ProfileParam>> = Lazy::new(||
     }
 });
 
+/// Defines the profile structure inside the configuration file.
+///
+/// It is divided into two fields:
+/// * name: represents the profile name.
+/// * parsed: represents the configuration values of the profile.
 pub struct Profile<'a> {
     name: &'a str,
     parsed: &'a TomlProfile,
 }
 
 impl Profile<'_> {
+    /// Returns the name of the profile.
     pub fn name(&self) -> &str {
         self.name
     }
 
+    /// Returns the app password in the profile configuration.
     pub fn app_password(&self) -> &str {
         (PROFILE_PARAMS["app-password"].get)(self.parsed).unwrap()
     }
 
+    /// Returns the region in the profile configuration.
     pub fn region(&self) -> Option<&str> {
         (PROFILE_PARAMS["region"].get)(self.parsed)
     }
 
+
+    /// Returns the vault value in the profile configuration.
     pub fn vault(&self) -> Option<&str> {
         (PROFILE_PARAMS["vault"].get)(self.parsed)
     }
 
+    /// Returns the admin endpoint in the profile configuration.
     pub fn admin_endpoint(&self) -> Option<&str> {
         // TODO: return default admin endpoint if unset.
         (PROFILE_PARAMS["admin-endpoint"].get)(self.parsed)
     }
 
+    /// Returns the cloud endpoint in the profile configuration.
     pub fn cloud_endpoint(&self) -> Option<&str> {
         // TODO: return default cloud endpoint if unset.
         (PROFILE_PARAMS["cloud-endpoint"].get)(self.parsed)
@@ -326,10 +339,16 @@ struct TomlConfigFile {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
+/// Describes the structure fields for a profile in the configuration file.
 pub struct TomlProfile {
+    /// The profile's unique app-password
     pub app_password: Option<String>,
+    /// The profile's region to use by default.
     pub region: Option<String>,
+    /// The vault value to use in MacOS.
     pub vault: Option<String>,
+    /// A custom admin endpoint used for development.
     pub admin_endpoint: Option<String>,
+    /// A custom cloud endpoint used for development.
     pub cloud_endpoint: Option<String>,
 }

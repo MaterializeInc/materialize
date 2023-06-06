@@ -40,6 +40,8 @@ use crate::{
     server::server,
 };
 
+/// Opens the default web browser in the host machine
+/// and awaits a single request containing the profile's app password.
 pub async fn init_with_browser() -> Result<AppPassword, Error> {
     // Bind a web server to a local port to receive the app password.
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -79,6 +81,9 @@ pub async fn init_with_browser() -> Result<AppPassword, Error> {
     }
 }
 
+/// Prompts the user for the profile email and passowrd in Materialize.
+/// Notice that the password is the same as the user uses to log into
+/// the console, and not the app-password.
 pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPassword, Error> {
     // Handle interactive user input
     let mut email = String::new();
@@ -122,6 +127,11 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
     Ok(app_password)
 }
 
+/// Initiates the profile creation process.
+///
+/// There are only two ways to create a profile:
+/// 1. By prompting your user and email.
+/// 2. By opening the browser and creating the credentials in the console.
 pub async fn init(
     scx: &mut Context,
     profile_name: Option<String>,
@@ -151,7 +161,8 @@ pub async fn init(
     Ok(())
 }
 
-pub async fn list(cx: &mut Context) -> Result<(), Error> {
+/// List all the possible config values for the profile.
+pub fn list(cx: &mut Context) -> Result<(), Error> {
     if let Some(profiles) = cx.config_file().profiles() {
         let output = cx.output_formatter();
 
@@ -167,22 +178,31 @@ pub async fn list(cx: &mut Context) -> Result<(), Error> {
     Ok(())
 }
 
+/// Removes the profile from the configuration file.
 pub async fn remove(cx: &mut Context) -> Result<(), Error> {
     cx.config_file()
         .remove_profile(cx.config_file().profile())
         .await
 }
 
+/// Represents the args to retrieve a profile configuration value.
 pub struct ConfigGetArgs<'a> {
+    /// Represents the configuration field name to retrieve the value.
     pub name: &'a str,
 }
 
+/// Represents the possible fields in a profile configuration.
 #[derive(Clone, Debug)]
 pub enum ConfigArg {
+    /// Represents `[TomlProfile::admin_endpoint]`
     AdminAPI,
+    /// Represents `[TomlProfile::app_password]`
     AppPassword,
+    /// Represents `[TomlProfile::cloud_endpoint]`
     CloudAPI,
+    /// Represents `[TomlProfile::region]`
     Region,
+    /// Represents `[TomlProfile::vault]`
     Vault,
 }
 
@@ -213,7 +233,8 @@ impl ToString for ConfigArg {
     }
 }
 
-pub async fn config_get(
+/// Shows the value of a profile configuration field.
+pub fn config_get(
     cx: &mut ProfileContext,
     ConfigGetArgs { name }: ConfigGetArgs<'_>,
 ) -> Result<(), Error> {
@@ -222,7 +243,8 @@ pub async fn config_get(
     Ok(())
 }
 
-pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
+/// Shows all the possible field and its values in the profile configuration.
+pub fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
     let profile_params = cx.config_file().list_profile_params()?;
     let output = cx.output_formatter();
 
@@ -242,11 +264,15 @@ pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
     Ok(())
 }
 
+/// Represents the args to set the value of a profile configuration field.
 pub struct ConfigSetArgs<'a> {
+    /// Represents the name of the field to set the value.
     pub name: &'a str,
+    /// Represents the new value of the field.
     pub value: &'a str,
 }
 
+/// Sets a value in the profile configuration.
 pub async fn config_set(
     cx: &mut ProfileContext,
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
@@ -254,10 +280,13 @@ pub async fn config_set(
     cx.config_file().set_profile_param(name, Some(value)).await
 }
 
+/// Represents the args to remove the value from a profile configuration field.
 pub struct ConfigRemoveArgs<'a> {
+    /// Represents the name of the field to remove.
     pub name: &'a str,
 }
 
+/// Removes the value from a profile configuration field.
 pub async fn config_remove(
     cx: &mut ProfileContext,
     ConfigRemoveArgs { name }: ConfigRemoveArgs<'_>,

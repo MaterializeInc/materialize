@@ -50,8 +50,7 @@ pub enum SecretSubcommand {
 
 pub async fn run(cx: Context, cmd: SecretCommand) -> Result<(), Error> {
     let mut cx = cx
-        .activate_profile(cmd.profile.profile)
-        .await?
+        .activate_profile(cmd.profile.profile)?
         .activate_region(cmd.region.region)?;
     match cmd.subcommand {
         SecretSubcommand::Create {

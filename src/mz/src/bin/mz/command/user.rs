@@ -50,7 +50,7 @@ pub enum UserSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: UserCommand) -> Result<(), Error> {
-    let mut cx = cx.activate_profile(cmd.profile.profile).await?;
+    let mut cx = cx.activate_profile(cmd.profile.profile)?;
     match &cmd.subcommand {
         UserSubcommand::Create { email, name } => {
             mz::command::user::create(&mut cx, CreateArgs { email, name }).await

@@ -24,15 +24,19 @@ use crate::context::Context;
 use crate::error::Error;
 use crate::ui::OptionalStr;
 
+/// Represents the args to retrieve a *global* configuration value.
 pub struct GetArgs<'a> {
+    /// Represents the configuration field name.
     pub name: &'a str,
 }
 
+/// Shows the value of a *global* configuration field.
 pub fn get(cx: &mut Context, GetArgs { name }: GetArgs<'_>) -> Result<(), Error> {
     let value = cx.config_file().get_param(name)?;
     cx.output_formatter().output_scalar(value)
 }
 
+/// Shows all the possible field and its values in the *global* configuration.
 pub fn list(cx: &mut Context) -> Result<(), Error> {
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct ConfigParam<'a> {
@@ -53,19 +57,26 @@ pub fn list(cx: &mut Context) -> Result<(), Error> {
     cx.output_formatter().output_table(values)
 }
 
+/// Represents the args to set the value of a *global* configuration field.
 pub struct SetArgs<'a> {
+    /// Represents the name of the field to set the value.
     pub name: &'a str,
+    /// Represents the new value of the field.
     pub value: &'a str,
 }
 
+/// Sets the value of a global configuration field.
 pub async fn set(cx: &mut Context, SetArgs { name, value }: SetArgs<'_>) -> Result<(), Error> {
     cx.config_file().set_param(name, Some(value)).await
 }
 
+/// Represents the args to remove the value of a *global* configuration field.
 pub struct RemoveArgs<'a> {
+    /// Represents the name of the field to remove.
     pub name: &'a str,
 }
 
+/// Removes the value from a *global* configuration field.
 pub async fn remove(cx: &mut Context, RemoveArgs { name }: RemoveArgs<'_>) -> Result<(), Error> {
     cx.config_file().set_param(name, None).await
 }

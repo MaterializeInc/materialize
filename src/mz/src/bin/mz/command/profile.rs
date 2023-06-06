@@ -93,18 +93,18 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
             )
             .await
         }
-        ProfileSubcommand::List => mz::command::profile::list(&mut cx).await,
+        ProfileSubcommand::List => mz::command::profile::list(&mut cx),
         ProfileSubcommand::Remove => mz::command::profile::remove(&mut cx).await,
         _ => {
-            let mut cx = cx.activate_profile(profile).await?;
+            let mut cx = cx.activate_profile(profile)?;
 
             match &cmd.subcommand {
                 ProfileSubcommand::Config(cmd) => match cmd {
                     ProfileConfigSubcommand::Get { name } => {
-                        mz::command::profile::config_get(&mut cx, ConfigGetArgs { name }).await
+                        mz::command::profile::config_get(&mut cx, ConfigGetArgs { name })
                     }
                     ProfileConfigSubcommand::List => {
-                        mz::command::profile::config_list(&mut cx).await
+                        mz::command::profile::config_list(&mut cx)
                     }
                     ProfileConfigSubcommand::Set { name, value } => {
                         mz::command::profile::config_set(&mut cx, ConfigSetArgs { name, value })

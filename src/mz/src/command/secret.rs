@@ -21,13 +21,25 @@ use std::io::{self, Write};
 
 use crate::{context::RegionContext, error::Error};
 
+/// Represents the args needed to create a secret
 pub struct CreateArgs<'a> {
+    /// Represents the database where the secret
+    /// is going to be created.
     pub database: Option<&'a str>,
+    /// Represents the schema where the secret
+    /// is going to be created.
     pub schema: Option<&'a str>,
+    /// Represents the secret name.
     pub name: &'a str,
+    /// If force is set to true, the secret will be overwritten if it exists.
+    ///
+    /// If force is set to false, the command will fail if the secret exists.
     pub force: bool,
 }
 
+/// Creates a secret in the profile environment.
+/// Behind the scenes this command uses the `psql` to run
+/// the SQL commands.
 pub async fn create(
     cx: &mut RegionContext,
     CreateArgs {

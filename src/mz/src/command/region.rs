@@ -23,6 +23,11 @@ use mz_cloud_api::client::cloud_provider::CloudProvider;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
+/// Enable a region in the profile organization.
+///
+/// In cases where the organization has already enabled the region
+/// the command will try to run a version update. Resulting
+/// in a downtime for a short period.
 pub async fn enable(cx: RegionContext) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
@@ -51,6 +56,7 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
     Ok(())
 }
 
+/// Lists all the available regions and their status.
 pub async fn list(cx: RegionContext) -> Result<(), Error> {
     let output_formatter = cx.output_formatter();
     let loading_spinner = output_formatter.loading_spinner("Retrieving regions...");
@@ -86,6 +92,7 @@ pub async fn list(cx: RegionContext) -> Result<(), Error> {
     Ok(())
 }
 
+/// Shows the health of the profile region followed by the HTTP and SQL endpoints.
 pub async fn show(cx: RegionContext) -> Result<(), Error> {
     // Sharing the reference of the context in multiple places makes
     // it necesarry to wrap in an `alloc::rc`.

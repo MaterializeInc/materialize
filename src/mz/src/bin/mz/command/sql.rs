@@ -34,8 +34,7 @@ pub struct SqlCommand {
 
 pub async fn run(cx: Context, cmd: SqlCommand) -> Result<(), Error> {
     let mut cx = cx
-        .activate_profile(cmd.profile.profile)
-        .await?
+        .activate_profile(cmd.profile.profile)?
         .activate_region(cmd.region.region)?;
     mz::command::sql::run(
         &mut cx,
