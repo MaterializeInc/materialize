@@ -63,8 +63,7 @@ impl Context {
         ContextLoadArgs {
             config_file_path,
             output_format,
-            // TODO: Color
-            no_color: _,
+            no_color,
         }: ContextLoadArgs,
     ) -> Result<Context, Error> {
         let config_file_path = match config_file_path {
@@ -74,7 +73,7 @@ impl Context {
         let config_file = ConfigFile::load(config_file_path).await?;
         Ok(Context {
             config_file,
-            output_formatter: OutputFormatter::new(output_format),
+            output_formatter: OutputFormatter::new(output_format, no_color),
         })
     }
 

@@ -35,12 +35,30 @@ pub enum OutputFormat {
 #[derive(Clone)]
 pub struct OutputFormatter {
     output_format: OutputFormat,
+    no_color: bool,
 }
+
+
+const TICKS: [&str; 9] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", ""];
+const COLORED_TICKS: [&str; 9] = [
+    "\x1b[92m⣾\x1b[0m",
+    "\x1b[92m⣽\x1b[0m",
+    "\x1b[92m⣻\x1b[0m",
+    "\x1b[92m⢿\x1b[0m",
+    "\x1b[92m⡿\x1b[0m",
+    "\x1b[92m⣟\x1b[0m",
+    "\x1b[92m⣯\x1b[0m",
+    "\x1b[92m⣷\x1b[0m",
+    "",
+];
 
 impl OutputFormatter {
     /// Creates a new output formatter that uses the specified output format.
-    pub fn new(output_format: OutputFormat) -> OutputFormatter {
-        OutputFormatter { output_format }
+    pub fn new(output_format: OutputFormat, no_color: bool) -> OutputFormatter {
+        OutputFormatter {
+            output_format,
+            no_color,
+        }
     }
 
     /// Outputs a single value.
@@ -96,13 +114,19 @@ impl OutputFormatter {
     pub fn loading_spinner(&self, message: &str) -> ProgressBar {
         let progress_bar = ProgressBar::new_spinner();
         progress_bar.enable_steady_tick(Duration::from_millis(120));
+
+        let tick_strings: Vec<&str> = match self.no_color {
+            true => TICKS.to_vec(),
+            false => COLORED_TICKS.to_vec(),
+        };
+
         progress_bar.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner} {msg}")
                 .expect("template known to be valid")
                 // For more spinners check out the cli-spinners project:
                 // https://github.com/sindresorhus/cli-spinners/blob/master/spinners.json
-                .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", ""]),
+                .tick_strings(&tick_strings),
         );
 
         progress_bar.set_message(message.to_string());
