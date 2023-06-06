@@ -291,6 +291,7 @@ pub enum JsonStats {
     /// The min and max strings, or None if there were none.
     Strings(PrimitiveStats<String>),
     /// Lower and upper bounds on the numerics, or None if there were none.
+    // TODO: PrimitiveStats<Decimal> when we get a first-class decimal type.
     Numerics(PrimitiveStats<f64>),
     /// A sentinel that indicates all elements were `Datum::List`s.
     ///

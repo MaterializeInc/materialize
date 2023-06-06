@@ -405,6 +405,7 @@ impl PersistSourceDataStats<'_> {
                 strings.upper.as_str().into(),
             ),
             JsonStats::Numerics(floats) => {
+                // TODO: remove this when we get a first-class decimal type.
                 fn float_to_datum(float: f64) -> Datum<'static> {
                     let numeric: Numeric = float.into();
                     numeric.into()
