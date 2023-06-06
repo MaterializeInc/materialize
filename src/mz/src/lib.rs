@@ -79,7 +79,6 @@
 #![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
-
 #![warn(missing_docs)]
 
 use mz_build_info::{build_info, BuildInfo};

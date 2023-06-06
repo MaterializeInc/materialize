@@ -301,7 +301,6 @@ impl Profile<'_> {
         (PROFILE_PARAMS["region"].get)(self.parsed)
     }
 
-
     /// Returns the vault value in the profile configuration.
     pub fn vault(&self) -> Option<&str> {
         (PROFILE_PARAMS["vault"].get)(self.parsed)

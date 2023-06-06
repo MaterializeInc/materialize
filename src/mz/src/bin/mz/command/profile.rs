@@ -103,9 +103,7 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
                     ProfileConfigSubcommand::Get { name } => {
                         mz::command::profile::config_get(&mut cx, ConfigGetArgs { name })
                     }
-                    ProfileConfigSubcommand::List => {
-                        mz::command::profile::config_list(&mut cx)
-                    }
+                    ProfileConfigSubcommand::List => mz::command::profile::config_list(&mut cx),
                     ProfileConfigSubcommand::Set { name, value } => {
                         mz::command::profile::config_set(&mut cx, ConfigSetArgs { name, value })
                             .await

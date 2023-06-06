@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-
 //! This module defines custom error types and structs related to MZ.
 //!
 //! [`ApiError`] is an error struct that represents an error returned by the
@@ -16,7 +15,6 @@
 //!
 //! [`Error`](`enum@Error`) is a custom error type containing multiple variants
 //! for erros produced by the self crate, internal crates and external crates.
-
 
 use thiserror::Error;
 use url::ParseError;
