@@ -1064,7 +1064,7 @@ ALTER INDEX name RENAME TO name2
 ----
 ALTER INDEX name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: Item(UnresolvedItemName([Ident("name")])), to_item_name: Ident("name2") })
 
 parse-statement
 ALTER INDEX i1 misplaced
@@ -1085,14 +1085,14 @@ ALTER VIEW name RENAME TO name2
 ----
 ALTER VIEW name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: Item(UnresolvedItemName([Ident("name")])), to_item_name: Ident("name2") })
 
 parse-statement
 ALTER MATERIALIZED VIEW name RENAME TO name2
 ----
 ALTER MATERIALIZED VIEW name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("name")])), to_item_name: Ident("name2") })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS ()
@@ -1324,7 +1324,7 @@ ALTER SECRET secret RENAME TO secret2
 ----
 ALTER SECRET secret RENAME TO secret2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: UnresolvedItemName([Ident("secret")]), to_item_name: Ident("secret2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedItemName([Ident("secret")])), to_item_name: Ident("secret2") })
 
 parse-statement
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
@@ -1859,11 +1859,25 @@ ALTER CLUSTER foo OWNER TO joe
 AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: false, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
 
 parse-statement
+ALTER CLUSTER foo RENAME TO joe
+----
+ALTER CLUSTER foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Cluster, if_exists: false, name: Cluster(Ident("foo")), to_item_name: Ident("joe") })
+
+parse-statement
 ALTER CLUSTER IF EXISTS foo OWNER TO joe
 ----
 ALTER CLUSTER IF EXISTS foo OWNER TO joe
 =>
 AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
+
+parse-statement
+ALTER CLUSTER IF EXISTS foo RENAME TO joe
+----
+ALTER CLUSTER IF EXISTS foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), to_item_name: Ident("joe") })
 
 parse-statement
 ALTER CLUSTER REPLICA c.foo OWNER TO joe
@@ -1873,11 +1887,25 @@ ALTER CLUSTER REPLICA c.foo OWNER TO joe
 AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: false, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
 
 parse-statement
+ALTER CLUSTER REPLICA c.foo RENAME TO joe
+----
+ALTER CLUSTER REPLICA c.foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: ClusterReplica, if_exists: false, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), to_item_name: Ident("joe") })
+
+parse-statement
 ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
 ----
 ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
 =>
 AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: true, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
+
+parse-statement
+ALTER CLUSTER REPLICA IF EXISTS c.foo RENAME TO joe
+----
+ALTER CLUSTER REPLICA IF EXISTS c.foo RENAME TO joe
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: ClusterReplica, if_exists: true, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), to_item_name: Ident("joe") })
 
 parse-statement
 ALTER DATABASE foo OWNER TO joe

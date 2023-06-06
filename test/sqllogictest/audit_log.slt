@@ -75,10 +75,16 @@ statement ok
 CREATE SOURCE multiplex FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1');
 
 statement ok
-DROP CLUSTER REPLICA foo.r;
+ALTER CLUSTER REPLICA foo.r RENAME TO s;
 
 statement ok
-DROP CLUSTER foo;
+ALTER CLUSTER foo RENAME TO bar;
+
+statement ok
+DROP CLUSTER REPLICA bar.s;
+
+statement ok
+DROP CLUSTER bar;
 
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id
@@ -130,8 +136,10 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 45  create  cluster  {"id":"u4","name":"materialize_public_multiplex"}  materialize
 46  create  cluster-replica  {"cluster_id":"u4","cluster_name":"materialize_public_multiplex","logical_size":"1","replica_id":"7","replica_name":"linked"}  materialize
 47  create  source  {"database":"materialize","id":"u15","item":"multiplex","schema":"public","size":"1","type":"load-generator"}  materialize
-48  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_id":"4","replica_name":"r"}  materialize
-49  drop  cluster  {"id":"u2","name":"foo"}  materialize
+48  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"4"}  materialize
+49  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
+50  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","replica_id":"4","replica_name":"s"}  materialize
+51  drop  cluster  {"id":"u2","name":"bar"}  materialize
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 666
@@ -144,7 +152,7 @@ CREATE TABLE tt ()
 query ITTTTT
 SELECT id, event_type, object_type, details, user, occurred_at FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-50  create  table  {"database":"materialize","id":"u16","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
+52  create  table  {"database":"materialize","id":"u16","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET unsafe_mock_audit_event_timestamp

@@ -312,6 +312,8 @@ pub enum EventDetails {
     RevokeRoleV1(RevokeRoleV1),
     RevokeRoleV2(RevokeRoleV2),
     IdFullNameV1(IdFullNameV1),
+    RenameClusterV1(RenameClusterV1),
+    RenameClusterReplicaV1(RenameClusterReplicaV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
@@ -413,6 +415,63 @@ impl RustType<proto::audit_log_event_v1::RenameItemV1> for RenameItemV1 {
             id: proto.id,
             old_name: proto.old_name.into_rust_if_some("RenameItemV1::old_name")?,
             new_name: proto.new_name.into_rust_if_some("RenameItemV1::new_name")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RenameClusterV1 {
+    pub id: String,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+impl RustType<proto::audit_log_event_v1::RenameClusterV1> for RenameClusterV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameClusterV1 {
+        proto::audit_log_event_v1::RenameClusterV1 {
+            id: self.id.to_string(),
+            old_name: self.old_name.into_proto(),
+            new_name: self.new_name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameClusterV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameClusterV1 {
+            id: proto.id,
+            old_name: proto.old_name,
+            new_name: proto.new_name,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RenameClusterReplicaV1 {
+    pub cluster_id: String,
+    pub replica_id: String,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+impl RustType<proto::audit_log_event_v1::RenameClusterReplicaV1> for RenameClusterReplicaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameClusterReplicaV1 {
+        proto::audit_log_event_v1::RenameClusterReplicaV1 {
+            cluster_id: self.cluster_id.to_string(),
+            replica_id: self.replica_id.to_string(),
+            old_name: self.old_name.into_proto(),
+            new_name: self.new_name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameClusterReplicaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameClusterReplicaV1 {
+            cluster_id: proto.cluster_id,
+            replica_id: proto.replica_id,
+            old_name: proto.old_name,
+            new_name: proto.new_name,
         })
     }
 }
@@ -760,6 +819,10 @@ impl EventDetails {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::RenameClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::RenameClusterReplicaV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
@@ -794,6 +857,10 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::RevokeRoleV1(details) => RevokeRoleV1(details.into_proto()),
             EventDetails::RevokeRoleV2(details) => RevokeRoleV2(details.into_proto()),
             EventDetails::IdFullNameV1(details) => IdFullNameV1(details.into_proto()),
+            EventDetails::RenameClusterV1(details) => RenameClusterV1(details.into_proto()),
+            EventDetails::RenameClusterReplicaV1(details) => {
+                RenameClusterReplicaV1(details.into_proto())
+            }
             EventDetails::RenameItemV1(details) => RenameItemV1(details.into_proto()),
             EventDetails::IdNameV1(details) => IdNameV1(details.into_proto()),
             EventDetails::SchemaV1(details) => SchemaV1(details.into_proto()),
@@ -823,6 +890,10 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             RevokeRoleV1(details) => Ok(EventDetails::RevokeRoleV1(details.into_rust()?)),
             RevokeRoleV2(details) => Ok(EventDetails::RevokeRoleV2(details.into_rust()?)),
             IdFullNameV1(details) => Ok(EventDetails::IdFullNameV1(details.into_rust()?)),
+            RenameClusterV1(details) => Ok(EventDetails::RenameClusterV1(details.into_rust()?)),
+            RenameClusterReplicaV1(details) => {
+                Ok(EventDetails::RenameClusterReplicaV1(details.into_rust()?))
+            }
             RenameItemV1(details) => Ok(EventDetails::RenameItemV1(details.into_rust()?)),
             IdNameV1(details) => Ok(EventDetails::IdNameV1(details.into_rust()?)),
             SchemaV1(details) => Ok(EventDetails::SchemaV1(details.into_rust()?)),

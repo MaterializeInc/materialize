@@ -884,6 +884,19 @@ statement error must be owner of CLUSTER jclus
 DROP CLUSTER jclus
 
 statement error must be owner of CLUSTER jclus
+ALTER CLUSTER jclus RENAME TO jclus2
+
+simple conn=joe,user=joe
+ALTER CLUSTER jclus RENAME TO jclus2;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CLUSTER jclus2 RENAME TO jclus;
+----
+COMPLETE 0
+
+statement error must be owner of CLUSTER jclus
 ALTER CLUSTER jclus OWNER TO group_materialize
 
 ## Cluster Replicas
@@ -934,6 +947,14 @@ DROP CLUSTER REPLICA default.jr2
 
 statement error must be owner of CLUSTER REPLICA default.jr2
 ALTER CLUSTER REPLICA default.jr2 OWNER TO group_materialize
+
+statement error db error: ERROR: must be owner of CLUSTER REPLICA default\.jr2
+ALTER CLUSTER REPLICA default.jr2 RENAME TO jr3
+
+simple conn=joe,user=joe
+ALTER CLUSTER REPLICA default.jr2 RENAME TO jr3
+----
+COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON CLUSTER jclus TO materialize;

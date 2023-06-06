@@ -104,10 +104,11 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
-    plan_utils, query, transform_ast, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan,
-    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
+    plan_utils, query, transform_ast, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
+    AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
@@ -3610,11 +3611,11 @@ fn plan_drop_cluster_replica(
     if_exists: bool,
     name: QualifiedReplica,
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
-    let id = resolve_cluster_replica(scx, &name, if_exists)?;
-    if let Some((cluster_id, _)) = &id {
-        ensure_cluster_is_not_linked(scx, *cluster_id)?;
+    let cluster = resolve_cluster_replica(scx, &name, if_exists)?;
+    if let Some((cluster, _)) = &cluster {
+        ensure_cluster_is_not_linked(scx, cluster.id())?;
     }
-    Ok(id)
+    Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
 fn plan_drop_item(
@@ -4066,8 +4067,8 @@ fn plan_alter_cluster_replica_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster_id, replica_id)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::ClusterReplica((cluster_id, replica_id)),
+        Some((cluster, replica_id)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
+            id: ObjectId::ClusterReplica((cluster.id(), replica_id)),
             object_type: ObjectType::ClusterReplica,
             new_owner,
         })),
@@ -4181,6 +4182,37 @@ pub fn plan_alter_object_rename(
         if_exists,
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, PlanError> {
+    match (object_type, name) {
+        (
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::Source
+            | ObjectType::Index
+            | ObjectType::Sink
+            | ObjectType::Secret
+            | ObjectType::Connection,
+            UnresolvedObjectName::Item(name),
+        ) => plan_alter_item_rename(scx, object_type, name, to_item_name, if_exists),
+        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
+            plan_alter_cluster_rename(scx, object_type, name, to_item_name, if_exists)
+        }
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
+            plan_alter_cluster_replica_rename(scx, object_type, name, to_item_name, if_exists)
+        }
+        (object_type, name) => {
+            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+        }
+    }
+}
+
+pub fn plan_alter_item_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    name: UnresolvedItemName,
+    to_item_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
     match resolve_item(scx, name, if_exists)? {
         Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
@@ -4213,6 +4245,46 @@ pub fn plan_alter_object_rename(
                 object_type,
             }))
         }
+        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+    }
+}
+
+pub fn plan_alter_cluster_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    name: Ident,
+    to_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster(scx, &name, if_exists)? {
+        Some(entry) => Ok(Plan::AlterClusterRename(AlterClusterRenamePlan {
+            id: entry.id(),
+            name: entry.name().to_string(),
+            to_name: ident(to_name),
+        })),
+        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+    }
+}
+
+pub fn plan_alter_cluster_replica_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    name: QualifiedReplica,
+    to_item_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster_replica(scx, &name, if_exists)? {
+        Some((cluster, replica)) => Ok(Plan::AlterClusterReplicaRename(
+            AlterClusterReplicaRenamePlan {
+                cluster_id: cluster.id(),
+                replica_id: replica,
+                name: QualifiedReplica {
+                    cluster: cluster.name().into(),
+                    replica: name.replica,
+                },
+                to_name: normalize::ident(to_item_name),
+            },
+        )),
         None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
     }
 }
@@ -4856,14 +4928,14 @@ fn resolve_cluster<'a>(
     }
 }
 
-fn resolve_cluster_replica(
-    scx: &StatementContext,
+fn resolve_cluster_replica<'a>(
+    scx: &'a StatementContext,
     name: &QualifiedReplica,
     if_exists: bool,
-) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
+) -> Result<Option<(&'a dyn CatalogCluster<'a>, ReplicaId)>, PlanError> {
     match scx.resolve_cluster(Some(&name.cluster)) {
         Ok(cluster) => match cluster.replica_ids().get(name.replica.as_str()) {
-            Some(replica_id) => Ok(Some((cluster.id(), *replica_id))),
+            Some(replica_id) => Ok(Some((cluster, *replica_id))),
             // TODO(benesch): generate a notice indicating that the
             // replica does not exist.
             None if if_exists => Ok(None),

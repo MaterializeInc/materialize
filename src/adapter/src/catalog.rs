@@ -973,6 +973,15 @@ impl CatalogState {
         }
     }
 
+    fn rename_cluster(&mut self, id: ClusterId, to_name: String) {
+        let cluster = self.get_cluster_mut(id);
+        let old_name = std::mem::take(&mut cluster.name);
+        cluster.name = to_name.clone();
+
+        assert!(self.clusters_by_name.remove(&old_name).is_some());
+        assert!(self.clusters_by_name.insert(to_name, id).is_none());
+    }
+
     fn insert_cluster_replica(
         &mut self,
         cluster_id: ClusterId,
@@ -1008,6 +1017,27 @@ impl CatalogState {
         assert!(cluster.replicas_by_id.insert(replica_id, replica).is_none());
     }
 
+    /// Renames a cluster replica.
+    ///
+    /// Panics if the cluster or cluster replica does not exist.
+    fn rename_cluster_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        to_name: String,
+    ) {
+        let replica = self.get_cluster_replica_mut(cluster_id, replica_id);
+        let old_name = std::mem::take(&mut replica.name);
+        replica.name = to_name.clone();
+
+        let cluster = self.get_cluster_mut(cluster_id);
+        assert!(cluster.replica_id_by_name.remove(&old_name).is_some());
+        assert!(cluster
+            .replica_id_by_name
+            .insert(to_name, replica_id)
+            .is_none());
+    }
+
     /// Inserts or updates the status of the specified cluster replica process.
     ///
     /// Panics if the cluster or replica does not exist.
@@ -1033,8 +1063,7 @@ impl CatalogState {
         id: ClusterId,
         replica_id: ReplicaId,
     ) -> Option<&ClusterReplica> {
-        self.clusters_by_id
-            .get(&id)
+        self.try_get_cluster(id)
             .and_then(|cluster| cluster.replicas_by_id.get(&replica_id))
     }
 
@@ -1056,9 +1085,21 @@ impl CatalogState {
         id: ClusterId,
         replica_id: ReplicaId,
     ) -> Option<&mut ClusterReplica> {
-        self.clusters_by_id
-            .get_mut(&id)
+        self.try_get_cluster_mut(id)
             .and_then(|cluster| cluster.replicas_by_id.get_mut(&replica_id))
+    }
+
+    /// Gets a mutable reference to the specified replica of the specified
+    /// cluster.
+    ///
+    /// Panics if either the cluster or the replica does not exist.
+    fn get_cluster_replica_mut(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> &mut ClusterReplica {
+        self.try_get_cluster_replica_mut(cluster_id, replica_id)
+            .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
     }
 
     /// Gets the status of the given cluster replica process.
@@ -5997,6 +6038,81 @@ impl Catalog {
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     }
                 }
+                Op::RenameCluster { id, name, to_name } => {
+                    if id.is_system() {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyCluster(name.clone()),
+                        )));
+                    }
+                    if is_reserved_name(&to_name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedClusterName(to_name),
+                        )));
+                    }
+                    tx.rename_cluster(id, &name, &to_name)?;
+                    builtin_table_updates.push(state.pack_cluster_update(&name, -1));
+                    state.rename_cluster(id, to_name.clone());
+                    builtin_table_updates.push(state.pack_cluster_update(&to_name, 1));
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::RenameClusterV1(mz_audit_log::RenameClusterV1 {
+                            id: id.to_string(),
+                            old_name: name.clone(),
+                            new_name: to_name.clone(),
+                        }),
+                    )?;
+                    info!("rename cluster {name} to {to_name}");
+                }
+                Op::RenameClusterReplica {
+                    cluster_id,
+                    replica_id,
+                    name,
+                    to_name,
+                } => {
+                    if cluster_id.is_system() {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyCluster(name.cluster.into_string()),
+                        )));
+                    }
+                    if is_reserved_name(&to_name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedClusterName(to_name),
+                        )));
+                    }
+                    tx.rename_cluster_replica(replica_id, &name, &to_name)?;
+                    builtin_table_updates.push(state.pack_cluster_replica_update(
+                        cluster_id,
+                        name.replica.as_str(),
+                        -1,
+                    ));
+                    state.rename_cluster_replica(cluster_id, replica_id, to_name.clone());
+                    builtin_table_updates
+                        .push(state.pack_cluster_replica_update(cluster_id, &to_name, 1));
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::ClusterReplica,
+                        EventDetails::RenameClusterReplicaV1(
+                            mz_audit_log::RenameClusterReplicaV1 {
+                                cluster_id: cluster_id.to_string(),
+                                replica_id: replica_id.to_string(),
+                                old_name: name.replica.as_str().to_string(),
+                                new_name: to_name.clone(),
+                            },
+                        ),
+                    )?;
+                    info!("rename cluster replica {name} to {to_name}");
+                }
                 Op::RenameItem {
                     id,
                     to_name,
@@ -7070,6 +7186,17 @@ pub enum Op {
         role_id: RoleId,
         member_id: RoleId,
         grantor_id: RoleId,
+    },
+    RenameCluster {
+        id: ClusterId,
+        name: String,
+        to_name: String,
+    },
+    RenameClusterReplica {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        name: QualifiedReplica,
+        to_name: String,
     },
     RenameItem {
         id: GlobalId,

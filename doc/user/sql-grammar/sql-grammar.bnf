@@ -4,7 +4,7 @@ alter_connection ::=
 alter_owner ::=
   'ALTER' ('CLUSTER' | 'CLUSTER REPLICA' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'TYPE' | 'SECRET' ) name 'OWNER TO' new_owner
 alter_rename ::=
-  'ALTER' ('CONNECTION' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
+  'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_role ::=

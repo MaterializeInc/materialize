@@ -3663,7 +3663,7 @@ impl<'a> Parser<'a> {
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_item_name()?;
+                let name = UnresolvedObjectName::Item(self.parse_item_name()?);
                 let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
                 self.expect_keyword(TO)?;
                 match action {
@@ -3681,7 +3681,7 @@ impl<'a> Parser<'a> {
                         Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
-                            name: UnresolvedObjectName::Item(name),
+                            name,
                             new_owner,
                         }))
                     }
@@ -3703,26 +3703,56 @@ impl<'a> Parser<'a> {
             ObjectType::Cluster => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::Cluster(self.parse_identifier()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::Database => {
                 let if_exists = self.parse_if_exists()?;
@@ -3791,7 +3821,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3846,7 +3876,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Index,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3886,7 +3916,7 @@ impl<'a> Parser<'a> {
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type: ObjectType::Secret,
                     if_exists,
-                    name,
+                    name: UnresolvedObjectName::Item(name),
                     to_item_name,
                 })
             }
@@ -3942,7 +3972,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Sink,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -4002,9 +4032,8 @@ impl<'a> Parser<'a> {
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Connection,
-
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }

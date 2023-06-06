@@ -30,6 +30,7 @@ use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier,
 };
+use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
@@ -1051,6 +1052,56 @@ impl<'a> Transaction<'a> {
         }
 
         Ok(())
+    }
+
+    pub fn rename_cluster(
+        &mut self,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        cluster_to_name: &str,
+    ) -> Result<(), Error> {
+        let key = ClusterKey { id: cluster_id };
+
+        match self.clusters.update(|k, v| {
+            if *k == key {
+                let mut value = v.clone();
+                value.name = cluster_to_name.to_string();
+                Some(value)
+            } else {
+                None
+            }
+        })? {
+            0 => Err(SqlCatalogError::UnknownCluster(cluster_name.to_string()).into()),
+            1 => Ok(()),
+            n => panic!(
+                "Expected to update single cluster {cluster_name} ({cluster_id}), updated {n}"
+            ),
+        }
+    }
+
+    pub fn rename_cluster_replica(
+        &mut self,
+        replica_id: ReplicaId,
+        replica_name: &QualifiedReplica,
+        replica_to_name: &str,
+    ) -> Result<(), Error> {
+        let key = ClusterReplicaKey { id: replica_id };
+
+        match self.cluster_replicas.update(|k, v| {
+            if *k == key {
+                let mut value = v.clone();
+                value.name = replica_to_name.to_string();
+                Some(value)
+            } else {
+                None
+            }
+        })? {
+            0 => Err(SqlCatalogError::UnknownClusterReplica(replica_name.to_string()).into()),
+            1 => Ok(()),
+            n => panic!(
+                "Expected to update single cluster replica {replica_name} ({replica_id}), updated {n}"
+            ),
+        }
     }
 
     pub fn insert_cluster_replica(
