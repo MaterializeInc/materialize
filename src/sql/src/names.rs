@@ -309,6 +309,13 @@ impl SchemaSpecifier {
         }
     }
 
+    pub fn is_user(&self) -> bool {
+        match self {
+            SchemaSpecifier::Temporary => true,
+            SchemaSpecifier::Id(id) => id.is_user(),
+        }
+    }
+
     pub fn is_temporary(&self) -> bool {
         matches!(self, SchemaSpecifier::Temporary)
     }
@@ -898,6 +905,18 @@ impl ObjectId {
             ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
             ObjectId::Role(role_id) => role_id.is_system(),
             ObjectId::Item(global_id) => global_id.is_system(),
+        }
+    }
+
+    pub fn is_user(&self) -> bool {
+        match self {
+            ObjectId::Cluster(cluster_id) => cluster_id.is_user(),
+            // replica IDs aren't namespaced so we rely on the cluster ID.
+            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_user(),
+            ObjectId::Database(database_id) => database_id.is_user(),
+            ObjectId::Schema((_database_id, schema_id)) => schema_id.is_user(),
+            ObjectId::Role(role_id) => role_id.is_user(),
+            ObjectId::Item(global_id) => global_id.is_user(),
         }
     }
 }
