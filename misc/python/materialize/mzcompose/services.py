@@ -111,6 +111,7 @@ class Materialized(Service):
                 "persist_stats_audit_percent": "100",
                 "enable_ld_rbac_checks": "true",
                 "enable_rbac_checks": "true",
+                "upsert_rocksdb_batch_size": "1",
             }
 
         if additional_system_parameter_defaults is not None:
