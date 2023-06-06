@@ -27,11 +27,6 @@ fi
 
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
-ci_collapsed_heading "kail: Clean up running instances, start a new instance"
-bin/ci-builder run stable pkill -9 -f "^kail$" || true
-bin/ci-builder run stable rm -f "kail-output.log"
-bin/ci-builder run stable kail > "kail-output.log"
-
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
@@ -43,6 +38,11 @@ bin/ci-builder run stable test/cloudtest/setup
 ci_collapsed_heading "kind: Purging state from previous builds..."
 bin/ci-builder run stable test/cloudtest/reset
 rm -f kubectl-*.log
+
+ci_collapsed_heading "kail: Clean up running instances, start a new instance"
+bin/ci-builder run stable pkill -9 -f "^kail$" || true
+bin/ci-builder run stable rm -f "kail-output.log"
+bin/ci-builder run stable kail > "kail-output.log"
 
 ci_uncollapsed_heading "cloudtest: Running \`bin/pytest ${run_args[*]}\`"
 bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log
