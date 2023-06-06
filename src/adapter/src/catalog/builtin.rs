@@ -46,7 +46,7 @@ use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 use crate::rbac;
 
-pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_", "external_"]);
 
 #[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
