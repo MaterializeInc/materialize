@@ -225,7 +225,7 @@ where
 
         info!("running GC to {:?}: {:?}", req.new_seqno_since, gc_rollups);
 
-        if gc_rollups.rollups_lte_seqno_since.is_empty() {
+        if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
             // to delete), we can safely exit.

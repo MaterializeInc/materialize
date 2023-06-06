@@ -31,7 +31,7 @@ seqno=v1 batches=
 seqno=v2 batches=
 seqno=v3 batches=b0
 
-write-rollup seqno=3
+write-rollup seqno=v3
 ----
 v4
 

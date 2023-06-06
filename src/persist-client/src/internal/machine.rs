@@ -1086,7 +1086,7 @@ pub mod datadriven {
     use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
-    use crate::internal::encoding::{Schemas, UntypedState};
+    use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::internal::state::TypedState;
@@ -1171,6 +1171,12 @@ pub mod datadriven {
                 continue;
             }
             let mut batches = vec![];
+            let rollups: Vec<_> = x
+                .collections
+                .rollups
+                .keys()
+                .map(|seqno| seqno.to_string())
+                .collect();
             x.collections.trace.map_batches(|b| {
                 if b.parts.is_empty() {
                     return;
@@ -1182,7 +1188,16 @@ pub mod datadriven {
                     }
                 }
             });
-            write!(s, "seqno={} batches={}\n", x.seqno, batches.join(","));
+            write!(
+                s,
+                "seqno={} batches={}\n",
+                x.seqno,
+                batches.join(","),
+                // "seqno={} batches={}\n"," rollups={}\n",
+                // x.seqno,
+                // batches.join(","),
+                // rollups.join(","),
+            );
         }
         Ok(s)
     }
@@ -1270,8 +1285,7 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let seqno: u64 = args.expect("seqno");
-        let seqno = SeqNo(seqno);
+        let seqno: SeqNo = args.expect("seqno");
 
         let mut all_live_states = datadriven
             .machine
