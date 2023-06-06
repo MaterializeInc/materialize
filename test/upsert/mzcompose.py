@@ -65,6 +65,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "testdrive",
         "failpoint",
         "incident-49",
+        "rocksdb-cleanup",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -308,3 +309,34 @@ def workflow_incident_49(c: Composition) -> None:
             c.run("testdrive", "incident-49/02-after-rehydration.td")
 
         c.run("testdrive", "incident-49/03-reset.td")
+
+
+def workflow_rocksdb_cleanup(c: Composition) -> None:
+    """Testing rocksdb cleanup after dropping sources"""
+    c.down(destroy_volumes=True)
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+    ]
+    c.up(*dependencies)
+
+    testdrive_files = [
+        "drop-source.td",
+        "drop-cluster-cascade.td",
+        "drop-source-in-cluster.td",
+    ]
+
+    for testdrive_file in testdrive_files:
+        c.run("testdrive", f"rocksdb-cleanup/{testdrive_file}")
+        files = c.exec(
+            "materialized",
+            "bash",
+            "-c",
+            "find /mzdata/source_data -type f",
+            capture=True,
+        ).stdout.strip()
+        assert (
+            files == ""
+        ), f"The scratch directory should have been cleaned up but has following files:\n{files}"

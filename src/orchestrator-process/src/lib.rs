@@ -497,10 +497,12 @@ impl NamespacedProcessOrchestrator {
             "--secrets-reader-process-dir={}",
             self.secrets_dir.display()
         ));
-        if let Some(scratch_directory) = &self.scratch_directory {
+
+        let scratch_directory = self.scratch_directory.as_ref().map(|dir| dir.join(id));
+        if let Some(scratch_directory) = &scratch_directory {
             args.push(format!(
                 "--scratch-directory={}",
-                scratch_directory.join(id).display()
+                scratch_directory.display()
             ));
         }
 
@@ -524,6 +526,19 @@ impl NamespacedProcessOrchestrator {
                     proxy_handles.push(handle.abort_on_drop());
                 }
             }
+
+            // Adding scope guard to clean up scratch directory
+            let _guard = scopeguard::guard((), |_| {
+                if let Some(scratch) = scratch_directory {
+                    info!("Cleaning up scratch directory {}", scratch.display());
+                    if let Err(e) = std::fs::remove_dir_all(scratch) {
+                        warn!(
+                            "Error cleaning up scratch directory: {}",
+                            e.display_with_causes()
+                        )
+                    }
+                }
+            });
 
             supervise_existing_process(&state_updater, &pid_file).await;
 
