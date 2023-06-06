@@ -41,7 +41,7 @@ AWS PrivateLink.
 
 The [AWS MSK PrivateLink](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [AWS Kafka PrivateLink](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) modules allow you to manage
 your connection to Materialize in a single configuration. The module builds
-target groups for brokers, a network load balancer, a TCP listener, and a VPC. These AWS resources are necessary components for creating a PrivateLink connection.
+target groups for brokers, a network load balancer, a TCP listener, and a VPC endpoint within an existing VPC. These AWS resources are necessary components for creating a PrivateLink connection.
 
 The Materialize provider uses [connection resource blocks](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/connection_aws_privatelink) to allow
 Materialize to communicate with the PrivateLink endpoint. After you deploy the
