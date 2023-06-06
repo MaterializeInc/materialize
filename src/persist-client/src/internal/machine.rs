@@ -1190,13 +1190,10 @@ pub mod datadriven {
             });
             write!(
                 s,
-                "seqno={} batches={}\n",
+                "seqno={} batches={} rollups={}\n",
                 x.seqno,
                 batches.join(","),
-                // "seqno={} batches={}\n"," rollups={}\n",
-                // x.seqno,
-                // batches.join(","),
-                // rollups.join(","),
+                rollups.join(","),
             );
         }
         Ok(s)

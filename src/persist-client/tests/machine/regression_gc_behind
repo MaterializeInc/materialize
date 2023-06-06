@@ -27,9 +27,9 @@ v3 [1]
 
 consensus-scan from_seqno=v0
 ----
-seqno=v1 batches=
-seqno=v2 batches=
-seqno=v3 batches=b0
+seqno=v1 batches= rollups=v1
+seqno=v2 batches= rollups=v1
+seqno=v3 batches=b0 rollups=v1
 
 write-rollup seqno=v3
 ----
@@ -48,6 +48,6 @@ v5 ok
 
 consensus-scan from_seqno=v0
 ----
-seqno=v3 batches=b0
-seqno=v4 batches=b0
-seqno=v5 batches=b0
+seqno=v3 batches=b0 rollups=v1
+seqno=v4 batches=b0 rollups=v1,v3
+seqno=v5 batches=b0 rollups=v3

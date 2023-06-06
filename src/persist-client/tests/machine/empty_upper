@@ -158,8 +158,8 @@ perform-maintenance
 
 consensus-scan from_seqno=v0
 ----
-seqno=v17 batches=
-seqno=v18 batches=
+seqno=v17 batches= rollups=v1
+seqno=v18 batches= rollups=v1,v17
 
 blob-scan-batches
 ----
