@@ -9,9 +9,11 @@
 
 use std::borrow::Cow;
 use std::io;
+use std::str::Utf8Error;
 
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
+use mz_pgrepr::{Type, Value};
 use mz_repr::{Datum, RelationType, Row, RowArena};
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
@@ -434,6 +436,9 @@ pub struct CopyCsvFormatParams<'a> {
     pub escape: u8,
     pub header: bool,
     pub null: Cow<'a, str>,
+    pub truncate_columns: bool,
+    pub accept_inv_chars: Option<u8>,
+    pub ignore_header: u32,
 }
 
 pub fn decode_copy_format_csv(
@@ -445,6 +450,9 @@ pub fn decode_copy_format_csv(
         escape,
         null,
         header,
+        truncate_columns,
+        accept_inv_chars,
+        mut ignore_header,
     }: CopyCsvFormatParams,
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
@@ -469,6 +477,11 @@ pub fn decode_copy_format_csv(
     let null_as_bytes = null.as_bytes();
 
     let mut record = ByteRecord::new();
+
+    while ignore_header > 0 {
+        rdr.read_byte_record(&mut record)?;
+        ignore_header -= 1;
+    }
 
     while rdr.read_byte_record(&mut record)? {
         if record.len() == 1 && record.iter().next() == Some(END_OF_COPY_MARKER) {
@@ -495,8 +508,60 @@ pub fn decode_copy_format_csv(
                 row.push(Datum::Null);
             } else {
                 match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, typ)),
+                    Ok(mut value) => {
+                        // From
+                        // https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-conversion.html#copy-truncatecolumns:
+                        //
+                        // Truncates data in VARCHAR and CHAR columns to the appropriate number of
+                        // characters so that it fits the column specification.
+                        if truncate_columns {
+                            match (typ, &mut value) {
+                                (
+                                    Type::VarChar {
+                                        max_length: Some(max_length),
+                                    },
+                                    Value::VarChar(v),
+                                ) => {
+                                    // Count utf8 chars, then truncate if needed. Fairly slow due to
+                                    // utf8 math.
+                                    let max_length: usize = match max_length.into_i32().try_into() {
+                                        Ok(v) if v > 0 => v,
+                                        _ => usize::MAX,
+                                    };
+                                    let count = v.chars().count();
+                                    if count > max_length {
+                                        *v = v.chars().take(max_length).collect();
+                                    }
+                                }
+                                (Type::Char, Value::Char(_)) => {
+                                    // Although specified in the docs above, Value::decode_text
+                                    // always takes the first byte only, so there's nothing to do
+                                    // here.
+                                }
+                                _ => {}
+                            }
+                        }
+                        row.push(value.into_datum(&buf, typ))
+                    }
                     Err(err) => {
+                        // From: https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-conversion.html#copy-acceptinvchars
+                        //
+                        // When ACCEPTINVCHARS is specified, COPY replaces each invalid UTF-8 character with
+                        // a string of equal length consisting of the character specified by
+                        // replacement_char. For example, if the replacement character is '^', an invalid
+                        // three-byte character will be replaced with '^^^'.
+                        if err.is::<Utf8Error>()
+                            && accept_inv_chars.is_some()
+                            && matches!(typ, Type::VarChar { .. } | Type::Text)
+                            && std::str::from_utf8(raw_value).is_err()
+                        {
+                            // Don't bother implementing until someone complains.
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "ACCEPTINVCHARS unsupported",
+                            ));
+                        }
+
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
                     }

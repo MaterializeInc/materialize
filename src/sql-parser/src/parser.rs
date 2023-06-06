@@ -4192,16 +4192,34 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_copy_option(&mut self) -> Result<CopyOption<Raw>, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER])? {
-                FORMAT => CopyOptionName::Format,
-                DELIMITER => CopyOptionName::Delimiter,
-                NULL => CopyOptionName::Null,
-                ESCAPE => CopyOptionName::Escape,
-                QUOTE => CopyOptionName::Quote,
-                HEADER => CopyOptionName::Header,
-                _ => unreachable!(),
-            };
+        let name = match self.expect_one_of_keywords(&[
+            ACCEPTINVCHARS,
+            CSV,
+            DATEFORMAT,
+            DELIMITER,
+            ESCAPE,
+            FORMAT,
+            HEADER,
+            IGNOREHEADER,
+            NULL,
+            QUOTE,
+            TIMEFORMAT,
+            TRUNCATECOLUMNS,
+        ])? {
+            ACCEPTINVCHARS => CopyOptionName::Acceptinvchars,
+            CSV => CopyOptionName::Csv,
+            DATEFORMAT => CopyOptionName::Dateformat,
+            DELIMITER => CopyOptionName::Delimiter,
+            ESCAPE => CopyOptionName::Escape,
+            FORMAT => CopyOptionName::Format,
+            HEADER => CopyOptionName::Header,
+            IGNOREHEADER => CopyOptionName::Ignoreheader,
+            NULL => CopyOptionName::Null,
+            QUOTE => CopyOptionName::Quote,
+            TIMEFORMAT => CopyOptionName::Timeformat,
+            TRUNCATECOLUMNS => CopyOptionName::Truncatecolumns,
+            _ => unreachable!(),
+        };
         let value = self.parse_optional_option_value()?;
         Ok(CopyOption { name, value })
     }

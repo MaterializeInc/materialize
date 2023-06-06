@@ -80,6 +80,7 @@
 //! in testdrive, e.g., because they depend on the current time.
 
 use std::error::Error;
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -3209,4 +3210,25 @@ fn test_max_connections() {
             client
         })
         .collect_vec();
+}
+
+// Test some COPY options that are difficult to test elsewhere.
+#[mz_ore::test]
+fn test_copy() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (s TEXT)").unwrap();
+
+    // Test ACCEPTINVCHARS. We don't implement it yet, but can detect it would trigger by sending
+    // invalid utf8 bytes.
+    {
+        let mut w = client
+            .copy_in("COPY t FROM stdin WITH (CSV, ACCEPTINVCHARS)")
+            .unwrap();
+        w.write_all(b"\xF1a").unwrap();
+        let err = w.finish().unwrap_err();
+        assert_contains!(err.to_string(), "ACCEPTINVCHARS unsupported");
+    }
 }

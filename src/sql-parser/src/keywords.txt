@@ -23,6 +23,7 @@
 #
 # For details on the code that is generated, see keywords.rs.
 
+Acceptinvchars
 Access
 Acks
 Addresses
@@ -91,6 +92,7 @@ Current
 Cursor
 Database
 Databases
+Dateformat
 Datums
 Day
 Days
@@ -164,6 +166,7 @@ Idempotence
 Idle
 If
 Ignore
+Ignoreheader
 Ilike
 In
 Include
@@ -355,6 +358,7 @@ Then
 Tick
 Ties
 Time
+Timeformat
 Timeline
 Timeout
 Timestamp
@@ -367,6 +371,7 @@ Trailing
 Transaction
 Trim
 True
+Truncatecolumns
 Tunnel
 Type
 Types

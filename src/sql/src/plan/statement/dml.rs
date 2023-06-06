@@ -676,11 +676,21 @@ fn plan_copy_from(
         }
     }
 
+    if options.timeformat != "auto" {
+        sql_bail!("COPY timeformat can only be auto");
+    }
+    if options.dateformat != "auto" {
+        sql_bail!("COPY dateformat can only be auto");
+    }
+
     let params = match format {
         CopyFormat::Text => {
             only_available_with_csv(options.quote, "quote")?;
             only_available_with_csv(options.escape, "escape")?;
             only_available_with_csv(options.header, "HEADER")?;
+            only_available_with_csv(options.truncatecolumns, "truncatecolumns")?;
+            only_available_with_csv(options.acceptinvchars, "acceptinvchars")?;
+            only_available_with_csv(options.ignoreheader, "ignoreheader")?;
             let delimiter = match options.delimiter {
                 Some(delimiter) if delimiter.len() > 1 => {
                     sql_bail!("COPY delimiter must be a single one-byte character");
@@ -712,6 +722,11 @@ fn plan_copy_from(
                 escape,
                 null,
                 header,
+                truncate_columns: options.truncatecolumns.unwrap_or(false),
+                accept_inv_chars: options
+                    .acceptinvchars
+                    .map(|_| '^'.try_into().expect("must fit")),
+                ignore_header: options.ignoreheader.unwrap_or(0),
             })
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
@@ -727,12 +742,18 @@ fn plan_copy_from(
 
 generate_extracted_config!(
     CopyOption,
-    (Format, String, Default("text")),
+    (Acceptinvchars, bool),
+    (Csv, bool),
+    (Dateformat, String, Default("auto")),
     (Delimiter, String),
-    (Null, String),
     (Escape, String),
+    (Format, String, Default("text")),
+    (Header, bool),
+    (Ignoreheader, u32),
+    (Null, String),
     (Quote, String),
-    (Header, bool)
+    (Timeformat, String, Default("auto")),
+    (Truncatecolumns, bool)
 );
 
 pub fn plan_copy(
@@ -745,12 +766,15 @@ pub fn plan_copy(
     }: CopyStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let options = CopyOptionExtracted::try_from(options)?;
-    let format = match options.format.to_lowercase().as_str() {
+    let mut format = match options.format.to_lowercase().as_str() {
         "text" => CopyFormat::Text,
         "csv" => CopyFormat::Csv,
         "binary" => CopyFormat::Binary,
         _ => sql_bail!("unknown FORMAT: {}", options.format),
     };
+    if options.csv == Some(true) {
+        format = CopyFormat::Csv;
+    }
     if let CopyDirection::To = direction {
         if options.delimiter.is_some() {
             sql_bail!("COPY TO does not support DELIMITER option yet");

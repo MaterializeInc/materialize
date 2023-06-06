@@ -1,0 +1,40 @@
+# Test COPY options supported only by redshift.
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+Query {"query": "CREATE TABLE t (i INT8, t TEXT, v VARCHAR(3))"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DELETE FROM t"}
+Query {"query": "COPY t FROM STDIN WITH (CSV, ACCEPTINVCHARS, DATEFORMAT='auto', TIMEFORMAT='auto', IGNOREHEADER=2, TRUNCATECOLUMNS)"}
+CopyData "0,Ignored,Ignored\n"
+CopyData "0,Ignored,Ignored\n"
+CopyData "1,abc,efgh\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 0"}
+ReadyForQuery {"status":"I"}
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"},{"name":"v"}]}
+DataRow {"fields":["1","abc","efg"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

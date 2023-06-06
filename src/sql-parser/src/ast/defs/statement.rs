@@ -256,23 +256,35 @@ impl_display!(CopyTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CopyOptionName {
-    Format,
+    Acceptinvchars,
+    Csv,
+    Dateformat,
     Delimiter,
-    Null,
     Escape,
-    Quote,
+    Format,
     Header,
+    Ignoreheader,
+    Null,
+    Quote,
+    Timeformat,
+    Truncatecolumns,
 }
 
 impl AstDisplay for CopyOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            CopyOptionName::Format => "FORMAT",
+            CopyOptionName::Acceptinvchars => "ACCEPTINVCHARS ",
+            CopyOptionName::Csv => "CSV",
+            CopyOptionName::Dateformat => "DATEFORMAT",
             CopyOptionName::Delimiter => "DELIMITER",
-            CopyOptionName::Null => "NULL",
             CopyOptionName::Escape => "ESCAPE",
-            CopyOptionName::Quote => "QUOTE",
+            CopyOptionName::Format => "FORMAT",
             CopyOptionName::Header => "HEADER",
+            CopyOptionName::Ignoreheader => "IGNOREHEADER",
+            CopyOptionName::Null => "NULL",
+            CopyOptionName::Quote => "QUOTE",
+            CopyOptionName::Timeformat => "TIMEFORMAT",
+            CopyOptionName::Truncatecolumns => "TRUNCATECOLUMNS",
         })
     }
 }
