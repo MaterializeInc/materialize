@@ -1487,4 +1487,32 @@ mod tests {
         cols.insert("col".into(), JsonMapElementStats { len: 1, stats: col });
         testcase(JsonStats::Maps(cols));
     }
+
+    // Confirm that fields are being trimmed from largest to smallest.
+    #[mz_ore::test]
+    fn trim_order_regression() {
+        fn dyn_stats(lower: &'static str, upper: &'static str) -> Box<dyn DynStats> {
+            Box::new(PrimitiveStats {
+                lower: lower.to_owned(),
+                upper: upper.to_owned(),
+            })
+        }
+        let stats = StructStats {
+            len: 2,
+            cols: BTreeMap::from([
+                ("foo".to_owned(), dyn_stats("a", "b")),
+                (
+                    "bar".to_owned(),
+                    dyn_stats("aaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaab"),
+                ),
+            ]),
+        };
+
+        // The threshold here is arbitrary... we just care that there's some budget where
+        // we'll discard the large field before the small one.
+        let mut proto_stats = RustType::into_proto(&stats);
+        trim_to_budget(&mut proto_stats, 30, |_| false);
+        assert!(proto_stats.cols.contains_key("foo"));
+        assert!(!proto_stats.cols.contains_key("bar"));
+    }
 }
