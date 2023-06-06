@@ -2152,9 +2152,9 @@ pub enum EvalError {
     NumericFieldOverflow,
     Float32OutOfRange(String),
     Float64OutOfRange(String),
-    Int16OutOfRange,
-    Int32OutOfRange,
-    Int64OutOfRange,
+    Int16OutOfRange(String),
+    Int32OutOfRange(String),
+    Int64OutOfRange(String),
     UInt16OutOfRange,
     UInt32OutOfRange,
     UInt64OutOfRange,
@@ -2261,9 +2261,9 @@ impl fmt::Display for EvalError {
             EvalError::Float64OutOfRange(val) => {
                 write!(f, "{} double precision out of range", val.quoted())
             }
-            EvalError::Int16OutOfRange => f.write_str("smallint out of range"),
-            EvalError::Int32OutOfRange => f.write_str("integer out of range"),
-            EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
+            EvalError::Int16OutOfRange(val) => write!(f, "{} smallint out of range", val.quoted()),
+            EvalError::Int32OutOfRange(val) => write!(f, "{} integer out of range", val.quoted()),
+            EvalError::Int64OutOfRange(val) => write!(f, "{} bigint out of range", val.quoted()),
             EvalError::UInt16OutOfRange => f.write_str("uint2 out of range"),
             EvalError::UInt32OutOfRange => f.write_str("uint4 out of range"),
             EvalError::UInt64OutOfRange => f.write_str("uint8 out of range"),
@@ -2530,9 +2530,15 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::Float64OutOfRange(val) => Float64OutOfRange(ProtoValueOutOfRange {
                 value: val.to_string(),
             }),
-            EvalError::Int16OutOfRange => Int16OutOfRange(()),
-            EvalError::Int32OutOfRange => Int32OutOfRange(()),
-            EvalError::Int64OutOfRange => Int64OutOfRange(()),
+            EvalError::Int16OutOfRange(val) => Int16OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int32OutOfRange(val) => Int32OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int64OutOfRange(val) => Int64OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
             EvalError::UInt16OutOfRange => Uint16OutOfRange(()),
             EvalError::UInt32OutOfRange => Uint32OutOfRange(()),
             EvalError::UInt64OutOfRange => Uint64OutOfRange(()),
@@ -2655,9 +2661,9 @@ impl RustType<ProtoEvalError> for EvalError {
                 NumericFieldOverflow(()) => Ok(EvalError::NumericFieldOverflow),
                 Float32OutOfRange(val) => Ok(EvalError::Float32OutOfRange(val.value)),
                 Float64OutOfRange(val) => Ok(EvalError::Float64OutOfRange(val.value)),
-                Int16OutOfRange(()) => Ok(EvalError::Int16OutOfRange),
-                Int32OutOfRange(()) => Ok(EvalError::Int32OutOfRange),
-                Int64OutOfRange(()) => Ok(EvalError::Int64OutOfRange),
+                Int16OutOfRange(val) => Ok(EvalError::Int16OutOfRange(val.value)),
+                Int32OutOfRange(val) => Ok(EvalError::Int32OutOfRange(val.value)),
+                Int64OutOfRange(val) => Ok(EvalError::Int64OutOfRange(val.value)),
                 Uint16OutOfRange(()) => Ok(EvalError::UInt16OutOfRange),
                 Uint32OutOfRange(()) => Ok(EvalError::UInt32OutOfRange),
                 Uint64OutOfRange(()) => Ok(EvalError::UInt64OutOfRange),

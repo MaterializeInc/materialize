@@ -25,7 +25,8 @@ sqlfunc!(
     #[inverse = to_unary!(NegInt32)]
     #[is_monotone = true]
     fn neg_int32(a: i32) -> Result<i32, EvalError> {
-        a.checked_neg().ok_or(EvalError::Int32OutOfRange)
+        a.checked_neg()
+            .ok_or(EvalError::Int32OutOfRange(a.to_string()))
     }
 );
 
@@ -41,7 +42,8 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "abs"]
     fn abs_int32(a: i32) -> Result<i32, EvalError> {
-        a.checked_abs().ok_or(EvalError::Int32OutOfRange)
+        a.checked_abs()
+            .ok_or(EvalError::Int32OutOfRange(a.to_string()))
     }
 );
 
@@ -84,7 +86,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt16ToInt32)]
     #[is_monotone = true]
     fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
-        i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
+        i16::try_from(a).or(Err(EvalError::Int16OutOfRange(a.to_string())))
     }
 );
 

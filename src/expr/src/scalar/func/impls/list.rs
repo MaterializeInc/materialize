@@ -154,9 +154,10 @@ impl LazyUnaryFunc for ListLength {
         if a.is_null() {
             return Ok(Datum::Null);
         }
-        match a.unwrap_list().iter().count().try_into() {
+        let count = a.unwrap_list().iter().count();
+        match count.try_into() {
             Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange),
+            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
         }
     }
 

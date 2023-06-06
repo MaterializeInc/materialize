@@ -138,10 +138,10 @@ SELECT NULL AND (1/0 > 0);
 # Check we consistently pick the same error
 # Postgres returns the first error instead
 
-query error smallint out of range
+query error "32768" smallint out of range
 SELECT (32768::int2 > 0) AND (1/0 > 0);
 
-query error smallint out of range
+query error "32768" smallint out of range
 SELECT (1/0 > 0) AND (32768::int2 > 0);
 
 query BBB rowsort

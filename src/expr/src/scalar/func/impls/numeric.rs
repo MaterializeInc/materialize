@@ -179,8 +179,10 @@ sqlfunc!(
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        let i = cx.try_into_i32(a).or(Err(EvalError::Int16OutOfRange))?;
-        i16::try_from(i).or(Err(EvalError::Int16OutOfRange))
+        let i = cx
+            .try_into_i32(a)
+            .or(Err(EvalError::Int16OutOfRange(a.to_string())))?;
+        i16::try_from(i).or(Err(EvalError::Int16OutOfRange(i.to_string())))
     }
 );
 
@@ -193,7 +195,8 @@ sqlfunc!(
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        cx.try_into_i32(a).or(Err(EvalError::Int32OutOfRange))
+        cx.try_into_i32(a)
+            .or(Err(EvalError::Int32OutOfRange(a.to_string())))
     }
 );
 
@@ -206,7 +209,8 @@ sqlfunc!(
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        cx.try_into_i64(a).or(Err(EvalError::Int64OutOfRange))
+        cx.try_into_i64(a)
+            .or(Err(EvalError::Int64OutOfRange(a.to_string())))
     }
 );
 

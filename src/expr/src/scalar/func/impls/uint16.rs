@@ -72,7 +72,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt16ToUint16)]
     #[is_monotone = true]
     fn cast_uint16_to_int16(a: u16) -> Result<i16, EvalError> {
-        i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
+        i16::try_from(a).or(Err(EvalError::Int16OutOfRange(a.to_string())))
     }
 );
 

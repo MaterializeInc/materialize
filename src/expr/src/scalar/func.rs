@@ -497,9 +497,10 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
         }
     };
 
-    match i32::try_from(decoded_string.chars().count()) {
+    let count = decoded_string.chars().count();
+    match i32::try_from(count) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
     }
 }
 
@@ -980,7 +981,7 @@ fn div_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int16()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int16OutOfRange)
+            .ok_or(EvalError::Int16OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -992,7 +993,7 @@ fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int32()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int32OutOfRange)
+            .ok_or(EvalError::Int32OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -1004,7 +1005,7 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int64()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int64OutOfRange)
+            .ok_or(EvalError::Int64OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -6528,8 +6529,8 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         let string_prefix = &string[0..char_index];
 
         let num_prefix_chars = string_prefix.chars().count();
-        let num_prefix_chars =
-            i32::try_from(num_prefix_chars).map_err(|_| EvalError::Int32OutOfRange)?;
+        let num_prefix_chars = i32::try_from(num_prefix_chars)
+            .map_err(|_| EvalError::Int32OutOfRange(num_prefix_chars.to_string()))?;
 
         Ok(Datum::Int32(num_prefix_chars + 1))
     } else {
@@ -6622,7 +6623,7 @@ fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
         Some(dim) => Datum::Int32(
             dim.length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange)?,
+                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
         ),
     })
 }
@@ -6684,7 +6685,7 @@ fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
             Some(dim) => Datum::Int32(
                 dim.length
                     .try_into()
-                    .map_err(|_| EvalError::Int32OutOfRange)?,
+                    .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
             ),
             None => Datum::Null,
         },
@@ -6726,7 +6727,7 @@ fn list_length_max<'a>(
         match max_len_on_layer(a, b) {
             Some(l) => match l.try_into() {
                 Ok(c) => Ok(Datum::Int32(c)),
-                Err(_) => Err(EvalError::Int32OutOfRange),
+                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string())),
             },
             None => Ok(Datum::Null),
         }

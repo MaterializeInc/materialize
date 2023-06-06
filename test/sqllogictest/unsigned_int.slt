@@ -670,7 +670,7 @@ SELECT 6789::uint4::int4
 ----
 6789
 
-query error integer out of range
+query error "2147483648" integer out of range
 SELECT 2147483648::uint4::int4
 
 query I
@@ -721,7 +721,7 @@ SELECT 15445::uint8::int4
 ----
 15445
 
-query error integer out of range
+query error "2147483648" integer out of range
 SELECT 2147483648::uint8::int4
 
 query I
@@ -729,7 +729,7 @@ SELECT 15445::uint8::int8
 ----
 15445
 
-query error bigint out of range
+query error "9223372036854775808" bigint out of range
 SELECT 9223372036854775808::uint8::int8
 
 query I

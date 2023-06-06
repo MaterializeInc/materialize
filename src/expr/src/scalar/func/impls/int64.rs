@@ -24,7 +24,8 @@ sqlfunc!(
     #[inverse = to_unary!(NegInt64)]
     #[is_monotone = true]
     fn neg_int64(a: i64) -> Result<i64, EvalError> {
-        a.checked_neg().ok_or(EvalError::Int64OutOfRange)
+        a.checked_neg()
+            .ok_or(EvalError::Int64OutOfRange(a.to_string()))
     }
 );
 
@@ -40,7 +41,8 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "abs"]
     fn abs_int64(a: i64) -> Result<i64, EvalError> {
-        a.checked_abs().ok_or(EvalError::Int64OutOfRange)
+        a.checked_abs()
+            .ok_or(EvalError::Int64OutOfRange(a.to_string()))
     }
 );
 
@@ -59,7 +61,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt16ToInt64)]
     #[is_monotone = true]
     fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
-        i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
+        i16::try_from(a).or(Err(EvalError::Int16OutOfRange(a.to_string())))
     }
 );
 
@@ -69,7 +71,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt32ToInt64)]
     #[is_monotone = true]
     fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
-        i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
+        i32::try_from(a).or(Err(EvalError::Int32OutOfRange(a.to_string())))
     }
 );
 

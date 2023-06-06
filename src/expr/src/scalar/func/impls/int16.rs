@@ -23,7 +23,8 @@ sqlfunc!(
     #[inverse = to_unary!(NegInt16)]
     #[is_monotone = true]
     fn neg_int16(a: i16) -> Result<i16, EvalError> {
-        a.checked_neg().ok_or(EvalError::Int16OutOfRange)
+        a.checked_neg()
+            .ok_or(EvalError::Int16OutOfRange(a.to_string()))
     }
 );
 
@@ -39,7 +40,8 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "abs"]
     fn abs_int16(a: i16) -> Result<i16, EvalError> {
-        a.checked_abs().ok_or(EvalError::Int16OutOfRange)
+        a.checked_abs()
+            .ok_or(EvalError::Int16OutOfRange(a.to_string()))
     }
 );
 
