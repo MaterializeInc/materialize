@@ -46,18 +46,18 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
-    GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
-    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
-    RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan,
-    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
-    VariableValue, View,
+    AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan,
+    AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan,
+    ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption, InsertPlan, MaterializedView,
+    MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
+    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetTransactionPlan,
+    SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
+    UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -3723,6 +3723,40 @@ impl Coordinator {
                 }
             }
         });
+    }
+
+    pub(super) async fn sequence_alter_cluster_rename(
+        &mut self,
+        session: &Session,
+        AlterClusterRenamePlan { id, name, to_name }: AlterClusterRenamePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = Op::RenameCluster { id, name, to_name };
+        match self.catalog_transact(Some(session), vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) async fn sequence_alter_cluster_replica_rename(
+        &mut self,
+        session: &Session,
+        AlterClusterReplicaRenamePlan {
+            cluster_id,
+            replica_id,
+            name,
+            to_name,
+        }: AlterClusterReplicaRenamePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = Op::RenameClusterReplica {
+            cluster_id,
+            replica_id,
+            name,
+            to_name,
+        };
+        match self.catalog_transact(Some(session), vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::ClusterReplica)),
+            Err(err) => Err(err),
+        }
     }
 
     pub(super) async fn sequence_alter_item_rename(

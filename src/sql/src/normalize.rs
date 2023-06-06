@@ -34,7 +34,7 @@ use crate::plan::statement::StatementContext;
 
 /// Normalizes a single identifier.
 pub fn ident(ident: Ident) -> String {
-    ident.as_str().into()
+    ident.into_string()
 }
 
 /// Normalizes a single identifier.

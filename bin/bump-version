@@ -21,6 +21,10 @@ if [[ $# -ne 1 ]]; then
     die "usage: $0 VERSION"
 fi
 
+if ! run git diff HEAD --compact-summary --exit-code; then
+    die "cannot begin bump with uncommitted content"
+fi
+
 version=${1#v}
 
 sed -i.bak \

@@ -4,7 +4,7 @@ alter_connection ::=
 alter_owner ::=
   'ALTER' ('CLUSTER' | 'CLUSTER REPLICA' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'TYPE' | 'SECRET' ) name 'OWNER TO' new_owner
 alter_rename ::=
-  'ALTER' ('CONNECTION' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
+  'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_role ::=
@@ -216,7 +216,7 @@ format_spec ::=
   'TEXT' |
   'BYTES'
 grant_privilege ::=
-  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* 'TO' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
+  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON (('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)*) 'TO' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 grant_role ::=
   'GRANT' role_name 'TO' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 key_strat ::=
@@ -292,7 +292,7 @@ reassign_owned ::=
 reset_session_variable ::=
   'RESET' variable_name
 revoke_privilege ::=
-  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
+  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON (('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)*) 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 revoke_role ::=
   'REVOKE' role_name 'FROM' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 rollback ::=

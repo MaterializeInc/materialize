@@ -1572,3 +1572,13 @@ query B
 SELECT pg_backend_pid() > 0
 ----
 true
+
+query B
+SELECT pg_is_in_recovery()
+----
+false
+
+query B
+SELECT pg_tablespace_location(0) IS NULL
+----
+true

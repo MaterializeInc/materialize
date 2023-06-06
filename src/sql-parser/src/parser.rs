@@ -3663,7 +3663,7 @@ impl<'a> Parser<'a> {
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_item_name()?;
+                let name = UnresolvedObjectName::Item(self.parse_item_name()?);
                 let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
                 self.expect_keyword(TO)?;
                 match action {
@@ -3681,7 +3681,7 @@ impl<'a> Parser<'a> {
                         Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
-                            name: UnresolvedObjectName::Item(name),
+                            name,
                             new_owner,
                         }))
                     }
@@ -3703,26 +3703,56 @@ impl<'a> Parser<'a> {
             ObjectType::Cluster => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::Cluster(self.parse_identifier()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::Database => {
                 let if_exists = self.parse_if_exists()?;
@@ -3791,7 +3821,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3846,7 +3876,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Index,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3886,7 +3916,7 @@ impl<'a> Parser<'a> {
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type: ObjectType::Secret,
                     if_exists,
-                    name,
+                    name: UnresolvedObjectName::Item(name),
                     to_item_name,
                 })
             }
@@ -3942,7 +3972,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Sink,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -4002,9 +4032,8 @@ impl<'a> Parser<'a> {
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Connection,
-
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -6032,115 +6061,179 @@ impl<'a> Parser<'a> {
     /// has already been consumed.
     fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
         match self.parse_privilege_specification() {
-            Some(privileges) => {
-                self.expect_keyword(ON)?;
-                // If the object type is omitted, then it is assumed to be a table.
-                let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
-                match object_type {
-                    ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
-                        return parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
-                        );
-                    }
-                    ObjectType::Sink
-                    | ObjectType::Index
-                    | ObjectType::ClusterReplica
-                    | ObjectType::Role
-                    | ObjectType::Func => {
-                        return parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("Unsupported GRANT on {object_type}")
-                        );
-                    }
-                    ObjectType::Table
-                    | ObjectType::Type
-                    | ObjectType::Cluster
-                    | ObjectType::Secret
-                    | ObjectType::Connection
-                    | ObjectType::Database
-                    | ObjectType::Schema => {}
-                }
-                let names =
-                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
-                self.expect_keyword(TO)?;
-                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
-                    privileges,
-                    object_type,
-                    names,
-                    roles,
-                }))
-            }
-            None => {
-                let role_name = self.parse_identifier()?;
-                self.expect_keyword(TO)?;
-                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::GrantRole(GrantRoleStatement {
-                    role_name,
-                    member_names,
-                }))
-            }
+            Some(privileges) => self.parse_grant_privilege(privileges),
+            None => self.parse_grant_role(),
         }
+    }
+
+    /// Parse a `GRANT PRIVILEGE` statement, assuming that the `GRANT` token
+    /// and all privileges have already been consumed.
+    fn parse_grant_privilege(
+        &mut self,
+        privileges: PrivilegeSpecification,
+    ) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ON)?;
+        let objects = if self.parse_keyword(ALL) {
+            let object_type = self.expect_grant_revoke_plural_object_type_in_schema("GRANT")?;
+            self.expect_keywords(&[IN, SCHEMA])?;
+            let schemas = self.parse_comma_separated(Parser::parse_schema_name)?;
+            GrantObjectSpecification {
+                object_type,
+                object_spec_inner: GrantObjectSpecificationInner::All { schemas },
+            }
+        } else {
+            let object_type = self.expect_grant_revoke_object_type("GRANT")?;
+            let names =
+                self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
+            GrantObjectSpecification {
+                object_type,
+                object_spec_inner: GrantObjectSpecificationInner::Objects { names },
+            }
+        };
+        self.expect_keyword(TO)?;
+        let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
+            privileges,
+            objects,
+            roles,
+        }))
+    }
+
+    /// Parse a `GRANT ROLE` statement, assuming that the `GRANT` token
+    /// has already been consumed.
+    fn parse_grant_role(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let role_name = self.parse_identifier()?;
+        self.expect_keyword(TO)?;
+        let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::GrantRole(GrantRoleStatement {
+            role_name,
+            member_names,
+        }))
     }
 
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
         match self.parse_privilege_specification() {
-            Some(privileges) => {
-                self.expect_keyword(ON)?;
-                // If the object type is omitted, then it is assumed to be a table.
-                let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
-                match object_type {
-                    ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
-                        return parser_err!(
+            Some(privileges) => self.parse_revoke_privilege(privileges),
+            None => self.parse_revoke_role(),
+        }
+    }
+
+    /// Parse a `REVOKE PRIVILEGE` statement, assuming that the `REVOKE` token
+    /// and all privileges have already been consumed.
+    fn parse_revoke_privilege(
+        &mut self,
+        privileges: PrivilegeSpecification,
+    ) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ON)?;
+        let objects = if self.parse_keyword(ALL) {
+            let object_type = self.expect_grant_revoke_plural_object_type_in_schema("REVOKE")?;
+            self.expect_keywords(&[IN, SCHEMA])?;
+            let schemas = self.parse_comma_separated(Parser::parse_schema_name)?;
+            GrantObjectSpecification {
+                object_type,
+                object_spec_inner: GrantObjectSpecificationInner::All { schemas },
+            }
+        } else {
+            let object_type = self.expect_grant_revoke_object_type("REVOKE")?;
+            let names =
+                self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
+            GrantObjectSpecification {
+                object_type,
+                object_spec_inner: GrantObjectSpecificationInner::Objects { names },
+            }
+        };
+        self.expect_keyword(FROM)?;
+        let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
+            privileges,
+            objects,
+            roles,
+        }))
+    }
+
+    /// Parse a `REVOKE ROLE` statement, assuming that the `REVOKE` token
+    /// has already been consumed.
+    fn parse_revoke_role(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let role_name = self.parse_identifier()?;
+        self.expect_keyword(FROM)?;
+        let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::RevokeRole(RevokeRoleStatement {
+            role_name,
+            member_names,
+        }))
+    }
+
+    /// Bail out if the current token is not an object type suitable for a GRANT/REVOKE, or consume
+    /// and return it if it is.
+    fn expect_grant_revoke_object_type(
+        &mut self,
+        statement_type: &str,
+    ) -> Result<ObjectType, ParserError> {
+        // If the object type is omitted, then it is assumed to be a table.
+        let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
+        self.expect_grant_revoke_object_type_inner(statement_type, object_type)
+    }
+
+    /// Bail out if the current token is not a plural object type suitable for a GRANT/REVOKE, or consume
+    /// and return it if it is.
+    fn expect_grant_revoke_plural_object_type_in_schema(
+        &mut self,
+        statement_type: &str,
+    ) -> Result<ObjectType, ParserError> {
+        let object_type = self.expect_plural_object_type().map_err(|_| {
+            // Limit the error message to allowed object types.
+            self.expected::<_, ObjectType>(
+                self.peek_pos(),
+                "one of TABLES or TYPES or SECRETS or CONNECTIONS",
+                self.peek_token(),
+            )
+            .unwrap_err()
+        })?;
+        self.expect_grant_revoke_object_type_inner(statement_type, object_type)?;
+        // Further restrict to object types in schemas.
+        if !object_type.lives_in_schema() {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("Unsupported object type: ALL {object_type}S")
+            );
+        }
+        Ok(object_type)
+    }
+
+    fn expect_grant_revoke_object_type_inner(
+        &mut self,
+        statement_type: &str,
+        object_type: ObjectType,
+    ) -> Result<ObjectType, ParserError> {
+        match object_type {
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
+                parser_err!(
                             self,
                             self.peek_prev_pos(),
                             format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
-                        );
-                    }
-                    ObjectType::Sink
-                    | ObjectType::Index
-                    | ObjectType::ClusterReplica
-                    | ObjectType::Role
-                    | ObjectType::Func => {
-                        return parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("Unsupported REVOKE on {object_type}")
-                        );
-                    }
-                    ObjectType::Table
-                    | ObjectType::Type
-                    | ObjectType::Cluster
-                    | ObjectType::Secret
-                    | ObjectType::Connection
-                    | ObjectType::Database
-                    | ObjectType::Schema => {}
-                }
-                let names =
-                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
-                self.expect_keyword(FROM)?;
-                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
-                    privileges,
-                    object_type,
-                    names,
-                    roles,
-                }))
+                        )
             }
-            None => {
-                let role_name = self.parse_identifier()?;
-                self.expect_keyword(FROM)?;
-                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::RevokeRole(RevokeRoleStatement {
-                    role_name,
-                    member_names,
-                }))
+            ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::ClusterReplica
+            | ObjectType::Role
+            | ObjectType::Func => {
+                parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    format!("Unsupported {statement_type} on {object_type}")
+                )
             }
+            ObjectType::Table
+            | ObjectType::Type
+            | ObjectType::Cluster
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Database
+            | ObjectType::Schema => Ok(object_type),
         }
     }
 
@@ -6239,6 +6332,51 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    /// Bail out if the current token is not an object type in the plural form, or consume and return it if it is.
+    fn expect_plural_object_type(&mut self) -> Result<ObjectType, ParserError> {
+        Ok(
+            match self.expect_one_of_keywords(&[
+                TABLES,
+                VIEWS,
+                MATERIALIZED,
+                SOURCES,
+                SINKS,
+                INDEXES,
+                TYPES,
+                ROLES,
+                USERS,
+                CLUSTER,
+                CLUSTERS,
+                SECRETS,
+                CONNECTIONS,
+                DATABASES,
+                SCHEMAS,
+            ])? {
+                TABLES => ObjectType::Table,
+                VIEWS => ObjectType::View,
+                MATERIALIZED => {
+                    self.expect_keyword(VIEWS)?;
+                    ObjectType::MaterializedView
+                }
+                SOURCES => ObjectType::Source,
+                SINKS => ObjectType::Sink,
+                INDEXES => ObjectType::Index,
+                TYPES => ObjectType::Type,
+                ROLES | USERS => ObjectType::Role,
+                CLUSTER => {
+                    self.expect_keyword(REPLICAS)?;
+                    ObjectType::ClusterReplica
+                }
+                CLUSTERS => ObjectType::Cluster,
+                SECRETS => ObjectType::Secret,
+                CONNECTIONS => ObjectType::Connection,
+                DATABASES => ObjectType::Database,
+                SCHEMAS => ObjectType::Schema,
                 _ => unreachable!(),
             },
         )

@@ -24,17 +24,18 @@ privilege.
 
 {{< diagram "privilege.svg" >}}
 
-Field         | Use
---------------|--------------------------------------------------
-_object_name_ | The object that privileges are being granted on.
-_role_name_   | The role name that is gaining privileges. Use the `PUBLIC` pseudo-role to grant privileges to all roles.
-**SELECT**    | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
-**INSERT**    | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
-**UPDATE**    | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
-**DELETE**    | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
-**CREATE**    | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
-**USAGE**     | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
-**ALL**       | All applicable privileges for the provided object type.
+Field                                           | Use
+------------------------------------------------|--------------------------------------------------
+_object_name_                                   | The object that privileges are being granted on.
+**ALL** _object_type_ **IN SCHEMA** schema_name | The privilege will be granted on all objects of _object_type_ in _schema_name_.
+_role_name_                                     | The role name that is gaining privileges. Use the `PUBLIC` pseudo-role to grant privileges to all roles.
+**SELECT**                                      | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
+**INSERT**                                      | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
+**UPDATE**                                      | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
+**DELETE**                                      | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
+**CREATE**                                      | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
+**USAGE**                                       | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
+**ALL PRIVILEGES**                              | All applicable privileges for the provided object type.
 
 ## Details
 

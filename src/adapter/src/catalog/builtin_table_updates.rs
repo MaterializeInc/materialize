@@ -391,6 +391,7 @@ impl CatalogState {
                         Datum::String(pgtype.name()),
                         default,
                         Datum::UInt32(pgtype.oid()),
+                        Datum::Int32(pgtype.typmod()),
                     ]),
                     diff,
                 });

@@ -1444,7 +1444,8 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("nullable", ScalarType::Bool.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("default", ScalarType::String.nullable(true))
-        .with_column("type_oid", ScalarType::Oid.nullable(false)),
+        .with_column("type_oid", ScalarType::Oid.nullable(false))
+        .with_column("type_mod", ScalarType::Int32.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2502,7 +2503,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
     position::int8::int2 as attnum,
-    -1::pg_catalog.int4 as atttypmod,
+    mz_columns.type_mod as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
