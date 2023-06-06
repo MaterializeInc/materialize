@@ -64,7 +64,12 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{CreateIndexStatement, RawItemName, Statement as AstStatement};
+use mz_sql_parser::ast::{
+    CreateIndexStatement, CreateViewStatement, CteBlock, DropObjectsStatement, Ident,
+    IfExistsBehavior, ObjectType, Query, RawItemName, Select, SelectItem, SelectStatement, SetExpr,
+    Statement as AstStatement, TableFactor, TableWithJoins, UnresolvedItemName,
+    UnresolvedObjectName, ViewDefinition,
+};
 use mz_sql_parser::parser;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -122,6 +127,11 @@ pub enum Outcome<'a> {
         actual_output: Output,
         location: Location,
     },
+    InconsistentViewOutcome {
+        query_outcome: Box<Outcome<'a>>,
+        view_outcome: Box<Outcome<'a>>,
+        location: Location,
+    },
     Bail {
         cause: Box<Outcome<'a>>,
         location: Location,
@@ -129,7 +139,7 @@ pub enum Outcome<'a> {
     Success,
 }
 
-const NUM_OUTCOMES: usize = 10;
+const NUM_OUTCOMES: usize = 11;
 const SUCCESS_OUTCOME: usize = NUM_OUTCOMES - 1;
 
 impl<'a> Outcome<'a> {
@@ -144,7 +154,8 @@ impl<'a> Outcome<'a> {
             Outcome::WrongColumnNames { .. } => 6,
             Outcome::OutputFailure { .. } => 7,
             Outcome::Bail { .. } => 8,
-            Outcome::Success => 9,
+            Outcome::InconsistentViewOutcome { .. } => 9,
+            Outcome::Success => 10,
         }
     }
 
@@ -251,6 +262,15 @@ impl fmt::Display for Outcome<'_> {
                 location, INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
+            InconsistentViewOutcome {
+                query_outcome,
+                view_outcome,
+                location,
+            } => write!(
+                f,
+                "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
+                location, INDENT, query_outcome, INDENT, view_outcome, INDENT
+            ),
             Success => f.write_str("Success"),
         }
     }
@@ -282,7 +302,8 @@ impl Outcomes {
             "wrong_column_names": self.0[6],
             "output_failure": self.0[7],
             "bail": self.0[8],
-            "success": self.0[9],
+            "inconsistent_view_outcome": self.0[9],
+            "success": self.0[10],
         })
     }
 
@@ -324,6 +345,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                 "wrong-column-names",
                 "output-failure",
                 "bail",
+                "inconsistent-view-outcome",
                 "success",
                 "total",
             ]
@@ -1159,7 +1181,7 @@ impl RunnerInner {
 
     async fn prepare_query<'a>(
         &self,
-        sql: &'a str,
+        sql: &str,
         output: &'a Result<QueryOutput<'_>, &'a str>,
         location: Location,
         in_transaction: &mut bool,
@@ -1230,7 +1252,7 @@ impl RunnerInner {
 
     async fn execute_query<'a>(
         &self,
-        sql: &'a str,
+        sql: &str,
         output: &'a Result<QueryOutput<'_>, &'a str>,
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
@@ -1366,6 +1388,50 @@ impl RunnerInner {
         Ok(Outcome::Success)
     }
 
+    async fn execute_view<'a>(
+        &self,
+        sql: &str,
+        num_attributes: Option<usize>,
+        output: &'a Result<QueryOutput<'_>, &'a str>,
+        location: Location,
+    ) -> Result<Outcome<'a>, anyhow::Error> {
+        // Create indexed view SQL commands and execute `CREATE VIEW`.
+        let (create_view, create_index, view_sql, drop_view) =
+            generate_view_sql(sql, num_attributes);
+        let create_view_result = self.client.execute(create_view.as_str(), &[]).await;
+
+        // Either handle a view creation error or alternatively index
+        // and query the view.
+        let view_outcome;
+        if let Err(view_error) = create_view_result {
+            if let Err(expected_error) = output {
+                view_outcome = if Regex::new(expected_error)?.is_match(&format!("{:#}", view_error))
+                {
+                    Outcome::Success
+                } else {
+                    Outcome::PlanFailure {
+                        error: view_error.into(),
+                        location: location.clone(),
+                    }
+                }
+            } else {
+                view_outcome = Outcome::PlanFailure {
+                    error: view_error.into(),
+                    location: location.clone(),
+                }
+            }
+        } else {
+            self.client.execute(create_index.as_str(), &[]).await?;
+            view_outcome = self
+                .execute_query(view_sql.as_str(), output, location.clone())
+                .await?;
+
+            // Remember to clean up after ourselves by dropping the view.
+            self.client.execute(drop_view.as_str(), &[]).await?;
+        }
+        Ok(view_outcome)
+    }
+
     async fn run_query<'a>(
         &self,
         sql: &'a str,
@@ -1378,11 +1444,27 @@ impl RunnerInner {
             .await?;
         match prepare_outcome {
             PrepareQueryOutcome::QueryPrepared(QueryInfo { is_select }) => {
+                let query_outcome = self.execute_query(sql, output, location.clone()).await?;
                 if is_select && self.auto_index_selects {
-                    unimplemented!("auto_index_selects")
-                } else {
-                    self.execute_query(sql, output, location.clone()).await
+                    let view_outcome = self
+                        .execute_view(sql, None, output, location.clone())
+                        .await?;
+
+                    // We compare here the query-based and view-based outcomes.
+                    // We only produce a test failure if the outcomes are of different
+                    // variant types, thus accepting smaller deviations in the details
+                    // produced for each variant.
+                    if std::mem::discriminant::<Outcome>(&query_outcome)
+                        != std::mem::discriminant::<Outcome>(&view_outcome)
+                    {
+                        return Ok(Outcome::InconsistentViewOutcome {
+                            query_outcome: Box::new(query_outcome),
+                            view_outcome: Box::new(view_outcome),
+                            location: location.clone(),
+                        });
+                    }
                 }
+                Ok(query_outcome)
             }
             PrepareQueryOutcome::Outcome(outcome) => Ok(outcome),
         }
@@ -1784,6 +1866,119 @@ impl<'a> RewriteBuffer<'a> {
         self.flush_to(self.input.len());
         self.output
     }
+}
+
+/// Generates view creation, view indexing, view querying, and view
+/// dropping SQL commands for a given `SELECT` query. If the number
+/// of attributes produced by the query is known, the view commands
+/// are specialized to avoid issues with column ambiguity. This
+/// function is a helper for `--auto_index_selects` and assumes that
+/// the provided input SQL has already been run through the parser,
+/// resulting in a valid `SELECT` statement.
+fn generate_view_sql(sql: &str, num_attributes: Option<usize>) -> (String, String, String, String) {
+    // We create a view for the select query and index it. Since
+    // one-shot SELECT statements may contain ambiguous column names,
+    // we just rename the output schema of the view using numerically
+    // increasing attribute names, whenever possible. This strategy
+    // makes it possible to use `CREATE INDEX`, thus matching the
+    // behavior of the option `auto_index_tables`. However, we may
+    // be presented with a `SELECT *` query, in which case the parser
+    // does not produce sufficient information to allow us to compute
+    // the number of output columns. In the latter case, we are supplied
+    // with `None` for `num_attributes` and just employ the command
+    // `CREATE DEFAULT INDEX` instead. Additionally, the view is created
+    // without schema renaming. This strategy is insufficient to dodge
+    // column name ambiguity in all cases, but we assume here that we
+    // can adjust the (hopefully) small number of tests that eventually
+    // challenge us in this particular way.
+    let name = UnresolvedItemName(vec![Ident::new(format!("v{}", Uuid::new_v4().as_simple()))]);
+    let columns = num_attributes.map_or(vec![], |n| {
+        (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
+    });
+
+    // To create the view, re-parse the sql; note that we must find exactly
+    // one statement and it must be a `SELECT`.
+    // NOTE(vmarcos): Direct string manipulation was attempted while
+    // prototyping the code below, which avoids the extra parsing and
+    // data structure cloning. However, running DDL is so slow that
+    // it did not matter in terms of runtime. We can revisit this if
+    // DDL cost drops dramatically in the future.
+    let stmts = parser::parse_statements(sql).unwrap_or_default();
+    assert!(stmts.len() == 1);
+    let query = match &stmts[0] {
+        Statement::Select(stmt) => &stmt.query,
+        _ => unreachable!("This function should only be called for SELECTs"),
+    };
+    let create_view = AstStatement::<Raw>::CreateView(CreateViewStatement {
+        if_exists: IfExistsBehavior::Error,
+        temporary: false,
+        definition: ViewDefinition {
+            name: name.clone(),
+            columns: columns.clone(),
+            query: query.clone(),
+        },
+    })
+    .to_ast_string_stable();
+
+    // We then create either a `CREATE INDEX` or a `CREATE DEFAULT INDEX`
+    // statement, depending on whether we could obtain the number of
+    // attributes from the original `SELECT`.
+    let create_index = AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
+        name: None,
+        in_cluster: None,
+        on_name: RawItemName::Name(name.clone()),
+        key_parts: if columns.len() == 0 {
+            None
+        } else {
+            Some(
+                columns
+                    .iter()
+                    .map(|ident| Expr::Identifier(vec![ident.clone()]))
+                    .collect(),
+            )
+        },
+        with_options: Vec::new(),
+        if_not_exists: false,
+    })
+    .to_ast_string_stable();
+
+    // `SELECT * FROM {name}`
+    let view_sql = AstStatement::<Raw>::Select(SelectStatement {
+        query: Query {
+            ctes: CteBlock::Simple(vec![]),
+            body: SetExpr::Select(Box::new(Select {
+                distinct: None,
+                projection: vec![SelectItem::Wildcard],
+                from: vec![TableWithJoins {
+                    relation: TableFactor::Table {
+                        name: RawItemName::Name(name.clone()),
+                        alias: None,
+                    },
+                    joins: vec![],
+                }],
+                selection: None,
+                group_by: vec![],
+                having: None,
+                options: vec![],
+            })),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        },
+        as_of: None,
+    })
+    .to_ast_string_stable();
+
+    // `DROP VIEW {name}`
+    let drop_view = AstStatement::<Raw>::DropObjects(DropObjectsStatement {
+        object_type: ObjectType::View,
+        if_exists: false,
+        names: vec![UnresolvedObjectName::Item(name)],
+        cascade: false,
+    })
+    .to_ast_string_stable();
+
+    (create_view, create_index, view_sql, drop_view)
 }
 
 /// Returns extra statements to execute after `stmt` is executed.
