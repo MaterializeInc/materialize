@@ -214,8 +214,8 @@ resource "materialize_cluster" "example_cluster" {
 }
 ```
 
-All the available Materialize resources can be found in the [Terraform provider
-registry documentation](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
+All the available Materialize resources and documentation can be found in the [Terraform provider
+registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
 
 ## Contributing
 
