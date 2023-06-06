@@ -18,6 +18,7 @@ members = [
     "src/controller",
     "src/environmentd",
     "src/expr",
+    "src/expr-parser",
     "src/expr-test-util",
     "src/frontegg-auth",
     "src/frontegg-client",

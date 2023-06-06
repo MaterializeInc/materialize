@@ -47,9 +47,9 @@ sha1 = "0.10.5"
 sha2 = "0.10.6"
 tracing = "0.1.37"
 uncased = "0.9.7"
-uuid = {version = "1.2.2", features = ["v5"]}
+uuid = { version = "1.2.2", features = ["v5"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
