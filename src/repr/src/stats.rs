@@ -11,6 +11,7 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 use mz_persist_types::columnar::{ColumnGet, Data};
+use mz_persist_types::dyn_struct::ValidityRef;
 use mz_persist_types::stats::{JsonStats, PrimitiveStats};
 use prost::Message;
 
@@ -39,16 +40,19 @@ fn as_optional_datum<'a>(row: &'a Row) -> Option<Datum<'a>> {
 /// because the non-option version won't generate any Nulls.
 pub(crate) fn proto_datum_min_max_nulls(
     col: &<Option<Vec<u8>> as Data>::Col,
+    validity: ValidityRef<'_>,
 ) -> (Vec<u8>, Vec<u8>, usize) {
     let (mut min, mut max) = (Row::default(), Row::default());
     let mut null_count = 0;
 
     let mut buf = Row::default();
     for idx in 0..col.len() {
-        NullableProtoDatumToPersist::decode(
-            ColumnGet::<Option<Vec<u8>>>::get(col, idx),
-            &mut buf.packer(),
-        );
+        let val = ColumnGet::<Option<Vec<u8>>>::get(col, idx);
+        if !validity.get(idx) {
+            assert!(val.map_or(true, |x| x.is_empty()));
+            continue;
+        }
+        NullableProtoDatumToPersist::decode(val, &mut buf.packer());
         let datum = as_optional_datum(&buf).expect("not enough datums");
         if datum == Datum::Null {
             null_count += 1;
@@ -78,16 +82,19 @@ pub(crate) fn proto_datum_min_max_nulls(
 /// because the non-option version won't generate any Nulls.
 pub(crate) fn jsonb_stats_nulls(
     col: &<Option<Vec<u8>> as Data>::Col,
+    validity: ValidityRef<'_>,
 ) -> Result<(JsonStats, usize), String> {
     let mut stats = JsonStats::default();
     let mut null_count = 0;
 
     let mut buf = Row::default();
     for idx in 0..col.len() {
-        NullableProtoDatumToPersist::decode(
-            ColumnGet::<Option<Vec<u8>>>::get(col, idx),
-            &mut buf.packer(),
-        );
+        let val = ColumnGet::<Option<Vec<u8>>>::get(col, idx);
+        if !validity.get(idx) {
+            assert!(val.map_or(true, |x| x.is_empty()));
+            continue;
+        }
+        NullableProtoDatumToPersist::decode(val, &mut buf.packer());
         let datum = as_optional_datum(&buf).expect("not enough datums");
         // Datum::Null only shows up at the top level of Jsonb, so we handle it
         // here instead of in the recursing function.
@@ -199,7 +206,7 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{Data, PartEncoder, Schema};
+    use mz_persist_types::columnar::{Data, PartEncoder};
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::{ColumnStats, DynStats, StructStats};
     use mz_proto::RustType;
@@ -214,7 +221,7 @@ mod tests {
         let mut part = PartBuilder::new(schema, &UnitSchema);
         {
             let mut part_mut = part.get_mut();
-            let mut encoder = schema.encoder(part_mut.key).unwrap();
+            let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
             for datum in datums {
                 encoder.encode(datum);
                 part_mut.ts.push(1u64);
@@ -222,7 +229,7 @@ mod tests {
             }
         }
         let part = part.finish().unwrap();
-        let expected = part.key_stats(schema).unwrap();
+        let expected = part.key_stats().unwrap();
         let mut actual = StructStats::from_proto(RustType::into_proto(&expected)).unwrap();
         // It's not particularly easy to give StructStats a PartialEq impl, but
         // verifying that there weren't any panics gets us pretty far.

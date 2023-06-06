@@ -88,6 +88,8 @@ use crate::columnar::Schema;
 
 pub mod codec_impls;
 pub mod columnar;
+pub mod dyn_col;
+pub mod dyn_struct;
 pub mod parquet;
 pub mod part;
 pub mod stats;

@@ -33,11 +33,8 @@ impl serde::Serialize for PartStats {
 }
 
 impl PartStats {
-    pub(crate) fn new<K: Codec, V: Codec>(
-        schemas: &Schemas<K, V>,
-        part: &Part,
-    ) -> Result<Self, String> {
-        let key = part.key_stats(schemas.key.as_ref())?;
+    pub(crate) fn new(part: &Part) -> Result<Self, String> {
+        let key = part.key_stats()?;
         Ok(PartStats { key })
     }
 
@@ -65,6 +62,6 @@ impl PartStats {
         drop(key);
         drop(val);
         let new_format = new_format.finish()?;
-        Self::new(schemas, &new_format)
+        Self::new(&new_format)
     }
 }

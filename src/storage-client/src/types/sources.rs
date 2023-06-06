@@ -26,14 +26,17 @@ use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{DataType, PartDecoder, PartEncoder, Schema};
+use mz_persist_types::columnar::{
+    ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
+};
+use mz_persist_types::dyn_struct::{DynStruct, DynStructCfg, ValidityMut, ValidityRef};
 use mz_persist_types::stats::StatsFn;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
-    ColumnName, ColumnType, Datum, DatumDecoderT, DatumEncoderT, Diff, GlobalId, RelationDesc,
-    RelationType, Row, RowArena, RowDecoder, RowEncoder, ScalarType,
+    ColumnType, Datum, DatumDecoderT, DatumEncoderT, Diff, GlobalId, RelationDesc, RelationType,
+    Row, RowDecoder, RowEncoder, ScalarType,
 };
 use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 use once_cell::sync::Lazy;
@@ -2549,32 +2552,28 @@ impl Codec for SourceData {
 /// an Err column.
 #[derive(Debug)]
 pub struct SourceDataEncoder<'a> {
-    wrapped: RowEncoder<'a>,
+    ok_validity: ValidityMut<'a>,
+    ok: RowEncoder<'a>,
+    err: &'a mut <Option<Vec<u8>> as Data>::Mut,
 }
 
 impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
     fn encode(&mut self, val: &SourceData) {
         match val.as_ref() {
             Ok(row) => {
-                // Append a fake Err datum.
-                let ok_datums = row.iter();
-                let err_datum = Datum::Null;
-                let datums = ok_datums.chain(std::iter::once(err_datum));
-                for (encoder, datum) in self.wrapped.col_encoders().iter_mut().zip(datums) {
+                self.ok_validity.push(true);
+                for (encoder, datum) in self.ok.col_encoders().iter_mut().zip(row.iter()) {
                     encoder.encode(datum);
                 }
+                ColumnPush::<Option<Vec<u8>>>::push(self.err, None);
             }
             Err(err) => {
-                let err = err.into_proto().encode_to_vec();
-
-                // Prepend a fake datum for every Ok column.
-                let ok_datums =
-                    std::iter::repeat(Datum::Null).take(self.wrapped.col_encoders().len() - 1);
-                let err_datum = Datum::Bytes(&err);
-                let datums = ok_datums.chain(std::iter::once(err_datum));
-                for (encoder, datum) in self.wrapped.col_encoders().iter_mut().zip(datums) {
-                    encoder.encode(datum);
+                self.ok_validity.push(false);
+                for encoder in self.ok.col_encoders() {
+                    encoder.encode_default();
                 }
+                let err = err.into_proto().encode_to_vec();
+                ColumnPush::<Option<Vec<u8>>>::push(self.err, Some(err.as_slice()));
             }
         }
     }
@@ -2586,26 +2585,16 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
 /// an Err column.
 #[derive(Debug)]
 pub struct SourceDataDecoder<'a> {
-    wrapped: RowDecoder<'a>,
+    ok_validity: ValidityRef<'a>,
+    ok: RowDecoder<'a>,
+    err: &'a <Option<Vec<u8>> as Data>::Col,
 }
 
 impl<'a> PartDecoder<'a, SourceData> for SourceDataDecoder<'a> {
     fn decode(&self, idx: usize, val: &mut SourceData) {
-        let decoders = self.wrapped.col_decoders();
-        let err_decoder_idx = decoders.len() - 1;
-        let ok_decoders = &decoders[..err_decoder_idx];
-        let err_decoder = &decoders[err_decoder_idx];
-        let arena = RowArena::default();
-        let err = arena.make_datum(|packer| err_decoder.decode(idx, packer));
-        match err {
-            Datum::Bytes(buf) => {
-                let err = ProtoDataflowError::decode(buf)
-                    .expect("proto should be valid")
-                    .into_rust()
-                    .expect("error should be valid");
-                val.0 = Err(err);
-            }
-            Datum::Null => {
+        let err = ColumnGet::<Option<Vec<u8>>>::get(self.err, idx);
+        match (self.ok_validity.get(idx), err) {
+            (true, None) => {
                 let mut packer = match val.0.as_mut() {
                     Ok(x) => x.packer(),
                     Err(_) => {
@@ -2613,82 +2602,81 @@ impl<'a> PartDecoder<'a, SourceData> for SourceDataDecoder<'a> {
                         val.0.as_mut().unwrap().packer()
                     }
                 };
-                for decoder in ok_decoders.iter() {
+                for decoder in self.ok.col_decoders() {
                     decoder.decode(idx, &mut packer);
                 }
             }
-            _ => panic!("unexpected err datum: {}", err),
-        }
+            (false, Some(err)) => {
+                let err = ProtoDataflowError::decode(err)
+                    .expect("proto should be valid")
+                    .into_rust()
+                    .expect("error should be valid");
+                val.0 = Err(err);
+            }
+            (true, Some(_)) | (false, None) => {
+                panic!("SourceData should have exactly one of ok or err")
+            }
+        };
     }
 }
 
-/// Newtype wrapper for a modified version of the real RelationDesc that
-/// accounts for the SourceData nullability hack.
-#[derive(Debug)]
-pub struct RelationDescHack(pub(crate) RelationDesc);
-
-impl RelationDescHack {
-    pub(crate) const SOURCE_DATA_ERROR: &str = "mz_internal_super_secret_source_data_errors";
-
-    /// Returns a modified version of the given RelationDesc that accounts for the
-    /// SourceData nullability hack. Exposed for PersistSourceDataStatsImpl, which
-    /// maybe just wants to live here instead.
-    pub fn new(desc: &RelationDesc) -> Self {
-        let names = desc.iter_names().cloned();
-        let typs = desc.iter_types().map(|x| {
-            // TODO(mfp): This makes them all nullable so we can set them all to
-            // Null if the overall Result is an Err.
-            let mut x = x.clone();
-            x.nullable = true;
-            x
-        });
-        let names = names.chain(std::iter::once(ColumnName::from(Self::SOURCE_DATA_ERROR)));
-        let typs = typs.chain(std::iter::once(ColumnType {
-            scalar_type: ScalarType::Bytes,
-            nullable: true,
-        }));
-        RelationDescHack(RelationDesc::new(RelationType::new(typs.collect()), names))
-    }
-}
-
-// TODO(mfp): This implements Schema for SourceData by flatmap-ing the Ok Row's
-// columns and the Err. This has the unfortunate effect of requiring us to make
-// all Row columns nullable (even if they aren't in the RelationDesc) so we have
-// something to store if the Err column is set. (Luckily, we could still check
-// it at decode time.)
-//
-// Better would be something like pushing the union structure of Result down to
-// parquet, but that's much harder and left for followup work (if we do it at
-// all).
 impl Schema<SourceData> for RelationDesc {
     type Encoder<'a> = SourceDataEncoder<'a>;
 
     type Decoder<'a> = SourceDataDecoder<'a>;
 
-    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-        // Constructing the fake RelationDesc is wasteful, but this only gets
-        // called when the feature flag is on.
-        Schema::<Row>::columns(&RelationDescHack::new(self).0)
+    fn columns(&self) -> DynStructCfg {
+        let ok_schema = Schema::<Row>::columns(self);
+        let cols = vec![
+            (
+                "ok".to_owned(),
+                DataType {
+                    optional: true,
+                    format: ColumnFormat::Struct(ok_schema),
+                },
+                StatsFn::Default,
+            ),
+            (
+                "err".to_owned(),
+                DataType {
+                    optional: true,
+                    format: ColumnFormat::Bytes,
+                },
+                // TODO(mfp): We likely only care if there were errors or not.
+                StatsFn::Default,
+            ),
+        ];
+        DynStructCfg::from(cols)
     }
 
     fn decoder<'a>(
         &self,
-        cols: mz_persist_types::part::ColumnsRef<'a>,
+        mut cols: mz_persist_types::dyn_struct::ColumnsRef<'a>,
     ) -> Result<Self::Decoder<'a>, String> {
-        // Constructing the fake RelationDesc is wasteful, but this only gets
-        // called when the feature flag is on.
-        let wrapped = Schema::<Row>::decoder(&RelationDescHack::new(self).0, cols)?;
-        Ok(SourceDataDecoder { wrapped })
+        let ok = cols.col::<Option<DynStruct>>("ok")?;
+        let err = cols.col::<Option<Vec<u8>>>("err")?;
+        let () = cols.finish()?;
+        let (ok_validity, ok) = RelationDesc::decoder(self, ok.as_opt_ref())?;
+        Ok(SourceDataDecoder {
+            ok_validity,
+            ok,
+            err,
+        })
     }
 
     fn encoder<'a>(
         &self,
-        cols: mz_persist_types::part::ColumnsMut<'a>,
+        mut cols: mz_persist_types::dyn_struct::ColumnsMut<'a>,
     ) -> Result<Self::Encoder<'a>, String> {
-        // Constructing the fake RelationDesc is wasteful, but this only gets
-        // called when the feature flag is on.
-        let wrapped = Schema::<Row>::encoder(&RelationDescHack::new(self).0, cols)?;
-        Ok(SourceDataEncoder { wrapped })
+        let ok = cols.col::<Option<DynStruct>>("ok")?;
+        let err = cols.col::<Option<Vec<u8>>>("err")?;
+        let () = cols.finish()?;
+        let (ok_validity, ok) = RelationDesc::encoder(self, ok.as_opt_mut())?;
+        Ok(SourceDataEncoder {
+            ok_validity,
+            ok,
+            err,
+        })
     }
 }
 
