@@ -42,7 +42,7 @@ rm -f kubectl-*.log
 ci_collapsed_heading "kail: Clean up running instances, start a new instance"
 bin/ci-builder run stable pkill -9 -f "^kail$" || true
 bin/ci-builder run stable rm -f "kail-output.log"
-bin/ci-builder run stable kail > "kail-output.log"
+bin/ci-builder run stable kail --context kind-cloudtest > "kail-output.log"
 
 ci_uncollapsed_heading "cloudtest: Running \`bin/pytest ${run_args[*]}\`"
 bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log
