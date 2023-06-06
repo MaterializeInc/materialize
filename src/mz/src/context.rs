@@ -232,11 +232,11 @@ impl RegionContext {
 
     /// Returns the configuration file loaded by this context.
     pub fn config_file(&self) -> &ConfigFile {
-        &self.context.config_file()
+        self.context.config_file()
     }
 
     /// Returns the output_formatter associated with this context.
     pub fn output_formatter(&self) -> &OutputFormatter {
-        &self.context.output_formatter()
+        self.context.output_formatter()
     }
 }

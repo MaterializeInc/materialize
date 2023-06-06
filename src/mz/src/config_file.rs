@@ -208,8 +208,8 @@ impl ConfigFile {
                 let profile = editable["profiles"][self.profile()]
                     .as_table_mut()
                     .ok_or(Error::ProfileMissing)?;
-                if profile.contains_key(&name.to_string()) {
-                    profile.remove(&name.to_string());
+                if profile.contains_key(name) {
+                    profile.remove(name);
                 }
             }
             Some(value) => editable["profiles"][self.profile()][name] = toml_edit::value(value),

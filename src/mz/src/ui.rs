@@ -38,8 +38,9 @@ pub struct OutputFormatter {
     no_color: bool,
 }
 
-
+/// Ticks displayed for loading without using colors
 const TICKS: [&str; 9] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", ""];
+/// Ticks displayed for loading with a green color
 const COLORED_TICKS: [&str; 9] = [
     "\x1b[92m⣾\x1b[0m",
     "\x1b[92m⣽\x1b[0m",

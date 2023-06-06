@@ -94,7 +94,7 @@ impl Client {
 
     /// Runs pg_isready to check if an environment is healthy
     pub fn is_ready(&self, environment: &Environment, email: String) -> Result<bool, Error> {
-        if let Some(_) = self.find("pg_isready") {
+        if self.find("pg_isready").is_some() {
             let mut command = Command::new("pg_isready");
             Ok(command
                 .args(vec![

@@ -103,7 +103,7 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
     let mut admin_client_builder = AdminClientBuilder::default();
 
     if let Some(admin_endpoint) = admin_endpoint {
-        admin_client_builder = admin_client_builder.endpoint(admin_endpoint.clone());
+        admin_client_builder = admin_client_builder.endpoint(admin_endpoint);
     }
 
     let admin_client: AdminClient = admin_client_builder.build(AdminClientConfig {
@@ -161,7 +161,7 @@ pub async fn list(cx: &mut Context) -> Result<(), Error> {
             #[tabled(rename = "Name")]
             name: &'a str,
         }
-        output.output_table(profiles.keys().into_iter().map(|name| ProfileName { name }))?;
+        output.output_table(profiles.keys().map(|name| ProfileName { name }))?;
     }
 
     Ok(())
@@ -218,7 +218,7 @@ pub async fn config_get(
     ConfigGetArgs { name }: ConfigGetArgs<'_>,
 ) -> Result<(), Error> {
     let value = cx.config_file().get_profile_param(name).unwrap();
-    cx.output_formatter().output_scalar(value.as_deref())?;
+    cx.output_formatter().output_scalar(value)?;
     Ok(())
 }
 
@@ -262,5 +262,5 @@ pub async fn config_remove(
     cx: &mut ProfileContext,
     ConfigRemoveArgs { name }: ConfigRemoveArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name.clone(), None).await
+    cx.config_file().set_profile_param(name, None).await
 }
