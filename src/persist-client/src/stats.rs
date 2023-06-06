@@ -15,8 +15,10 @@ use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::stats::StructStats;
 use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
+use timely::progress::Antichain;
 
 use crate::internal::encoding::Schemas;
+use crate::ShardId;
 
 /// Aggregate statistics about data contained in a [Part].
 #[derive(Arbitrary, Debug)]
@@ -64,4 +66,27 @@ impl PartStats {
         let new_format = new_format.finish()?;
         Self::new(&new_format)
     }
+}
+
+/// Statistics about the contents of a shard as_of some time.
+///
+/// TODO: Add more stats here as they become necessary.
+#[derive(Debug)]
+pub struct SnapshotStats<T> {
+    /// The shard these statistics are for.
+    pub shard_id: ShardId,
+    /// The frontier at which these statistics are valid.
+    pub as_of: Antichain<T>,
+    /// An estimate of the count of updates in the shard.
+    ///
+    /// This is an upper bound on the number of updates that persist_source
+    /// would emit if you snapshot the source at the given as_of. The real
+    /// number of updates, after consolidation, might be lower. It includes both
+    /// additions and retractions.
+    ///
+    /// NB: Because of internal persist compaction, the answer for a given as_of
+    /// may change over time (as persist advances through Seqnos), but because
+    /// compaction never results in more updates than the sum of the inputs, it
+    /// can only go down.
+    pub num_updates: usize,
 }

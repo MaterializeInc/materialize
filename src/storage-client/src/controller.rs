@@ -38,6 +38,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -392,6 +393,14 @@ pub trait StorageController: Debug + Send {
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;
+
+    /// Returns aggregate statistics about the contents of the local input named
+    /// `id` at `as_of`.
+    async fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Antichain<Self::Timestamp>,
+    ) -> Result<SnapshotStats<Self::Timestamp>, StorageError>;
 
     /// Assigns a read policy to specific identifiers.
     ///
@@ -1957,6 +1966,17 @@ where
             }
             Err(_) => Err(StorageError::ReadBeforeSince(id)),
         }
+    }
+
+    async fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Antichain<Self::Timestamp>,
+    ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
+        self.state
+            .persist_read_handles
+            .snapshot_stats(id, as_of)
+            .await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
