@@ -95,7 +95,7 @@ use mz_ore::tracing::{
     TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, PersistParameters};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
@@ -298,6 +298,10 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Tune down the number of connections to make this all work a little easier
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
+    // Stress persist more by writing rollups frequently
+    let mut persist_parameters = PersistParameters::default();
+    persist_parameters.rollup_threshold = Some(5);
+    persist_parameters.apply(&persist_cfg);
 
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();

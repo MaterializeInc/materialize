@@ -1860,8 +1860,10 @@ pub mod tests {
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
-        let (mut write, _) = new_test_client()
-            .await
+        let client = new_test_client().await;
+        // set a low rollup threshold so GC/truncation is more aggressive
+        client.cfg.dynamic.set_rollup_threshold(5);
+        let (mut write, _) = client
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
 
