@@ -361,6 +361,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
 
 struct QueryInfo {
     is_select: bool,
+    num_attributes: Option<usize>,
 }
 
 enum PrepareQueryOutcome<'a> {
@@ -1214,8 +1215,12 @@ impl RunnerInner {
             _ => bail!("Got multiple statements: {:?}", statements),
         };
         let mut is_select = false;
+        let mut num_attributes = None;
         match statement {
-            Statement::Select { .. } => is_select = true,
+            Statement::Select(stmt) => {
+                is_select = true;
+                num_attributes = analyze_num_attributes(&stmt.query.body);
+            }
             _ => (),
         }
 
@@ -1247,7 +1252,10 @@ impl RunnerInner {
             }
             _ => (),
         }
-        Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo { is_select }))
+        Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo {
+            is_select,
+            num_attributes,
+        }))
     }
 
     async fn execute_query<'a>(
@@ -1396,8 +1404,13 @@ impl RunnerInner {
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
         // Create indexed view SQL commands and execute `CREATE VIEW`.
+        let expected_column_names = if let Ok(QueryOutput { column_names, .. }) = output {
+            column_names.clone()
+        } else {
+            None
+        };
         let (create_view, create_index, view_sql, drop_view) =
-            generate_view_sql(sql, num_attributes);
+            generate_view_sql(sql, num_attributes, expected_column_names);
         let create_view_result = self.client.execute(create_view.as_str(), &[]).await;
 
         // Either handle a view creation error or alternatively index
@@ -1443,11 +1456,14 @@ impl RunnerInner {
             .prepare_query(sql, output, location.clone(), in_transaction)
             .await?;
         match prepare_outcome {
-            PrepareQueryOutcome::QueryPrepared(QueryInfo { is_select }) => {
+            PrepareQueryOutcome::QueryPrepared(QueryInfo {
+                is_select,
+                num_attributes,
+            }) => {
                 let query_outcome = self.execute_query(sql, output, location.clone()).await?;
                 if is_select && self.auto_index_selects {
                     let view_outcome = self
-                        .execute_view(sql, None, output, location.clone())
+                        .execute_view(sql, num_attributes, output, location.clone())
                         .await?;
 
                     // We compare here the query-based and view-based outcomes.
@@ -1875,14 +1891,19 @@ impl<'a> RewriteBuffer<'a> {
 /// function is a helper for `--auto_index_selects` and assumes that
 /// the provided input SQL has already been run through the parser,
 /// resulting in a valid `SELECT` statement.
-fn generate_view_sql(sql: &str, num_attributes: Option<usize>) -> (String, String, String, String) {
+fn generate_view_sql(
+    sql: &str,
+    num_attributes: Option<usize>,
+    expected_column_names: Option<Vec<ColumnName>>,
+) -> (String, String, String, String) {
     // We create a view for the select query and index it. Since
     // one-shot SELECT statements may contain ambiguous column names,
-    // we just rename the output schema of the view using numerically
-    // increasing attribute names, whenever possible. This strategy
-    // makes it possible to use `CREATE INDEX`, thus matching the
-    // behavior of the option `auto_index_tables`. However, we may
-    // be presented with a `SELECT *` query, in which case the parser
+    // we either use the expected column names, if that option was
+    // provided, or else just rename the output schema of the view
+    // using numerically increasing attribute names, whenever possible.
+    // This strategy makes it possible to use `CREATE INDEX`, thus
+    // matching the behavior of the option `auto_index_tables`. However,
+    // we may be presented with a `SELECT *` query, in which case the parser
     // does not produce sufficient information to allow us to compute
     // the number of output columns. In the latter case, we are supplied
     // with `None` for `num_attributes` and just employ the command
@@ -1892,9 +1913,12 @@ fn generate_view_sql(sql: &str, num_attributes: Option<usize>) -> (String, Strin
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
     let name = UnresolvedItemName(vec![Ident::new(format!("v{}", Uuid::new_v4().as_simple()))]);
-    let columns = num_attributes.map_or(vec![], |n| {
-        (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
-    });
+    let columns = expected_column_names.map_or(
+        num_attributes.map_or(vec![], |n| {
+            (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
+        }),
+        |cols| cols.iter().map(|c| Ident::new(c.as_str())).collect(),
+    );
 
     // To create the view, re-parse the sql; note that we must find exactly
     // one statement and it must be a `SELECT`.
@@ -1979,6 +2003,45 @@ fn generate_view_sql(sql: &str, num_attributes: Option<usize>) -> (String, Strin
     .to_ast_string_stable();
 
     (create_view, create_index, view_sql, drop_view)
+}
+
+/// Computes the number of attributes that are obtained by the
+/// projection of a `SELECT` query. The projection may include
+/// wildcards, in which case the analysis just returns `None`.
+fn analyze_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
+    let mut num_attributes = 0usize;
+    for item in projection.iter() {
+        let SelectItem::Expr { expr, .. } = item else { return None };
+        match expr {
+            Expr::QualifiedWildcard(..) | Expr::WildcardAccess(..) => {
+                return None;
+            }
+            _ => {
+                num_attributes += 1;
+            }
+        }
+    }
+    Some(num_attributes)
+}
+
+/// Performs an analysis of the provided query `body` to derive the
+/// number of attributes in the query. We only consider syntactic
+/// cues, so the analysis may end up deriving `None` for the number
+/// of attributes as a conservative approximation.
+fn analyze_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
+    // Iterate to peel off the query body until the query's
+    // projection list is found.
+    let mut set_expr = body;
+    loop {
+        match set_expr {
+            SetExpr::Select(select) => {
+                return analyze_num_attributes_from_projection(&select.projection)
+            }
+            SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
+            SetExpr::Query(query) => set_expr = &query.body,
+            _ => return None,
+        }
+    }
 }
 
 /// Returns extra statements to execute after `stmt` is executed.
