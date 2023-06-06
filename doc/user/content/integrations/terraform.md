@@ -100,7 +100,7 @@ You can use the modules to establish the underlying cloud
 resources and then use the Materialize provider to build Materialize-specific
 objects. A few use cases are captured in the sections below:
 
-### MSK or self-managed Kafka and PrivateLink
+### AWS PrivateLink
 
 To get data into Materialize, you need a connection to allow your data source to
 communicate with Materialize. One option to connect securely to Materialize is
@@ -160,7 +160,7 @@ CONNECTION`](https://materialize.com/docs/sql/create-connection/#ssh-tunnel)
 statement.
 
 
-### Postgres RDS
+### RDS PostgreSQL
 
 You can also create an RDS instance from which you can track and propagate
 changes. The [AWS RDS Postgres module](https://github.com/MaterializeInc/terraform-aws-rds-postgres) creates a
