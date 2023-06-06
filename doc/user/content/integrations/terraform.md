@@ -19,7 +19,74 @@ other cloud resources that Materialize depends on. Modules allow you to bypass
 manually configuring cloud resources and are an efficient way of deploying
 infrastructure with a single `terraform apply` command.
 
-## Use cases
+## Terraform provider
+
+To use the Materialize provider, you create a new `main.tf` file and add the
+required providers:
+
+```hcl
+terraform {
+  required_providers {
+    materialize = {
+      source = "MaterializeInc/materialize"
+      version = "0.0.5"
+    }
+  }
+}
+```
+
+The Materialize provider is hosted on the [Terraform provider registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest).
+
+### Authentication
+
+To configure the provider to communicate with your Materialize organization, you
+need to authenticate with a Materialize username, app password, and other
+specifics from your account.
+
+Materialize recommends saving sensitive input variables as environment variables
+to avoid checking secrets into source control. To create a Terraform environment
+variable, export your sensitive variable in the terminal:
+
+```shell
+export TF_VAR_MZ_PW=yourMZpassword
+```
+
+In the `main.tf` file, add the provider configuration and any variable
+references:
+
+```hcl
+
+variable "MZ_PW" {}
+
+provider "materialize" {
+  host     = "yourMZhostname"
+  username = "yourMZusername"
+  password = var.MZ_PW
+  port     = 6875
+  database = "yourMZdatabase"
+}
+```
+
+### Create Materialize resources
+
+The Materialize provider allows you to create several resource types in your
+organization. Resources correspond to Materialize objects and are configured
+with the `resource` block in your Terraform configuration file.
+
+For example, to create a new cluster, you would use the `materialize_cluster`
+resource:
+
+```hcl
+resource "materialize_cluster" "example_cluster" {
+  name = "cluster"
+}
+```
+
+All the available Materialize resources and documentation can be found in the [Terraform provider
+registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
+
+
+## Terraform modules
 
 Materialize objects can be created through standard SQL queries, but managing
 more than a few components can be difficult to maintain.  Using Terraform can be
@@ -150,72 +217,6 @@ resource "materialize_source_postgres" "example_source_postgres" {
   }
 }
 ```
-
-## Using the Terraform provider
-
-To use the Materialize provider, you create a new `main.tf` file and add the
-required providers:
-
-```hcl
-terraform {
-  required_providers {
-    materialize = {
-      source = "MaterializeInc/materialize"
-      version = "0.0.5"
-    }
-  }
-}
-```
-
-The Materialize provider is hosted on the [Terraform provider registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest).
-
-### Authentication
-
-To configure the provider to communicate with your Materialize organization, you
-need to authenticate with a Materialize username, app password, and other
-specifics from your account.
-
-Materialize recommends saving sensitive input variables as environment variables
-to avoid checking secrets into source control. To create a Terraform environment
-variable, export your sensitive variable in the terminal:
-
-```shell
-export TF_VAR_MZ_PW=yourMZpassword
-```
-
-In the `main.tf` file, add the provider configuration and any variable
-references:
-
-```hcl
-
-variable "MZ_PW" {}
-
-provider "materialize" {
-  host     = "yourMZhostname"
-  username = "yourMZusername"
-  password = var.MZ_PW
-  port     = 6875
-  database = "yourMZdatabase"
-}
-```
-
-### Creating resources
-
-The Materialize provider allows you to create several resource types in your
-organization. Resources correspond to Materialize objects and are configured
-with the `resource` block in your Terraform configuration file.
-
-For example, to create a new cluster, you would use the `materialize_cluster`
-resource:
-
-```hcl
-resource "materialize_cluster" "example_cluster" {
-  name = "cluster"
-}
-```
-
-All the available Materialize resources and documentation can be found in the [Terraform provider
-registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
 
 ## Contributing
 
