@@ -11,11 +11,11 @@ This page outlines how to assign and manage role privileges.
 
 ## Grant privileges
 
-To grant privileges to a role, use the `GRANT PRIVILEGE` statement with the
+To grant privileges to a role, use the [`GRANT PRIVILEGE`](https://materialize.com/docs/sql/grant-privilege/) statement with the
 object you want to grant privileges to:
 
 ```sql
-GRANT USAGE ON DATABASE <database> TO <new_role>;
+GRANT USAGE ON <OBJECT_TYPE> <object_name> TO <new_role>;
 ```
 
 Materialize objects allow for the following privileges:
@@ -35,8 +35,8 @@ Materialize objects allow for the following privileges:
 
 ## Revoke privileges 
 
-To remove privileges from a role, use the `REVOKE` statement:
+To remove privileges from a role, use the [`REVOKE`](https://materialize.com/docs/sql/revoke-privilege/) statement:
 
 ```sql
-REVOKE USAGE ON DATABASE <database> FROM <new_role>;
+REVOKE USAGE ON <OBJECT_TYPE> <object_name> FROM <new_role>;
 ```

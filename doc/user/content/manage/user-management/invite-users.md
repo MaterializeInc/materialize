@@ -28,6 +28,3 @@ privileges.
 
 Organization Admins receive the `SUPERUSER` attribute for their sessions and can
 bypass all permission checks.
-
-
-

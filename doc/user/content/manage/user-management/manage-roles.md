@@ -30,7 +30,7 @@ GRANT <new_role> to <new_user>;
 To change a role's attributes, use the `ALTER ROLE` statement:
 
 ```sql
-ALTER ROLE <new_role> WITH CREATEROLE;
+ALTER ROLE <new_role> WITH <ATTRIBUTE>;
 ```
 
 Materialize roles have the following available attributes:
