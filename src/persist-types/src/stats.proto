@@ -50,6 +50,9 @@ message ProtoPrimitiveStats {
         float lower_f32 = 10;
         double lower_f64 = 11;
         string lower_string = 13;
+        bytes lower_fixed_size_bytes_8 = 27;
+        bytes lower_fixed_size_bytes_12 = 28;
+        bytes lower_fixed_size_bytes_16 = 29;
     }
     oneof upper {
         bool upper_bool = 14;
@@ -64,6 +67,9 @@ message ProtoPrimitiveStats {
         float upper_f32 = 23;
         double upper_f64 = 24;
         string upper_string = 26;
+        bytes upper_fixed_size_bytes_8 = 30;
+        bytes upper_fixed_size_bytes_12 = 31;
+        bytes upper_fixed_size_bytes_16 = 32;
     }
 }
 

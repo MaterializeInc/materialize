@@ -221,7 +221,12 @@ pub enum ColumnFormat {
     String,
     /// A column of type [crate::dyn_struct::DynStruct].
     Struct(DynStructCfg),
-    // TODO: FixedSizedBytes for UUIDs?
+    /// A column of type `[u8; 8]`.
+    FixedSizeBytes8,
+    /// A column of type `[u8; 12]`.
+    FixedSizeBytes12,
+    /// A column of type `[u8; 16]`.
+    FixedSizeBytes16,
 }
 
 /// An encoder for values of a fixed schema

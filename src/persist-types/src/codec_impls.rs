@@ -13,8 +13,9 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use arrow2::array::{
-    Array, BinaryArray, BooleanArray, MutableArray, MutableBinaryArray, MutableBooleanArray,
-    MutablePrimitiveArray, MutableUtf8Array, PrimitiveArray, Utf8Array,
+    Array, BinaryArray, BooleanArray, FixedSizeBinaryArray, MutableArray, MutableBinaryArray,
+    MutableBooleanArray, MutableFixedSizeBinaryArray, MutablePrimitiveArray, MutableUtf8Array,
+    PrimitiveArray, Utf8Array,
 };
 use arrow2::bitmap::{Bitmap, MutableBitmap};
 use arrow2::buffer::Buffer;
@@ -443,6 +444,48 @@ impl ColumnCfg<Option<String>> for () {
     }
 }
 
+macro_rules! data_fixed_size_bytes {
+    ($width:literal, $format:ident) => {
+        impl Data for [u8; $width] {
+            type Cfg = ();
+            type Ref<'a> = [u8; $width];
+            type Col = FixedSizeBytes<$width>;
+            type Mut = MutableFixedSizeBytes<$width>;
+            type Stats = PrimitiveStats<[u8; $width]>;
+        }
+
+        impl ColumnCfg<[u8; $width]> for () {
+            fn as_type(&self) -> DataType {
+                DataType {
+                    optional: false,
+                    format: ColumnFormat::$format,
+                }
+            }
+        }
+
+        impl Data for Option<[u8; $width]> {
+            type Cfg = ();
+            type Ref<'a> = Option<[u8; $width]>;
+            type Col = FixedSizeBytes<$width>;
+            type Mut = MutableFixedSizeBytes<$width>;
+            type Stats = OptionStats<PrimitiveStats<[u8; $width]>>;
+        }
+
+        impl ColumnCfg<Option<[u8; $width]>> for () {
+            fn as_type(&self) -> DataType {
+                DataType {
+                    optional: false,
+                    format: ColumnFormat::$format,
+                }
+            }
+        }
+    };
+}
+
+data_fixed_size_bytes!(8, FixedSizeBytes8);
+data_fixed_size_bytes!(12, FixedSizeBytes12);
+data_fixed_size_bytes!(16, FixedSizeBytes16);
+
 impl Data for DynStruct {
     type Cfg = DynStructCfg;
     type Ref<'a> = DynStructRef<'a>;
@@ -744,6 +787,106 @@ impl ColumnPush<Option<String>> for MutableUtf8Array<i32> {
         <MutableUtf8Array<i32>>::push(self, val)
     }
 }
+
+/// A newtype wrapper for [FixedSizeBinaryArray] that guarantees a certain
+/// width.
+#[derive(Debug)]
+pub struct FixedSizeBytes<const N: usize>(pub(crate) FixedSizeBinaryArray);
+
+impl<const N: usize> FixedSizeBytes<N> {
+    fn get(&self, idx: usize) -> [u8; N] {
+        debug_assert_eq!(self.0.size(), N);
+        <[u8; N]>::try_from(self.0.value(idx))
+            .unwrap_or_else(|_| panic!("values should be length {}", N))
+    }
+}
+
+impl<const N: usize> From<MutableFixedSizeBytes<N>> for FixedSizeBytes<N> {
+    fn from(value: MutableFixedSizeBytes<N>) -> Self {
+        debug_assert_eq!(value.0.size(), N);
+        FixedSizeBytes(value.0.into())
+    }
+}
+
+/// A newtype wrapper for [MutableFixedSizeBinaryArray] that guarantees a
+/// certain width.
+#[derive(Debug)]
+pub struct MutableFixedSizeBytes<const N: usize>(MutableFixedSizeBinaryArray);
+
+impl<const N: usize> Default for MutableFixedSizeBytes<N> {
+    fn default() -> Self {
+        MutableFixedSizeBytes(MutableFixedSizeBinaryArray::new(N))
+    }
+}
+
+impl<const N: usize> ColumnRef<()> for FixedSizeBytes<N> {
+    fn cfg(&self) -> &() {
+        &()
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+        (Encoding::Plain, Box::new(self.0.clone()))
+    }
+    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
+        let array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| {
+                format!(
+                    "expected FixedSizeBinaryArray but was {:?}",
+                    array.data_type()
+                )
+            })?;
+        if array.size() != N {
+            return Err(format!(
+                "expected FixedSizeBinaryArray of size {} but was {}",
+                N,
+                array.size()
+            ));
+        }
+        Ok(FixedSizeBytes(array.clone()))
+    }
+}
+
+macro_rules! arrowable_fixed_sized_bytes {
+    ($width:literal) => {
+        impl ColumnGet<[u8; $width]> for FixedSizeBytes<$width> {
+            fn get<'a>(&'a self, idx: usize) -> [u8; $width] {
+                assert!(self.0.validity().is_none());
+                self.get(idx)
+            }
+        }
+
+        impl ColumnGet<Option<[u8; $width]>> for FixedSizeBytes<$width> {
+            fn get<'a>(&'a self, idx: usize) -> Option<[u8; $width]> {
+                if self.0.validity().map_or(true, |x| x.get_bit(idx)) {
+                    Some(self.get(idx))
+                } else {
+                    None
+                }
+            }
+        }
+
+        impl ColumnPush<[u8; $width]> for MutableFixedSizeBytes<$width> {
+            fn push<'a>(&mut self, val: [u8; $width]) {
+                assert!(self.0.validity().is_none());
+                self.0.push(Some(val))
+            }
+        }
+
+        impl ColumnPush<Option<[u8; $width]>> for MutableFixedSizeBytes<$width> {
+            fn push<'a>(&mut self, val: Option<[u8; $width]>) {
+                self.0.push(val)
+            }
+        }
+    };
+}
+
+arrowable_fixed_sized_bytes!(8);
+arrowable_fixed_sized_bytes!(12);
+arrowable_fixed_sized_bytes!(16);
 
 /// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema].
 #[derive(Debug)]

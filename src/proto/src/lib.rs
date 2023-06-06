@@ -75,6 +75,7 @@
 
 //! Generated protobuf code and companion impls.
 
+use std::array::TryFromSliceError;
 use std::char::CharTryFromError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU64, TryFromIntError};
@@ -96,6 +97,8 @@ pub enum TryFromProtoError {
     TryFromIntError(TryFromIntError),
     /// A wrapped [`CharTryFromError`] due to failed [`char`] conversion.
     CharTryFromError(CharTryFromError),
+    /// A wrapped [`TryFromSliceError`] due to failed [`array`] conversion.
+    TryFromSliceError(TryFromSliceError),
     /// A date conversion failed
     DateConversionError(String),
     /// A regex compilation failed
@@ -203,6 +206,7 @@ impl std::fmt::Display for TryFromProtoError {
         match self {
             TryFromIntError(error) => error.fmt(f),
             CharTryFromError(error) => error.fmt(f),
+            TryFromSliceError(error) => error.fmt(f),
             DateConversionError(msg) => write!(f, "Date conversion failed: `{}`", msg),
             RegexError(error) => error.fmt(f),
             DeserializationError(error) => error.fmt(f),
@@ -235,6 +239,7 @@ impl std::error::Error for TryFromProtoError {
         match self {
             TryFromIntError(error) => Some(error),
             CharTryFromError(error) => Some(error),
+            TryFromSliceError(error) => Some(error),
             RegexError(error) => Some(error),
             DeserializationError(error) => Some(error),
             DateConversionError(_) => None,
@@ -529,6 +534,16 @@ impl RustType<u64> for std::num::NonZeroUsize {
 
     fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
         Ok(usize::from_proto(proto)?.try_into()?)
+    }
+}
+
+impl<const N: usize> RustType<Vec<u8>> for [u8; N] {
+    fn into_proto(&self) -> Vec<u8> {
+        self.to_vec()
+    }
+
+    fn from_proto(proto: Vec<u8>) -> Result<Self, TryFromProtoError> {
+        <[u8; N]>::try_from(proto.as_slice()).map_err(TryFromProtoError::TryFromSliceError)
     }
 }
 

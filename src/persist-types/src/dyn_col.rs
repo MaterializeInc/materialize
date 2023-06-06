@@ -241,6 +241,12 @@ impl DataType {
             (true, ColumnFormat::Bytes) => logic.call::<Option<Vec<u8>>>(&()),
             (false, ColumnFormat::String) => logic.call::<String>(&()),
             (true, ColumnFormat::String) => logic.call::<Option<String>>(&()),
+            (false, ColumnFormat::FixedSizeBytes8) => logic.call::<[u8; 8]>(&()),
+            (true, ColumnFormat::FixedSizeBytes8) => logic.call::<Option<[u8; 8]>>(&()),
+            (false, ColumnFormat::FixedSizeBytes12) => logic.call::<[u8; 12]>(&()),
+            (true, ColumnFormat::FixedSizeBytes12) => logic.call::<Option<[u8; 12]>>(&()),
+            (false, ColumnFormat::FixedSizeBytes16) => logic.call::<[u8; 16]>(&()),
+            (true, ColumnFormat::FixedSizeBytes16) => logic.call::<Option<[u8; 16]>>(&()),
             (false, ColumnFormat::Struct(cfg)) => logic.call::<DynStruct>(cfg),
             (true, ColumnFormat::Struct(cfg)) => logic.call::<Option<DynStruct>>(cfg),
         }

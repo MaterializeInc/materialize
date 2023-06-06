@@ -472,6 +472,7 @@ mod impls {
     use proptest::prelude::*;
     use serde::Serialize;
 
+    use crate::codec_impls::FixedSizeBytes;
     use crate::columnar::Data;
     use crate::dyn_struct::{DynStruct, DynStructCol, ValidityRef};
     use crate::stats::private::StatsCost;
@@ -517,6 +518,15 @@ mod impls {
     stats_cost!(i64);
     stats_cost!(f32);
     stats_cost!(f64);
+
+    impl<const N: usize> StatsCost for PrimitiveStats<[u8; N]> {
+        fn cost(&self) -> usize {
+            std::mem::size_of::<[u8; N]>() * 2
+        }
+        fn trim(&mut self) {
+            // No-op
+        }
+    }
 
     impl StatsCost for PrimitiveStats<Vec<u8>> {
         fn cost(&self) -> usize {
@@ -743,6 +753,9 @@ mod impls {
     stats_primitive!(f64, clone);
     stats_primitive!(Vec<u8>, as_slice);
     stats_primitive!(String, as_str);
+    stats_primitive!([u8; 8], clone);
+    stats_primitive!([u8; 12], clone);
+    stats_primitive!([u8; 16], clone);
 
     impl ColumnStats<Vec<u8>> for BytesStats {
         fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
@@ -943,6 +956,44 @@ mod impls {
                 // practice).
                 .unwrap_or_else(|| upper.to_owned());
             let none = col.validity().map_or(0, |x| x.unset_bits());
+            OptionStats {
+                none,
+                some: PrimitiveStats { lower, upper },
+            }
+        }
+    }
+
+    impl<const N: usize> StatsFrom<FixedSizeBytes<N>> for PrimitiveStats<[u8; N]> {
+        fn stats_from(col: &FixedSizeBytes<N>, validity: ValidityRef<'_>) -> Self {
+            assert!(col.0.validity().is_none());
+            let mut array = col.0.clone();
+            array.set_validity(validity.0.cloned());
+            <OptionStats<PrimitiveStats<[u8; N]>>>::stats_from(
+                &FixedSizeBytes(array),
+                ValidityRef::none(),
+            )
+            .some
+        }
+    }
+
+    impl<const N: usize> StatsFrom<FixedSizeBytes<N>> for OptionStats<PrimitiveStats<[u8; N]>> {
+        fn stats_from(col: &FixedSizeBytes<N>, validity: ValidityRef<'_>) -> Self {
+            assert_eq!(col.0.size(), N);
+            debug_assert!(validity.is_superset(col.0.validity()));
+            let (mut lower, mut upper) = (None, None);
+            let mut none = 0;
+            for val in col.0.iter() {
+                let Some(val) = val else {
+                    none += 1;
+                    continue;
+                };
+                let val = <[u8; N]>::try_from(val)
+                    .unwrap_or_else(|_| panic!("values should be length {}", N));
+                lower = Some(std::cmp::min(val, lower.unwrap_or([u8::MAX; N])));
+                upper = Some(std::cmp::max(val, upper.unwrap_or([u8::MIN; N])));
+            }
+            let lower = lower.unwrap_or([0u8; N]);
+            let upper = upper.unwrap_or([0u8; N]);
             OptionStats {
                 none,
                 some: PrimitiveStats { lower, upper },
@@ -1173,6 +1224,15 @@ mod impls {
                 Some(proto_primitive_stats::Lower::LowerString(_)) => {
                     f.call(PrimitiveStats::<String>::from_proto(x)?)
                 }
+                Some(proto_primitive_stats::Lower::LowerFixedSizeBytes8(_)) => {
+                    f.call(PrimitiveStats::<[u8; 8]>::from_proto(x)?)
+                }
+                Some(proto_primitive_stats::Lower::LowerFixedSizeBytes12(_)) => {
+                    f.call(PrimitiveStats::<[u8; 12]>::from_proto(x)?)
+                }
+                Some(proto_primitive_stats::Lower::LowerFixedSizeBytes16(_)) => {
+                    f.call(PrimitiveStats::<[u8; 16]>::from_proto(x)?)
+                }
                 None => Err(TryFromProtoError::missing_field("ProtoPrimitiveStats::min")),
             },
             proto_dyn_stats::Kind::Struct(x) => f.call(StructStats::from_proto(x)?),
@@ -1235,6 +1295,9 @@ mod impls {
     primitive_stats_rust_type!(f32, LowerF32, UpperF32);
     primitive_stats_rust_type!(f64, LowerF64, UpperF64);
     primitive_stats_rust_type!(String, LowerString, UpperString);
+    primitive_stats_rust_type!([u8; 8], LowerFixedSizeBytes8, UpperFixedSizeBytes8);
+    primitive_stats_rust_type!([u8; 12], LowerFixedSizeBytes12, UpperFixedSizeBytes12);
+    primitive_stats_rust_type!([u8; 16], LowerFixedSizeBytes16, UpperFixedSizeBytes16);
 
     impl RustType<ProtoPrimitiveBytesStats> for PrimitiveStats<Vec<u8>> {
         fn into_proto(&self) -> ProtoPrimitiveBytesStats {
@@ -1461,6 +1524,15 @@ mod tests {
             testcase(primitive_stats(&[a, b], |x| *x))
         });
         proptest!(|(a in any::<f64>(), b in any::<f64>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<[u8; 8]>(), b in any::<[u8; 8]>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<[u8; 12]>(), b in any::<[u8; 12]>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<[u8; 16]>(), b in any::<[u8; 16]>())| {
             testcase(primitive_stats(&[a, b], |x| *x))
         });
 
