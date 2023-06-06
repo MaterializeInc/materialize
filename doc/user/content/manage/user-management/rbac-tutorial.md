@@ -189,7 +189,7 @@ to a user in your Materialize organization.
    SELECT name, privileges FROM mz_tables WHERE name='dev_table';
    ```
 
-   The output should return the owner object ID, the level of permission, and the owner ID of the role on the table.
+   The output should return the object ID, the level of permission, and the assigning role ID.
 
    ```nofmt
    name|privileges
@@ -197,7 +197,7 @@ to a user in your Materialize organization.
    (1 row)
    ```
 
-   In this example, object ID `u1` has append, read, write, and delete
+   In this example, role ID `u1` has append, read, write, and delete
    privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges,
    which were assigned by the `u1` user.
 
