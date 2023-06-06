@@ -273,3 +273,6 @@ simple conn=mz_system,user=mz_system
 CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 ----
 db error: ERROR: system cluster 'mz_system' cannot be modified
+
+statement error role name "external_foo" is reserved
+CREATE ROLE external_foo
