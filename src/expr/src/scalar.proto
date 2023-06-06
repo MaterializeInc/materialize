@@ -768,9 +768,9 @@ message ProtoEvalError {
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
         ProtoIndexOutOfRange index_out_of_range = 54;
-        google.protobuf.Empty uint16_out_of_range = 55;
-        google.protobuf.Empty uint32_out_of_range = 56;
-        google.protobuf.Empty uint64_out_of_range = 57;
+        ProtoValueOutOfRange uint16_out_of_range = 55;
+        ProtoValueOutOfRange uint32_out_of_range = 56;
+        ProtoValueOutOfRange uint64_out_of_range = 57;
         google.protobuf.Empty date_out_of_range = 58;
         google.protobuf.Empty mz_timestamp_out_of_range = 59;
         google.protobuf.Empty mz_timestamp_step_overflow = 60;

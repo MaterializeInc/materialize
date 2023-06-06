@@ -290,21 +290,21 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_add(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
 fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_add(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
 fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_add(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
@@ -769,21 +769,21 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn sub_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_sub(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
 fn sub_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_sub(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
 fn sub_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_sub(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
@@ -907,21 +907,21 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_mul(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
 fn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_mul(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
 fn mul_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_mul(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
