@@ -164,6 +164,12 @@ Materialize maintains a
 connections, sources, and database objects. The Materialize provider is a
 Terraform plugin that allows Terraform to interact with the Materialize API.
 
+
+Materialize also maintains several [Terraform modules](https://registry.terraform.io/namespaces/MaterializeInc) to help manage your other
+cloud resources. Modules allow you to bypass manually configuring cloud
+resources and are an efficient way of deploying essential infrastructure for
+your organization.
+
 ## Client libraries and ORMs
 
 Applications can use any common language-specific PostgreSQL drivers and PostgreSQL-compatible ORMs to interact with Materialize and **create relations**, **execute queries** and **stream out results**.
