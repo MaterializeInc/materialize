@@ -82,7 +82,9 @@ sqlfunc!(
     fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
         // Unlike casting a 16-bit or 32-bit integers to OID, casting a 64-bit
         // integers to an OID rejects negative values.
-        u32::try_from(a).map(Oid).or(Err(EvalError::OidOutOfRange))
+        u32::try_from(a)
+            .map(Oid)
+            .or(Err(EvalError::OidOutOfRange(a.to_string())))
     }
 );
 

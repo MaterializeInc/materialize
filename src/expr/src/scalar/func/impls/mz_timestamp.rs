@@ -45,7 +45,8 @@ sqlfunc!(
     #[is_monotone = true]
     fn cast_numeric_to_mz_timestamp(a: Numeric) -> Result<Timestamp, EvalError> {
         // The try_into will error if the conversion is lossy (out of range or fractional).
-        a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange)
+        a.try_into()
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
     }
 );
 
@@ -72,7 +73,8 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     #[is_monotone = true]
     fn cast_int64_to_mz_timestamp(a: i64) -> Result<Timestamp, EvalError> {
-        a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange)
+        a.try_into()
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
     }
 );
 
@@ -83,7 +85,7 @@ sqlfunc!(
     fn cast_int32_to_mz_timestamp(a: i32) -> Result<Timestamp, EvalError> {
         i64::from(a)
             .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange)
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
     }
 );
 
@@ -95,7 +97,7 @@ sqlfunc!(
     ) -> Result<Timestamp, EvalError> {
         a.timestamp_millis()
             .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange)
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
     }
 );
 
@@ -107,7 +109,7 @@ sqlfunc!(
     ) -> Result<Timestamp, EvalError> {
         a.timestamp_millis()
             .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange)
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
     }
 );
 

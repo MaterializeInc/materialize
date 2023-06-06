@@ -727,8 +727,8 @@ message ProtoEvalError {
         ProtoValueOutOfRange int16_out_of_range = 11;
         ProtoValueOutOfRange int32_out_of_range = 12;
         ProtoValueOutOfRange int64_out_of_range = 13;
-        google.protobuf.Empty oid_out_of_range = 14;
-        google.protobuf.Empty interval_out_of_range = 15;
+        ProtoValueOutOfRange oid_out_of_range = 14;
+        ProtoValueOutOfRange interval_out_of_range = 15;
         google.protobuf.Empty timestamp_out_of_range = 16;
         google.protobuf.Empty char_out_of_range = 17;
         google.protobuf.Empty invalid_base64_equals = 18;
@@ -772,7 +772,7 @@ message ProtoEvalError {
         ProtoValueOutOfRange uint32_out_of_range = 56;
         ProtoValueOutOfRange uint64_out_of_range = 57;
         google.protobuf.Empty date_out_of_range = 58;
-        google.protobuf.Empty mz_timestamp_out_of_range = 59;
+        ProtoValueOutOfRange mz_timestamp_out_of_range = 59;
         google.protobuf.Empty mz_timestamp_step_overflow = 60;
         google.protobuf.Empty timestamp_cannot_be_nan = 61;
         mz_repr.adt.range.ProtoInvalidRangeError invalid_range = 62;

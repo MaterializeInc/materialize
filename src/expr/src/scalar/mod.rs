@@ -2158,10 +2158,10 @@ pub enum EvalError {
     UInt16OutOfRange(String),
     UInt32OutOfRange(String),
     UInt64OutOfRange(String),
-    MzTimestampOutOfRange,
+    MzTimestampOutOfRange(String),
     MzTimestampStepOverflow,
-    OidOutOfRange,
-    IntervalOutOfRange,
+    OidOutOfRange(String),
+    IntervalOutOfRange(String),
     TimestampCannotBeNan,
     TimestampOutOfRange,
     DateOutOfRange,
@@ -2267,10 +2267,14 @@ impl fmt::Display for EvalError {
             EvalError::UInt16OutOfRange(val) => write!(f, "{} uint2 out of range", val.quoted()),
             EvalError::UInt32OutOfRange(val) => write!(f, "{} uint4 out of range", val.quoted()),
             EvalError::UInt64OutOfRange(val) => write!(f, "{} uint8 out of range", val.quoted()),
-            EvalError::MzTimestampOutOfRange => f.write_str("mz_timestamp out of range"),
+            EvalError::MzTimestampOutOfRange(val) => {
+                write!(f, "{} mz_timestamp out of range", val.quoted())
+            }
             EvalError::MzTimestampStepOverflow => f.write_str("step mz_timestamp overflow"),
-            EvalError::OidOutOfRange => f.write_str("OID out of range"),
-            EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
+            EvalError::OidOutOfRange(val) => write!(f, "{} OID out of range", val.quoted()),
+            EvalError::IntervalOutOfRange(val) => {
+                write!(f, "{} interval out of range", val.quoted())
+            }
             EvalError::TimestampCannotBeNan => f.write_str("timestamp cannot be NaN"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
             EvalError::DateOutOfRange => f.write_str("date out of range"),
@@ -2443,7 +2447,7 @@ impl EvalError {
             EvalError::LikeEscapeTooLong => {
                 Some("Escape string must be empty or one character.".into())
             }
-            EvalError::MzTimestampOutOfRange => Some(
+            EvalError::MzTimestampOutOfRange(_) => Some(
                 "Integer, numeric, and text casts to mz_timestamp must be in the form of whole \
                 milliseconds since the Unix epoch. Values with fractional parts cannot be \
                 converted to mz_timestamp."
@@ -2548,10 +2552,16 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::UInt64OutOfRange(val) => Uint64OutOfRange(ProtoValueOutOfRange {
                 value: val.to_string(),
             }),
-            EvalError::MzTimestampOutOfRange => MzTimestampOutOfRange(()),
+            EvalError::MzTimestampOutOfRange(val) => MzTimestampOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
             EvalError::MzTimestampStepOverflow => MzTimestampStepOverflow(()),
-            EvalError::OidOutOfRange => OidOutOfRange(()),
-            EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
+            EvalError::OidOutOfRange(val) => OidOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::IntervalOutOfRange(val) => IntervalOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
             EvalError::TimestampCannotBeNan => TimestampCannotBeNan(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
             EvalError::DateOutOfRange => DateOutOfRange(()),
@@ -2673,10 +2683,10 @@ impl RustType<ProtoEvalError> for EvalError {
                 Uint16OutOfRange(val) => Ok(EvalError::UInt16OutOfRange(val.value)),
                 Uint32OutOfRange(val) => Ok(EvalError::UInt32OutOfRange(val.value)),
                 Uint64OutOfRange(val) => Ok(EvalError::UInt64OutOfRange(val.value)),
-                MzTimestampOutOfRange(()) => Ok(EvalError::MzTimestampOutOfRange),
+                MzTimestampOutOfRange(val) => Ok(EvalError::MzTimestampOutOfRange(val.value)),
                 MzTimestampStepOverflow(()) => Ok(EvalError::MzTimestampStepOverflow),
-                OidOutOfRange(()) => Ok(EvalError::OidOutOfRange),
-                IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
+                OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value)),
+                IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value)),
                 TimestampCannotBeNan(()) => Ok(EvalError::TimestampCannotBeNan),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
                 DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
