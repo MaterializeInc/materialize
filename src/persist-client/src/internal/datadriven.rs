@@ -248,6 +248,7 @@ mod tests {
                                 machine_dd::truncate_batch_desc(&mut state, args).await
                             }
                             "write-batch" => machine_dd::write_batch(&mut state, args).await,
+                            "write-rollup" => machine_dd::write_rollup(&mut state, args).await,
                             _ => panic!("unknown directive {:?}", tc),
                         };
                         match res {

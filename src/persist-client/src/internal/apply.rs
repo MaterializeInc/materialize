@@ -350,6 +350,7 @@ where
             state,
             expiry_metrics,
             garbage_collection,
+            write_rollup,
             work_ret,
         } = next_state;
 
@@ -382,7 +383,7 @@ where
 
                 let maintenance = RoutineMaintenance {
                     garbage_collection,
-                    write_rollup: state.need_rollup(cfg.dynamic.rollup_threshold()),
+                    write_rollup,
                 };
 
                 ApplyCmdResult::Committed((diff, state, work_ret, maintenance))
@@ -435,6 +436,8 @@ where
             );
         }
 
+        let write_rollup = new_state.need_rollup(cfg.dynamic.rollup_threshold());
+
         // Find out if this command has been selected to perform gc, so
         // that it will fire off a background request to the
         // GarbageCollector to delete eligible blobs and truncate the
@@ -467,6 +470,7 @@ where
             state: new_state,
             expiry_metrics,
             garbage_collection,
+            write_rollup,
             work_ret,
         })
     }
@@ -582,6 +586,7 @@ struct NextState<K, V, T, D, R> {
     diff: StateDiff<T>,
     state: TypedState<K, V, T, D>,
     expiry_metrics: ExpiryMetrics,
+    write_rollup: Option<SeqNo>,
     garbage_collection: Option<GcReq>,
     work_ret: R,
 }

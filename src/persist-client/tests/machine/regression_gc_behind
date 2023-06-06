@@ -31,13 +31,23 @@ seqno=v1 batches=
 seqno=v2 batches=
 seqno=v3 batches=b0
 
-# Run gc up to our latest seqno
-gc to_seqno=v3
+write-rollup seqno=3
 ----
-v4 ok
+v4
+
+# Run gc up to our latest seqno
+gc to_seqno=v4
+----
+v5 ok
 
 # Now some slow gc req comes in that's behind. In the regression case, this
 # panics.
 gc to_seqno=v1
 ----
-v4 ok
+v5 ok
+
+consensus-scan from_seqno=v0
+----
+seqno=v3 batches=b0
+seqno=v4 batches=b0
+seqno=v5 batches=b0

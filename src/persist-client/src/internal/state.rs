@@ -989,7 +989,7 @@ where
 
 // TODO: Document invariants.
 #[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct State<T> {
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
@@ -1240,11 +1240,8 @@ where
         // using a state transition (in this case from X to X+1), the minimum
         // number of live diffs is actually two. Detect when we're in this
         // minimal two diff state and stop the (otherwise) infinite iteration.
-        let tombstone_needs_rollup = self.collections.is_tombstone() && {
-            let (latest_rollup_seqno, _) = self.latest_rollup();
-            latest_rollup_seqno.next() < self.seqno
-        };
-        let should_gc = should_gc || tombstone_needs_rollup;
+        let tombstone_needs_gc = self.collections.is_tombstone();
+        let should_gc = should_gc || tombstone_needs_gc;
         if should_gc {
             self.collections.last_gc_req = new_seqno_since;
             Some(GcReq {
@@ -1343,8 +1340,18 @@ where
 
     pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
-        let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
 
+        if self.collections.is_tombstone() {
+            info!(
+                "is a tombstone: {:?}, latest rollup: {:?}",
+                self.seqno, latest_rollup_seqno
+            );
+            if self.collections.is_tombstone() && latest_rollup_seqno.next() < self.seqno {
+                return Some(self.seqno);
+            }
+        }
+
+        let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
         // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
         // we avoid assigning rollups to every seqno past the threshold to avoid handles
         // racing / performing redundant work.

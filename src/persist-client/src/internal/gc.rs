@@ -22,7 +22,7 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, warn, Instrument, Span};
+use tracing::{debug, debug_span, info, warn, Instrument, Span};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
@@ -223,7 +223,9 @@ where
         let rollups_to_remove_from_state = gc_rollups.rollups_to_remove_from_state();
         report_step_timing(&machine.applier.metrics.gc.steps.find_removable_rollups);
 
-        if rollups_to_remove_from_state.is_empty() {
+        info!("running GC to {:?}: {:?}", req.new_seqno_since, gc_rollups);
+
+        if gc_rollups.rollups_lte_seqno_since.is_empty() {
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
             // to delete), we can safely exit.
@@ -609,4 +611,11 @@ impl GcRollups {
             Some((_rollup_to_keep, rollups_to_remove_from_state)) => rollups_to_remove_from_state,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[mz_ore::test]
+    fn gc() {}
 }

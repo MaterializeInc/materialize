@@ -136,6 +136,10 @@ where
                 ret
             })
             .await;
+        info!(
+            "add and removed rollups: {:?} {:?}, {:?}",
+            _seqno, _applied, maintenance
+        );
         (applied_ever_true, maintenance)
     }
 
@@ -668,6 +672,7 @@ where
                     state.become_tombstone()
                 })
                 .await;
+            info!("became tombstone: {:?}", res);
             let err = match res {
                 Ok((_seqno, _res, maintenance)) => return Some(maintenance),
                 Err(err) => err,
@@ -1067,6 +1072,7 @@ where
 #[cfg(test)]
 pub mod datadriven {
     use std::collections::BTreeMap;
+    use std::marker::PhantomData;
     use std::sync::Arc;
 
     use anyhow::anyhow;
@@ -1080,9 +1086,10 @@ pub mod datadriven {
     use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
-    use crate::internal::encoding::Schemas;
+    use crate::internal::encoding::{Schemas, UntypedState};
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
+    use crate::internal::state::TypedState;
     use crate::read::{Listen, ListenEvent};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
@@ -1257,6 +1264,60 @@ pub mod datadriven {
             new_opaque,
             since.0.elements()
         ))
+    }
+
+    pub async fn write_rollup(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let seqno: u64 = args.expect("seqno");
+        let seqno = SeqNo(seqno);
+
+        let mut all_live_states = datadriven
+            .machine
+            .applier
+            .state_versions
+            .fetch_all_live_states::<u64>(datadriven.shard_id)
+            .await
+            .expect("shard initialized")
+            .check_ts_codec()
+            .expect("codec matches");
+
+        while let Some(state) = all_live_states.next(|_| {}) {
+            if state.seqno == seqno {
+                break;
+            }
+        }
+
+        let state = all_live_states.state();
+        if state.seqno != seqno {
+            return Err(anyhow!(
+                "seqno {} cannot be reached while writing rollup",
+                seqno
+            ));
+        }
+
+        let typed_state = TypedState::<String, (), u64, i64> {
+            state: state.clone(),
+            _phantom: PhantomData::default(),
+        };
+        let rollup = datadriven.state_versions.encode_rollup_blob(
+            datadriven.machine.applier.shard_metrics.as_ref(),
+            &typed_state,
+            PartialRollupKey::new(state.seqno, &RollupId::new()),
+        );
+        let () = datadriven.state_versions.write_rollup_blob(&rollup).await;
+        let (applied, maintenance) = datadriven
+            .machine
+            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
+            .await;
+
+        if !applied {
+            return Err(anyhow!("failed to apply rollup for: {}", rollup.seqno));
+        }
+
+        datadriven.routine.push(maintenance);
+        Ok(format!("{}\n", datadriven.machine.seqno()))
     }
 
     pub async fn write_batch(
