@@ -4,6 +4,7 @@ description: "Get details about using Materialize with Redpanda"
 aliases:
   - /third-party/redpanda/
   - /integrations/redpanda/
+  - /connect-sources/redpanda/
 menu:
   main:
     parent: "redpanda"

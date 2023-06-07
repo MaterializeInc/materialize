@@ -8,6 +8,8 @@ menu:
 aliases:
   - /integrations/postgres-bastion/
   - /ops/network-security/ssh-tunnel/
+  - /connect-sources/ssh-tunnel/
+
 
 ---
 

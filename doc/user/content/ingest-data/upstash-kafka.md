@@ -3,6 +3,7 @@ title: "Upstash Kafka"
 description: "How to securely connect an Upstash Kafka cluster to Materialize as a source or sink."
 aliases:
   - /integrations/upstash-kafka/
+  - /connect-sources/upstash-kafka/
 menu:
   main:
     parent: "kafka"
