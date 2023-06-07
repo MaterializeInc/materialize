@@ -214,12 +214,15 @@ pub enum LeaderStatus {
 #[derive(Debug)]
 pub enum LeaderState {
     IsLeader,
+    // Invariant: these options are always Some. The reason for the extra layer is to
+    // allow us to take a &mut LeaderState and access a oneshot::Sender by value.
     Initializing {
-        promote_leader: oneshot::Sender<()>,
-        ready_to_promote: oneshot::Receiver<()>,
+        promote_leader: Option<oneshot::Sender<()>>,
+        ready_to_promote: Option<oneshot::Receiver<()>>,
     },
+    // Same invariant as above
     ReadyToPromote {
-        promote_leader: oneshot::Sender<()>,
+        promote_leader: Option<oneshot::Sender<()>>,
     },
 }
 
@@ -235,23 +238,20 @@ pub async fn handle_leader_status(
     State(state): State<Arc<Mutex<LeaderState>>>,
 ) -> impl IntoResponse {
     let mut leader_state = state.lock().expect("lock poisoned");
-    let mut state = LeaderState::IsLeader;
-    std::mem::swap(&mut *leader_state, &mut state);
-    match state {
+    match &mut *leader_state {
         LeaderState::IsLeader => (),
         LeaderState::Initializing {
             promote_leader,
-            mut ready_to_promote,
+            ready_to_promote,
         } => {
-            match ready_to_promote.try_recv() {
+            match ready_to_promote.as_mut().expect("invariant").try_recv() {
                 Ok(_) => {
-                    *leader_state = LeaderState::ReadyToPromote { promote_leader };
+                    *leader_state = LeaderState::ReadyToPromote {
+                        promote_leader: promote_leader.take(),
+                    };
                 }
                 Err(TryRecvError::Empty) => {
-                    *leader_state = LeaderState::Initializing {
-                        promote_leader,
-                        ready_to_promote,
-                    };
+                    // Continue waiting.
                 }
                 Err(TryRecvError::Closed) => {
                     *leader_state = LeaderState::IsLeader; // server has started, it is the leader now
@@ -287,14 +287,9 @@ pub async fn handle_leader_promote(
 ) -> impl IntoResponse {
     let mut leader_state = state.lock().expect("lock poisoned");
 
-    // If we're still Initializing we swap back the state, otherwise we end up as the Leader no matter what
-    let mut state = LeaderState::IsLeader;
-    std::mem::swap(&mut *leader_state, &mut state);
-
-    match state {
+    match &mut *leader_state {
         LeaderState::IsLeader => (),
         LeaderState::Initializing { .. } => {
-            std::mem::swap(&mut *leader_state, &mut state);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!(BecomeLeaderResult::Failure {
@@ -304,8 +299,7 @@ pub async fn handle_leader_promote(
         }
         LeaderState::ReadyToPromote { promote_leader } => {
             // even if send fails it means the server has started and we're already the leader
-            *leader_state = LeaderState::IsLeader;
-            let _ = promote_leader.send(());
+            let _ = promote_leader.take().expect("invariant").send(());
         }
     }
     // We're either already the leader or should be if we reach this.
@@ -383,8 +377,8 @@ impl InternalHttpServer {
             .route("/api/leader/status", routing::get(handle_leader_status))
             .route("/api/leader/promote", routing::post(handle_leader_promote))
             .with_state(Arc::new(Mutex::new(LeaderState::Initializing {
-                promote_leader,
-                ready_to_promote,
+                promote_leader: Some(promote_leader),
+                ready_to_promote: Some(ready_to_promote),
             })));
 
         InternalHttpServer {
