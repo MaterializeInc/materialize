@@ -22,7 +22,7 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, info, warn, Instrument, Span};
+use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
