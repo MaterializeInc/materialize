@@ -83,6 +83,7 @@ use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
+use uuid::fmt::Simple;
 use uuid::Uuid;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -1409,8 +1410,12 @@ impl RunnerInner {
         } else {
             None
         };
-        let (create_view, create_index, view_sql, drop_view) =
-            generate_view_sql(sql, num_attributes, expected_column_names);
+        let (create_view, create_index, view_sql, drop_view) = generate_view_sql(
+            sql,
+            Uuid::new_v4().as_simple(),
+            num_attributes,
+            expected_column_names,
+        );
         let create_view_result = self.client.execute(create_view.as_str(), &[]).await;
 
         // Either handle a view creation error or alternatively index
@@ -1893,6 +1898,7 @@ impl<'a> RewriteBuffer<'a> {
 /// resulting in a valid `SELECT` statement.
 fn generate_view_sql(
     sql: &str,
+    view_uuid: &Simple,
     num_attributes: Option<usize>,
     expected_column_names: Option<Vec<ColumnName>>,
 ) -> (String, String, String, String) {
@@ -1912,7 +1918,7 @@ fn generate_view_sql(
     // column name ambiguity in all cases, but we assume here that we
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
-    let name = UnresolvedItemName(vec![Ident::new(format!("v{}", Uuid::new_v4().as_simple()))]);
+    let name = UnresolvedItemName(vec![Ident::new(format!("v{}", view_uuid))]);
     let columns = expected_column_names.map_or(
         num_attributes.map_or(vec![], |n| {
             (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
@@ -2072,6 +2078,48 @@ fn mutate(sql: &str) -> Vec<String> {
         }
     }
     additional
+}
+
+#[mz_ore::test]
+fn test_generate_view_sql() {
+    let uuid = Uuid::parse_str("67e5504410b1426f9247bb680e5fe0c8").unwrap();
+    let cases = vec![
+        (("SELECT * FROM t", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM "t""#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c")])),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c")"#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, c FROM t1, t2", Some(3), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        // A case with ambiguity that is accepted by the function, illustrating that
+        // our measures to dodge this issue are imperfect.
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a)", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a")"#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+    ];
+    for ((sql, num_attributes, expected_column_names), expected) in cases {
+        let view_sql =
+            generate_view_sql(sql, uuid.as_simple(), num_attributes, expected_column_names);
+        assert_eq!(expected, view_sql);
+    }
 }
 
 #[mz_ore::test]

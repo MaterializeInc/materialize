@@ -159,4 +159,10 @@ tests=(
     test/sqllogictest/postgres/pgcrypto/*.slt
 )
 
+tests_with_views=(
+    test/sqllogictest/aggregates.slt
+)
+
 sqllogictest -v "${tests[@]}" "$@"
+
+sqllogictest -v --auto-index-selects "${tests_with_views[@]}" "$@"
