@@ -257,11 +257,11 @@ pub async fn handle_leader_status(
         }
         LeaderState::ReadyToPromote { .. } => (),
     }
+    let status = state_to_status(&leader_state);
+    drop(leader_state);
     (
         StatusCode::OK,
-        Json(serde_json::json!(LeaderStatusResponse {
-            status: state_to_status(&leader_state),
-        })),
+        Json(serde_json::json!(LeaderStatusResponse { status })),
     )
 }
 
@@ -299,6 +299,7 @@ pub async fn handle_leader_promote(
     }
     // We're either already the leader or should be if we reach this.
     *leader_state = LeaderState::IsLeader;
+    drop(leader_state);
     (
         StatusCode::OK,
         Json(serde_json::json!(BecomeLeaderResponse {
