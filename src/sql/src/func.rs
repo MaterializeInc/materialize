@@ -3380,7 +3380,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 ELSE (
                     SELECT mz_internal.mz_error_if_null(
                         (
-                            SELECT concat(qual.d, qual.s, item.name)
+                            SELECT DISTINCT concat(qual.d, qual.s, item.name)
                             FROM
                                 mz_objects AS item
                             JOIN

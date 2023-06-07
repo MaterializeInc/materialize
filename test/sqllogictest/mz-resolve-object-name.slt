@@ -229,6 +229,12 @@ s86 1397
 s86 1398
 s86 1705
 
+query T
+SELECT DISTINCT mz_internal.mz_global_id_to_name(id) AS name
+FROM mz_internal.mz_resolve_object_name('abs');
+----
+pg_catalog.abs
+
 statement ok
 CREATE TABLE public.abs (a int);
 
