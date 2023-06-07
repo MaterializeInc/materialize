@@ -88,9 +88,9 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         except ValueError as err:
             self.output_printer.print_error(f"Query with value error is: {sql}")
             raise err
-        except Exception as err:
+        except Exception:
             self.output_printer.print_error(f"Query with unexpected error is: {sql}")
-            raise err
+            raise
 
     def _extract_message_from_error(
         self, error: Union[ProgrammingError, DatabaseError]
