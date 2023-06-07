@@ -527,10 +527,13 @@ impl NamespacedProcessOrchestrator {
                 }
             }
 
-            // Adding scope guard to clean up scratch directory
+            // Clean up scratch directory when the service is terminated.
+            // This is best effort as a development and testing convenience.
+            // Because the process orchestrator is not used in production, we 
+            // don't need to be perfectly robust with the cleanup.
             let _guard = scopeguard::guard((), |_| {
                 if let Some(scratch) = scratch_directory {
-                    info!("Cleaning up scratch directory {}", scratch.display());
+                    info!("cleaning up scratch directory", scratch_dir = %scratch.display());
                     if let Err(e) = std::fs::remove_dir_all(scratch) {
                         warn!(
                             "Error cleaning up scratch directory: {}",
