@@ -50,10 +50,10 @@ use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
-    Statement, StatementKind, TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
+    StatementKind, TransactionAccessMode,
 };
-use crate::catalog::{CatalogType, IdReference, RoleAttributes};
+use crate::catalog::{CatalogType, IdReference, ObjectType, RoleAttributes};
 use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 
 pub(crate) mod error;

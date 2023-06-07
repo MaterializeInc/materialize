@@ -2622,7 +2622,7 @@ impl CatalogEntry {
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
     pub fn is_relation(&self) -> bool {
-        mz_sql::ast::ObjectType::from(self.item_type()).is_relation()
+        mz_sql::catalog::ObjectType::from(self.item_type()).is_relation()
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
@@ -3026,10 +3026,10 @@ impl Catalog {
                             MZ_SYSTEM_ROLE_ID,
                             MzAclItem::group_by_grantee(vec![
                                 rbac::default_catalog_privilege(
-                                    mz_sql_parser::ast::ObjectType::Source,
+                                    mz_sql::catalog::ObjectType::Source,
                                 ),
                                 rbac::owner_privilege(
-                                    mz_sql_parser::ast::ObjectType::Source,
+                                    mz_sql::catalog::ObjectType::Source,
                                     MZ_SYSTEM_ROLE_ID,
                                 ),
                             ]),
@@ -3055,11 +3055,9 @@ impl Catalog {
                             }),
                             MZ_SYSTEM_ROLE_ID,
                             MzAclItem::group_by_grantee(vec![
-                                rbac::default_catalog_privilege(
-                                    mz_sql_parser::ast::ObjectType::Table,
-                                ),
+                                rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Table),
                                 rbac::owner_privilege(
-                                    mz_sql_parser::ast::ObjectType::Table,
+                                    mz_sql::catalog::ObjectType::Table,
                                     MZ_SYSTEM_ROLE_ID,
                                 ),
                             ]),
@@ -3095,11 +3093,9 @@ impl Catalog {
                             item,
                             MZ_SYSTEM_ROLE_ID,
                             MzAclItem::group_by_grantee(vec![
-                                rbac::default_catalog_privilege(
-                                    mz_sql_parser::ast::ObjectType::View,
-                                ),
+                                rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::View),
                                 rbac::owner_privilege(
-                                    mz_sql_parser::ast::ObjectType::View,
+                                    mz_sql::catalog::ObjectType::View,
                                     MZ_SYSTEM_ROLE_ID,
                                 ),
                             ]),
@@ -3145,10 +3141,10 @@ impl Catalog {
                             MZ_SYSTEM_ROLE_ID,
                             MzAclItem::group_by_grantee(vec![
                                 rbac::default_catalog_privilege(
-                                    mz_sql_parser::ast::ObjectType::Source,
+                                    mz_sql::catalog::ObjectType::Source,
                                 ),
                                 rbac::owner_privilege(
-                                    mz_sql_parser::ast::ObjectType::Source,
+                                    mz_sql::catalog::ObjectType::Source,
                                     MZ_SYSTEM_ROLE_ID,
                                 ),
                             ]),
@@ -3680,8 +3676,8 @@ impl Catalog {
                 }),
                 MZ_SYSTEM_ROLE_ID,
                 MzAclItem::group_by_grantee(vec![
-                    rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Type),
-                    rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
+                    rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Type),
+                    rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
                 ]),
             );
         }
@@ -4622,7 +4618,7 @@ impl Catalog {
                 functions: BTreeMap::new(),
                 owner_id,
                 privileges: MzAclItem::group_by_grantee(vec![rbac::owner_privilege(
-                    mz_sql_parser::ast::ObjectType::Schema,
+                    mz_sql::catalog::ObjectType::Schema,
                     owner_id,
                 )]),
             },
@@ -5193,11 +5189,11 @@ impl Catalog {
                     owner_id,
                 } => {
                     let database_privileges = vec![rbac::owner_privilege(
-                        mz_sql_parser::ast::ObjectType::Database,
+                        mz_sql::catalog::ObjectType::Database,
                         owner_id,
                     )];
                     let default_schema_privileges = vec![
-                        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, owner_id),
+                        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, owner_id),
                         // Default schemas provide USAGE privileges to PUBLIC by default.
                         MzAclItem {
                             grantee: RoleId::Public,
@@ -5290,7 +5286,7 @@ impl Catalog {
                         }
                     };
                     let privileges = vec![rbac::owner_privilege(
-                        mz_sql::ast::ObjectType::Schema,
+                        mz_sql::catalog::ObjectType::Schema,
                         owner_id,
                     )];
                     let schema_id = tx.insert_user_schema(
@@ -5383,7 +5379,7 @@ impl Catalog {
                         )));
                     }
                     let privileges = vec![rbac::owner_privilege(
-                        mz_sql::ast::ObjectType::Cluster,
+                        mz_sql::catalog::ObjectType::Cluster,
                         owner_id,
                     )];
                     tx.insert_user_cluster(
@@ -7775,17 +7771,17 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.item_dependents(id, &mut seen)
     }
 
-    fn all_object_privileges(&self, object_type: mz_sql_parser::ast::ObjectType) -> AclMode {
+    fn all_object_privileges(&self, object_type: mz_sql::catalog::ObjectType) -> AclMode {
         rbac::all_object_privileges(object_type)
     }
 
-    fn get_object_type(&self, object_id: &ObjectId) -> mz_sql_parser::ast::ObjectType {
+    fn get_object_type(&self, object_id: &ObjectId) -> mz_sql::catalog::ObjectType {
         match object_id {
-            ObjectId::Cluster(_) => mz_sql_parser::ast::ObjectType::Cluster,
-            ObjectId::ClusterReplica(_) => mz_sql_parser::ast::ObjectType::ClusterReplica,
-            ObjectId::Database(_) => mz_sql_parser::ast::ObjectType::Database,
-            ObjectId::Schema(_) => mz_sql_parser::ast::ObjectType::Schema,
-            ObjectId::Role(_) => mz_sql_parser::ast::ObjectType::Role,
+            ObjectId::Cluster(_) => mz_sql::catalog::ObjectType::Cluster,
+            ObjectId::ClusterReplica(_) => mz_sql::catalog::ObjectType::ClusterReplica,
+            ObjectId::Database(_) => mz_sql::catalog::ObjectType::Database,
+            ObjectId::Schema(_) => mz_sql::catalog::ObjectType::Schema,
+            ObjectId::Role(_) => mz_sql::catalog::ObjectType::Role,
             ObjectId::Item(item_id) => self.get_item(item_id).item_type().into(),
         }
     }
@@ -9248,11 +9244,11 @@ mod tests {
         let catalog = catalog.for_system_session();
 
         assert_eq!(
-            mz_sql_parser::ast::ObjectType::ClusterReplica,
+            mz_sql::catalog::ObjectType::ClusterReplica,
             catalog.get_object_type(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
         );
         assert_eq!(
-            mz_sql_parser::ast::ObjectType::Role,
+            mz_sql::catalog::ObjectType::Role,
             catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
         );
     }

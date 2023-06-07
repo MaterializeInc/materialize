@@ -205,7 +205,7 @@ pub async fn initialize(
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
-        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Database, MZ_SYSTEM_ROLE_ID)
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Database, MZ_SYSTEM_ROLE_ID)
             .into_proto(),
     ];
     // Optionally add a privilege for the bootstrap role.
@@ -214,7 +214,7 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(mz_sql_parser::ast::ObjectType::Database).into_proto(),
+                rbac::all_object_privileges(mz_sql::catalog::ObjectType::Database).into_proto(),
             ),
         })
     };
@@ -244,9 +244,8 @@ pub async fn initialize(
     ));
 
     let schema_privileges = vec![
-        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema).into_proto(),
-        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
-            .into_proto(),
+        rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Schema).into_proto(),
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
     let mz_catalog_schema_key = proto::SchemaKey {
@@ -292,34 +291,35 @@ pub async fn initialize(
     let public_schema_key = proto::SchemaKey {
         id: Some(SchemaId::User(PUBLIC_SCHEMA_ID).into_proto()),
     };
-    let public_schema =
-        proto::SchemaValue {
-            database_id: Some(MATERIALIZE_DATABASE_ID.into_proto()),
-            name: "public".to_string(),
-            owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-            privileges: vec![
-                proto::MzAclItem {
-                    grantee: Some(RoleId::Public.into_proto()),
-                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                    acl_mode: Some(AclMode::USAGE.into_proto()),
-                },
-                rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
-                    .into_proto(),
-            ]
-            .into_iter()
-            // Optionally add the bootstrap role to the public schema.
-            .chain(bootstrap_role.as_ref().map(|(role_id, _)| {
-                proto::MzAclItem {
+    let public_schema = proto::SchemaValue {
+        database_id: Some(MATERIALIZE_DATABASE_ID.into_proto()),
+        name: "public".to_string(),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+        privileges: vec![
+            proto::MzAclItem {
+                grantee: Some(RoleId::Public.into_proto()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                acl_mode: Some(AclMode::USAGE.into_proto()),
+            },
+            rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
+                .into_proto(),
+        ]
+        .into_iter()
+        // Optionally add the bootstrap role to the public schema.
+        .chain(
+            bootstrap_role
+                .as_ref()
+                .map(|(role_id, _)| proto::MzAclItem {
                     grantee: Some(role_id.clone()),
                     grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     acl_mode: Some(
-                        rbac::all_object_privileges(mz_sql_parser::ast::ObjectType::Schema)
+                        rbac::all_object_privileges(mz_sql::catalog::ObjectType::Schema)
                             .into_proto(),
                     ),
-                }
-            }))
-            .collect(),
-        };
+                }),
+        )
+        .collect(),
+    };
 
     SCHEMAS_COLLECTION
         .initialize(
@@ -349,8 +349,7 @@ pub async fn initialize(
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
-        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID)
-            .into_proto(),
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
     // Optionally add a privilege for the bootstrap role.
@@ -359,7 +358,7 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(mz_sql_parser::ast::ObjectType::Cluster).into_proto(),
+                rbac::all_object_privileges(mz_sql::catalog::ObjectType::Cluster).into_proto(),
             ),
         });
     };

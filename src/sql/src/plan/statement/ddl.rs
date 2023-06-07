@@ -80,14 +80,15 @@ use crate::ast::{
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
     KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
-    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    TableConstraint, UnresolvedDatabaseName, ViewDefinition,
+    LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
+    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
+    UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
+    ObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
@@ -3479,7 +3480,12 @@ pub fn plan_drop_objects(
         cascade,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    assert_ne!(object_type, ObjectType::Func, "rejected in parser");
+    assert_ne!(
+        object_type,
+        mz_sql_parser::ast::ObjectType::Func,
+        "rejected in parser"
+    );
+    let object_type = object_type.into();
 
     let mut referenced_ids = Vec::new();
     for name in names {
@@ -4004,6 +4010,7 @@ pub fn plan_alter_owner(
         new_owner,
     }: AlterOwnerStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    let object_type = object_type.into();
     match (object_type, name) {
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
@@ -4182,6 +4189,7 @@ pub fn plan_alter_object_rename(
         if_exists,
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, PlanError> {
+    let object_type = object_type.into();
     match (object_type, name) {
         (
             ObjectType::View
@@ -4736,7 +4744,7 @@ fn plan_update_privilege(
     target: GrantTargetSpecification<Aug>,
     roles: Vec<ResolvedRoleName>,
 ) -> Result<UpdatePrivilegesPlan, PlanError> {
-    let object_type = target.object_type;
+    let object_type = target.object_type.into();
     fn object_type_filter(
         object_id: &ObjectId,
         object_type: &ObjectType,
