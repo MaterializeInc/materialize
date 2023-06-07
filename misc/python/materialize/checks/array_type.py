@@ -16,7 +16,7 @@ from materialize.util import MzVersion
 
 class ArrayType(Check):
     def _can_run(self) -> bool:
-        return self.base_version >= MzVersion.parse("0.57.0-dev")
+        return self.base_version >= MzVersion.parse("0.58.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
