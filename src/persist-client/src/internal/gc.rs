@@ -285,16 +285,21 @@ where
         .await;
 
         // Now that the blobs are deleted / Consensus is truncated, remove
-        // the rollups from state. Doing this at the end ensures that if
-        // the process crashes part-way through, we still have a reference
-        // to these rollups (in the current state) to resume their deletion.
+        // the rollups from state. Doing this at the end ensures that our
+        // invariant is maintained that the current state contains a rollup
+        // to the earliest state in Consensus, and ensures that if GC crashes
+        // part-way through, we still have a reference to these rollups to
+        // resume their deletion.
         //
-        // Unfortunately this means that if GC crashes part-way through,
-        // it could repeat work it has already done. We could alternatively
-        // remove each rollup from state as we go, which has some tradeoffs:
-        // * We'd incur a CaS operation for each rollup removal
-        // * We'd have to figure out how to handle maintenance work here
-        //   promptly if the GC work is long running
+        // This does mean that if GC crashes part-way through we would
+        // repeat work when it resumes. However the redundant work should
+        // be minimal as Consensus is incrementally truncated, allowing
+        // the next run of GC to skip any work needed for rollups less
+        // than the last truncation.
+        //
+        // In short, while this step is not incremental, it does not need
+        // to be for GC to efficiently resume. And in fact, making it
+        // incremental could be quite expensive (e.g. more CaS operations).
         let (removed_rollups, maintenance) =
             machine.remove_rollups(rollups_to_remove_from_state).await;
         report_step_timing(&machine.applier.metrics.gc.steps.remove_rollups_from_state);
