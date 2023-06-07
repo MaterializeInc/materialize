@@ -1360,10 +1360,10 @@ SELECT justify_interval(interval '1 month -1 hour');
 ----
 29 days 23:00:00
 
-query error "2147483647 days 24:00:00" interval out of range 
+query error "2147483647 days 24:00:00" interval out of range
 SELECT justify_hours(interval '2147483647 days 24 hrs');
 
-query error "178956970 years 7 months 30 days" interval out of range 
+query error "178956970 years 7 months 30 days" interval out of range
 SELECT justify_days(interval '2147483647 months 30 days');
 
 query T
