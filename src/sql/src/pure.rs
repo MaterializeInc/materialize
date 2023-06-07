@@ -17,23 +17,24 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::error::ErrorExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
-use mz_repr::adt::system::Oid;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro,
-    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, Envelope, Ident,
-    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedItemName,
+    AlterSourceAction, AlterSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName,
+    Envelope, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
+    UnresolvedItemName,
 };
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
-use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
+};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -52,6 +53,8 @@ use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 use crate::{kafka_util, normalize};
+
+mod postgres;
 
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
@@ -96,6 +99,16 @@ fn subsource_gen<'a, T>(
     Ok(validated_requested_subsources)
 }
 
+// Convenience function to ensure subsources are not named.
+fn named_subsource_err(name: &Option<DeferredItemName<Aug>>) -> Result<(), PlanError> {
+    match name {
+        Some(DeferredItemName::Named(_)) => {
+            sql_bail!("Cannot manually ID qualify subsources")
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Generates a subsource name by prepending source schema name if present
 ///
 /// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
@@ -135,15 +148,6 @@ pub async fn purify_create_source(
         progress_subsource,
         ..
     } = &mut stmt;
-
-    fn named_subsource_err(name: &Option<DeferredItemName<Aug>>) -> Result<(), PlanError> {
-        match name {
-            Some(DeferredItemName::Named(_)) => {
-                sql_bail!("Cannot manually ID qualify subsources")
-            }
-            _ => Ok(()),
-        }
-    }
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     named_subsource_err(progress_subsource)?;
@@ -303,28 +307,18 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
+
             let publication_tables =
                 mz_postgres_util::publication_info(&config, &publication, None).await?;
 
             if publication_tables.is_empty() {
-                return Err(PlanError::EmptyPublication(publication));
+                return Err(PlanError::EmptyPublication(publication.to_string()));
             }
 
-            // An index from table name -> schema name -> database name -> PostgresTableDesc
-            let mut tables_by_name = BTreeMap::new();
-            for table in &publication_tables {
-                tables_by_name
-                    .entry(table.name.clone())
-                    .or_insert_with(BTreeMap::new)
-                    .entry(table.namespace.clone())
-                    .or_insert_with(BTreeMap::new)
-                    .entry(connection.database.clone())
-                    .or_insert(table);
-            }
-
-            let publication_catalog = ErsatzCatalog(tables_by_name);
-
-            let mut targeted_subsources = vec![];
+            let publication_catalog = postgres::derive_catalog_from_publication_tables(
+                &connection.database,
+                &publication_tables,
+            )?;
 
             let mut validated_requested_subsources = vec![];
             match referenced_subsources {
@@ -377,7 +371,6 @@ pub async fn purify_create_source(
                 Some(ReferencedSubsources::SubsetTables(subsources)) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
-
                     validated_requested_subsources.extend(subsource_gen(
                         subsources,
                         &publication_catalog,
@@ -396,114 +389,14 @@ pub async fn purify_create_source(
                 );
             }
 
-            // This condition would get caught during the catalog transaction, but produces a
-            // vague, non-contextual error. Instead, error here so we can suggest to the user
-            // how to fix the problem.
-            if let Some(name) = validated_requested_subsources
-                .iter()
-                .map(|(_, subsource_name, _)| subsource_name)
-                .duplicates()
-                .next()
-                .cloned()
-            {
-                let mut upstream_references: Vec<_> = validated_requested_subsources
-                    .into_iter()
-                    .filter_map(|(u, t, _)| if t == name { Some(u) } else { None })
-                    .collect();
+            postgres::validate_requested_subsources(&config, &validated_requested_subsources)
+                .await?;
 
-                upstream_references.sort();
-
-                return Err(PlanError::SubsourceNameConflict {
-                    name,
-                    upstream_references,
-                });
-            }
-
-            // We technically could allow multiple subsources to ingest the same upstream table, but
-            // it is almost certainly an error on the user's end.
-            if let Some(name) = validated_requested_subsources
-                .iter()
-                .map(|(referenced_name, _, _)| referenced_name)
-                .duplicates()
-                .next()
-                .cloned()
-            {
-                let mut target_names: Vec<_> = validated_requested_subsources
-                    .into_iter()
-                    .filter_map(|(u, t, _)| if u == name { Some(t) } else { None })
-                    .collect();
-
-                target_names.sort();
-
-                return Err(PlanError::SubsourceDuplicateReference { name, target_names });
-            }
-
-            // Ensure that we have select permissions on all tables; we have to do this before we
-            // start snapshotting because if we discover we cannot `COPY` from a table while
-            // snapshotting, we break the entire source.
-            let tables_to_check_permissions = validated_requested_subsources
-                .iter()
-                .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
-                .collect();
-
-            mz_postgres_util::check_table_privileges(&config, tables_to_check_permissions).await?;
-
-            let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
-
-            for name in text_columns.iter_mut() {
-                let (qual, col) = match name.0.split_last().expect("must have at least one element")
-                {
-                    (col, qual) if qual.is_empty() => {
-                        return Err(PlanError::InvalidOptionValue {
-                            option_name: PgConfigOptionName::TextColumns.to_ast_string(),
-                            err: Box::new(PlanError::UnderqualifiedColumnName(
-                                col.as_str().to_string(),
-                            )),
-                        });
-                    }
-                    (col, qual) => (qual.to_vec(), col.as_str().to_string()),
-                };
-
-                let qual_name = UnresolvedItemName(qual);
-
-                let (mut fully_qualified_name, desc) = publication_catalog
-                    .resolve(qual_name)
-                    .map_err(|e| PlanError::InvalidOptionValue {
-                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
-                        err: Box::new(e),
-                    })?;
-
-                if !desc.columns.iter().any(|column| column.name == col) {
-                    return Err(PlanError::InvalidOptionValue {
-                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
-                        err: Box::new(PlanError::UnknownColumn {
-                            table: Some(
-                                normalize::unresolved_item_name(fully_qualified_name)
-                                    .expect("known to be of valid len"),
-                            ),
-                            column: mz_repr::ColumnName::from(col),
-                        }),
-                    });
-                }
-
-                // Rewrite fully qualified name.
-                fully_qualified_name.0.push(col.as_str().to_string().into());
-                *name = fully_qualified_name;
-
-                let new = text_cols_dict
-                    .entry(desc.oid)
-                    .or_default()
-                    .insert(col.as_str().to_string());
-
-                if !new {
-                    return Err(PlanError::InvalidOptionValue {
-                        option_name: PgConfigOptionName::TextColumns.to_ast_string(),
-                        err: Box::new(PlanError::UnexpectedDuplicateReference {
-                            name: name.clone(),
-                        }),
-                    });
-                }
-            }
+            let text_cols_dict = postgres::generate_text_columns(
+                &publication_catalog,
+                &mut text_columns,
+                &PgConfigOptionName::TextColumns.to_ast_string(),
+            )?;
 
             // Normalize options to contain full qualified values.
             if let Some(text_cols_option) = options
@@ -517,123 +410,15 @@ pub async fn purify_create_source(
                 text_cols_option.value = Some(WithOptionValue::Sequence(seq));
             }
 
-            // Aggregate all unrecognized types.
-            let mut unsupported_cols = vec![];
-
-            // Now that we have an explicit list of validated requested subsources we can create them
-            for (upstream_name, subsource_name, table) in validated_requested_subsources.into_iter()
-            {
-                // Figure out the schema of the subsource
-                let mut columns = vec![];
-                for c in table.columns.iter() {
-                    let name = Ident::new(c.name.clone());
-                    let ty = match text_cols_dict.get(&table.oid) {
-                        Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
-                        _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
-                            Ok(t) => t,
-                            Err(_) => {
-                                let mut full_name = upstream_name.0.clone();
-                                full_name.push(name);
-                                unsupported_cols.push((
-                                    UnresolvedItemName(full_name).to_ast_string(),
-                                    Oid(c.type_oid),
-                                ));
-                                continue;
-                            }
-                        },
-                    };
-
-                    let data_type = scx.resolve_type(ty)?;
-                    let mut options = vec![];
-
-                    if !c.nullable {
-                        options.push(mz_sql_parser::ast::ColumnOptionDef {
-                            name: None,
-                            option: mz_sql_parser::ast::ColumnOption::NotNull,
-                        });
-                    }
-
-                    columns.push(ColumnDef {
-                        name,
-                        data_type,
-                        collation: None,
-                        options,
-                    });
-                }
-
-                let mut constraints = vec![];
-                for key in table.keys.clone() {
-                    let mut key_columns = vec![];
-
-                    for col_num in key.cols {
-                        key_columns.push(Ident::new(
-                            table
-                                .columns
-                                .iter()
-                                .find(|col| col.col_num == Some(col_num))
-                                .expect("key exists as column")
-                                .name
-                                .clone(),
-                        ))
-                    }
-
-                    let constraint = mz_sql_parser::ast::TableConstraint::Unique {
-                        name: Some(Ident::new(key.name)),
-                        columns: key_columns,
-                        is_primary: key.is_primary,
-                        nulls_not_distinct: key.nulls_not_distinct,
-                    };
-
-                    // We take the first constraint available to be the primary key.
-                    if key.is_primary {
-                        constraints.insert(0, constraint);
-                    } else {
-                        constraints.push(constraint);
-                    }
-                }
-
-                // Create the targeted AST node for the original CREATE SOURCE statement
-                let transient_id = GlobalId::Transient(get_transient_subsource_id());
-
-                let subsource =
-                    scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
-
-                targeted_subsources.push(CreateSourceSubsource {
-                    reference: upstream_name,
-                    subsource: Some(DeferredItemName::Named(subsource)),
-                });
-
-                // Create the subsource statement
-                let subsource = CreateSubsourceStatement {
-                    name: subsource_name,
-                    columns,
-                    // TODO(petrosagg): nothing stops us from getting the constraints of the
-                    // upstream tables and mirroring them here which will lead to more optimization
-                    // opportunities if for example there is a primary key or an index.
-                    //
-                    // If we ever do that we must triple check that we will get notified *in the
-                    // replication stream*, if our assumptions change. Failure to do that could
-                    // mean that an upstream table that started with an index was then altered to
-                    // one without and now we're producing garbage data.
-                    constraints,
-                    if_not_exists: false,
-                    with_options: vec![CreateSubsourceOption {
-                        name: CreateSubsourceOptionName::References,
-                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
-                    }],
-                };
-                subsources.push((transient_id, subsource));
-            }
-
-            if !unsupported_cols.is_empty() {
-                return Err(PlanError::UnrecognizedTypeInPostgresSource {
-                    cols: unsupported_cols,
-                });
-            }
-
-            targeted_subsources.sort();
+            let (targeted_subsources, new_subsources) = postgres::generate_targeted_subsources(
+                &scx,
+                validated_requested_subsources,
+                text_cols_dict,
+                get_transient_subsource_id,
+            )?;
 
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            subsources.extend(new_subsources);
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
@@ -814,6 +599,195 @@ pub async fn purify_create_source(
     purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 
     Ok((subsources, stmt))
+}
+
+pub async fn purify_alter_source(
+    catalog: Box<dyn SessionCatalog>,
+    mut stmt: AlterSourceStatement<Aug>,
+    connection_context: ConnectionContext,
+) -> Result<
+    (
+        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        AlterSourceStatement<Aug>,
+    ),
+    PlanError,
+> {
+    let scx = StatementContext::new(None, &*catalog);
+    let AlterSourceStatement {
+        source_name,
+        action,
+        if_exists,
+    } = &mut stmt;
+
+    // Get name.
+    let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
+        Err(_) if !*if_exists => {
+            return Ok((vec![], stmt));
+        }
+        Ok(item) => item,
+        Err(e) => return Err(e.into()),
+    };
+
+    // Ensure it's an ingestion-based and alterable source.
+    let desc = match item.source_desc() {
+        Ok(Some(desc)) => desc,
+        Ok(None) => {
+            sql_bail!(
+                "{} is a {} not a source",
+                scx.catalog.minimal_qualification(item.name()),
+                item.item_type()
+            )
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // If there's no further work to do here, early return.
+    let (targeted_subsources, details) = match action {
+        AlterSourceAction::AddSubsources {
+            subsources,
+            details,
+        } => (subsources, details),
+        _ => return Ok((vec![], stmt)),
+    };
+
+    assert!(
+        details.is_none(),
+        "details cannot be set before purification"
+    );
+
+    for CreateSourceSubsource {
+        subsource,
+        reference: _,
+    } in targeted_subsources.iter()
+    {
+        named_subsource_err(subsource)?;
+    }
+
+    // Get connection
+    let pg_source_connection = {
+        match &desc.connection {
+            GenericSourceConnection::Postgres(pg_connection) => pg_connection,
+            _ => sql_bail!(
+                "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
+                scx.catalog.minimal_qualification(item.name()),
+                desc.connection.name()
+            ),
+        }
+    };
+
+    // Get PostgresConnection for generating subsources.
+    let pg_connection = &pg_source_connection.connection;
+
+    let config = pg_connection
+        .config(&*connection_context.secrets_reader)
+        .await?;
+
+    let mut publication_tables =
+        mz_postgres_util::publication_info(&config, &pg_source_connection.publication, None)
+            .await?;
+
+    if publication_tables.is_empty() {
+        return Err(PlanError::EmptyPublication(
+            pg_source_connection.publication.to_string(),
+        ));
+    }
+
+    let publication_catalog = postgres::derive_catalog_from_publication_tables(
+        &pg_connection.database,
+        &publication_tables,
+    )?;
+
+    let validated_requested_subsources =
+        subsource_gen(targeted_subsources, &publication_catalog, source_name)?;
+
+    // Determine duplicate references to tables by cross-referencing the table
+    // positions in the current publication info to thei
+    let mut current_subsources = BTreeMap::new();
+    for idx in pg_source_connection.table_casts.keys() {
+        // Table casts all have their values increased by to accommodate for the
+        // primary source--this means that to look them up in the publication
+        // tables you must subtract one.
+        let native_idx = *idx - 1;
+        let table_desc = &pg_source_connection.publication_details.tables[native_idx];
+        current_subsources.insert(
+            UnresolvedItemName(vec![
+                pg_connection.database.clone().into(),
+                table_desc.namespace.clone().into(),
+                table_desc.name.clone().into(),
+            ]),
+            native_idx,
+        );
+    }
+
+    for (upstream_name, _, _) in validated_requested_subsources.iter() {
+        if current_subsources.contains_key(upstream_name) {
+            sql_bail!(
+                "cannot create multiple subsources in the same source that refer to upstream table {}",
+                upstream_name
+            );
+        }
+    }
+
+    postgres::validate_requested_subsources(&config, &validated_requested_subsources).await?;
+
+    // TODO: text columns
+
+    let mut subsource_id_counter = 0;
+    let get_transient_subsource_id = move || {
+        subsource_id_counter += 1;
+        subsource_id_counter
+    };
+
+    let (named_subsources, new_subsources) = postgres::generate_targeted_subsources(
+        &scx,
+        validated_requested_subsources,
+        BTreeMap::new(),
+        get_transient_subsource_id,
+    )?;
+
+    *targeted_subsources = named_subsources;
+
+    // An index from table name -> output index.
+    let mut new_name_to_output_map = BTreeMap::new();
+    for (i, table) in publication_tables.iter().enumerate() {
+        new_name_to_output_map.insert(
+            UnresolvedItemName(vec![
+                pg_connection.database.clone().into(),
+                table.namespace.clone().into(),
+                table.name.clone().into(),
+            ]),
+            i,
+        );
+    }
+
+    // Fixup the publication info
+    for (name, idx) in current_subsources {
+        let table = pg_source_connection.publication_details.tables[idx].clone();
+
+        // Determine if this current subsource is in the new publication tables.
+        match new_name_to_output_map.get(&name) {
+            // These are tables that were previously defined; we want to
+            // duplicate their definition to the new `publication_tables`
+            // because this command is meant only to add new tables, not update
+            // the schema of existing tables.
+            Some(cur_idx) => publication_tables[*cur_idx] = table,
+            // These are tables that no longer exist in the publication but the
+            // user has kept around. When the ingestion restarts after adding
+            // the new table, they will error out, but that is not the problem
+            // or scope of this function.
+            None => publication_tables.push(table),
+        }
+    }
+
+    // TODO: Options
+    let new_details = PostgresSourcePublicationDetails {
+        tables: publication_tables,
+        slot: pg_source_connection.publication_details.slot.clone(),
+    };
+
+    *details = Some(hex::encode(new_details.into_proto().encode_to_vec()));
+
+    Ok((new_subsources, stmt))
 }
 
 async fn purify_source_format(
