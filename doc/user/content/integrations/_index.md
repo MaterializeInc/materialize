@@ -160,10 +160,7 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 ### Terraform
 
 Materialize maintains a
-[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you configure Materialize resources like
-connections, sources, and database objects. The Materialize provider is a
-Terraform plugin that allows Terraform to interact with the Materialize API.
-
+[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you safely and predictably provision and manage connections, sources, and other database objects.
 
 Materialize also maintains several [Terraform modules](https://registry.terraform.io/namespaces/MaterializeInc) to help manage your other
 cloud resources. Modules allow you to bypass manually configuring cloud
