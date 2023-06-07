@@ -66,3 +66,73 @@ Used Indexes:
   - materialize.public.t_x
 
 EOF
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT name, cities.state FROM
+  cities JOIN states
+  ON cities.state = states.state
+  WHERE cities.pop > states.pop / 2;
+----
+Explained Query:
+  Project (#0, #1) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
+    Filter (#2 > (#4 / 2)) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
+      Join on=(#1 = #3) type=differential // { cardinality: "materialize.public.cities * materialize.public.states" }
+        ArrangeBy keys=[[#1]] // { cardinality: "materialize.public.cities" }
+          Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+        ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.states" }
+          Get materialize.public.states // { cardinality: "materialize.public.states" }
+
+Used Indexes:
+  - materialize.public.cities_state
+  - materialize.public.state_state
+
+EOF
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT MAX(t.y) FROM t JOIN t2 ON t.x = t2.x
+----
+Explained Query:
+  Return // { cardinality: "3" }
+    Union // { cardinality: "3" }
+      Get l0 // { cardinality: "1" }
+      Map (null) // { cardinality: "2" }
+        Union // { cardinality: "2" }
+          Negate // { cardinality: "1" }
+            Project () // { cardinality: "1" }
+              Get l0 // { cardinality: "1" }
+          Constant // { cardinality: "1" }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[max(#0)] // { cardinality: "1" }
+        Project (#1) // { cardinality: "materialize.public.t * materialize.public.t2" }
+          Join on=(#0 = #2) type=differential // { cardinality: "materialize.public.t * materialize.public.t2" }
+            ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t" }
+              Get materialize.public.t // { cardinality: "materialize.public.t" }
+            ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t2" }
+              Get materialize.public.t2 // { cardinality: "materialize.public.t2" }
+
+Used Indexes:
+  - materialize.public.t_x
+  - materialize.public.tt_x
+
+EOF
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp,
+    LATERAL (SELECT name FROM cities WHERE state = grp.state ORDER BY pop DESC NULLS LAST LIMIT 3);
+----
+Explained Query:
+  Project (#1, #0) // { cardinality: "materialize.public.cities" }
+    TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 // { cardinality: "materialize.public.cities" }
+      Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+
+Used Indexes:
+  - materialize.public.cities_name
+
+EOF

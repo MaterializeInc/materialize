@@ -113,6 +113,8 @@ pub struct WorstCaseFactorizer {
     pub cardinalities: BTreeMap<FactorizerVariable, usize>,
 }
 
+const WORST_CASE_SELECTIVITY: f64 = 0.1;
+
 impl Factorizer for WorstCaseFactorizer {
     fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp {
         match tf {
@@ -157,17 +159,17 @@ impl Factorizer for WorstCaseFactorizer {
                     if let Some(icard) = index_cardinality(expr) {
                         icard
                     } else {
-                        SymExp::from(0.1)
+                        SymExp::from(WORST_CASE_SELECTIVITY)
                     }
                 }
-                _ => SymExp::from(1.0),
+                _ => SymExp::from(WORST_CASE_SELECTIVITY),
             },
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                 match func {
                     BinaryFunc::Eq => match (index_cardinality(expr1), index_cardinality(expr2)) {
                         (Some(icard1), Some(icard2)) => SymbolicExpression::max(icard1, icard2),
                         (Some(icard), None) | (None, Some(icard)) => icard,
-                        (None, None) => SymExp::from(0.1),
+                        (None, None) => SymExp::from(WORST_CASE_SELECTIVITY),
                     },
                     // 1.0 - the Eq case
                     BinaryFunc::NotEq => match (index_cardinality(expr1), index_cardinality(expr2))
@@ -176,7 +178,7 @@ impl Factorizer for WorstCaseFactorizer {
                             1.0 - SymbolicExpression::max(icard1, icard2)
                         }
                         (Some(icard), None) | (None, Some(icard)) => 1.0 - icard,
-                        (None, None) => SymExp::from(0.9),
+                        (None, None) => SymExp::from(1.0 - WORST_CASE_SELECTIVITY),
                     },
                     BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => {
                         // if we have high/low key values and one of the columns is an index

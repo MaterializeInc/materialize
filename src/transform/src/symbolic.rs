@@ -33,6 +33,49 @@ pub enum SymbolicExpression<V> {
 }
 
 impl<V> SymbolicExpression<V> {
+    /// Evaluates a symbolic expression, given a way to `concretize` its symbolic parts
+    pub fn evaluate<F>(&self, concretize: &F) -> f64
+    where
+        F: Fn(&V) -> f64,
+    {
+        use SymbolicExpression::*;
+        match self {
+            Constant(OrderedFloat(n)) => *n,
+            Symbolic(v, n) => f64::powi(
+                concretize(v),
+                i32::try_from(*n).expect("symbolic exponent overflow"),
+            ),
+            Sum(ss) => ss.into_iter().map(|s| s.evaluate(concretize)).sum(),
+            Product(ps) => ps.into_iter().map(|p| p.evaluate(concretize)).product(),
+            Max(e1, e2) => f64::max(e1.evaluate(concretize), e2.evaluate(concretize)),
+            Min(e1, e2) => f64::min(e1.evaluate(concretize), e2.evaluate(concretize)),
+        }
+    }
+
+    /// Computes the order of a symbolic expression
+    ///
+    /// ```
+    /// use mz_transform::symbolic::SymbolicExpression;
+    ///
+    /// let x = SymbolicExpression::symbolic("x".to_string());
+    /// let y = SymbolicExpression::symbolic("y".to_string());
+    /// // x^3 + xy + 1000000
+    /// let e = SymbolicExpression::sum(vec![SymbolicExpression::product(vec![x.clone(); 3]), SymbolicExpression::product(vec![x, y]), SymbolicExpression::f64(1000000.0)]);
+    /// // has order 3
+    /// assert_eq!(e.order(), 3);
+    /// ```
+    pub fn order(&self) -> usize {
+        use SymbolicExpression::*;
+        match self {
+            Constant(_) => 0,
+            Symbolic(_, n) => *n,
+            Sum(ss) => ss.into_iter().map(|s| s.order()).max().unwrap_or(0),
+            Product(ps) => ps.into_iter().map(|p| p.order()).sum(),
+            Max(e1, e2) => usize::max(e1.order(), e2.order()),
+            Min(e1, e2) => usize::min(e1.order(), e2.order()),
+        }
+    }
+
     /// Walks the entire term, simplifying away redundancies that may have accumulated
     pub fn normalize(&self) -> Self
     where
@@ -189,7 +232,7 @@ impl<V> SymbolicExpression<V> {
             match e {
                 Constant(n) => constant *= n,
                 Symbolic(v, n) => {
-                    variables.entry((v, n)).and_modify(|e| *e += 1).or_insert(1);
+                    variables.entry(v).and_modify(|e| *e += n).or_insert(n);
                 }
                 Max(_, _) | Min(_, _) => {
                     minmaxes.entry(e).and_modify(|e| *e += 1).or_insert(1);
@@ -212,11 +255,7 @@ impl<V> SymbolicExpression<V> {
                 .into_iter()
                 .map(|(m, scalar)| m * SymbolicExpression::usize(scalar)),
         );
-        result.extend(
-            variables
-                .into_iter()
-                .map(|((v, n), scalar)| Symbolic(v, n) * SymbolicExpression::usize(scalar)),
-        );
+        result.extend(variables.into_iter().map(|(v, n)| Symbolic(v, n)));
 
         if constant.0 == 0.0 {
             return Self::f64(0.0);
@@ -467,5 +506,71 @@ impl<V> From<usize> for SymbolicExpression<V> {
 impl<V> From<f64> for SymbolicExpression<V> {
     fn from(value: f64) -> Self {
         SymbolicExpression::f64(value)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::f64::consts::{E, PI};
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_evaluate() {
+        type SymExp = SymbolicExpression<String>;
+
+        fn concretize(s: &String) -> f64 {
+            if s == "pi" {
+                PI
+            } else if s == "e" {
+                E
+            } else if s == "one" {
+                1.0
+            } else if s == "two" {
+                2.0
+            } else {
+                0.0
+            }
+        }
+
+        // normally its imprudent to use `assert_eq!`/`==` with f64
+        // but we're doing the operations we expect `evaluate` to be doing! so we should IDENTICAL answers
+
+        assert_eq!(SymExp::f64(0.0).evaluate(&concretize), 0.0);
+        assert_eq!(SymExp::symbolic("pi".to_string()).evaluate(&concretize), PI);
+        assert_eq!(SymExp::symbolic("e".to_string()).evaluate(&concretize), E);
+        assert_eq!(
+            SymExp::symbolic("one".to_string()).evaluate(&concretize),
+            1.0
+        );
+
+        assert_eq!(
+            SymExp::product(vec![
+                SymExp::symbolic("one".to_string()),
+                SymExp::symbolic("two".to_string())
+            ])
+            .evaluate(&concretize),
+            2.0
+        );
+
+        let two_to_the_eighth = SymExp::product(vec![SymExp::symbolic("two".to_string()); 8]);
+        match &two_to_the_eighth {
+            SymExp::Symbolic(v, n) => {
+                assert_eq!(v, "two");
+                assert_eq!(*n, 8);
+            }
+            _ => assert!(false, "didn't use exponenents correctly"),
+        };
+        assert_eq!(two_to_the_eighth.evaluate(&concretize), 256.0);
+
+        assert_eq!(
+            SymExp::sum(vec![
+                SymExp::symbolic("pi".to_string()),
+                SymExp::symbolic("e".to_string()),
+                SymExp::symbolic("two".to_string())
+            ])
+            .evaluate(&concretize),
+            PI + E + 2.0
+        );
     }
 }
