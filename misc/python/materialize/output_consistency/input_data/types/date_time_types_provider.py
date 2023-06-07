@@ -40,9 +40,6 @@ DATE_TYPE = DateTimeDataType(
     DATE_TYPE_IDENTIFIER,
     "DATE",
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
-    # "4714-11-24 BC",
-    # "262143-12-31 AD",
-    # "2023-06-01 AD",
     "0001-01-01",
     "99999-12-31",
     ["2023-06-01"],
@@ -54,10 +51,6 @@ TIMESTAMP_TYPE = DateTimeDataType(
     TIMESTAMP_TYPE_IDENTIFIER,
     "TIMESTAMP",
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
-    # "4713-01-01 BC 00:00:00",
-    # "294276-12-31 23:59:59 AD",
-    # "2023-06-01 11:22:33 AD",
-    # TODO verify
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
     ["2023-06-01 11:22:33"],
@@ -66,10 +59,6 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     TIMESTAMPTZ_TYPE_IDENTIFIER,
     "TIMESTAMPTZ",
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
-    # "4713-01-01 BC 00:00:00",
-    # "294276-12-31 23:59:59 AD",
-    # "2023-06-01 11:22:33 AD",
-    # TODO verify
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
     ["2023-06-01 11:22:33"],
