@@ -4,6 +4,7 @@ description: "How to propagate Change Data Capture (CDC) data from a database to
 aliases:
   - /third-party/debezium/
   - /integrations/debezium/
+  - /connect-sources/debezium/
 ---
 
 You can use [Debezium](https://debezium.io/) to propagate Change Data Capture (CDC) data from a database to Materialize, for example MySQL or PostgreSQL.
