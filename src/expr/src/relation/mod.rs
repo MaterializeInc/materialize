@@ -12,7 +12,7 @@
 use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use bytesize::ByteSize;
@@ -2204,6 +2204,7 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
 
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // If you modify this, then please also attend to Display for ColumnOrderWithExpr!
         write!(
             f,
             "#{} {} {}",
@@ -2998,6 +2999,16 @@ pub struct WindowFrame {
     pub end_bound: WindowFrameBound,
 }
 
+impl Display for WindowFrame {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} between {} and {}",
+            self.units, self.start_bound, self.end_bound
+        )
+    }
+}
+
 impl WindowFrame {
     /// Return the default window frame used when one is not explicitly defined
     pub fn default() -> Self {
@@ -3094,6 +3105,16 @@ pub enum WindowFrameUnits {
     Groups,
 }
 
+impl Display for WindowFrameUnits {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowFrameUnits::Rows => write!(f, "rows"),
+            WindowFrameUnits::Range => write!(f, "range"),
+            WindowFrameUnits::Groups => write!(f, "groups"),
+        }
+    }
+}
+
 impl RustType<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
     fn into_proto(&self) -> proto_window_frame::ProtoWindowFrameUnits {
         use proto_window_frame::proto_window_frame_units::Kind::*;
@@ -3141,6 +3162,18 @@ pub enum WindowFrameBound {
     OffsetFollowing(u64),
     /// `UNBOUNDED FOLLOWING`.
     UnboundedFollowing,
+}
+
+impl Display for WindowFrameBound {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowFrameBound::UnboundedPreceding => write!(f, "unbounded preceding"),
+            WindowFrameBound::OffsetPreceding(offset) => write!(f, "{} preceding", offset),
+            WindowFrameBound::CurrentRow => write!(f, "current row"),
+            WindowFrameBound::OffsetFollowing(offset) => write!(f, "{} following", offset),
+            WindowFrameBound::UnboundedFollowing => write!(f, "unbounded following"),
+        }
+    }
 }
 
 impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {

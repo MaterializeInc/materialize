@@ -19,6 +19,7 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
+use mz_ore::str::separated;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
@@ -758,6 +759,7 @@ fn lag_lead<'a, I>(
     temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
     lag_lead_type: &LagLeadType,
+    ignore_nulls: &bool,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -794,18 +796,50 @@ where
         let idx = i64::try_from(idx).expect("Array index does not fit in i64");
         let offset = i64::from(offset.unwrap_int32());
         // By default, offset is applied backwards (for `lag`): flip the sign if `lead` should run instead
-        let offset = match lag_lead_type {
-            LagLeadType::Lag => offset,
-            LagLeadType::Lead => -offset,
+        let (offset, decrement) = match lag_lead_type {
+            LagLeadType::Lag => (offset, 1),
+            LagLeadType::Lead => (-offset, -1),
         };
-        let vec_offset = idx - offset;
 
-        let lagged_value = match u64::try_from(vec_offset) {
-            Ok(vec_offset) => datums
-                .get(usize::cast_from(vec_offset))
-                .map(|d| d.0)
-                .unwrap_or(*default_value),
-            Err(_) => *default_value,
+        // Get a Datum from `datums`. Return None if index is out of range.
+        let datums_get = |i: i64| -> Option<Datum> {
+            match u64::try_from(i) {
+                Ok(i) => datums
+                    .get(usize::cast_from(i))
+                    .map(|d| Some(d.0)) // succeeded in getting a Datum from the vec
+                    .unwrap_or(None), // overindexing
+                Err(_) => None, // underindexing (negative index)
+            }
+        };
+
+        let lagged_value = if !ignore_nulls {
+            datums_get(idx - offset).unwrap_or(*default_value)
+        } else {
+            // We start j from idx, and step j until we have seen an abs(offset) number of non-null
+            // values.
+            //
+            // (This is a very naive implementation: We could avoid an inner loop, and instead step
+            // two indexes in one loop, with one index lagging behind. But a common use case is an
+            // offset of 1 and not too many nulls, for which this doesn't matter. And anyhow, the
+            // whole thing hopefully will be replaced by prefix sum soon.)
+            let mut to_go = num::abs(offset);
+            let mut j = idx;
+            loop {
+                j -= decrement;
+                match datums_get(j) {
+                    Some(datum) => {
+                        if !datum.is_null() {
+                            to_go -= 1;
+                            if to_go == 0 {
+                                break datum;
+                            }
+                        }
+                    }
+                    None => {
+                        break *default_value;
+                    }
+                };
+            }
         };
 
         result.push((lagged_value, *original_row));
@@ -1135,6 +1169,7 @@ pub enum AggregateFunc {
     LagLead {
         order_by: Vec<ColumnOrder>,
         lag_lead: LagLeadType,
+        ignore_nulls: bool,
     },
     FirstValue {
         order_by: Vec<ColumnOrder>,
@@ -1154,7 +1189,7 @@ pub enum AggregateFunc {
 /// An explicit [`Arbitrary`] implementation needed here because of a known
 /// `proptest` issue.
 ///
-/// Revert to the derive-macro impementation once the issue[^1] is fixed.
+/// Revert to the derive-macro implementation once the issue[^1] is fixed.
 ///
 /// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
 impl Arbitrary for AggregateFunc {
@@ -1232,8 +1267,15 @@ impl Arbitrary for AggregateFunc {
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
                 proptest_any::<LagLeadType>(),
+                proptest_any::<bool>(),
             )
-                .prop_map(|(order_by, lag_lead)| AggregateFunc::LagLead { order_by, lag_lead })
+                .prop_map(
+                    |(order_by, lag_lead, ignore_nulls)| AggregateFunc::LagLead {
+                        order_by,
+                        lag_lead,
+                        ignore_nulls,
+                    },
+                )
                 .boxed(),
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
@@ -1327,19 +1369,20 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::RowNumber { order_by } => Kind::RowNumber(order_by.into_proto()),
                 AggregateFunc::Rank { order_by } => Kind::Rank(order_by.into_proto()),
                 AggregateFunc::DenseRank { order_by } => Kind::DenseRank(order_by.into_proto()),
-                AggregateFunc::LagLead { order_by, lag_lead } => {
-                    Kind::LagLead(proto_aggregate_func::ProtoLagLead {
-                        order_by: Some(order_by.into_proto()),
-                        lag_lead: Some(match lag_lead {
-                            LagLeadType::Lag => {
-                                proto_aggregate_func::proto_lag_lead::LagLead::Lag(())
-                            }
-                            LagLeadType::Lead => {
-                                proto_aggregate_func::proto_lag_lead::LagLead::Lead(())
-                            }
-                        }),
-                    })
-                }
+                AggregateFunc::LagLead {
+                    order_by,
+                    lag_lead,
+                    ignore_nulls,
+                } => Kind::LagLead(proto_aggregate_func::ProtoLagLead {
+                    order_by: Some(order_by.into_proto()),
+                    lag_lead: Some(match lag_lead {
+                        LagLeadType::Lag => proto_aggregate_func::proto_lag_lead::LagLead::Lag(()),
+                        LagLeadType::Lead => {
+                            proto_aggregate_func::proto_lag_lead::LagLead::Lead(())
+                        }
+                    }),
+                    ignore_nulls: *ignore_nulls,
+                }),
                 AggregateFunc::FirstValue {
                     order_by,
                     window_frame,
@@ -1446,6 +1489,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                         ))
                     }
                 },
+                ignore_nulls: pll.ignore_nulls,
             },
             Kind::FirstValue(pfv) => AggregateFunc::FirstValue {
                 order_by: pfv
@@ -1529,7 +1573,8 @@ impl AggregateFunc {
             AggregateFunc::LagLead {
                 order_by,
                 lag_lead: lag_lead_type,
-            } => lag_lead(datums, temp_storage, order_by, lag_lead_type),
+                ignore_nulls,
+            } => lag_lead(datums, temp_storage, order_by, lag_lead_type, ignore_nulls),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -2009,24 +2054,84 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
-            AggregateFunc::JsonbAgg { .. } => f.write_str("jsonb_agg"),
-            AggregateFunc::JsonbObjectAgg { .. } => f.write_str("jsonb_object_agg"),
-            AggregateFunc::ArrayConcat { .. } => f.write_str("array_agg"),
-            AggregateFunc::ListConcat { .. } => f.write_str("list_agg"),
-            AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
-            AggregateFunc::RowNumber { .. } => f.write_str("row_number"),
-            AggregateFunc::Rank { .. } => f.write_str("rank"),
-            AggregateFunc::DenseRank { .. } => f.write_str("dense_rank"),
+            AggregateFunc::JsonbAgg { order_by } => {
+                write!(f, "jsonb_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::JsonbObjectAgg { order_by } => {
+                write!(
+                    f,
+                    "jsonb_object_agg[order_by=[{}]]",
+                    separated(", ", order_by)
+                )
+            }
+            AggregateFunc::ArrayConcat { order_by } => {
+                write!(f, "array_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::ListConcat { order_by } => {
+                write!(f, "list_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::StringAgg { order_by } => {
+                write!(f, "string_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::RowNumber { order_by } => {
+                write!(f, "row_number[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::Rank { order_by } => {
+                write!(f, "rank[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::DenseRank { order_by } => {
+                write!(f, "dense_rank[order_by=[{}]]", separated(", ", order_by))
+            }
             AggregateFunc::LagLead {
                 lag_lead: LagLeadType::Lag,
-                ..
-            } => f.write_str("lag"),
+                ignore_nulls,
+                order_by,
+            } => {
+                f.write_str("lag")?;
+                f.write_str("[")?;
+                if *ignore_nulls {
+                    f.write_str("ignore_nulls=true, ")?;
+                }
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                f.write_str("]")
+            }
             AggregateFunc::LagLead {
                 lag_lead: LagLeadType::Lead,
-                ..
-            } => f.write_str("lead"),
-            AggregateFunc::FirstValue { .. } => f.write_str("first_value"),
-            AggregateFunc::LastValue { .. } => f.write_str("last_value"),
+                ignore_nulls,
+                order_by,
+            } => {
+                f.write_str("lag")?;
+                f.write_str("[")?;
+                if *ignore_nulls {
+                    f.write_str("ignore_nulls=true, ")?;
+                }
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                f.write_str("]")
+            }
+            AggregateFunc::FirstValue {
+                order_by,
+                window_frame,
+            } => {
+                f.write_str("first_value")?;
+                f.write_str("[")?;
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                if *window_frame != WindowFrame::default() {
+                    write!(f, " {}", window_frame)?;
+                }
+                f.write_str("]")
+            }
+            AggregateFunc::LastValue {
+                order_by,
+                window_frame,
+            } => {
+                f.write_str("last_value")?;
+                f.write_str("[")?;
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                if *window_frame != WindowFrame::default() {
+                    write!(f, " {}", window_frame)?;
+                }
+                f.write_str("]")
+            }
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

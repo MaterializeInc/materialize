@@ -72,8 +72,8 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
     CoercibleScalarExpr, ColumnOrder, ColumnRef, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
-    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, VariadicFunc, WindowExpr,
-    WindowExprType,
+    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc, VariadicFunc,
+    WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
@@ -4241,6 +4241,13 @@ pub(crate) fn resolve_desc_and_nulls_last<T: AstInfo>(
     }
 }
 
+/// Plans the ORDER BY clause of a window function.
+///
+/// Unfortunately, we have to create two HIR structs from an AST OrderByExpr:
+/// A ColumnOrder has asc/desc and nulls first/last, but can't represent an HirScalarExpr, just
+/// a column reference by index. Therefore, we return both HirScalarExprs and ColumnOrders.
+/// Note that the column references in the ColumnOrders point NOT to input columns, but into the
+/// `Vec<HirScalarExpr>` that we return.
 fn plan_function_order_by(
     ecx: &ExprContext,
     order_by: &[OrderByExpr<Aug>],
@@ -4512,6 +4519,15 @@ fn plan_function<'a>(
 
             let func = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
+            if window_spec.ignore_nulls && window_spec.respect_nulls {
+                sql_bail!("Both IGNORE NULLS and RESPECT NULLS were given.");
+            }
+            if window_spec.ignore_nulls || window_spec.respect_nulls {
+                // If we ever add a scalar window function that supports ignore, then don't forget
+                // to also update HIR EXPLAIN.
+                bail_unsupported!(IGNORE_NULLS_ERROR_MSG);
+            }
+
             let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
 
             return Ok(HirScalarExpr::Windowing(WindowExpr {
@@ -4530,14 +4546,25 @@ fn plan_function<'a>(
             let (expr, func) =
                 func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
+            if window_spec.ignore_nulls && window_spec.respect_nulls {
+                sql_bail!("Both IGNORE NULLS and RESPECT NULLS were given.");
+            }
+            if window_spec.ignore_nulls || window_spec.respect_nulls {
+                match func {
+                    ValueWindowFunc::Lag | ValueWindowFunc::Lead => {}
+                    _ => bail_unsupported!(IGNORE_NULLS_ERROR_MSG),
+                }
+            }
+
             let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
 
             return Ok(HirScalarExpr::Windowing(WindowExpr {
                 func: WindowExprType::Value(ValueWindowExpr {
                     func,
-                    expr: Box::new(expr),
+                    args: Box::new(expr),
                     order_by: col_orders,
                     window_frame,
+                    ignore_nulls: window_spec.ignore_nulls, // (RESPECT NULLS is the default)
                 }),
                 partition,
                 order_by,
@@ -4594,6 +4621,9 @@ fn plan_function<'a>(
 
     func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])
 }
+
+pub const IGNORE_NULLS_ERROR_MSG: &str =
+    "IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD";
 
 /// Resolves the name to a set of function implementations.
 ///
