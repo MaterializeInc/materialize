@@ -25,7 +25,7 @@ In this step, you'll first verify that the source is running and then check the 
 
     For each `subsource`, make sure the `status` is `running`. If you see `stalled` or `failed`, there's likely a configuration issue for you to fix. Check the `error` field for details and fix the issue before moving on. Also, if the `status` of any subsource is `starting` for more than a few minutes, [contact our team](/support/).
 
-2. Once the source is running, use the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics) table to check the status of the initial snapshot.
+2. Once the source is running, use the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics) table to check the status of the initial snapshot:
 
     ```sql
     WITH
