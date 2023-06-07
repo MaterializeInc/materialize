@@ -38,38 +38,40 @@ The Materialize provider is hosted on the [Terraform provider registry](https://
 
 ### Authentication
 
-To configure the provider to communicate with your Materialize organization, you
+To configure the provider to communicate with your Materialize region, you
 need to authenticate with a Materialize username, app password, and other
 specifics from your account.
 
+{{< note >}}
+Materialize recommends creating a new app password for each application you use. To create a new app password, navigate to [https://console.materialize.com/access](https://console.materialize.com/access).
+{{</ note >}}
+
 Materialize recommends saving sensitive input variables as environment variables
-to avoid checking secrets into source control. To create a Terraform environment
-variable, export your sensitive variable in the terminal:
+to avoid checking secrets into source control. In Terraform, you can export your Materialize app password as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name) with the `TF_VAR_<name>` format.
 
 ```shell
-export TF_VAR_MZ_PW=yourMZpassword
+export TF_VAR_MZ_PW=<app_password>
 ```
 
 In the `main.tf` file, add the provider configuration and any variable
 references:
 
 ```hcl
-
 variable "MZ_PW" {}
 
 provider "materialize" {
-  host     = "yourMZhostname"
-  username = "yourMZusername"
+  host     = <hostname>
+  username = <username>
   password = var.MZ_PW
   port     = 6875
-  database = "yourMZdatabase"
+  database = <database>
 }
 ```
 
-### Create Materialize resources
+### Materialize resources
 
 The Materialize provider allows you to create several resource types in your
-organization. Resources correspond to Materialize objects and are configured
+region. Resources correspond to Materialize objects and are configured
 with the `resource` block in your Terraform configuration file.
 
 For example, to create a new cluster, you would use the `materialize_cluster`
@@ -81,8 +83,25 @@ resource "materialize_cluster" "example_cluster" {
 }
 ```
 
-All the available Materialize resources and documentation can be found in the [Terraform provider
-registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
+You can find reference documentation for all the resources available in the
+Materialize provider in the [Terraform registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
+
+### Create Materialize data sources
+
+The Materialize provider supports several data source types to retrieve
+information about your existing Materialize resources. Data sources can return
+information about objects defined outside of Terraform and can be used as
+variables in your configuration with the `data` block.
+
+For example, to return information about your current clusters, you would use the
+`materialize_cluster` data source:
+
+```hcl
+data "materialize_cluster" "all" {}
+```
+
+This data source returns all cluster names and IDs which you can use as
+variables for new resources. 
 
 
 ## Terraform modules
@@ -94,6 +113,11 @@ The Terraform modules below provide the cloud infrastructure foundation
 Materialize needs to communicate with components outside of Materialize itself.
 The Materialize provider allows users to manage Materialize resources in the
 same programmatic way.
+
+{{< note >}}
+While Materialize offers support for its Terraform provider, Materialize does
+not offer support for these modules.
+{{</ note >}}
 
 You can use the modules to establish the underlying cloud
 resources and then use the Materialize provider to build Materialize-specific
@@ -177,12 +201,12 @@ Terraform configuration below with output from the module:
 ```hcl
 resource "materialize_secret" "example_secret" {
   name  = "secret"
-  value = <your_RDS_password>
+  value = <RDSpassword>
 }
 
 resource "materialize_connection_postgres" "example_postgres_connection" {
   name = "example_postgres_connection"
-  host = <your_RDS_hostname>
+  host = <RDShostname>
   port = 5432
   user {
     secret {
