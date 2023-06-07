@@ -12,7 +12,14 @@ $ kafka-create-topic topic=upsert
 > CREATE CONNECTION conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> CREATE SOURCE upsert
+> CREATE SOURCE kept_upsert
+  FROM KAFKA CONNECTION conn (TOPIC
+  'testdrive-upsert-${testdrive.seed}'
+  )
+  KEY FORMAT TEXT VALUE FORMAT TEXT
+  ENVELOPE UPSERT
+
+> CREATE SOURCE dropped_upsert
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
@@ -24,7 +31,8 @@ fish:fish
 bird:goose
 animal:whale
 
-> SELECT count(*) from upsert;
+> SELECT count(*) from dropped_upsert;
 3
 
-> DROP SOURCE upsert;
+> SELECT count(*) from kept_upsert;
+3

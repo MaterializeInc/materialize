@@ -16,7 +16,15 @@ $ kafka-create-topic topic=upsert
 
 > CREATE CLUSTER c1 REPLICAS (replica1 (SIZE '1'));
 
-> CREATE SOURCE upsert
+> CREATE SOURCE kept_upsert
+  IN CLUSTER c1
+  FROM KAFKA CONNECTION conn (TOPIC
+  'testdrive-upsert-${testdrive.seed}'
+  )
+  KEY FORMAT TEXT VALUE FORMAT TEXT
+  ENVELOPE UPSERT
+
+> CREATE SOURCE dropped_upsert
   IN CLUSTER c1
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
@@ -29,7 +37,8 @@ fish:fish
 bird:goose
 animal:whale
 
-> SELECT count(*) from upsert;
+> SELECT count(*) from dropped_upsert;
 3
 
-> DROP SOURCE upsert;
+> SELECT count(*) from dropped_upsert;
+3

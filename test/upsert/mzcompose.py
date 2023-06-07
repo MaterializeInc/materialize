@@ -322,21 +322,46 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     ]
     c.up(*dependencies)
 
-    testdrive_files = [
-        "drop-source.td",
-        "drop-cluster-cascade.td",
-        "drop-source-in-cluster.td",
+    def rocksdb_path(source_name) -> tuple[str, str]:
+        (source_id, cluster_id, replica_id) = c.sql_query(
+            f"select s.id, s.cluster_id, c.id from mz_sources s join mz_cluster_replicas c on s.cluster_id = c.cluster_id where s.name ='{source_name}'"
+        )[0]
+        prefix = "/mzdata/source_data"
+        cluster_prefix = f"{cluster_id}-replica-{replica_id[1:]}"
+        return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
+
+    def files_at_path(path) -> int:
+        num_files = c.exec(
+            "materialized", "bash", "-c", f"find {path} -type f | wc -l", capture=True
+        ).stdout.strip()
+        return int(num_files)
+
+    scenarios = [
+        ("drop-source.td", "DROP SOURCE dropped_upsert", True),
+        ("drop-cluster-cascade.td", "DROP CLUSTER c1 CASCADE", True),
+        ("drop-source-in-cluster.td", "DROP SOURCE dropped_upsert", False),
     ]
 
-    for testdrive_file in testdrive_files:
-        c.run("testdrive", f"rocksdb-cleanup/{testdrive_file}")
-        files = c.exec(
-            "materialized",
-            "bash",
-            "-c",
-            "find /mzdata/source_data -type f",
-            capture=True,
-        ).stdout.strip()
-        assert (
-            files == ""
-        ), f"The scratch directory should have been cleaned up but has following files:\n{files}"
+    for (testdrive_file, drop_stmt, cluster_dropped) in scenarios:
+        with c.override(
+            Testdrive(no_reset=True),
+        ):
+            c.up("testdrive", persistent=True)
+            c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
+
+            (_, kept_source_path) = rocksdb_path("kept_upsert")
+            (dropped_cluster_path, dropped_source_path) = rocksdb_path("dropped_upsert")
+
+            assert files_at_path(kept_source_path) > 0
+            assert files_at_path(dropped_source_path) > 0
+
+            c.testdrive(f"> {drop_stmt}")
+
+            assert files_at_path(kept_source_path) > 0
+
+            if cluster_dropped:
+                assert files_at_path(dropped_cluster_path) == 0
+            else:
+                assert files_at_path(dropped_source_path) == 0
+
+        c.testdrive("# reset testdrive")
