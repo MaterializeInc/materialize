@@ -619,6 +619,7 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
             routing::get(move || async move { root::handle_home(profiling).await }),
         )
         .route("/api/sql", routing::post(sql::handle_sql))
+        .route("/api/segment", routing::post(sql::handle_segment))
         .route("/memory", routing::get(memory::handle_memory))
         .route(
             "/hierarchical-memory",

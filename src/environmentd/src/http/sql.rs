@@ -27,9 +27,11 @@ use mz_adapter::{
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::ToJson;
+use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt;
 use mz_pgwire::Severity;
-use mz_repr::{Datum, RelationDesc, RowArena};
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::{Datum, RelationDesc, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
@@ -40,6 +42,53 @@ use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
+
+pub async fn handle_segment(
+    mut client: AuthedClient,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    match dbg!(execute_segment(&mut client, request).await) {
+        Ok(()) => Ok(()),
+        Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+    }
+}
+
+async fn execute_segment(
+    client: &mut AuthedClient,
+    value: serde_json::Value,
+) -> Result<(), anyhow::Error> {
+    dbg!(&value);
+    let client = &mut client.client;
+    client.start_transaction(Some(1))?;
+    const EMPTY_PORTAL: &str = "";
+    let stmt = "INSERT INTO materialize.public.t VALUES ($1)";
+    let stmt = mz_sql::parse::parse_with_limit(stmt)
+        .unwrap()?
+        .into_element();
+    client
+        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+        .await?;
+    let result_formats = vec![mz_pgrepr::Format::Text; 0];
+    let prep_stmt = client.get_prepared_statement(EMPTY_PORTAL).await?;
+    let desc = prep_stmt.desc().clone();
+    let revision = prep_stmt.catalog_revision;
+    let stmt = prep_stmt.stmt().cloned();
+    let datum = Jsonb::from_serde_json(value)?;
+    let params = vec![(datum.as_ref().into_datum(), ScalarType::Jsonb)];
+    client.session().set_portal(
+        EMPTY_PORTAL.into(),
+        desc,
+        stmt,
+        params,
+        result_formats,
+        revision,
+    )?;
+    client
+        .execute(EMPTY_PORTAL.into(), futures::future::pending())
+        .await?;
+    client.end_transaction(EndTransactionAction::Commit).await?;
+    Ok(())
+}
 
 pub async fn handle_sql(
     mut client: AuthedClient,
