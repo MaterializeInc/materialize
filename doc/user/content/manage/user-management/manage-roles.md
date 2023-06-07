@@ -42,6 +42,14 @@ Materialize roles have the following available attributes:
 | `INHERIT`       | **Read-only.** Can inherit the privileges of roles that it is a member of. On by default.      |
 | `CREATECLUSTER` | Can create a cluster.                                                           |
 
+## Remove a user from a role
+
+To remove a user from a role, use the `REVOKE` statement:
+
+```sql
+REVOKE <role_name> FROM <user_name>;
+```
+
 
 ## Drop a role
 

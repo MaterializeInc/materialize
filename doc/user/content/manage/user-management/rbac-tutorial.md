@@ -143,7 +143,7 @@ In this example, let's say your `dev_role` needs the following permissions:
    GRANT SELECT, UPDATE, INSERT ON dev_table TO dev_role;
    ```
 
-   Table objects have four available privileges - `read`, `write`, `insert`, and
+   Table objects have four available privileges - `read`, `write`, `append`, and
    `delete`. The `dev_role` doesn't need `delete` permissions, so it is not
    applied in the `GRANT` statement above.
 
