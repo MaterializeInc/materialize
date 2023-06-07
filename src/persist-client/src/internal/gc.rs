@@ -235,7 +235,6 @@ where
         let rollups_to_remove_from_state = gc_rollups.rollups_to_remove_from_state();
         report_step_timing(&machine.applier.metrics.gc.steps.find_removable_rollups);
 
-        info!("running GC to {:?}: {:?}", req.new_seqno_since, gc_rollups);
         let mut gc_stats = GcStats::default();
 
         if rollups_to_remove_from_state.is_empty() {
@@ -639,11 +638,4 @@ impl GcRollups {
             Some((_rollup_to_keep, rollups_to_remove_from_state)) => rollups_to_remove_from_state,
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[mz_ore::test]
-    fn gc() {}
 }

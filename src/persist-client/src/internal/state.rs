@@ -1231,15 +1231,10 @@ where
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
-        // The whole point of a tombstone is that we forever keep exactly one
-        // cheap, unchanging version in consensus. Force GC to run on tombstone
-        // shards to make sure we clean up the final few versions before the
-        // tombstone.
-        //
-        // However, because we write a rollup as of SeqNo X and then link it in
-        // using a state transition (in this case from X to X+1), the minimum
-        // number of live diffs is actually two. Detect when we're in this
-        // minimal two diff state and stop the (otherwise) infinite iteration.
+        // Always assign GC work to a tombstoned shard to have the chance to
+        // clean up any residual blobs. This is safe (won't cause excess gc)
+        // as the only allowed command after becoming a tombstone is to write
+        // the final rollup.
         let tombstone_needs_gc = self.collections.is_tombstone();
         let should_gc = should_gc || tombstone_needs_gc;
         if should_gc {
@@ -1341,14 +1336,13 @@ where
     pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
 
-        if self.collections.is_tombstone() {
-            info!(
-                "is a tombstone: {:?}, latest rollup: {:?}",
-                self.seqno, latest_rollup_seqno
-            );
-            if self.collections.is_tombstone() && latest_rollup_seqno.next() < self.seqno {
-                return Some(self.seqno);
-            }
+        // Tombstoned shards require one final rollup. However, because we
+        // write a rollup as of SeqNo X and then link it in using a state
+        // transition (in this case from X to X+1), the minimum number of
+        // live diffs is actually two. Detect when we're in this minimal
+        // two diff state and stop the (otherwise) infinite iteration.
+        if self.collections.is_tombstone() && latest_rollup_seqno.next() < self.seqno {
+            return Some(self.seqno);
         }
 
         let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);

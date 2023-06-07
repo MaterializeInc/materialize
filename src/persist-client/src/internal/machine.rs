@@ -136,10 +136,6 @@ where
                 ret
             })
             .await;
-        info!(
-            "add and removed rollups: {:?} {:?}, {:?}",
-            _seqno, _applied, maintenance
-        );
         (applied_ever_true, maintenance)
     }
 
@@ -672,7 +668,6 @@ where
                     state.become_tombstone()
                 })
                 .await;
-            info!("became tombstone: {:?}", res);
             let err = match res {
                 Ok((_seqno, _res, maintenance)) => return Some(maintenance),
                 Err(err) => err,
@@ -1265,7 +1260,7 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
-            since.0.elements(),
+            since.0.elements()
         ))
     }
 
