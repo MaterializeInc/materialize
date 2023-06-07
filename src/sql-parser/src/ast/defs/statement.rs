@@ -1673,6 +1673,10 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
 pub enum AlterSourceAction<T: AstInfo> {
     SetOptions(Vec<CreateSourceOption<T>>),
     ResetOptions(Vec<CreateSourceOptionName>),
+    AddSubsources {
+        subsources: Vec<CreateSourceSubsource<T>>,
+        details: Option<String>,
+    },
     DropSubsources {
         if_exists: bool,
         cascade: bool,
@@ -1723,6 +1727,7 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
                     f.write_str(" CASCADE");
                 }
             }
+            _ => todo!(),
         }
     }
 }

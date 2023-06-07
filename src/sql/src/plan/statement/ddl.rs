@@ -4818,6 +4818,7 @@ pub fn plan_alter_source(
                 crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
             }
         }
+        _ => todo!(),
     };
 
     Ok(Plan::AlterSource(AlterSourcePlan { id, action }))
