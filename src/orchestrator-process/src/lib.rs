@@ -104,12 +104,13 @@ use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
 use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_pid_file::PidFile;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
 use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
+use tokio::fs::remove_dir_all;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::broadcast::{self, Sender};
@@ -534,12 +535,10 @@ impl NamespacedProcessOrchestrator {
             let _guard = scopeguard::guard((), |_| {
                 if let Some(scratch) = scratch_directory {
                     info!(scratch_dir = %scratch.display(), "cleaning up scratch directory");
-                    if let Err(e) = std::fs::remove_dir_all(scratch) {
-                        warn!(
-                            "Error cleaning up scratch directory: {}",
-                            e.display_with_causes()
-                        )
-                    }
+                    task::spawn(
+                        || "clean_cluster_scratch_directory",
+                        remove_dir_all(scratch),
+                    );
                 }
             });
 
