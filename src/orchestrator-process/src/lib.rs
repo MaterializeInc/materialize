@@ -91,8 +91,8 @@ use anyhow::{bail, Context};
 use async_stream::stream;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::future;
 use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
-use futures::{future, TryFutureExt};
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
@@ -535,15 +535,14 @@ impl NamespacedProcessOrchestrator {
             let _guard = scopeguard::guard((), |_| {
                 if let Some(scratch) = scratch_directory {
                     info!(scratch_dir = %scratch.display(), "cleaning up scratch directory");
-                    task::spawn(
-                        || "clean_cluster_scratch_directory",
-                        remove_dir_all(scratch).map_err(|error| {
+                    task::spawn(|| "clean_cluster_scratch_directory", async {
+                        if let Err(e) = remove_dir_all(scratch).await {
                             warn!(
                                 "Error cleaning up scratch directory: {}",
-                                error.display_with_causes()
-                            )
-                        }),
-                    );
+                                e.display_with_causes()
+                            );
+                        }
+                    });
                 }
             });
 
