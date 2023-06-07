@@ -1,0 +1,191 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+write-batch output=b0 lower=0 upper=1
+k1 0 1
+----
+parts=1 len=1
+
+write-batch output=b1 lower=1 upper=2
+k2 1 -1
+k3 1 1
+----
+parts=1 len=2
+
+write-batch output=b2 lower=2 upper=3
+k3 2 -1
+k4 2 1
+----
+parts=1 len=2
+
+# insert our first batch into state
+register-writer writer_id=w11111111-1111-1111-1111-111111111111
+----
+v2 [0]
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v3 [1]
+
+compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v4 [2]
+
+# write a bunch of rollups to verify GC bounds
+write-rollup seqno=v3
+----
+v5
+
+write-rollup seqno=v4
+----
+v6
+
+write-rollup seqno=v5
+----
+v7
+
+consensus-scan from_seqno=v1
+----
+seqno=v1 batches= rollups=v1
+seqno=v2 batches= rollups=v1
+seqno=v3 batches=b0 rollups=v1
+seqno=v4 batches=b0,b1 rollups=v1
+seqno=v5 batches=b0,b1 rollups=v1,v3
+seqno=v6 batches=b0,b1 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1 rollups=v1,v3,v4,v5
+
+# gc at the first seqno should be a no-op (no rollups to remove)
+gc to_seqno=v1
+----
+v7 batch_parts=0 rollups=0 truncated= state_rollups=
+
+consensus-scan from_seqno=v1
+----
+seqno=v1 batches= rollups=v1
+seqno=v2 batches= rollups=v1
+seqno=v3 batches=b0 rollups=v1
+seqno=v4 batches=b0,b1 rollups=v1
+seqno=v5 batches=b0,b1 rollups=v1,v3
+seqno=v6 batches=b0,b1 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1 rollups=v1,v3,v4,v5
+
+# there is only 1 rollup <= seqno 2, so this should also be a no-op
+gc to_seqno=v2
+----
+v7 batch_parts=0 rollups=0 truncated= state_rollups=
+
+consensus-scan from_seqno=v1
+----
+seqno=v1 batches= rollups=v1
+seqno=v2 batches= rollups=v1
+seqno=v3 batches=b0 rollups=v1
+seqno=v4 batches=b0,b1 rollups=v1
+seqno=v5 batches=b0,b1 rollups=v1,v3
+seqno=v6 batches=b0,b1 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1 rollups=v1,v3,v4,v5
+
+# ok! now it gets interesting, let's gc to v3 which the latest state
+# has a rollup for. we should be able to remove v1 and states [v1, v3)
+gc to_seqno=v3
+----
+v8 batch_parts=0 rollups=0 truncated=v3 state_rollups=v1
+
+consensus-scan from_seqno=v1
+----
+seqno=v3 batches=b0 rollups=v1
+seqno=v4 batches=b0,b1 rollups=v1
+seqno=v5 batches=b0,b1 rollups=v1,v3
+seqno=v6 batches=b0,b1 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1 rollups=v1,v3,v4,v5
+seqno=v8 batches=b0,b1 rollups=v3,v4,v5
+
+# if we run the same GC again, or less, they should be no-ops
+# and perform no truncations
+gc to_seqno=v3
+----
+v8 batch_parts=0 rollups=0 truncated= state_rollups=
+
+gc to_seqno=v2
+----
+v8 batch_parts=0 rollups=0 truncated= state_rollups=
+
+# let's try GC'ing many rollups at once. here, we both ask
+# to remove >1 rollup at once, and pass in a to_seqno that is
+# not exactly covered by a rollup. we expect to see all rollups
+# <= the latest to be removed
+gc to_seqno=v8
+----
+v9 batch_parts=0 rollups=0 truncated=v4,v5 state_rollups=v3,v4
+
+consensus-scan from_seqno=v1
+----
+seqno=v5 batches=b0,b1 rollups=v1,v3
+seqno=v6 batches=b0,b1 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1 rollups=v1,v3,v4,v5
+seqno=v8 batches=b0,b1 rollups=v3,v4,v5
+seqno=v9 batches=b0,b1 rollups=v5
+
+# let's verify that rollups are physically deleted too.
+# it's subtle, but v8 was the first transition that
+# removed a rollup from state, so we need to GC up to
+# v8 to verify the rollup blob is deleted.
+
+write-rollup seqno=v8
+----
+v10
+
+write-rollup seqno=v9
+----
+v11
+
+# (this is also subtle, but we GC to v8 again like before.
+# this time we can make further progress though, as previously
+# v8 was greater than the latest rollup, now v8 is less than
+# the latest rollup so everything below it can be removed)
+gc to_seqno=v8
+----
+v12 batch_parts=0 rollups=1 truncated=v8 state_rollups=v5
+
+consensus-scan from_seqno=v1
+----
+seqno=v8 batches=b0,b1 rollups=v3,v4,v5
+seqno=v9 batches=b0,b1 rollups=v5
+seqno=v10 batches=b0,b1 rollups=v5,v8
+seqno=v11 batches=b0,b1 rollups=v5,v8,v9
+seqno=v12 batches=b0,b1 rollups=v8,v9
+
+# truncate Consensus out-of-band to mirror overlapping GC
+# processes. we'll remove v8 from Consensus but "fail"
+# before removing v8 from state
+consensus-truncate to_seqno=v9
+----
+1
+
+consensus-scan from_seqno=v1
+----
+seqno=v9 batches=b0,b1 rollups=v5
+seqno=v10 batches=b0,b1 rollups=v5,v8
+seqno=v11 batches=b0,b1 rollups=v5,v8,v9
+seqno=v12 batches=b0,b1 rollups=v8,v9
+
+# even though the row v8 doesn't exist any more, GC
+# should still know to remove it from state. it should
+# additionally perform no actual truncate calls because
+# it started at a state greater than to_seqno
+gc to_seqno=v9
+----
+v13 batch_parts=0 rollups=0 truncated= state_rollups=v8
+
+consensus-scan from_seqno=v1
+----
+seqno=v9 batches=b0,b1 rollups=v5
+seqno=v10 batches=b0,b1 rollups=v5,v8
+seqno=v11 batches=b0,b1 rollups=v5,v8,v9
+seqno=v12 batches=b0,b1 rollups=v8,v9
+seqno=v13 batches=b0,b1 rollups=v9

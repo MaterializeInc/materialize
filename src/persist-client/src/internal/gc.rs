@@ -451,7 +451,7 @@ where
 
             gc_stats.truncated_consensus_to.push(truncate_lt);
             gc_stats.batch_parts_deleted_from_blob += batch_parts_to_delete.len();
-            gc_stats.rollups_deleted_from_blob += batch_parts_to_delete.len();
+            gc_stats.rollups_deleted_from_blob += rollups_to_delete.len();
 
             Self::delete_and_truncate(
                 truncate_lt,

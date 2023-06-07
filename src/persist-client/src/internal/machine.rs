@@ -1199,6 +1199,20 @@ pub mod datadriven {
         Ok(s)
     }
 
+    pub async fn consensus_truncate(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let to = args.expect("to_seqno");
+        let removed = datadriven
+            .client
+            .consensus
+            .truncate(&datadriven.shard_id.to_string(), to)
+            .await
+            .expect("valid truncation");
+        Ok(format!("{}\n", removed))
+    }
+
     pub async fn blob_scan_batches(
         datadriven: &mut MachineState,
         _args: DirectiveArgs<'_>,

@@ -130,7 +130,7 @@ v9
 # run gc to clear only the b0,b1 seqnos
 gc to_seqno=v9
 ----
-v10 batch_parts=0 rollups=0 truncated=v7 state_rollups=v4
+v10 batch_parts=0 rollups=1 truncated=v7 state_rollups=v4
 
 consensus-scan from_seqno=v0
 ----
@@ -155,21 +155,23 @@ k3 1 1
 <run 0>
 part 0
 
-# run gc to clear up to the latest state by first writing a new rollup at the current seqno
-write-rollup seqno=v10
+# write a new rollup at v8 so we can GC v7 on our next call
+write-rollup seqno=v8
 ----
 v11
 
-gc to_seqno=v11
+gc to_seqno=v8
 ----
-v12 batch_parts=2 rollups=2 truncated=v10 state_rollups=v7
+v12 batch_parts=2 rollups=0 truncated=v8 state_rollups=v7
 
 # we should only have b0_1,b2 now
 consensus-scan from_seqno=v0
 ----
+seqno=v8 batches=b0_1,b2 rollups=v4
+seqno=v9 batches=b0_1,b2 rollups=v4,v7
 seqno=v10 batches=b0_1,b2 rollups=v7
-seqno=v11 batches=b0_1,b2 rollups=v7,v10
-seqno=v12 batches=b0_1,b2 rollups=v10
+seqno=v11 batches=b0_1,b2 rollups=v7,v8
+seqno=v12 batches=b0_1,b2 rollups=v8
 
 # and b0 and b1 should no longer exist in the blob store, as no states still reference them
 fetch-batch input=b0

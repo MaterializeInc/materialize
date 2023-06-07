@@ -205,6 +205,9 @@ mod tests {
                                 machine_dd::compare_and_downgrade_since(&mut state, args).await
                             }
                             "consensus-scan" => machine_dd::consensus_scan(&mut state, args).await,
+                            "consensus-truncate" => {
+                                machine_dd::consensus_truncate(&mut state, args).await
+                            }
                             "downgrade-since" => {
                                 machine_dd::downgrade_since(&mut state, args).await
                             }
