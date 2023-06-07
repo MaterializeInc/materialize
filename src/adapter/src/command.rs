@@ -407,10 +407,12 @@ pub enum ExecuteResponse {
     Subscribing { rx: RowBatchStream },
     /// The active transaction committed.
     TransactionCommitted {
+        /// Session parameters that changed because the transaction ended.
         params: BTreeMap<&'static str, String>,
     },
     /// The active transaction rolled back.
     TransactionRolledBack {
+        /// Session parameters that changed because the transaction ended.
         params: BTreeMap<&'static str, String>,
     },
     /// The specified number of rows were updated in the requested table.
