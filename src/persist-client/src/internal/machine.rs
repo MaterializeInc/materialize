@@ -1236,12 +1236,13 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let since = args.expect_antichain("since");
+        let seqno = args.optional("seqno");
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
             .downgrade_since(
                 &reader_id,
-                None,
+                seqno,
                 &since,
                 (datadriven.machine.applier.cfg.now)(),
             )
@@ -1250,7 +1251,7 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
-            since.0.elements()
+            since.0.elements(),
         ))
     }
 
@@ -1554,10 +1555,28 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             new_seqno_since,
         };
-        let maintenance = GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        let (maintenance, stats) =
+            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
         datadriven.routine.push(maintenance);
 
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+        Ok(format!(
+            "{} batch_parts={} rollups={} truncated={} state_rollups={}\n",
+            datadriven.machine.seqno(),
+            stats.batch_parts_deleted_from_blob,
+            stats.rollups_deleted_from_blob,
+            stats
+                .truncated_consensus_to
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            stats
+                .rollups_removed_from_state
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        ))
     }
 
     pub async fn snapshot(

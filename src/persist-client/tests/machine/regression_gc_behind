@@ -38,13 +38,13 @@ v4
 # Run gc up to our latest seqno
 gc to_seqno=v4
 ----
-v5 ok
+v5 batch_parts=0 rollups=0 truncated=v3 state_rollups=v1
 
 # Now some slow gc req comes in that's behind. In the regression case, this
 # panics.
 gc to_seqno=v1
 ----
-v5 ok
+v5 batch_parts=0 rollups=0 truncated= state_rollups=
 
 consensus-scan from_seqno=v0
 ----

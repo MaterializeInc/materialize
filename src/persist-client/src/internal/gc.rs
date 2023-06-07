@@ -152,9 +152,10 @@ where
 
                 let start = Instant::now();
                 machine.applier.metrics.gc.started.inc();
-                let mut maintenance = Self::gc_and_truncate(&mut machine, consolidated_req)
-                    .instrument(gc_span)
-                    .await;
+                let (mut maintenance, _stats) =
+                    Self::gc_and_truncate(&mut machine, consolidated_req)
+                        .instrument(gc_span)
+                        .await;
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();
                 machine
@@ -204,10 +205,10 @@ where
         Some(gc_completed_receiver)
     }
 
-    pub async fn gc_and_truncate(
+    pub(crate) async fn gc_and_truncate(
         machine: &mut Machine<K, V, T, D>,
         req: GcReq,
-    ) -> RoutineMaintenance {
+    ) -> (RoutineMaintenance, GcStats) {
         let mut step_start = Instant::now();
         let mut report_step_timing = |counter: &Counter| {
             let now = Instant::now();
@@ -215,6 +216,17 @@ where
             step_start = now;
         };
         assert_eq!(req.shard_id, machine.shard_id());
+
+        // Double check our GC req: seqno_since will never regress
+        // so we can verify it's not somehow greater than the last-
+        // known seqno_since
+        let current_seqno_since = machine.applier.seqno_since();
+        assert!(
+            req.new_seqno_since <= current_seqno_since,
+            "invalid gc req: {:?} vs machine seqno_since {}",
+            req,
+            current_seqno_since
+        );
 
         // First, check the latest known state to this process to see
         // if there's relevant GC work for this seqno_since
@@ -224,13 +236,14 @@ where
         report_step_timing(&machine.applier.metrics.gc.steps.find_removable_rollups);
 
         info!("running GC to {:?}: {:?}", req.new_seqno_since, gc_rollups);
+        let mut gc_stats = GcStats::default();
 
         if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
             // to delete), we can safely exit.
             machine.applier.metrics.gc.noop.inc();
-            return RoutineMaintenance::default();
+            return (RoutineMaintenance::default(), gc_stats);
         }
 
         debug!(
@@ -268,6 +281,7 @@ where
             &gc_rollups,
             machine,
             &mut report_step_timing,
+            &mut gc_stats,
         )
         .await;
 
@@ -286,6 +300,7 @@ where
             machine.remove_rollups(rollups_to_remove_from_state).await;
         report_step_timing(&machine.applier.metrics.gc.steps.remove_rollups_from_state);
         debug!("CaS removed rollups from state: {:?}", removed_rollups);
+        gc_stats.rollups_removed_from_state = removed_rollups;
 
         // Everything here and below is not strictly needed for GC to complete,
         // but it's a good opportunity, while we have all live states in hand,
@@ -336,7 +351,7 @@ where
                 .post_gc_calculations_seconds,
         );
 
-        maintenance
+        (maintenance, gc_stats)
     }
 
     /// Physically deletes all blobs from Blob and live diffs from Consensus that
@@ -351,6 +366,7 @@ where
         gc_rollups: &GcRollups,
         machine: &mut Machine<K, V, T, D>,
         timer: &mut F,
+        gc_stats: &mut GcStats,
     ) where
         F: FnMut(&Counter),
     {
@@ -432,6 +448,10 @@ where
                     }
                 }
             });
+
+            gc_stats.truncated_consensus_to.push(truncate_lt);
+            gc_stats.batch_parts_deleted_from_blob += batch_parts_to_delete.len();
+            gc_stats.rollups_deleted_from_blob += batch_parts_to_delete.len();
 
             Self::delete_and_truncate(
                 truncate_lt,
@@ -565,6 +585,14 @@ where
 
         futures.collect().await
     }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GcStats {
+    pub(crate) batch_parts_deleted_from_blob: usize,
+    pub(crate) rollups_deleted_from_blob: usize,
+    pub(crate) truncated_consensus_to: Vec<SeqNo>,
+    pub(crate) rollups_removed_from_state: Vec<SeqNo>,
 }
 
 #[derive(Debug)]

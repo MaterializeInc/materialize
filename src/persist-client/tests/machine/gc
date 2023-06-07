@@ -66,7 +66,7 @@ seqno=v4 batches=b0,b1 rollups=v1
 # gc should _not_ perform any work in this case.
 gc to_seqno=v4
 ----
-v4 ok
+v4 batch_parts=0 rollups=0 truncated= state_rollups=
 
 # verify that consensus has not changed
 consensus-scan from_seqno=v3
@@ -83,7 +83,7 @@ v5
 # and introduce its own seqno (to remove the older rollup from state)
 gc to_seqno=v5
 ----
-v6 ok
+v6 batch_parts=0 rollups=0 truncated=v4 state_rollups=v1
 
 # verify that gc removed all seqno less than the latest
 consensus-scan from_seqno=v0
@@ -130,7 +130,7 @@ v9
 # run gc to clear only the b0,b1 seqnos
 gc to_seqno=v9
 ----
-v10 ok
+v10 batch_parts=0 rollups=0 truncated=v7 state_rollups=v4
 
 consensus-scan from_seqno=v0
 ----
@@ -162,7 +162,7 @@ v11
 
 gc to_seqno=v11
 ----
-v12 ok
+v12 batch_parts=2 rollups=2 truncated=v10 state_rollups=v7
 
 # we should only have b0_1,b2 now
 consensus-scan from_seqno=v0

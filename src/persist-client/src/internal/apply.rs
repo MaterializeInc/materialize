@@ -207,18 +207,18 @@ where
             })
     }
 
-    /// Returns all rollups that are <= the given `seqno_since`.
+    /// Returns all rollups that are <= the given `seqno`.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
     /// updated to the latest state.
-    pub fn rollups_lte_seqno(&self, seqno_since: SeqNo) -> Vec<(SeqNo, PartialRollupKey)> {
+    pub fn rollups_lte_seqno(&self, seqno: SeqNo) -> Vec<(SeqNo, PartialRollupKey)> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state
                     .collections
                     .rollups
-                    .range(..=seqno_since)
+                    .range(..=seqno)
                     .map(|(seqno, rollup)| (*seqno, rollup.key.clone()))
                     .collect::<Vec<(SeqNo, PartialRollupKey)>>()
             })
