@@ -4,6 +4,7 @@ description: "How to securely connect an Amazon MSK cluster as a source to Mater
 aliases:
   - /integrations/aws-msk/
   - /integrations/amazon-msk/
+  - /connect-sources/amazon-msk/
 menu:
   main:
     parent: "kafka"

@@ -33,7 +33,9 @@ use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::types::connections::KafkaConnection;
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
-use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
+};
 
 use crate::catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
@@ -41,10 +43,10 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
     MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS,
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
-    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES,
+    MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS,
+    MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error,
@@ -332,6 +334,9 @@ impl CatalogState {
                         GenericSourceConnection::Postgres(postgres) => {
                             self.pack_postgres_source_update(id, postgres, diff)
                         }
+                        GenericSourceConnection::Kafka(kafka) => {
+                            self.pack_kafka_source_update(id, kafka, diff)
+                        }
                         _ => vec![],
                     },
                     _ => vec![],
@@ -470,6 +475,22 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(&postgres.publication_details.slot),
+            ]),
+            diff,
+        }]
+    }
+
+    fn pack_kafka_source_update(
+        &self,
+        id: GlobalId,
+        kafka: &KafkaSourceConnection,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_KAFKA_SOURCES),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(&kafka.group_id(id)),
             ]),
             diff,
         }]

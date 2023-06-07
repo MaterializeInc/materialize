@@ -36,7 +36,7 @@ use mz_sql::plan::Plan;
 use serde::{Deserialize, Serialize};
 use tokio::time;
 use tokio_postgres::error::SqlState;
-use tracing::warn;
+use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
@@ -90,7 +90,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
             // We omit most detail from the error message we send to the client, to
             // avoid giving attackers unnecessary information during auth. AdapterErrors
             // are safe to return because they're generated after authentication.
-            warn!("WS request failed init: {}", e);
+            debug!("WS request failed init: {}", e);
             let reason = match e.downcast_ref::<AdapterError>() {
                 Some(error) => Cow::Owned(error.to_string()),
                 None => "unauthorized".into(),
@@ -118,7 +118,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
     // Send any notices that might have been generated on startup.
     let notices = client.client.session().drain_notices();
     if let Err(err) = forward_notices(&mut ws, notices).await {
-        tracing::error!("failed to forward notices to WebSocket, {err:?}");
+        debug!("failed to forward notices to WebSocket, {err:?}");
         return;
     }
 
@@ -177,7 +177,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         };
 
         if let Err(err) = ws_response().await {
-            tracing::error!("failed to send respond over WebSocket, {err:?}");
+            debug!("failed to send response over WebSocket, {err:?}");
             return;
         }
     }

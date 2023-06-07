@@ -3314,52 +3314,64 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         FROM
                         mz_internal.mz_object_dependencies AS d
                             JOIN
-                            mz_internal.mz_name_to_global_id($1) AS g (id)
+                            mz_internal.mz_resolve_object_name($1) AS g
                             ON d.object_id = g.id
                     ) AS d
                     ON s.id = d.subsource
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
         },
-        "mz_name_to_global_id" => Table {
-            // If the user wants to specify a database, we also require them to specify which
-            // schemas in that database they want us to search in that database.
-            params!(String, ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
-                SELECT o.id
+        "mz_resolve_object_name" => Table {
+            // This implementation is available primarily to drive the other, single-param
+            // implementation.
+            params!(
+                // Database
+                String,
+                // Schemas/search path
+                ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
+                // Item name
+                String
+            ) =>
+            // credit for using rank() to @def-
+            sql_impl_table_func("
+                SELECT id, oid, schema_id, name, type, owner_id, privileges
+                FROM (
+                    SELECT o.*, rank() OVER (ORDER BY pg_catalog.array_position($2, search_schema.name))
+                    FROM
+                        mz_catalog.mz_objects AS o
+                        JOIN mz_catalog.mz_schemas AS s
+                            ON o.schema_id = s.id
+                        JOIN unnest($2::text[]) AS search_schema (name)
+                            ON search_schema.name = s.name
+                        JOIN mz_catalog.mz_databases AS d
+                            -- Schemas without database IDs are present in every
+                            -- database that exists.
+                            ON d.id = COALESCE(s.database_id, d.id)
+                    WHERE
+                        o.name = $3::pg_catalog.text
+                        AND d.name = $1::pg_catalog.text
+                )
+                WHERE rank = 1;
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL;
+            params!(String) =>
+            // Normalize the input name, and for any NULL values (e.g. not database qualified), use
+            // the defaults used during name resolution.
+            sql_impl_table_func("
+                SELECT
+                    o.id, o.oid, o.schema_id, o.name, o.type, o.owner_id, o.privileges
                 FROM
-                    mz_catalog.mz_objects AS o
-                        JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
-                WHERE
-                    o.name = $3::pg_catalog.text AND s.name =ANY ($2::pg_catalog.text[])
-                        AND
-                    (
-                        s.database_id IS NULL
-                            OR
-                        s.database_id
-                        = (SELECT id FROM mz_catalog.mz_databases WHERE name = $1::pg_catalog.text)
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_FULL_QUAL;
-            params!(ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(), $1, $2
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ANY_SCHEMA;
-            params!(String, String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(),
-                        ARRAY[($1)::pg_catalog.text],
-                        $2
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ONE_SCHEMA;
-            params!(String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(),
-                        pg_catalog.current_schemas(true),
-                        $1
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ITEM_NAME;
+                    (SELECT mz_internal.mz_normalize_object_name($1))
+                            AS normalized (n),
+                    mz_internal.mz_resolve_object_name(
+                        COALESCE(n[1], pg_catalog.current_database()),
+                        CASE
+                            WHEN n[2] IS NULL
+                                THEN pg_catalog.current_schemas(true)
+                            ELSE
+                                ARRAY[n[2]]
+                        END,
+                        n[3]
+                    ) AS o
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
         },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -3368,7 +3380,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 ELSE (
                     SELECT mz_internal.mz_error_if_null(
                         (
-                            SELECT concat(qual.d, qual.s, item.name)
+                            SELECT DISTINCT concat(qual.d, qual.s, item.name)
                             FROM
                                 mz_objects AS item
                             JOIN
@@ -3392,6 +3404,30 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 )
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
+        },
+        "mz_normalize_object_name" => Scalar {
+            params!(String) => sql_impl_func("
+            (
+                SELECT
+                    CASE
+                        WHEN $1 IS NULL THEN NULL
+                        WHEN pg_catalog.array_length(ident, 1) > 3
+                            THEN mz_internal.mz_error_if_null(
+                                NULL::pg_catalog.text[],
+                                'improper relation name (too many dotted names): ' || $1
+                            )
+                        ELSE pg_catalog.array_cat(
+                            pg_catalog.array_fill(
+                                CAST(NULL AS pg_catalog.text),
+                                ARRAY[3 - pg_catalog.array_length(ident, 1)]
+                            ),
+                            ident
+                        )
+                    END
+                FROM (
+                    SELECT pg_catalog.parse_ident($1) AS ident
+                ) AS i
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
         },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;

@@ -44,14 +44,14 @@ pub mod compat;
 /// associated timestamps.
 ///
 /// Shareable with `.share()`
-pub struct ReclockFollower<FromTime: Timestamp, IntoTime: Timestamp> {
+pub struct ReclockFollower<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> {
     /// The `since` maintained by the local handle. This may be beyond the shared `since`
     since: Antichain<IntoTime>,
     pub inner: Rc<RefCell<ReclockFollowerInner<FromTime, IntoTime>>>,
 }
 
 #[derive(Debug)]
-pub struct ReclockFollowerInner<FromTime: Timestamp, IntoTime: Timestamp> {
+pub struct ReclockFollowerInner<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> {
     /// A dTVC trace of the remap collection containing all updates at `t: since <= t < upper`.
     // NOTE(petrosagg): Once we write this as a timely operator this should just be an arranged
     // trace of the remap collection
@@ -390,13 +390,12 @@ where
     }
 }
 
-impl<FromTime: Timestamp, IntoTime: Timestamp> Drop for ReclockFollower<FromTime, IntoTime> {
+impl<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> Drop
+    for ReclockFollower<FromTime, IntoTime>
+{
     fn drop(&mut self) {
         // Release read hold
-        let mut inner = self.inner.borrow_mut();
-        inner
-            .since
-            .update_iter(self.since.iter().map(|t| (t.clone(), -1)));
+        self.compact(Antichain::new());
     }
 }
 
@@ -1178,6 +1177,37 @@ mod tests {
             .map(|(m, ts)| (m, ts.unwrap()))
             .collect_vec();
         assert_eq!(reclocked_msgs, &[(2, 1000.into())]);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    async fn test_sharing() {
+        let (mut operator, mut follower) =
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+
+        // Install a since hold
+        let shared_follower = follower.share();
+
+        // First mint bindings for partition 0 offset 1 at timestamp 1000
+        let source_upper = partitioned_frontier([(0, MzOffset::from(1))]);
+        follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
+
+        // Advance the since frontier on one of the handles at a timestamp that is less than 1000
+        // to leave the previously minted binding intact. Since we have an active since hold
+        // through `shared_follower` nothing in the trace is actually compacted.
+        follower.compact(Antichain::from_elem(500.into()));
+
+        // This will release since hold of {0} through `shared_follower` and the overall since
+        // frontier will become {500} which must now actually compact the in-memory trace.
+        drop(shared_follower);
+
+        // Verify that we reclock partition 0 offset 0 correctly
+        let batch = vec![(0, Partitioned::with_partition(0, MzOffset::from(0)))];
+        let reclocked_msgs = follower
+            .reclock(batch)
+            .map(|(m, ts)| (m, ts.unwrap()))
+            .collect_vec();
+        assert_eq!(reclocked_msgs, &[(0, 1000.into())]);
     }
 
     #[mz_ore::test(tokio::test)]

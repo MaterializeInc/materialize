@@ -7,6 +7,7 @@ menu:
     weight: 10
 aliases:
   - /ops/network-security/static-ips/
+  - /connect-sources/static-ips/
 ---
 
 Your Materialize region initiates connections from a static set of IP addresses.

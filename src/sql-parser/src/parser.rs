@@ -6073,28 +6073,12 @@ impl<'a> Parser<'a> {
         privileges: PrivilegeSpecification,
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(ON)?;
-        let objects = if self.parse_keyword(ALL) {
-            let object_type = self.expect_grant_revoke_plural_object_type_in_schema("GRANT")?;
-            self.expect_keywords(&[IN, SCHEMA])?;
-            let schemas = self.parse_comma_separated(Parser::parse_schema_name)?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::All { schemas },
-            }
-        } else {
-            let object_type = self.expect_grant_revoke_object_type("GRANT")?;
-            let names =
-                self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::Objects { names },
-            }
-        };
+        let target = self.expect_grant_target_specification("GRANT")?;
         self.expect_keyword(TO)?;
         let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
             privileges,
-            objects,
+            target,
             roles,
         }))
     }
@@ -6127,28 +6111,12 @@ impl<'a> Parser<'a> {
         privileges: PrivilegeSpecification,
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(ON)?;
-        let objects = if self.parse_keyword(ALL) {
-            let object_type = self.expect_grant_revoke_plural_object_type_in_schema("REVOKE")?;
-            self.expect_keywords(&[IN, SCHEMA])?;
-            let schemas = self.parse_comma_separated(Parser::parse_schema_name)?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::All { schemas },
-            }
-        } else {
-            let object_type = self.expect_grant_revoke_object_type("REVOKE")?;
-            let names =
-                self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::Objects { names },
-            }
-        };
+        let target = self.expect_grant_target_specification("REVOKE")?;
         self.expect_keyword(FROM)?;
         let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
             privileges,
-            objects,
+            target,
             roles,
         }))
     }
@@ -6165,6 +6133,54 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn expect_grant_target_specification(
+        &mut self,
+        statement_type: &str,
+    ) -> Result<GrantTargetSpecification<Raw>, ParserError> {
+        let (object_type, object_spec_inner) = if self.parse_keyword(ALL) {
+            let object_type = self.expect_grant_revoke_plural_object_type(statement_type)?;
+            let object_spec_inner = if self.parse_keyword(IN) {
+                if !object_type.lives_in_schema() && object_type != ObjectType::Schema {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        format!("IN invalid for {object_type}S")
+                    );
+                }
+                match self.expect_one_of_keywords(&[DATABASE, SCHEMA])? {
+                    DATABASE => GrantTargetSpecificationInner::AllDatabases {
+                        databases: self.parse_comma_separated(Parser::parse_database_name)?,
+                    },
+                    SCHEMA => {
+                        if object_type == ObjectType::Schema {
+                            self.prev_token();
+                            self.expected(self.peek_pos(), DATABASE, self.peek_token())?;
+                        }
+                        GrantTargetSpecificationInner::AllSchemas {
+                            schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                GrantTargetSpecificationInner::All
+            };
+            (object_type, object_spec_inner)
+        } else {
+            let object_type = self.expect_grant_revoke_object_type(statement_type)?;
+            let object_spec_inner = GrantTargetSpecificationInner::Objects {
+                names: self
+                    .parse_comma_separated(|parser| parser.parse_object_name(object_type))?,
+            };
+            (object_type, object_spec_inner)
+        };
+
+        Ok(GrantTargetSpecification {
+            object_type,
+            object_spec_inner,
+        })
+    }
+
     /// Bail out if the current token is not an object type suitable for a GRANT/REVOKE, or consume
     /// and return it if it is.
     fn expect_grant_revoke_object_type(
@@ -6178,7 +6194,7 @@ impl<'a> Parser<'a> {
 
     /// Bail out if the current token is not a plural object type suitable for a GRANT/REVOKE, or consume
     /// and return it if it is.
-    fn expect_grant_revoke_plural_object_type_in_schema(
+    fn expect_grant_revoke_plural_object_type(
         &mut self,
         statement_type: &str,
     ) -> Result<ObjectType, ParserError> {
@@ -6186,20 +6202,12 @@ impl<'a> Parser<'a> {
             // Limit the error message to allowed object types.
             self.expected::<_, ObjectType>(
                 self.peek_pos(),
-                "one of TABLES or TYPES or SECRETS or CONNECTIONS",
+                "one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS",
                 self.peek_token(),
             )
             .unwrap_err()
         })?;
         self.expect_grant_revoke_object_type_inner(statement_type, object_type)?;
-        // Further restrict to object types in schemas.
-        if !object_type.lives_in_schema() {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Unsupported object type: ALL {object_type}S")
-            );
-        }
         Ok(object_type)
     }
 
@@ -6260,7 +6268,10 @@ impl<'a> Parser<'a> {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
                 MATERIALIZED => {
-                    self.expect_keyword(VIEW)?;
+                    if let Err(e) = self.expect_keyword(VIEW) {
+                        self.prev_token();
+                        return Err(e);
+                    }
                     ObjectType::MaterializedView
                 }
                 SOURCE => ObjectType::Source,
@@ -6360,7 +6371,10 @@ impl<'a> Parser<'a> {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
                 MATERIALIZED => {
-                    self.expect_keyword(VIEWS)?;
+                    if let Err(e) = self.expect_keyword(VIEWS) {
+                        self.prev_token();
+                        return Err(e);
+                    }
                     ObjectType::MaterializedView
                 }
                 SOURCES => ObjectType::Source,
@@ -6369,7 +6383,10 @@ impl<'a> Parser<'a> {
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,
                 CLUSTER => {
-                    self.expect_keyword(REPLICAS)?;
+                    if let Err(e) = self.expect_keyword(REPLICAS) {
+                        self.prev_token();
+                        return Err(e);
+                    }
                     ObjectType::ClusterReplica
                 }
                 CLUSTERS => ObjectType::Cluster,

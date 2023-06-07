@@ -4,6 +4,7 @@ description: "How to propagate Change Data Capture (CDC) data from a MySQL datab
 aliases:
   - /guides/cdc-mysql/
   - /integrations/cdc-mysql/
+  - /connect-sources/cdc-mysql/
 menu:
   main:
     parent: "mysql"

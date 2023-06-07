@@ -20,18 +20,20 @@ be used to indicate that the privileges should be revoked from all roles
 
 {{< diagram "privilege.svg" >}}
 
-Field                                           | Use
-------------------------------------------------|--------------------------------------------------
-_object_name_                                   | The object that privileges are being revoked from.
-**ALL** _object_type_ **IN SCHEMA** schema_name | The privilege will be revoked from all objects of _object_type_ in _schema_name_.
-_role_name_                                     | The role name that is losing privileges. Use the `PUBLIC` pseudo-role to revoke privileges from all roles.
-**SELECT**                                      | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
-**INSERT**                                      | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
-**UPDATE**                                      | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
-**DELETE**                                      | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
-**CREATE**                                      | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
-**USAGE**                                       | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
-**ALL PRIVILEGES**                              | All applicable privileges for the provided object type.
+Field                                               | Use
+----------------------------------------------------|--------------------------------------------------
+_object_name_                                       | The object that privileges are being revoked from.
+**ALL** _object_type_ **IN SCHEMA** schema_name     | The privilege will be revoked from all objects of _object_type_ in _schema_name_.
+**ALL** _object_type_ **IN DATABASE** database_name | The privilege will be revoked from all objects of _object_type_ in _database_name_.
+**ALL** _object_type_                               | The privilege will be revoked from all objects of _object_type_, excluding system objects.
+_role_name_                                         | The role name that is losing privileges. Use the `PUBLIC` pseudo-role to revoke privileges from all roles.
+**SELECT**                                          | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
+**INSERT**                                          | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
+**UPDATE**                                          | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
+**DELETE**                                          | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
+**CREATE**                                          | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
+**USAGE**                                           | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
+**ALL PRIVILEGES**                                  | All applicable privileges for the provided object type.
 
 ## Details
 
