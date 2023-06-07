@@ -15,6 +15,9 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
+    DateTimeReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.types.date_time_types_provider import (
     DATE_TYPE_IDENTIFIER,
     INTERVAL_TYPE_IDENTIFIER,
@@ -24,6 +27,7 @@ from materialize.output_consistency.input_data.types.date_time_types_provider im
     DateTimeDataType,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class DateTimeOperationParam(OperationParam):
@@ -54,12 +58,22 @@ class DateTimeOperationParam(OperationParam):
             self.supported_type_identifiers.append(TIMESTAMPTZ_TYPE_IDENTIFIER)
 
     def supports_type(
-            self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: List[Expression]
     ) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)
             and data_type.identifier in self.supported_type_identifiers
         )
+
+    def might_support_as_input_assuming_category_matches(
+        self, return_type_spec: ReturnTypeSpec
+    ) -> bool:
+        # In doubt return True
+
+        if isinstance(return_type_spec, DateTimeReturnTypeSpec):
+            return return_type_spec.type_identifier in self.supported_type_identifiers
+
+        return True
 
 
 class TimeIntervalOperationParam(OperationParam):
