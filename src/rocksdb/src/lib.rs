@@ -127,10 +127,6 @@ pub struct InstanceOptions {
     /// path before starting.
     pub cleanup_on_new: bool,
 
-    /// Whether or not to clear state at the instance
-    /// after the client is dropped.
-    pub cleanup_on_drop: bool,
-
     /// Whether or not to write writes
     /// to the wal. This is not in `RocksDBTuningParameters` because it
     /// applies to `WriteOptions` when creating `WriteBatch`es.
@@ -145,7 +141,6 @@ impl InstanceOptions {
     pub fn defaults_with_env(env: rocksdb::Env) -> Self {
         InstanceOptions {
             cleanup_on_new: true,
-            cleanup_on_drop: true,
             use_wal: false,
             env,
         }
