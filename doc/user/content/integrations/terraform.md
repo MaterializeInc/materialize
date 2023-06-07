@@ -103,6 +103,34 @@ data "materialize_cluster" "all" {}
 This data source returns all cluster names and IDs which you can use as
 variables for new resources. 
 
+### Import Materialize objects into Terraform state
+
+Terraform allows you to import infrastructure into your current Terraform state
+file. Importing objects allows you to keep track of infrastructure created
+outside of the Terraform workflow. The `terraform import` command lets you
+specify objects you want Terraform to manage and reduces potential configuration
+drift. Importing objects allows you to keep related infrastructure in a
+Terraform state file and let Terraform manage the configuration.
+
+For instance, if you created a cluster in Materialize and wanted to manage that
+resource with Terraform, you would add create resource block for the resource
+you want to import in your Terraform configuration:
+
+```hcl
+resource "materialize_cluster.<cluster_name> {
+    name = <cluster_name>
+}
+```
+
+Next, you would use the `terraform import` command with the cluster name and ID
+to associate the object with the resource block:
+
+```shell
+terraform import materialize_cluster.<cluster_name> <CLUSTER_ID>
+```
+
+Terraform will then manage the cluster and you can use Terraform as the source of
+truth for your Materialize object.
 
 ## Terraform modules
 

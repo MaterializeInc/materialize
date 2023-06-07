@@ -167,6 +167,11 @@ cloud resources. Modules allow you to bypass manually configuring cloud
 resources and are an efficient way of deploying essential infrastructure for
 your organization.
 
+{{< note >}}
+While Materialize offers support for its provider, Materialize does not offer
+support for these modules.
+{{</ note >}}
+
 ## Client libraries and ORMs
 
 Applications can use any common language-specific PostgreSQL drivers and PostgreSQL-compatible ORMs to interact with Materialize and **create relations**, **execute queries** and **stream out results**.
