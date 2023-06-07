@@ -46,8 +46,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::{mpsc, oneshot};
 use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
@@ -188,8 +188,8 @@ pub struct InternalHttpConfig {
     pub tracing_handle: TracingHandle,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    pub promote_leader: oneshot::Sender<()>,
-    pub ready_to_promote: oneshot::Receiver<()>,
+    pub promote_leader: mpsc::Sender<()>,
+    pub ready_to_promote: mpsc::Receiver<()>,
 }
 
 pub struct InternalHttpServer {
@@ -215,11 +215,11 @@ pub enum LeaderStatus {
 pub enum LeaderState {
     IsLeader,
     Initializing {
-        promote_leader: oneshot::Sender<()>,
-        ready_to_promote: oneshot::Receiver<()>,
+        promote_leader: mpsc::Sender<()>,
+        ready_to_promote: mpsc::Receiver<()>,
     },
     ReadyToPromote {
-        promote_leader: oneshot::Sender<()>,
+        promote_leader: mpsc::Sender<()>,
     },
 }
 
@@ -235,25 +235,22 @@ pub async fn handle_leader_status(
     State(state): State<Arc<Mutex<LeaderState>>>,
 ) -> impl IntoResponse {
     let mut leader_state = state.lock().expect("lock poisoned");
-    let mut state = LeaderState::IsLeader;
-    std::mem::swap(&mut *leader_state, &mut state);
-    match state {
+    match &mut *leader_state {
         LeaderState::IsLeader => (),
         LeaderState::Initializing {
             promote_leader,
-            mut ready_to_promote,
+            ready_to_promote,
         } => {
             match ready_to_promote.try_recv() {
                 Ok(_) => {
-                    *leader_state = LeaderState::ReadyToPromote { promote_leader };
-                }
-                Err(TryRecvError::Empty) => {
-                    *leader_state = LeaderState::Initializing {
-                        promote_leader,
-                        ready_to_promote,
+                    *leader_state = LeaderState::ReadyToPromote {
+                        promote_leader: promote_leader.clone(),
                     };
                 }
-                Err(TryRecvError::Closed) => {
+                Err(TryRecvError::Empty) => {
+                    // Continue waiting.
+                }
+                Err(TryRecvError::Disconnected) => {
                     *leader_state = LeaderState::IsLeader; // server has started, it is the leader now
                 }
             }
@@ -286,15 +283,9 @@ pub async fn handle_leader_promote(
     State(state): State<Arc<Mutex<LeaderState>>>,
 ) -> impl IntoResponse {
     let mut leader_state = state.lock().expect("lock poisoned");
-
-    // If we're still Initializing we swap back the state, otherwise we end up as the Leader no matter what
-    let mut state = LeaderState::IsLeader;
-    std::mem::swap(&mut *leader_state, &mut state);
-
-    match state {
+    match &*leader_state {
         LeaderState::IsLeader => (),
         LeaderState::Initializing { .. } => {
-            std::mem::swap(&mut *leader_state, &mut state);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!(BecomeLeaderResult::Failure {
@@ -303,11 +294,11 @@ pub async fn handle_leader_promote(
             );
         }
         LeaderState::ReadyToPromote { promote_leader } => {
-            // even if send fails it means the server has started and we're already the leader
-            *leader_state = LeaderState::IsLeader;
-            let _ = promote_leader.send(());
+            let _ = promote_leader.try_send(());
         }
     }
+    // We're either already the leader or should be if we reach this.
+    *leader_state = LeaderState::IsLeader;
     (
         StatusCode::OK,
         Json(serde_json::json!(BecomeLeaderResponse {

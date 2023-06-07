@@ -109,8 +109,7 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use rand::seq::SliceRandom;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::error::RecvError;
+use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
@@ -285,8 +284,8 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let (internal_http_listener, internal_http_conns) =
         server::listen(config.internal_http_listen_addr).await?;
 
-    let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
-    let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
+    let (ready_to_promote_tx, ready_to_promote_rx) = mpsc::channel(1);
+    let (promote_leader_tx, mut promote_leader_rx) = mpsc::channel(1);
 
     // Start the internal HTTP server.
     //
@@ -354,7 +353,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                     return Err(anyhow!(e).context("Stash upgrade would have failed with this error"));
                 }
 
-                if let Err(()) = ready_to_promote_tx.send(()) {
+                if let Err(_) = ready_to_promote_tx.send(()).await {
                     return Err(anyhow!("internal http server closed its end of ready_to_promote"));
                 }
 
@@ -362,7 +361,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
                     Arc::try_unwrap(waiting_on_leader_promotion).expect("for testing").send(internal_http_listener.local_addr()).expect("other side disappeared");
                 }
-                if let Err(RecvError{..}) = promote_leader_rx.await {
+                if   promote_leader_rx.recv().await.is_none() {
                     return Err(anyhow!("internal http server closed its end of promote_leader"));
                 }
             }
