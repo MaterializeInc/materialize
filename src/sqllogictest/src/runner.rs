@@ -66,9 +66,9 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, CreateViewStatement, CteBlock, DropObjectsStatement, Ident,
-    IfExistsBehavior, ObjectType, Query, RawItemName, Select, SelectItem, SelectStatement, SetExpr,
-    Statement as AstStatement, TableFactor, TableWithJoins, UnresolvedItemName,
-    UnresolvedObjectName, ViewDefinition,
+    IfExistsBehavior, ObjectType, OrderByExpr, Query, RawItemName, Select, SelectItem,
+    SelectStatement, SetExpr, Statement as AstStatement, TableFactor, TableWithJoins,
+    UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
 };
 use mz_sql_parser::parser;
 use mz_stash::StashFactory;
@@ -1972,7 +1972,13 @@ fn generate_view_sql(
     })
     .to_ast_string_stable();
 
-    // `SELECT * FROM {name}`
+    // Prior to querying the view, process the `ORDER BY` clause of
+    // the `SELECT` query, if any. Ordering is not preserved when a
+    // view includes an `ORDER BY` clause and must be re-enforced by
+    // an external `ORDER BY` clause when querying the view.
+    let view_order_by = derive_order_by(&query.body, &query.order_by);
+
+    // `SELECT * FROM {name} [ORDER BY <num_seq>]`
     let view_sql = AstStatement::<Raw>::Select(SelectStatement {
         query: Query {
             ctes: CteBlock::Simple(vec![]),
@@ -1991,7 +1997,7 @@ fn generate_view_sql(
                 having: None,
                 options: vec![],
             })),
-            order_by: vec![],
+            order_by: view_order_by,
             limit: None,
             offset: None,
         },
@@ -2048,6 +2054,71 @@ fn analyze_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
             _ => return None,
         }
     }
+}
+
+/// Analyzes a query's `ORDER BY` clause to derive an `ORDER BY`
+/// clause that is exclusively making numeric references. The
+/// rewritten `ORDER BY` clause is then usable when querying a
+/// view that contains the same `SELECT` as the given query.
+fn derive_order_by(body: &SetExpr<Raw>, order_by: &Vec<OrderByExpr<Raw>>) -> Vec<OrderByExpr<Raw>> {
+    // Iterate to peel off the query body until the query's
+    // projection list is found.
+    let mut set_expr = body;
+    loop {
+        match set_expr {
+            SetExpr::Select(select) => {
+                // We found the projection list. Process the `ORDER BY`
+                // clause and match the referenced expressions.
+                return derive_order_by_from_projection(&select.projection, order_by);
+            }
+            SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
+            SetExpr::Query(query) => set_expr = &query.body,
+            _ => return vec![],
+        }
+    }
+}
+
+/// Computes an `ORDER BY` clause with only numeric references
+/// from given projection and `ORDER BY` of a `SELECT` query.
+/// If the derivation fails to match a given expression, the
+/// matched prefix is returned. Note that this could be empty.
+fn derive_order_by_from_projection(
+    projection: &Vec<SelectItem<Raw>>,
+    order_by: &Vec<OrderByExpr<Raw>>,
+) -> Vec<OrderByExpr<Raw>> {
+    let mut view_order_by: Vec<OrderByExpr<Raw>> = vec![];
+    for order_by_expr in order_by.iter() {
+        let query_expr = &order_by_expr.expr;
+        let view_expr = match query_expr {
+            Expr::Value(mz_sql_parser::ast::Value::Number(_)) => query_expr.clone(),
+            _ => {
+                // Find expression in query projection, if we can.
+                if let Some(i) = projection.iter().position(|item| match item {
+                    SelectItem::Expr { expr, alias } => {
+                        expr == query_expr
+                            || match query_expr {
+                                Expr::Identifier(ident) => {
+                                    ident.len() == 1 && Some(&ident[0]) == alias.as_ref()
+                                }
+                                _ => false,
+                            }
+                    }
+                    SelectItem::Wildcard => false,
+                }) {
+                    Expr::Value(mz_sql_parser::ast::Value::Number((i + 1).to_string()))
+                } else {
+                    // Stop at prefix if we cannot match further.
+                    break;
+                }
+            }
+        };
+        view_order_by.push(OrderByExpr {
+            expr: view_expr,
+            asc: order_by_expr.asc,
+            nulls_last: order_by_expr.nulls_last,
+        });
+    }
+    view_order_by
 }
 
 /// Returns extra statements to execute after `stmt` is executed.
@@ -2110,6 +2181,35 @@ fn test_generate_view_sql() {
         (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a)", None, None),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a")"#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c"), ColumnName::from("d")])),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d") AS SELECT "a", "b", "b" + "d" AS "c", "a" + "b" AS "d" FROM "t1", "t2" ORDER BY "a", "c", "a" + "b""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d")"#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, 3, 4"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("((SELECT 1 AS a UNION SELECT 2 AS b) UNION SELECT 3 AS c) ORDER BY a", Some(1), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1") AS (SELECT 1 AS "a" UNION SELECT 2 AS "b") UNION SELECT 3 AS "c" ORDER BY "a""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1")"#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY 1", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a") ORDER BY 1"#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        // A case illustrating that we are not always able to rewrite `ORDER BY`.
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY a", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a") ORDER BY "a""#.to_string(),
             r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
