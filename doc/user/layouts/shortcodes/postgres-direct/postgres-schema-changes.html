@@ -1,0 +1,4 @@
+Materialize does not support changes to schemas for existing publications, and
+will set the source into an error state if a breaking DDL change is detected
+upstream. To handle schema changes, you need to drop the existing sources and
+then recreate them after creating new publications for the updated schemas.

@@ -6,7 +6,7 @@ menu:
     parent: "postgresql"
     name: "Using Kafka and Debezium"
     identifier: "pg-dbz"
-    weight: 10
+    weight: 50
 ---
 
 Change Data Capture (CDC) allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL).
@@ -17,7 +17,7 @@ This guide shows you how to use [Debezium](https://debezium.io/) and [Kafka](/sq
 
 **Minimum requirements:** PostgreSQL 10+
 
-Before deploying a Debezium connector, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html).
+Before deploying a Debezium connector, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/current/logical-replication.html).
 
 {{< tabs >}}
 {{< tab "Self-hosted">}}
