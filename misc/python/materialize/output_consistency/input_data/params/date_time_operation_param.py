@@ -15,6 +15,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.types.date_time_types_provider import (
+    INTERVAL_TYPE_IDENTIFIER,
     DateTimeDataType,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
@@ -35,8 +36,32 @@ class DateTimeOperationParam(OperationParam):
         )
         self.type_identifier = type_identifier
 
+        assert (
+            type_identifier != INTERVAL_TYPE_IDENTIFIER
+        ), f"{type_identifier} not supported, use TimeIntervalOperationParam"
+
     def supports_type(self, data_type: DataType) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)
             and data_type.identifier == self.type_identifier
+        )
+
+
+class TimeIntervalOperationParam(OperationParam):
+    def __init__(
+        self,
+        optional: bool = False,
+        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+    ):
+        super().__init__(
+            DataTypeCategory.DATE_TIME,
+            optional,
+            incompatibilities,
+            incompatibility_combinations=None,
+        )
+
+    def supports_type(self, data_type: DataType) -> bool:
+        return (
+            isinstance(data_type, DateTimeDataType)
+            and data_type.identifier == INTERVAL_TYPE_IDENTIFIER
         )

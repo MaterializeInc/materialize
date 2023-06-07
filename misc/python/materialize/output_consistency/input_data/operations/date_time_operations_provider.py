@@ -10,6 +10,7 @@ from typing import List
 
 from materialize.output_consistency.input_data.params.date_time_operation_param import (
     DateTimeOperationParam,
+    TimeIntervalOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     DATE_TIME_COMPONENT_PARAM,
@@ -52,7 +53,7 @@ DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "date_bin",
         [
-            DateTimeOperationParam(INTERVAL_TYPE_IDENTIFIER),
+            TimeIntervalOperationParam(),
             DateTimeOperationParam(TIMESTAMP_TYPE_IDENTIFIER),
             DateTimeOperationParam(TIMESTAMP_TYPE_IDENTIFIER),
         ],
@@ -73,7 +74,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "date_trunc",
-        [DATE_TIME_COMPONENT_PARAM, DateTimeOperationParam(INTERVAL_TYPE_IDENTIFIER)],
+        [DATE_TIME_COMPONENT_PARAM, TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
     )
 )
@@ -152,7 +153,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "justify_days",
-        [DateTimeOperationParam(INTERVAL_TYPE_IDENTIFIER)],
+        [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
     )
 )
@@ -160,7 +161,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "justify_hours",
-        [DateTimeOperationParam(INTERVAL_TYPE_IDENTIFIER)],
+        [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
     )
 )
@@ -168,7 +169,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "justify_interval",
-        [DateTimeOperationParam(INTERVAL_TYPE_IDENTIFIER)],
+        [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
     )
 )
