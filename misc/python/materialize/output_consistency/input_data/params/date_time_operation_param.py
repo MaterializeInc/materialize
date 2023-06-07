@@ -15,7 +15,11 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.types.date_time_types_provider import (
+    DATE_TYPE_IDENTIFIER,
     INTERVAL_TYPE_IDENTIFIER,
+    TIME_TYPE_IDENTIFIER,
+    TIMESTAMP_TYPE_IDENTIFIER,
+    TIMESTAMPTZ_TYPE_IDENTIFIER,
     DateTimeDataType,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
@@ -24,8 +28,11 @@ from materialize.output_consistency.operation.operation_param import OperationPa
 class DateTimeOperationParam(OperationParam):
     def __init__(
         self,
-        type_identifier: str,
         optional: bool = False,
+        support_date: bool = True,
+        support_time: bool = True,
+        support_timestamp: bool = True,
+        support_timestamp_tz: bool = True,
         incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
@@ -34,16 +41,21 @@ class DateTimeOperationParam(OperationParam):
             incompatibilities,
             incompatibility_combinations=None,
         )
-        self.type_identifier = type_identifier
+        self.supported_type_identifiers = []
 
-        assert (
-            type_identifier != INTERVAL_TYPE_IDENTIFIER
-        ), f"{type_identifier} not supported, use TimeIntervalOperationParam"
+        if support_date:
+            self.supported_type_identifiers.append(DATE_TYPE_IDENTIFIER)
+        if support_time:
+            self.supported_type_identifiers.append(TIME_TYPE_IDENTIFIER)
+        if support_timestamp:
+            self.supported_type_identifiers.append(TIMESTAMP_TYPE_IDENTIFIER)
+        if support_timestamp_tz:
+            self.supported_type_identifiers.append(TIMESTAMPTZ_TYPE_IDENTIFIER)
 
     def supports_type(self, data_type: DataType) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)
-            and data_type.identifier == self.type_identifier
+            and data_type.identifier in self.supported_type_identifiers
         )
 
 
