@@ -1138,7 +1138,7 @@ impl HirScalarExpr {
                             SS::Column(inner.arity() - 1)
                         }
                         WindowExprType::Value(func) => {
-                            let hir_scalar_input = func.expr.clone();
+                            let hir_scalar_input = func.args.clone();
                             *inner = inner.take_dangerous().let_in_fallible(
                                 id_gen,
                                 |id_gen, mut get_inner| {

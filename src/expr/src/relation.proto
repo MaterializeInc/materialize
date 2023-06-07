@@ -68,6 +68,7 @@ message ProtoAggregateFunc {
             google.protobuf.Empty lag = 2;
             google.protobuf.Empty lead = 3;
         }
+        bool ignore_nulls = 4;
     };
 
     message ProtoWindowFrame {

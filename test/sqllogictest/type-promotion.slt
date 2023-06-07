@@ -1569,7 +1569,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
 SELECT jsonb_object_agg(1::uint8, 2::int);
 ----
-Reduce aggregates=[jsonb_object_agg(row(row(uint8_to_text(integer_to_uint8(1)), jsonb_or_null_to_jsonb(integer_to_numeric(2)))))]
+Reduce aggregates=[jsonb_object_agg[order_by=[]](row(row(uint8_to_text(integer_to_uint8(1)), jsonb_or_null_to_jsonb(integer_to_numeric(2)))))]
   Constant
     - ()
 
