@@ -101,7 +101,7 @@ data "materialize_cluster" "all" {}
 ```
 
 This data source returns all cluster names and IDs which you can use as
-variables for new resources. 
+variables for new resources.
 
 ### Import Materialize objects into Terraform state
 
