@@ -18,7 +18,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, RoleAttributes, SessionCatalog};
+use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, SessionCatalog};
 use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
     AbortTransactionPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
@@ -38,7 +38,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
-use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
+use mz_sql_parser::ast::QualifiedReplica;
 
 use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use crate::catalog::Catalog;

@@ -2253,26 +2253,6 @@ impl ObjectType {
             | ObjectType::Role => false,
         }
     }
-
-    pub fn is_relation(&self) -> bool {
-        match self {
-            ObjectType::Table
-            | ObjectType::View
-            | ObjectType::MaterializedView
-            | ObjectType::Source => true,
-            ObjectType::Sink
-            | ObjectType::Index
-            | ObjectType::Type
-            | ObjectType::Secret
-            | ObjectType::Connection
-            | ObjectType::Func
-            | ObjectType::Database
-            | ObjectType::Schema
-            | ObjectType::Cluster
-            | ObjectType::ClusterReplica
-            | ObjectType::Role => false,
-        }
-    }
 }
 
 impl AstDisplay for ObjectType {

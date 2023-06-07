@@ -16,8 +16,8 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
+use mz_sql::catalog::ObjectType;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::ObjectType;
 
 /// Notices that can occur in the adapter layer.
 ///
