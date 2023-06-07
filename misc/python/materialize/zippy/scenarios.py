@@ -264,7 +264,9 @@ class DataflowsLarge(Scenario):
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             CreateReplica: 2,
-            CreateTopicParameterized(max_topics=2, envelopes=[Envelope.UPSERT]): 10,
+            CreateTopicParameterized(
+                max_topics=2, envelopes_with_weights={Envelope.UPSERT: 100}
+            ): 10,
             CreateSourceParameterized(max_sources=10): 10,
             CreateViewParameterized(
                 max_views=5, expensive_aggregates=True, max_inputs=5
