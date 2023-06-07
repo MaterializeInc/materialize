@@ -34,10 +34,10 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, GrantObjectSpecification, GrantObjectSpecificationInner,
-    GrantPrivilegesStatement, GrantRoleStatement, Privilege, PrivilegeSpecification,
-    ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement, SshConnectionOption,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    DropOwnedStatement, GrantPrivilegesStatement, GrantRoleStatement, GrantTargetSpecification,
+    GrantTargetSpecificationInner, Privilege, PrivilegeSpecification, ReassignOwnedStatement,
+    RevokePrivilegesStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -4670,11 +4670,11 @@ pub fn plan_grant_privileges(
     scx: &StatementContext,
     GrantPrivilegesStatement {
         privileges,
-        objects,
+        target,
         roles,
     }: GrantPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, objects, roles)?;
+    let plan = plan_update_privilege(scx, privileges, target, roles)?;
     Ok(Plan::GrantPrivileges(plan.into()))
 }
 
@@ -4689,11 +4689,11 @@ pub fn plan_revoke_privileges(
     scx: &StatementContext,
     RevokePrivilegesStatement {
         privileges,
-        objects,
+        target,
         roles,
     }: RevokePrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, objects, roles)?;
+    let plan = plan_update_privilege(scx, privileges, target, roles)?;
     Ok(Plan::RevokePrivileges(plan.into()))
 }
 
@@ -4733,25 +4733,80 @@ impl From<UpdatePrivilegesPlan> for RevokePrivilegesPlan {
 fn plan_update_privilege(
     scx: &StatementContext,
     privileges: PrivilegeSpecification,
-    objects: GrantObjectSpecification<Aug>,
+    target: GrantTargetSpecification<Aug>,
     roles: Vec<ResolvedRoleName>,
 ) -> Result<UpdatePrivilegesPlan, PlanError> {
-    let object_type = objects.object_type;
-    let object_ids: Vec<ObjectId> = match objects.object_spec_inner {
-        GrantObjectSpecificationInner::All { schemas } => schemas
+    let object_type = target.object_type;
+    fn object_type_filter(
+        object_id: &ObjectId,
+        object_type: &ObjectType,
+        scx: &StatementContext,
+    ) -> bool {
+        if object_type == &ObjectType::Table {
+            scx.get_object_type(object_id).is_relation()
+        } else {
+            object_type == &scx.get_object_type(object_id)
+        }
+    }
+    let object_ids: Vec<ObjectId> = match target.object_spec_inner {
+        GrantTargetSpecificationInner::All => {
+            let cluster_ids = scx
+                .catalog
+                .get_clusters()
+                .into_iter()
+                .map(|cluster| cluster.id().into());
+            let database_ids = scx
+                .catalog
+                .get_databases()
+                .into_iter()
+                .map(|database| database.id().into());
+            let schema_ids = scx
+                .catalog
+                .get_schemas()
+                .into_iter()
+                .filter(|schema| !schema.id().is_temporary())
+                .map(|schema| (schema.database().clone(), schema.id().clone()).into());
+            let item_ids = scx
+                .catalog
+                .get_items()
+                .into_iter()
+                .map(|item| item.id().into());
+            cluster_ids
+                .chain(database_ids)
+                .chain(schema_ids)
+                .chain(item_ids)
+                .filter(|object_id| object_type_filter(object_id, &object_type, scx))
+                .filter(|object_id| object_id.is_user())
+                .collect()
+        }
+        GrantTargetSpecificationInner::AllDatabases { databases } => {
+            let schema_ids = databases
+                .iter()
+                .map(|database| scx.get_database(database.database_id()))
+                .flat_map(|database| database.schemas().into_iter())
+                .filter(|schema| !schema.id().is_temporary())
+                .map(|schema| (schema.database().clone(), schema.id().clone()).into());
+
+            let item_ids = databases
+                .iter()
+                .map(|database| scx.get_database(database.database_id()))
+                .flat_map(|database| database.schemas().into_iter())
+                .flat_map(|schema| schema.item_ids().values())
+                .map(|item_id| (*item_id).into());
+
+            item_ids
+                .chain(schema_ids)
+                .filter(|object_id| object_type_filter(object_id, &object_type, scx))
+                .collect()
+        }
+        GrantTargetSpecificationInner::AllSchemas { schemas } => schemas
             .into_iter()
             .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
             .flat_map(|schema| schema.item_ids().values())
             .map(|item_id| (*item_id).into())
-            .filter(|object_id| {
-                if object_type == ObjectType::Table {
-                    scx.get_object_type(object_id).is_relation()
-                } else {
-                    object_type == scx.get_object_type(object_id)
-                }
-            })
+            .filter(|object_id| object_type_filter(object_id, &object_type, scx))
             .collect(),
-        GrantObjectSpecificationInner::Objects { names } => names
+        GrantTargetSpecificationInner::Objects { names } => names
             .into_iter()
             .map(|name| {
                 name.try_into()
