@@ -7,14 +7,14 @@ menu:
     weight: 15
 ---
 
-This page outlines how to create new roles in Materialize.
+This page outlines how to create and manage roles in Materialize.
 
 ## Create a role
 
 To create a new role, use the `CREATE ROLE` statement:
 
 ```sql
-CREATE ROLE <new_role>;
+CREATE ROLE <role_name>;
 ```
 
 ## Grant a role to a user
@@ -22,7 +22,7 @@ CREATE ROLE <new_role>;
 To grant a role assignment to a user, use the `GRANT` statement:
 
 ```sql
-GRANT <new_role> to <new_user>;
+GRANT <role_name> to <user_name>;
 ```
 
 ## Alter a role's attributes
@@ -30,7 +30,7 @@ GRANT <new_role> to <new_user>;
 To change a role's attributes, use the `ALTER ROLE` statement:
 
 ```sql
-ALTER ROLE <new_role> WITH <ATTRIBUTE>;
+ALTER ROLE <role_name> WITH <ATTRIBUTE>;
 ```
 
 Materialize roles have the following available attributes:
@@ -48,5 +48,5 @@ Materialize roles have the following available attributes:
 To remove a role, use the `DROP ROLE` statement:
 
 ```sql
-DROP ROLE <new_role>;
+DROP ROLE <role_name>;
 ```

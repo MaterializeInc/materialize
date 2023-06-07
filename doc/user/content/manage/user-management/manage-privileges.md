@@ -4,7 +4,7 @@ description: "Assign and manage role privileges in Materialize"
 menu:
   main:
     parent: user-management
-    weight: 20 
+    weight: 20
 ---
 
 This page outlines how to assign and manage role privileges.
@@ -15,7 +15,7 @@ To grant privileges to a role, use the [`GRANT PRIVILEGE`](https://materialize.c
 object you want to grant privileges to:
 
 ```sql
-GRANT USAGE ON <OBJECT_TYPE> <object_name> TO <new_role>;
+GRANT USAGE ON <OBJECT_TYPE> <object_name> TO <role_name>;
 ```
 
 Materialize objects allow for the following privileges:
@@ -33,10 +33,10 @@ Materialize objects allow for the following privileges:
 | `SECRET`             | `USAGE`                             |
 | `CLUSTER`            | `USAGE` `CREATE`                    |
 
-## Revoke privileges 
+## Revoke privileges
 
 To remove privileges from a role, use the [`REVOKE`](https://materialize.com/docs/sql/revoke-privilege/) statement:
 
 ```sql
-REVOKE USAGE ON <OBJECT_TYPE> <object_name> FROM <new_role>;
+REVOKE USAGE ON <OBJECT_TYPE> <object_name> FROM <role_name>;
 ```
