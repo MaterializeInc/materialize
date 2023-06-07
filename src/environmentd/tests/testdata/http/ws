@@ -48,6 +48,13 @@ ws-text
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
+{"query": "SET application_name TO a"}
+----
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
 {"query": ""}
 ----
 {"type":"ReadyForQuery","payload":"I"}
@@ -138,6 +145,15 @@ ws-text
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"T"}
 
+# Session parameters should get reset when the transaction is rolled back.
+
+ws-text
+{"query": "SET application_name TO b"}
+----
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"b"}}
+{"type":"ReadyForQuery","payload":"T"}
+
 ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
@@ -161,8 +177,47 @@ ws-text
 {"query": "ROLLBACK; SELECT 2"}
 ----
 {"type":"CommandComplete","payload":"ROLLBACK"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":[2]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Session variables local to a transaction should get reset
+
+ws-text
+{"query": "BEGIN"}
+----
+{"type":"CommandComplete","payload":"BEGIN"}
+{"type":"ReadyForQuery","payload":"T"}
+
+ws-text
+{"query": "SET LOCAL application_name TO c"}
+----
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"c"}}
+{"type":"ReadyForQuery","payload":"T"}
+
+ws-text
+{"query": "SHOW application_name"}
+----
+{"type":"Rows","payload":["application_name"]}
+{"type":"Row","payload":["c"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"T"}
+
+ws-text
+{"query": "COMMIT"}
+----
+{"type":"CommandComplete","payload":"COMMIT"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SHOW application_name"}
+----
+{"type":"Rows","payload":["application_name"]}
+{"type":"Row","payload":["a"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 

@@ -1402,6 +1402,26 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
                 self.copy_from(id, columns, params, row_desc).await
             }
+            ExecuteResponse::TransactionCommitted { params }
+            | ExecuteResponse::TransactionRolledBack { params } => {
+                let notify_set: mz_ore::collections::HashSet<String> = self
+                    .adapter_client
+                    .session()
+                    .vars()
+                    .notify_set()
+                    .map(|v| v.name().to_string())
+                    .collect();
+
+                // Only report on parameters that are in the notify set.
+                for (name, value) in params
+                    .into_iter()
+                    .filter(|(name, _v)| notify_set.contains(*name))
+                {
+                    let msg = BackendMessage::ParameterStatus(name, value);
+                    self.send(msg).await?;
+                }
+                command_complete!()
+            }
 
             ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
@@ -1438,8 +1458,6 @@ where
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
-            | ExecuteResponse::TransactionCommitted
-            | ExecuteResponse::TransactionRolledBack
             | ExecuteResponse::Updated(..) => {
                 command_complete!()
             }

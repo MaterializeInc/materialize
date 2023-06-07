@@ -295,10 +295,13 @@ pub enum SqlResult {
     Ok {
         /// The command complete tag.
         ok: String,
-        /// Any parameters that may have changed.
-        parameters: Vec<ParameterStatus>,
         /// Any notices generated during execution of the query.
         notices: Vec<Notice>,
+        /// Any parameters that may have changed.
+        ///
+        /// Note: skip serializing this field in a response if the list of parameters is empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        parameters: Vec<ParameterStatus>,
     },
     /// The query returned an error.
     Err {
@@ -890,14 +893,17 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
         | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), Vec::default()).into(),
-        ExecuteResponse::TransactionCommitted | ExecuteResponse::TransactionRolledBack => {
-            // When a transaction ends there is a chance our variables change, so send everything
-            // in the notify set.
-            let params = client
+        ExecuteResponse::TransactionCommitted { params } | ExecuteResponse::TransactionRolledBack { params }=> {
+            let notify_set: mz_ore::collections::HashSet<String> = client
                 .session()
                 .vars()
                 .notify_set()
-                .map(|v| ParameterStatus { name: v.name().to_string(), value: v.value() })
+                .map(|v| v.name().to_string())
+                .collect();
+            let params = params
+                .into_iter()
+                .filter(|(name, _value)| notify_set.contains(*name))
+                .map(|(name, value)| ParameterStatus { name: name.to_string(), value })
                 .collect();
             SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), params).into()
         },

@@ -1395,10 +1395,22 @@ impl SessionVars {
 
     /// Commits or rolls back configuration parameter updates made via
     /// [`SessionVars::set`] since the last call to `end_transaction`.
-    pub fn end_transaction(&mut self, action: EndTransactionAction) {
+    pub fn end_transaction(
+        &mut self,
+        action: EndTransactionAction,
+    ) -> BTreeMap<&'static str, String> {
+        let mut changed = BTreeMap::new();
         for var in self.vars.values_mut() {
+            let before = var.value();
             var.end_transaction(action);
+            let after = var.value();
+
+            // Report the new value of the parameter.
+            if before != after {
+                changed.insert(var.name(), after);
+            }
         }
+        changed
     }
 
     /// Returns the value of the `application_name` configuration parameter.
