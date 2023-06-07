@@ -605,7 +605,7 @@ impl StateVersions {
         };
         let (applied, initial_state) = match empty_state
             .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_and_remove_rollups((rollup_seqno, &rollup), &[])
+                state.add_rollup((rollup_seqno, &rollup))
             }) {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {

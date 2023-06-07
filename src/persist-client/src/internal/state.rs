@@ -358,10 +358,9 @@ impl<T> StateCollections<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub fn add_and_remove_rollups(
+    pub fn add_rollup(
         &mut self,
         add_rollup: (SeqNo, &HollowRollup),
-        remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
         let (rollup_seqno, rollup) = add_rollup;
         let applied = match self.rollups.get(&rollup_seqno) {
@@ -371,18 +370,9 @@ where
                 true
             }
         };
-        for (seqno, key) in remove_rollups {
-            let removed_key = self.rollups.remove(seqno);
-            debug_assert!(
-                removed_key.as_ref().map_or(true, |x| &x.key == key),
-                "{} vs {:?}",
-                key,
-                removed_key
-            );
-        }
-        // This state transition is a no-op if applied is false and none of
-        // remove_rollups existed, but we still commit the state change so that
-        // this gets linearized (maybe we're looking at old state).
+        // This state transition is a no-op if applied is false but we
+        // still commit the state change so that this gets linearized
+        // (maybe we're looking at old state).
         Continue(applied)
     }
 
@@ -2263,7 +2253,7 @@ pub(crate) mod tests {
 
         assert!(state
             .collections
-            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .add_rollup((rollup_seqno, &rollup))
             .is_continue());
 
         // shouldn't need a rollup at the seqno of the rollup
@@ -2302,7 +2292,7 @@ pub(crate) mod tests {
         };
         assert!(state
             .collections
-            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .add_rollup((rollup_seqno, &rollup))
             .is_continue());
 
         state.seqno = SeqNo(8);

@@ -104,9 +104,7 @@ where
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
         let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
-        let (applied, maintenance) = self
-            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
-            .await;
+        let (applied, maintenance) = self.add_rollup((rollup.seqno, &rollup.to_hollow())).await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
             // get added. Delete it.
@@ -118,10 +116,9 @@ where
         maintenance
     }
 
-    pub async fn add_and_remove_rollups(
+    pub async fn add_rollup(
         &mut self,
         add_rollup: (SeqNo, &HollowRollup),
-        remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> (bool, RoutineMaintenance) {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
         // here.
@@ -129,7 +126,7 @@ where
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, _applied, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
-                let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
+                let ret = state.add_rollup(add_rollup);
                 if let Continue(applied) = ret {
                     applied_ever_true = applied_ever_true || applied;
                 }
@@ -1330,7 +1327,7 @@ pub mod datadriven {
         let () = datadriven.state_versions.write_rollup_blob(&rollup).await;
         let (applied, maintenance) = datadriven
             .machine
-            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
+            .add_rollup((rollup.seqno, &rollup.to_hollow()))
             .await;
 
         if !applied {
