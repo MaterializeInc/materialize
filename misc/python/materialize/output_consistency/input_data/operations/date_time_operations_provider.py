@@ -38,6 +38,18 @@ DATE_TIME_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
+        "age",
+        [
+            DateTimeOperationParam(TIMESTAMP_TYPE_IDENTIFIER),
+            DateTimeOperationParam(TIMESTAMP_TYPE_IDENTIFIER),
+        ],
+        DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        relevance=OperationRelevance.LOW,
+    )
+)
+
+DATE_TIME_OPERATION_TYPES.append(
+    DbFunction(
         "date_bin",
         [
             DateTimeOperationParam(INTERVAL_TYPE_IDENTIFIER),
