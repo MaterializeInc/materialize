@@ -177,7 +177,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         };
 
         if let Err(err) = ws_response().await {
-            debug!("failed to send respond over WebSocket, {err:?}");
+            debug!("failed to send response over WebSocket, {err:?}");
             return;
         }
     }
