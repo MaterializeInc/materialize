@@ -77,3 +77,18 @@ class NumericOperationParam(OperationParam):
             return False
 
         return True
+
+
+class MaxSignedInt4OperationParam(NumericOperationParam):
+    def __init__(
+        self,
+        optional: bool = False,
+        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+    ):
+        super().__init__(
+            optional=optional,
+            incompatibilities=incompatibilities,
+            only_int_type=True,
+            no_int_type_larger_int4=True,
+            no_floating_point_type=True,
+        )
