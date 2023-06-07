@@ -20,6 +20,8 @@ infrastructure with a single `terraform apply` command.
 
 ## Terraform provider
 
+The Materialize provider is hosted on the [Terraform provider registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest).
+
 To use the Materialize provider, you create a new `main.tf` file and add the
 required providers:
 
@@ -33,8 +35,6 @@ terraform {
   }
 }
 ```
-
-The Materialize provider is hosted on the [Terraform provider registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest).
 
 ### Authentication
 
@@ -129,7 +129,7 @@ To get data into Materialize, you need a connection to allow your data source to
 communicate with Materialize. One option to connect securely to Materialize is
 AWS PrivateLink.
 
-The [AWS MSK PrivateLink](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [AWS Kafka PrivateLink](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) modules allow you to manage
+The [AWS MSK PrivateLink](https://github.com/MaterializeInc/terraform-aws-msk-privatelink), [AWS RDS PrivateLink](https://github.com/MaterializeInc/terraform-aws-rds-privatelink), and [AWS Kafka PrivateLink](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) modules allow you to manage
 your connection to Materialize in a single configuration. The module builds
 target groups for brokers, a network load balancer, a TCP listener, and a VPC endpoint within an existing VPC. These AWS resources are necessary components for creating a PrivateLink connection.
 
