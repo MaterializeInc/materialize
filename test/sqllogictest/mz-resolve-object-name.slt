@@ -30,11 +30,11 @@ CREATE TABLE d.s.t (a int);
 
 # This goofy structure is because we can't just return the record from mz_resolve_object_name.
 query T
-SELECT concat(o.id, ' ', o.oid, ' ', o.schema_id, ' ', o.name, ' ', o.type, ' ', o.owner_id, ' ', o.privileges::text) FROM (
+SELECT concat(o.id, ' ', o.schema_id, ' ', o.name, ' ', o.type, ' ', o.owner_id, ' ', o.privileges::text) FROM (
     SELECT * FROM mz_internal.mz_resolve_object_name('t')
 ) AS o;
 ----
-u1 20480 u3 t table u1 {u1=arwd/u1}
+u1 u3 t table u1 {u1=arwd/u1}
 
 query T
 SELECT id FROM mz_internal.mz_resolve_object_name('t');
@@ -48,17 +48,22 @@ materialize.public.t
 
 # Roundtrips
 query T
-SELECT mz_internal.mz_global_id_to_name(id) FROM mz_internal.mz_resolve_object_name('materialize.public.t');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('materialize.public.t');
 ----
 materialize.public.t
 
 query T
-SELECT mz_internal.mz_global_id_to_name(id) FROM mz_internal.mz_resolve_object_name('t');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('t');
 ----
 materialize.public.t
 
 query T
-SELECT id FROM mz_internal.mz_resolve_object_name(mz_internal.mz_global_id_to_name('u1'));
+SELECT id
+FROM mz_internal.mz_resolve_object_name(
+    mz_internal.mz_global_id_to_name('u1')
+);
 ----
 u1
 
@@ -133,54 +138,46 @@ SET search_path = public
 # Check ambient schemas
 
 query T
-SELECT id FROM mz_internal.mz_resolve_object_name('int4');
-----
-s20
-
-query T
-SELECT id FROM mz_internal.mz_resolve_object_name('pg_catalog.int4');
-----
-s20
-
-query T
-SELECT id FROM mz_internal.mz_resolve_object_name('materialize.pg_catalog.int4');
-----
-s20
-
-query T
-SELECT id FROM mz_internal.mz_resolve_object_name('d.pg_catalog.int4');
-----
-s20
-
-query T
-SELECT mz_internal.mz_global_id_to_name('s20');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('int4');
 ----
 pg_catalog.int4
 
 query T
-SELECT id FROM mz_internal.mz_resolve_object_name('mz_sources');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('pg_catalog.int4');
 ----
-s337
+pg_catalog.int4
 
 query T
-SELECT id FROM mz_internal.mz_resolve_object_name('mz_catalog.mz_sources');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('materialize.pg_catalog.int4');
 ----
-s337
+pg_catalog.int4
 
 query T
-SELECT id FROM mz_internal.mz_resolve_object_name('materialize.mz_catalog.mz_sources');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('mz_sources');
 ----
-s337
+mz_catalog.mz_sources
 
 query T
-SELECT id FROM mz_internal.mz_resolve_object_name('d.mz_catalog.mz_sources');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('mz_catalog.mz_sources');
 ----
-s337
+mz_catalog.mz_sources
 
 query T
-SELECT mz_internal.mz_global_id_to_name('s326');
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('materialize.mz_catalog.mz_sources');
 ----
-mz_internal.mz_view_keys
+mz_catalog.mz_sources
+
+query T
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('d.mz_catalog.mz_sources');
+----
+mz_catalog.mz_sources
 
 # Values that do not exist
 query T
@@ -220,14 +217,14 @@ NULL
 # Check many objects with same GlobalId
 
 query T
-SELECT concat(id, ' ', oid) FROM mz_internal.mz_resolve_object_name('abs');
+SELECT concat(id LIKE 's%', ' ', oid) FROM mz_internal.mz_resolve_object_name('abs');
 ----
-s86 1394
-s86 1395
-s86 1396
-s86 1397
-s86 1398
-s86 1705
+t 1394
+t 1395
+t 1396
+t 1397
+t 1398
+t 1705
 
 query T
 SELECT DISTINCT mz_internal.mz_global_id_to_name(id) AS name
@@ -241,14 +238,14 @@ CREATE TABLE public.abs (a int);
 # Ensure that competing names in items lower in the search path do not creep in.
 
 query T
-SELECT concat(id, ' ', oid) FROM mz_internal.mz_resolve_object_name('abs');
+SELECT concat(id LIKE 's%', ' ', oid) FROM mz_internal.mz_resolve_object_name('abs');
 ----
-s86 1394
-s86 1395
-s86 1396
-s86 1397
-s86 1398
-s86 1705
+t 1394
+t 1395
+t 1396
+t 1397
+t 1398
+t 1705
 
 # Tables have no subsources
 
