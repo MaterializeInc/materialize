@@ -39,8 +39,7 @@ ci_collapsed_heading "kind: Purging state from previous builds..."
 bin/ci-builder run stable test/cloudtest/reset
 rm -f kubectl-*.log
 
-ci_collapsed_heading "kail: Clean up running instances, start a new instance"
-bin/ci-builder stop stable --name="kail" || true
+ci_collapsed_heading "kail: Start an instance"
 bin/ci-builder run stable --detached --name="kail" kail --context kind-cloudtest > "kail-output.log"
 
 ci_uncollapsed_heading "cloudtest: Running \`bin/pytest ${run_args[*]}\`"
