@@ -146,6 +146,9 @@ pub fn describe(
         Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
         Statement::GrantPrivileges(stmt) => ddl::describe_grant_privileges(&scx, stmt)?,
         Statement::RevokePrivileges(stmt) => ddl::describe_revoke_privileges(&scx, stmt)?,
+        Statement::AlterDefaultPrivileges(stmt) => {
+            ddl::describe_alter_default_privileges(&scx, stmt)?
+        }
         Statement::ReassignOwned(stmt) => ddl::describe_reassign_owned(&scx, stmt)?,
 
         // `SHOW` statements.
@@ -283,6 +286,7 @@ pub fn plan(
         Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
         Statement::GrantPrivileges(stmt) => ddl::plan_grant_privileges(scx, stmt),
         Statement::RevokePrivileges(stmt) => ddl::plan_revoke_privileges(scx, stmt),
+        Statement::AlterDefaultPrivileges(stmt) => ddl::plan_alter_default_privileges(scx, stmt),
         Statement::ReassignOwned(stmt) => ddl::plan_reassign_owned(scx, stmt),
 
         // DML statements.

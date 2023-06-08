@@ -153,6 +153,7 @@ impl Plan {
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
+            StatementKind::AlterDefaultPrivileges => vec![],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
                 PlanKind::AlterIndexSetOptions,

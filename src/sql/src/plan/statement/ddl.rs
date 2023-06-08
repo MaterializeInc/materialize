@@ -30,14 +30,14 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,
-    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterDefaultPrivilegesStatement, AlterOwnerStatement, AlterRoleStatement, AlterSinkAction,
+    AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, GrantPrivilegesStatement, GrantRoleStatement, GrantTargetSpecification,
-    GrantTargetSpecificationInner, Privilege, PrivilegeSpecification, ReassignOwnedStatement,
-    RevokePrivilegesStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    DropOwnedStatement, GrantPrivilegesStatement, GrantRoleStatement, GrantTargetAllSpecification,
+    GrantTargetSpecification, GrantTargetSpecificationInner, Privilege, PrivilegeSpecification,
+    ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement, SshConnectionOption,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -4757,7 +4757,7 @@ fn plan_update_privilege(
         }
     }
     let object_ids: Vec<ObjectId> = match target.object_spec_inner {
-        GrantTargetSpecificationInner::All => {
+        GrantTargetSpecificationInner::All(GrantTargetAllSpecification::All) => {
             let cluster_ids = scx
                 .catalog
                 .get_clusters()
@@ -4787,7 +4787,9 @@ fn plan_update_privilege(
                 .filter(|object_id| object_id.is_user())
                 .collect()
         }
-        GrantTargetSpecificationInner::AllDatabases { databases } => {
+        GrantTargetSpecificationInner::All(GrantTargetAllSpecification::AllDatabases {
+            databases,
+        }) => {
             let schema_ids = databases
                 .iter()
                 .map(|database| scx.get_database(database.database_id()))
@@ -4807,13 +4809,15 @@ fn plan_update_privilege(
                 .filter(|object_id| object_type_filter(object_id, &object_type, scx))
                 .collect()
         }
-        GrantTargetSpecificationInner::AllSchemas { schemas } => schemas
-            .into_iter()
-            .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
-            .flat_map(|schema| schema.item_ids().values())
-            .map(|item_id| (*item_id).into())
-            .filter(|object_id| object_type_filter(object_id, &object_type, scx))
-            .collect(),
+        GrantTargetSpecificationInner::All(GrantTargetAllSpecification::AllSchemas { schemas }) => {
+            schemas
+                .into_iter()
+                .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
+                .flat_map(|schema| schema.item_ids().values())
+                .map(|item_id| (*item_id).into())
+                .filter(|object_id| object_type_filter(object_id, &object_type, scx))
+                .collect()
+        }
         GrantTargetSpecificationInner::Objects { names } => names
             .into_iter()
             .map(|name| {
@@ -4904,6 +4908,20 @@ fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
         Privilege::USAGE => AclMode::USAGE,
         Privilege::CREATE => AclMode::CREATE,
     }
+}
+
+pub fn describe_alter_default_privileges(
+    _: &StatementContext,
+    _: AlterDefaultPrivilegesStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    bail_unsupported!("ALTER DEFAULT PRIVILEGES")
+}
+
+pub fn plan_alter_default_privileges(
+    _: &StatementContext,
+    _: AlterDefaultPrivilegesStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    bail_unsupported!("ALTER DEFAULT PRIVILEGES")
 }
 
 pub fn describe_reassign_owned(
