@@ -55,7 +55,7 @@ DEFAULT_BOOTSTRAP: List[ActionOrFactory] = [
     StorageStart,
     # Make sure that non-functional clusters and replicas
     # do not cause an OOM elsewhere in the product.
-    ComputeStartDisabledReplica,
+    # ComputeStartDisabledReplica,
     ComputeStartDisabledCluster,
 ]
 
