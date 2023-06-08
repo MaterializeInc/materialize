@@ -27,12 +27,19 @@ resources
 * Prevent accident operations from unauthorized users
 
 * Isolate access to user-facing data from internal organization data
+T
+Materialize object access is also dependent on cluster privileges.
+Roles that need access to an object that use compute resources must also have
+the same level of access to the cluster. Materialize objects that use compute
+resources are:
 
-Materialize object access is also dependant on cluster privileges.
-Users who need access to an object like a database must also have
-the same level of access to the cluster.
+* Replicas
+* Sources
+* Sinks
+* Indexes
+* Materialized views
 
-The next sections go over the concepts of authorization and authentication and
+he next sections go over the concepts of authorization and authentication and
 the objects within Materialize.
 
 ## Authentication vs. authorization
