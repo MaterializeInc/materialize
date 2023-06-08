@@ -41,8 +41,9 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{
-    self, is_reserved_name, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
-    SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
+    self, is_reserved_name, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleMembership,
+    SerializedCatalogItem, SerializedReplicaConfig, SerializedReplicaLocation,
+    SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
 };
 use crate::coord::timeline;
 
@@ -499,6 +500,30 @@ impl Connection {
             .collect::<Result<_, _>>()?;
 
         Ok(sources)
+    }
+
+    /// Load the persisted default privileges.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_default_privileges(
+        &mut self,
+    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
+        Ok(DEFAULT_PRIVILEGES_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| {
+                (
+                    DefaultPrivilegeObject::new(
+                        k.role_id,
+                        k.database_spec,
+                        k.schema_id,
+                        k.object_type,
+                    ),
+                    DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
+                )
+            })
+            .collect::<Result<_, _>>()?)
     }
 
     /// Load the persisted server configurations.
