@@ -3761,7 +3761,10 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         AlterSourcePlan { id, action }: AlterSourcePlan,
+        subsources: Vec<CreateSourcePlans>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        assert!(subsources.is_empty());
+
         let cur_entry = self.catalog().get_entry(&id);
         let cur_source = cur_entry.source().expect("known to be source");
 

@@ -315,6 +315,7 @@ pub fn generate_required_role_membership(
         | Plan::AlterIndexResetOptions(_)
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
+        | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
@@ -410,7 +411,9 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterIndexSetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterIndexResetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSink(plan) => vec![ObjectId::Item(plan.id)],
-        Plan::AlterSource(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterSource(alter_source) | Plan::PurifiedAlterSource { alter_source, .. } => {
+            vec![ObjectId::Item(alter_source.id)]
+        }
         Plan::AlterItemRename(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
         Plan::RotateKeys(plan) => vec![ObjectId::Item(plan.id)],
@@ -627,6 +630,37 @@ fn generate_required_privileges(
                         name,
                         cluster_config,
                         &existing_resolved_ids,
+                        role_id,
+                    )
+                    .into_iter()
+                },
+            )
+            .collect(),
+        Plan::PurifiedAlterSource {
+            // Keep in sync with  AlterSourcePlan elsewhere; right now this does
+            // not affect the output privileges.
+            alter_source: AlterSourcePlan { id: _, action: _ },
+            subsources,
+        } => subsources
+            .iter()
+            .flat_map(
+                |CreateSourcePlans {
+                     source_id: _,
+                     plan:
+                         CreateSourcePlan {
+                             name,
+                             source: _,
+                             if_not_exists: _,
+                             timeline: _,
+                             cluster_config,
+                         },
+                     resolved_ids,
+                 }| {
+                    generate_required_source_privileges(
+                        catalog,
+                        name,
+                        cluster_config,
+                        resolved_ids,
                         role_id,
                     )
                     .into_iter()

@@ -453,8 +453,16 @@ impl Coordinator {
                 )
                 .await;
             }
-            Ok(Plan::AlterSource(_)) => {
-                todo!()
+            Ok(Plan::AlterSource(alter_source)) => {
+                self.sequence_plan(
+                    ctx,
+                    Plan::PurifiedAlterSource {
+                        alter_source,
+                        subsources: plans,
+                    },
+                    ResolvedIds(BTreeSet::new()),
+                )
+                .await;
             }
             Ok(p) => {
                 unreachable!("{:?} is not purified", p)

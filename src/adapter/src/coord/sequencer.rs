@@ -352,9 +352,17 @@ impl Coordinator {
                 let result = self.sequence_alter_sink(ctx.session(), plan).await;
                 ctx.retire(result);
             }
-            Plan::AlterSource(plan) => {
-                let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
+            Plan::PurifiedAlterSource {
+                alter_source,
+                subsources,
+            } => {
+                let result = self
+                    .sequence_alter_source(ctx.session_mut(), alter_source, subsources)
+                    .await;
                 ctx.retire(result);
+            }
+            Plan::AlterSource(_) => {
+                unreachable!("ALTER SOURCE must be purified")
             }
             Plan::AlterSystemSet(plan) => {
                 let result = self.sequence_alter_system_set(ctx.session(), plan).await;

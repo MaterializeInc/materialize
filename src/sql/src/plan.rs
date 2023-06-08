@@ -141,6 +141,12 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
+    PurifiedAlterSource {
+        // The `ALTER SOURCE` plan
+        alter_source: AlterSourcePlan,
+        // The plan to create any subsources added in the `ALTER SOURCE` statement.
+        subsources: Vec<CreateSourcePlans>,
+    },
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
@@ -339,7 +345,7 @@ impl Plan {
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
-            Plan::AlterSource(_) => "alter source",
+            Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
