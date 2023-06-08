@@ -175,3 +175,144 @@ impl From<objects_v18::AclMode> for objects_v19::AclMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::metrics::MetricsRegistry;
+    use tokio_postgres::Config;
+
+    use super::objects_v18::{
+        self, global_id::Value as GlobalIdInnerV18, schema_id::Value as SchemaIdInnerV18,
+        GlobalId as GlobalIdV18, ItemKey as ItemKeyV18, ItemValue as ItemValueV18,
+        SchemaId as SchemaIdV18,
+    };
+    use super::objects_v19::{
+        self, global_id::Value as GlobalIdInnerV19, schema_id::Value as SchemaIdInnerV19,
+        GlobalId as GlobalIdV19, SchemaId as SchemaIdV19,
+    };
+    use super::upgrade;
+
+    use crate::{StashFactory, TypedCollection};
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn smoke_test() {
+        // Connect to the Stash.
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+        let factory = StashFactory::new(&MetricsRegistry::new());
+
+        let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
+        let mut stash = factory.open(connstr.to_string(), None, tls).await.unwrap();
+
+        // Insert some items.
+        let items_v18: TypedCollection<objects_v18::ItemKey, objects_v18::ItemValue> =
+            TypedCollection::new("item");
+        items_v18
+            .insert_without_overwrite(
+                &mut stash,
+                vec![
+                    (
+                        ItemKeyV18 {
+                            gid: Some(GlobalIdV18 {
+                                value: Some(GlobalIdInnerV18::User(42)),
+                            }),
+                        },
+                        ItemValueV18 {
+                            schema_id: Some(SchemaIdV18 {
+                                value: Some(SchemaIdInnerV18::User(2)),
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ItemKeyV18 {
+                            gid: Some(GlobalIdV18 {
+                                value: Some(GlobalIdInnerV18::System(43)),
+                            }),
+                        },
+                        ItemValueV18 {
+                            schema_id: Some(SchemaIdV18 {
+                                value: Some(SchemaIdInnerV18::User(2)),
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ItemKeyV18 {
+                            gid: Some(GlobalIdV18 {
+                                value: Some(GlobalIdInnerV18::System(44)),
+                            }),
+                        },
+                        ItemValueV18 {
+                            schema_id: Some(SchemaIdV18 {
+                                value: Some(SchemaIdInnerV18::System(1)),
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Run our migration.
+        stash
+            .with_transaction(|mut tx| {
+                Box::pin(async move {
+                    upgrade(&mut tx).await?;
+                    Ok(())
+                })
+            })
+            .await
+            .expect("migration failed");
+
+        // Read back the items.
+        let items_v19: TypedCollection<objects_v19::ItemKey, objects_v19::ItemValue> =
+            TypedCollection::new("item");
+        let items = items_v19.iter(&mut stash).await.unwrap();
+
+        // Filter down to just GlobalIds and SchemaIds to make comparisons easier.
+        let mut ids: Vec<_> = items
+            .into_iter()
+            .map(|((key, value), _, _)| {
+                let gid = key.gid.unwrap();
+                let schema_id = value.schema_id.unwrap();
+
+                (gid, schema_id)
+            })
+            .collect();
+        ids.sort();
+
+        assert_eq!(
+            ids,
+            vec![
+                // Woo! Our value got migrated.
+                (
+                    GlobalIdV19 {
+                        value: Some(GlobalIdInnerV19::System(43))
+                    },
+                    SchemaIdV19 {
+                        value: Some(SchemaIdInnerV19::System(2))
+                    }
+                ),
+                // Other values did not get migrated.
+                (
+                    GlobalIdV19 {
+                        value: Some(GlobalIdInnerV19::System(44))
+                    },
+                    SchemaIdV19 {
+                        value: Some(SchemaIdInnerV19::System(1))
+                    }
+                ),
+                (
+                    GlobalIdV19 {
+                        value: Some(GlobalIdInnerV19::User(42))
+                    },
+                    SchemaIdV19 {
+                        value: Some(SchemaIdInnerV19::User(2))
+                    }
+                )
+            ]
+        );
+    }
+}
