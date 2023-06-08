@@ -53,7 +53,10 @@ use crate::ast::{
     ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
     StatementKind, TransactionAccessMode,
 };
-use crate::catalog::{CatalogType, IdReference, ObjectType, RoleAttributes};
+use crate::catalog::{
+    CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
+    RoleAttributes,
+};
 use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 
 pub(crate) mod error;
@@ -144,6 +147,7 @@ pub enum Plan {
     RevokeRole(RevokeRolePlan),
     GrantPrivileges(GrantPrivilegesPlan),
     RevokePrivileges(RevokePrivilegesPlan),
+    AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
 }
 
@@ -153,7 +157,7 @@ impl Plan {
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
-            StatementKind::AlterDefaultPrivileges => vec![],
+            StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
                 PlanKind::AlterIndexSetOptions,
@@ -349,6 +353,7 @@ impl Plan {
             Plan::RevokeRole(_) => "revoke role",
             Plan::GrantPrivileges(_) => "grant privilege",
             Plan::RevokePrivileges(_) => "revoke privilege",
+            Plan::AlterDefaultPrivileges(_) => "alter default privileges",
             Plan::ReassignOwned(_) => "reassign owned",
         }
     }
@@ -603,7 +608,9 @@ pub struct DropOwnedPlan {
     /// All object IDs to drop.
     pub drop_ids: Vec<ObjectId>,
     /// The privileges to revoke.
-    pub revokes: Vec<(ObjectId, MzAclItem)>,
+    pub privilege_revokes: Vec<(ObjectId, MzAclItem)>,
+    /// The default privileges to revoke.
+    pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
 }
 
 #[derive(Debug)]
@@ -931,6 +938,15 @@ pub struct RevokePrivilegesPlan {
     pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will have privileges revoked.
     pub revokees: Vec<RoleId>,
+}
+#[derive(Debug)]
+pub struct AlterDefaultPrivilegesPlan {
+    /// Description of objects that match this default privilege.
+    pub privilege_objects: Vec<DefaultPrivilegeObject>,
+    /// The privilege to be granted/revoked from the matching objects.
+    pub privilege_acl_items: Vec<DefaultPrivilegeAclItem>,
+    /// Whether this is a grant or revoke.
+    pub is_grant: bool,
 }
 
 #[derive(Debug)]

@@ -22,18 +22,18 @@ use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, SessionCatalo
 use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
     AbortTransactionPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
-    AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ClosePlan,
-    CommitTransactionPlan, CopyFromPlan, CopyRowsPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateSourcePlans, CreateTablePlan, CreateTypePlan, CreateViewPlan, DeallocatePlan,
-    DeclarePlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    GrantPrivilegesPlan, GrantRolePlan, InsertPlan, MutationKind, PeekPlan, Plan,
-    PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan, ReassignOwnedPlan,
-    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan, SetTransactionPlan,
-    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ClosePlan, CommitTransactionPlan, CopyFromPlan, CopyRowsPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
+    MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
+    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
     StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
@@ -266,6 +266,12 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
             roles.push(*new_role);
             roles
         }
+        Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+            privilege_objects, ..
+        }) => privilege_objects
+            .iter()
+            .map(|privilege_object| privilege_object.role_id)
+            .collect(),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -423,6 +429,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::RotateKeys(_)
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
+        | Plan::AlterDefaultPrivileges(_)
         | Plan::ReassignOwned(_) => Vec::new(),
     }
 }
@@ -575,7 +582,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::DropOwned(_)
-        | Plan::ReassignOwned(_) => Vec::new(),
+        | Plan::ReassignOwned(_)
+        | Plan::AlterDefaultPrivileges(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -1114,6 +1122,22 @@ fn generate_required_privileges(
             }
             privleges
         }
+        Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+            privilege_objects,
+            privilege_acl_items: _,
+            is_grant: _,
+        }) => privilege_objects
+            .into_iter()
+            .filter_map(|privilege_object| {
+                if let (Some(database_id), Some(_)) =
+                    (privilege_object.database_id, privilege_object.schema_id)
+                {
+                    Some((database_id.into(), AclMode::USAGE, role_id))
+                } else {
+                    None
+                }
+            })
+            .collect(),
         Plan::AlterClusterRename(AlterClusterRenamePlan { .. })
         | Plan::AlterClusterReplicaRename(AlterClusterReplicaRenamePlan { .. })
         | Plan::CreateDatabase(CreateDatabasePlan {
@@ -1192,7 +1216,8 @@ fn generate_required_privileges(
         | Plan::DropOwned(DropOwnedPlan {
             role_ids: _,
             drop_ids: _,
-            revokes: _,
+            privilege_revokes: _,
+            default_privilege_revokes: _,
         })
         | Plan::ReassignOwned(ReassignOwnedPlan {
             old_roles: _,

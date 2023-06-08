@@ -56,8 +56,8 @@ use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
-    CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, RoleAttributes,
-    SessionCatalog, TypeReference,
+    CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
+    EnvironmentId, IdReference, NameReference, RoleAttributes, SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -2683,53 +2683,8 @@ struct AllocatedBuiltinSystemIds<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DefaultPrivilegeObject {
-    pub role_id: RoleId,
-    pub database_id: Option<DatabaseId>,
-    pub schema_id: Option<SchemaId>,
-    pub object_type: mz_sql::catalog::ObjectType,
-}
-
-impl DefaultPrivilegeObject {
-    fn new(
-        role_id: RoleId,
-        database_id: Option<DatabaseId>,
-        schema_id: Option<SchemaId>,
-        object_type: mz_sql::catalog::ObjectType,
-    ) -> DefaultPrivilegeObject {
-        DefaultPrivilegeObject {
-            role_id,
-            database_id,
-            schema_id,
-            object_type,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DefaultPrivilegeAclItem {
-    pub grantee: RoleId,
-    pub acl_mode: AclMode,
-}
-
-impl DefaultPrivilegeAclItem {
-    fn new(grantee: RoleId, acl_mode: AclMode) -> DefaultPrivilegeAclItem {
-        DefaultPrivilegeAclItem { grantee, acl_mode }
-    }
-
-    /// Converts this [`DefaultPrivilegeAclItem`] into an [`MzAclItem`].
-    fn mz_acl_item(self, grantor: RoleId) -> MzAclItem {
-        MzAclItem {
-            grantee: self.grantee,
-            grantor,
-            acl_mode: self.acl_mode,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DefaultPrivileges {
-    privileges: BTreeMap<DefaultPrivilegeObject, Vec<DefaultPrivilegeAclItem>>,
+    privileges: BTreeMap<DefaultPrivilegeObject, BTreeMap<RoleId, DefaultPrivilegeAclItem>>,
 }
 
 impl Default for DefaultPrivileges {
@@ -2743,14 +2698,31 @@ impl Default for DefaultPrivileges {
 impl DefaultPrivileges {
     /// Add a new default privilege into the set of all default privileges.
     fn grant(&mut self, object: DefaultPrivilegeObject, privilege: DefaultPrivilegeAclItem) {
+        if privilege.acl_mode.is_empty() {
+            return;
+        }
+
         let privileges = self.privileges.entry(object).or_default();
-        if let Some(default_privilege) = privileges
-            .into_iter()
-            .find(|default_privilege| default_privilege.grantee == privilege.grantee)
-        {
+        if let Some(default_privilege) = privileges.get_mut(&privilege.grantee) {
             default_privilege.acl_mode |= privilege.acl_mode;
         } else {
-            privileges.push(privilege);
+            privileges.insert(privilege.grantee, privilege);
+        }
+    }
+
+    /// Revoke a default privilege from the set of all default privileges.
+    fn revoke(&mut self, object: &DefaultPrivilegeObject, privilege: &DefaultPrivilegeAclItem) {
+        if let Some(privileges) = self.privileges.get_mut(object) {
+            if let Some(default_privilege) = privileges.get_mut(&privilege.grantee) {
+                default_privilege.acl_mode =
+                    default_privilege.acl_mode.difference(privilege.acl_mode);
+                if default_privilege.acl_mode.is_empty() {
+                    privileges.remove(&privilege.grantee);
+                }
+            }
+            if privileges.is_empty() {
+                self.privileges.remove(object);
+            }
         }
     }
 
@@ -2760,15 +2732,11 @@ impl DefaultPrivileges {
         &self,
         object: &DefaultPrivilegeObject,
         grantee: &RoleId,
-    ) -> Option<AclMode> {
+    ) -> Option<&AclMode> {
         self.privileges
             .get(object)
-            .and_then(|privileges| {
-                privileges
-                    .into_iter()
-                    .find(|privilege| &privilege.grantee == grantee)
-            })
-            .map(|privilege| privilege.acl_mode)
+            .and_then(|privileges| privileges.get(grantee))
+            .map(|privilege| &privilege.acl_mode)
     }
 
     /// Get all default privileges that apply to the provided object details.
@@ -2779,6 +2747,16 @@ impl DefaultPrivileges {
         schema_id: Option<SchemaId>,
         object_type: mz_sql::catalog::ObjectType,
     ) -> impl Iterator<Item = DefaultPrivilegeAclItem> + '_ {
+        // Privileges consider all relations to be of type table due to PostgreSQL compatibility. We
+        // don't require the caller to worry about that and we will map their `object_type` to the
+        // correct type for privileges.
+        let privilege_object_type = if object_type.is_relation() {
+            mz_sql::catalog::ObjectType::Table
+        } else {
+            object_type
+        };
+        let valid_acl_mode = rbac::all_object_privileges(object_type);
+
         // Collect all entries that apply to the provided object details.
         // If either `database_id` or `schema_id` are `None`, then we might end up with duplicate
         // entries in the vec below. That's OK because we consolidate the results after.
@@ -2787,66 +2765,76 @@ impl DefaultPrivileges {
                 role_id,
                 database_id,
                 schema_id,
-                object_type,
+                object_type: privilege_object_type,
             },
             DefaultPrivilegeObject {
                 role_id,
                 database_id,
                 schema_id: None,
-                object_type,
+                object_type: privilege_object_type,
             },
             DefaultPrivilegeObject {
                 role_id,
                 database_id: None,
                 schema_id: None,
-                object_type,
+                object_type: privilege_object_type,
             },
             DefaultPrivilegeObject {
                 role_id: RoleId::Public,
                 database_id,
                 schema_id,
-                object_type,
+                object_type: privilege_object_type,
             },
             DefaultPrivilegeObject {
                 role_id: RoleId::Public,
                 database_id,
                 schema_id: None,
-                object_type,
+                object_type: privilege_object_type,
             },
             DefaultPrivilegeObject {
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
-                object_type,
+                object_type: privilege_object_type,
             },
         ]
         .into_iter()
         .filter_map(|object| self.privileges.get(&object))
-        .flatten()
+        .flat_map(|acl_map| acl_map.values())
         // Consolidate privileges with a common grantee.
         .fold(
             BTreeMap::new(),
-            |mut accum,
-             DefaultPrivilegeAclItem {
-                 grantee,
-                 acl_mode: privileges,
-             }| {
-                let acl_mode = accum.entry(grantee).or_insert_with(AclMode::empty);
-                *acl_mode |= *privileges;
+            |mut accum, DefaultPrivilegeAclItem { grantee, acl_mode }| {
+                let accum_acl_mode = accum.entry(grantee).or_insert_with(AclMode::empty);
+                *accum_acl_mode |= *acl_mode;
                 accum
             },
         )
         .into_iter()
-        .map(|(grantee, privileges)| DefaultPrivilegeAclItem {
+        // Restrict the acl_mode to only privileges valid for the provided object type. If the
+        // default privilege has an object type of Table, then it may contain privileges valid for
+        // tables but not other relations. If the passed in object type is another relation, then
+        // we need to remove any privilege that is not valid for the specified relation.
+        .map(move |(grantee, acl_mode)| (grantee, acl_mode & valid_acl_mode))
+        // Filter out empty privileges.
+        .filter(|(_, acl_mode)| !acl_mode.is_empty())
+        .map(|(grantee, acl_mode)| DefaultPrivilegeAclItem {
             grantee: *grantee,
-            acl_mode: privileges,
+            acl_mode,
         })
     }
 
     fn iter(
         &self,
-    ) -> impl Iterator<Item = (&DefaultPrivilegeObject, &Vec<DefaultPrivilegeAclItem>)> {
-        self.privileges.iter()
+    ) -> impl Iterator<
+        Item = (
+            &DefaultPrivilegeObject,
+            impl Iterator<Item = &DefaultPrivilegeAclItem>,
+        ),
+    > {
+        self.privileges
+            .iter()
+            .map(|(object, acl_map)| (object, acl_map.values()))
     }
 }
 
@@ -3586,6 +3574,7 @@ impl Catalog {
                 builtin_table_updates.push(catalog.state.pack_default_privileges_update(
                     default_privilege_object,
                     &default_privilege_acl_item.grantee,
+                    &default_privilege_acl_item.acl_mode,
                     1,
                 ));
             }
@@ -6288,6 +6277,50 @@ impl Catalog {
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     }
                 }
+                Op::UpdateDefaultPrivilege {
+                    privilege_object,
+                    privilege_acl_item,
+                    variant,
+                } => {
+                    if let Some(acl_mode) = state
+                        .default_privileges
+                        .get_privileges_for_grantee(&privilege_object, &privilege_acl_item.grantee)
+                    {
+                        builtin_table_updates.push(state.pack_default_privileges_update(
+                            &privilege_object,
+                            &privilege_acl_item.grantee,
+                            acl_mode,
+                            -1,
+                        ));
+                    }
+                    match variant {
+                        UpdatePrivilegeVariant::Grant => state
+                            .default_privileges
+                            .grant(privilege_object.clone(), privilege_acl_item.clone()),
+                        UpdatePrivilegeVariant::Revoke => state
+                            .default_privileges
+                            .revoke(&privilege_object, &privilege_acl_item),
+                    }
+                    let new_acl_mode = state
+                        .default_privileges
+                        .get_privileges_for_grantee(&privilege_object, &privilege_acl_item.grantee);
+                    tx.set_default_privilege(
+                        privilege_object.role_id,
+                        privilege_object.database_id,
+                        privilege_object.schema_id,
+                        privilege_object.object_type,
+                        privilege_acl_item.grantee,
+                        new_acl_mode.cloned(),
+                    )?;
+                    if let Some(new_acl_mode) = new_acl_mode {
+                        builtin_table_updates.push(state.pack_default_privileges_update(
+                            &privilege_object,
+                            &privilege_acl_item.grantee,
+                            new_acl_mode,
+                            1,
+                        ));
+                    }
+                }
                 Op::RenameCluster { id, name, to_name } => {
                     if id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
@@ -7184,6 +7217,17 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
+    pub fn default_privileges(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &DefaultPrivilegeObject,
+            impl Iterator<Item = &DefaultPrivilegeAclItem>,
+        ),
+    > {
+        self.state.default_privileges.iter()
+    }
+
     /// Allocate ids for introspection sources. Called once per cluster creation.
     pub async fn allocate_introspection_sources(&self) -> Vec<(&'static BuiltinLog, GlobalId)> {
         let log_amount = BUILTINS::logs().count();
@@ -7461,6 +7505,11 @@ pub enum Op {
     UpdatePrivilege {
         object_id: ObjectId,
         privilege: MzAclItem,
+        variant: UpdatePrivilegeVariant,
+    },
+    UpdateDefaultPrivilege {
+        privilege_object: DefaultPrivilegeObject,
+        privilege_acl_item: DefaultPrivilegeAclItem,
         variant: UpdatePrivilegeVariant,
     },
     RevokeRole {
@@ -7952,6 +8001,16 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.get_clusters()
             .into_iter()
             .flat_map(|cluster| cluster.replicas().into_iter())
+            .collect()
+    }
+
+    fn get_default_privileges(
+        &self,
+    ) -> Vec<(&DefaultPrivilegeObject, Vec<&DefaultPrivilegeAclItem>)> {
+        self.state
+            .default_privileges
+            .iter()
+            .map(|(object, acl_items)| (object, acl_items.collect()))
             .collect()
     }
 

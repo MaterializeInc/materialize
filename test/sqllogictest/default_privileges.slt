@@ -11,6 +11,19 @@ mode cockroach
 
 reset-server
 
+# Enable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+# Test pre-populated default privileges
+
 query TTTTTT
 SELECT * FROM mz_default_privileges
 ----
@@ -24,3 +37,4885 @@ SELECT unnest(privileges)::text FROM mz_types WHERE name = 'ty'
 ----
 =U/materialize
 materialize=U/materialize
+
+statement ok
+DROP TYPE ty
+
+# Create helper view
+statement ok
+CREATE VIEW default_privileges AS
+SELECT
+  (CASE defaults.role_id WHEN 'p' THEN 'PUBLIC' ELSE roles.name END) AS role_name,
+  databases.name AS database_name,
+  schemas.name AS schema_name,
+  defaults.object_type AS object_type,
+  (CASE defaults.grantee WHEN 'p' THEN 'PUBLIC' ELSE grantees.name END) AS grantee_name,
+  defaults.privileges AS privileges
+FROM mz_default_privileges defaults
+LEFT JOIN mz_roles AS roles ON defaults.role_id = roles.id
+LEFT JOIN mz_roles AS grantees ON defaults.grantee = grantees.id
+LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
+LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
+ORDER BY role_name, grantee_name
+
+# Test altering default privileges
+
+statement ok
+CREATE SCHEMA s0
+
+statement ok
+CREATE DATABASE d1
+
+statement ok
+CREATE SCHEMA d1.s1
+
+statement ok
+CREATE SCHEMA d1.s11
+
+statement ok
+CREATE DATABASE d2
+
+statement ok
+CREATE SCHEMA d2.s2
+
+statement ok
+CREATE SCHEMA d2.s22
+
+statement ok
+CREATE ROLE r1
+
+statement ok
+CREATE ROLE r2
+
+statement ok
+CREATE ROLE r3
+
+statement ok
+CREATE ROLE r4
+
+statement ok
+CREATE ROLE r5
+
+statement ok
+CREATE ROLE r6 CREATECLUSTER CREATEDB
+
+statement ok
+CREATE ROLE r7 CREATECLUSTER CREATEDB
+
+statement ok
+CREATE ROLE r8
+
+statement ok
+CREATE ROLE r9 CREATECLUSTER CREATEDB
+
+statement ok
+CREATE ROLE r10
+
+statement ok
+CREATE ROLE r11 CREATECLUSTER CREATEDB
+
+statement ok
+CREATE ROLE r12
+
+statement ok
+GRANT r6 TO materialize
+
+statement ok
+GRANT r7 TO materialize
+
+statement ok
+GRANT r9 TO materialize
+
+statement ok
+GRANT r11 TO materialize
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO r6, r7;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON SCHEMA d1.s1, d1.s11, d2.s2, d2.s22 TO r9, r11;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE d1, d2 TO r9, r11;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE materialize, d1, d2 TO r6, r7, r9;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER default TO r6, r7, r9, r11;
+----
+COMPLETE 0
+
+## Relations
+
+### Grants
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON TABLES TO r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r3      arwd
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT INSERT ON TABLES TO r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT DELETE ON TABLES TO r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT SELECT ON TABLES TO r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 GRANT INSERT ON TABLES TO r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 GRANT DELETE ON TABLES TO r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT UPDATE ON TABLES TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      r
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r2      r
+materialize  NULL  NULL  TABLE  r1      ar
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+CREATE TABLE materialize.public.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  =w/materialize
+t  r2=r/materialize
+t  r1=ar/materialize
+t  r3=arwd/materialize
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE t
+
+statement ok
+CREATE VIEW materialize.public.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r1=r/materialize
+v  r2=r/materialize
+v  r3=r/materialize
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r1=r/materialize
+mv  r2=r/materialize
+mv  r3=r/materialize
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+statement ok
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r1=r/materialize
+s  r2=r/materialize
+s  r3=r/materialize
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE s
+
+statement ok
+CREATE TABLE d1.s11.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  =w/materialize
+t  r2=r/materialize
+t  r4=a/materialize
+t  r1=ar/materialize
+t  r3=arwd/materialize
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d1.s11.t
+
+statement ok
+CREATE VIEW d1.s11.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r1=r/materialize
+v  r2=r/materialize
+v  r3=r/materialize
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d1.s11.v
+
+statement ok
+CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r1=r/materialize
+mv  r2=r/materialize
+mv  r3=r/materialize
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d1.s11.mv
+
+statement ok
+CREATE SOURCE d1.s11.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r1=r/materialize
+s  r2=r/materialize
+s  r3=r/materialize
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d1.s11.s
+
+statement ok
+CREATE TABLE d2.s22.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  =w/materialize
+t  r2=r/materialize
+t  r4=a/materialize
+t  r1=ar/materialize
+t  r3=arwd/materialize
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d2.s22.t
+
+statement ok
+CREATE VIEW d2.s22.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r1=r/materialize
+v  r2=r/materialize
+v  r3=r/materialize
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d2.s22.v
+
+statement ok
+CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r1=r/materialize
+mv  r2=r/materialize
+mv  r3=r/materialize
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d2.s22.mv
+
+statement ok
+CREATE SOURCE d2.s22.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r1=r/materialize
+s  r2=r/materialize
+s  r3=r/materialize
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d2.s22.s
+
+statement ok
+CREATE TABLE d1.s1.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  =w/materialize
+t  r2=r/materialize
+t  r4=a/materialize
+t  r5=d/materialize
+t  r1=ar/materialize
+t  r3=arwd/materialize
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d1.s1.t
+
+statement ok
+CREATE VIEW d1.s1.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r1=r/materialize
+v  r2=r/materialize
+v  r3=r/materialize
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d1.s1.v
+
+statement ok
+CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r1=r/materialize
+mv  r2=r/materialize
+mv  r3=r/materialize
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d1.s1.mv
+
+statement ok
+CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r1=r/materialize
+s  r2=r/materialize
+s  r3=r/materialize
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d1.s1.s
+
+statement ok
+CREATE TABLE d2.s2.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  =w/materialize
+t  r2=r/materialize
+t  r4=a/materialize
+t  r5=d/materialize
+t  r1=ar/materialize
+t  r3=arwd/materialize
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d2.s2.t
+
+statement ok
+CREATE VIEW d2.s2.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r1=r/materialize
+v  r2=r/materialize
+v  r3=r/materialize
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d2.s2.v
+
+statement ok
+CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r1=r/materialize
+mv  r2=r/materialize
+mv  r3=r/materialize
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d2.s2.mv
+
+statement ok
+CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r1=r/materialize
+s  r2=r/materialize
+s  r3=r/materialize
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d2.s2.s
+
+simple conn=r6,user=r6
+CREATE TABLE materialize.public.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r8=r/r6
+t  r6=arwd/r6
+
+simple conn=r6,user=r6
+DROP TABLE materialize.public.t;
+----
+COMPLETE 0
+
+simple conn=r6,user=r6
+CREATE VIEW materialize.public.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r6=r/r6
+v  r8=r/r6
+
+simple conn=r6,user=r6
+DROP VIEW materialize.public.v;
+----
+COMPLETE 0
+
+simple conn=r6,user=r6
+CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r6=r/r6
+mv  r8=r/r6
+
+simple conn=r6,user=r6
+DROP MATERIALIZED VIEW materialize.public.mv;
+----
+COMPLETE 0
+
+simple conn=r6,user=r6
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r6=r/r6
+s  r8=r/r6
+
+simple conn=r6,user=r6
+DROP SOURCE materialize.public.s;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE TABLE materialize.public.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r8=r/r7
+t  r7=arwd/r7
+
+simple conn=r7,user=r7
+DROP TABLE materialize.public.t;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE VIEW materialize.public.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r7=r/r7
+v  r8=r/r7
+
+simple conn=r7,user=r7
+DROP VIEW materialize.public.v;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r7=r/r7
+mv  r8=r/r7
+
+simple conn=r7,user=r7
+DROP MATERIALIZED VIEW materialize.public.mv;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r7=r/r7
+s  r8=r/r7
+
+simple conn=r7,user=r7
+DROP SOURCE materialize.public.s;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TABLE d1.s1.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r10=a/r9
+t  r9=arwd/r9
+
+simple conn=r9,user=r9
+DROP TABLE d1.s1.t;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE VIEW d1.s1.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r9=r/r9
+
+simple conn=r9,user=r9
+DROP VIEW d1.s1.v;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r9=r/r9
+
+simple conn=r9,user=r9
+DROP MATERIALIZED VIEW d1.s1.mv;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r9=r/r9
+
+simple conn=r9,user=r9
+DROP SOURCE d1.s1.s;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TABLE d2.s2.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r10=a/r9
+t  r9=arwd/r9
+
+simple conn=r9,user=r9
+DROP TABLE d2.s2.t;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE VIEW d2.s2.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r9=r/r9
+
+simple conn=r9,user=r9
+DROP VIEW d2.s2.v;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r9=r/r9
+
+simple conn=r9,user=r9
+DROP MATERIALIZED VIEW d2.s2.mv;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r9=r/r9
+
+simple conn=r9,user=r9
+DROP SOURCE d2.s2.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d1.s1.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r12=d/r11
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d1.s1.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d1.s1.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d1.s1.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d1.s1.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d1.s1.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d1.s11.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d1.s11.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d1.s11.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d1.s11.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d1.s11.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d1.s11.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d1.s11.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d2.s2.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r12=d/r11
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d2.s2.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d2.s2.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d2.s2.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d2.s2.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d2.s2.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d2.s22.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d2.s22.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d2.s22.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d2.s22.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d2.s22.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d2.s22.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d2.s22.s;
+----
+COMPLETE 0
+
+### Revokes
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      a
+materialize  NULL  NULL  TABLE  r3      arwd
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON TABLES FROM r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      a
+materialize  d1    NULL  TABLE  r4      a
+materialize  d2    NULL  TABLE  r4      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE INSERT ON TABLES FROM r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+materialize  d1    s1    TABLE  r5      d
+materialize  d2    s2    TABLE  r5      d
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE DELETE ON TABLES FROM r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TABLE  r8      r
+r7           NULL  NULL  TABLE  r8      r
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE SELECT ON TABLES FROM r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r9           d1    NULL  TABLE  r10     a
+r9           d2    NULL  TABLE  r10     a
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 REVOKE INSERT ON TABLES FROM r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+r11          d1    s1    TABLE  r12     d
+r11          d2    s2    TABLE  r12     d
+materialize  NULL  NULL  TABLE  r1      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 REVOKE DELETE ON TABLES FROM r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      a
+materialize  NULL  NULL  TABLE  PUBLIC  w
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE UPDATE ON TABLES FROM PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      a
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE INSERT ON TABLES FROM r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC NULL  NULL  TYPE   PUBLIC  U
+
+statement ok
+CREATE TABLE materialize.public.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE t
+
+statement ok
+CREATE VIEW materialize.public.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+statement ok
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE s
+
+statement ok
+CREATE TABLE d1.s11.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d1.s11.t
+
+statement ok
+CREATE VIEW d1.s11.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d1.s11.v
+
+statement ok
+CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d1.s11.mv
+
+statement ok
+CREATE SOURCE d1.s11.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d1.s11.s
+
+statement ok
+CREATE TABLE d2.s22.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d2.s22.t
+
+statement ok
+CREATE VIEW d2.s22.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d2.s22.v
+
+statement ok
+CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d2.s22.mv
+
+statement ok
+CREATE SOURCE d2.s22.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d2.s22.s
+
+statement ok
+CREATE TABLE d1.s1.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d1.s1.t
+
+statement ok
+CREATE VIEW d1.s1.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d1.s1.v
+
+statement ok
+CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d1.s1.mv
+
+statement ok
+CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d1.s1.s
+
+statement ok
+CREATE TABLE d2.s2.t ()
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  materialize=arwd/materialize
+
+statement ok
+DROP TABLE d2.s2.t
+
+statement ok
+CREATE VIEW d2.s2.v AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  materialize=r/materialize
+
+statement ok
+DROP VIEW d2.s2.v
+
+statement ok
+CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  materialize=r/materialize
+
+statement ok
+DROP MATERIALIZED VIEW d2.s2.mv
+
+statement ok
+CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  materialize=r/materialize
+
+statement ok
+DROP SOURCE d2.s2.s
+
+simple conn=r6,user=r6
+CREATE TABLE materialize.public.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r6=arwd/r6
+
+simple conn=r6,user=r6
+DROP TABLE materialize.public.t;
+----
+COMPLETE 0
+
+simple conn=r6,user=r6
+CREATE VIEW materialize.public.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r6=r/r6
+
+simple conn=r6,user=r6
+DROP VIEW materialize.public.v;
+----
+COMPLETE 0
+
+simple conn=r6,user=r6
+CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r6=r/r6
+
+simple conn=r6,user=r6
+DROP MATERIALIZED VIEW materialize.public.mv;
+----
+COMPLETE 0
+
+simple conn=r6,user=r6
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r6=r/r6
+
+simple conn=r6,user=r6
+DROP SOURCE materialize.public.s;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE TABLE materialize.public.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r7=arwd/r7
+
+simple conn=r7,user=r7
+DROP TABLE materialize.public.t;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE VIEW materialize.public.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r7=r/r7
+
+simple conn=r7,user=r7
+DROP VIEW materialize.public.v;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r7=r/r7
+
+simple conn=r7,user=r7
+DROP MATERIALIZED VIEW materialize.public.mv;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r7=r/r7
+
+simple conn=r7,user=r7
+DROP SOURCE materialize.public.s;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TABLE d1.s1.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r9=arwd/r9
+
+simple conn=r9,user=r9
+DROP TABLE d1.s1.t;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE VIEW d1.s1.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r9=r/r9
+
+simple conn=r9,user=r9
+DROP VIEW d1.s1.v;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r9=r/r9
+
+simple conn=r9,user=r9
+DROP MATERIALIZED VIEW d1.s1.mv;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r9=r/r9
+
+simple conn=r9,user=r9
+DROP SOURCE d1.s1.s;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TABLE d2.s2.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r9=arwd/r9
+
+simple conn=r9,user=r9
+DROP TABLE d2.s2.t;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE VIEW d2.s2.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r9=r/r9
+
+simple conn=r9,user=r9
+DROP VIEW d2.s2.v;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r9=r/r9
+
+simple conn=r9,user=r9
+DROP MATERIALIZED VIEW d2.s2.mv;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r9=r/r9
+
+simple conn=r9,user=r9
+DROP SOURCE d2.s2.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d1.s1.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d1.s1.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d1.s1.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d1.s1.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d1.s1.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d1.s1.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d1.s11.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d1.s11.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d1.s11.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d1.s11.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d1.s11.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d1.s11.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d1.s11.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d2.s2.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d2.s2.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d2.s2.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d2.s2.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d2.s2.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d2.s2.s;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TABLE d2.s22.t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r11=arwd/r11
+
+simple conn=r11,user=r11
+DROP TABLE d2.s22.t;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE VIEW d2.s22.v AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  r11=r/r11
+
+simple conn=r11,user=r11
+DROP VIEW d2.s22.v;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
+----
+mv  r11=r/r11
+
+simple conn=r11,user=r11
+DROP MATERIALIZED VIEW d2.s22.mv;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SOURCE d2.s22.s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
+----
+s  r11=r/r11
+
+simple conn=r11,user=r11
+DROP SOURCE d2.s22.s;
+----
+COMPLETE 0
+
+## Types
+
+### Grants
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON TYPES TO r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON TYPES TO r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+materialize  NULL  NULL  TYPE  r3      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT USAGE ON TYPES TO r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+materialize  NULL  NULL  TYPE  r3      U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON TYPES TO r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+materialize  NULL  NULL  TYPE  r3      U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT USAGE ON TYPES TO r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+materialize  NULL  NULL  TYPE  r3      U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 GRANT USAGE ON TYPES TO r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+materialize  NULL  NULL  TYPE  r3      U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON TYPES TO r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+materialize  NULL  NULL  TYPE  r3      U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON TYPES TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r1      U
+materialize  NULL  NULL  TYPE  r2      U
+materialize  NULL  NULL  TYPE  r3      U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+CREATE TYPE materialize.public.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  r1=U/materialize
+ty  r2=U/materialize
+ty  r3=U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE ty
+
+statement ok
+CREATE TYPE d1.s11.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  r1=U/materialize
+ty  r2=U/materialize
+ty  r3=U/materialize
+ty  r4=U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d1.s11.ty
+
+statement ok
+CREATE TYPE d2.s22.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  r1=U/materialize
+ty  r2=U/materialize
+ty  r3=U/materialize
+ty  r4=U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d2.s22.ty
+
+statement ok
+CREATE TYPE d1.s1.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  r1=U/materialize
+ty  r2=U/materialize
+ty  r3=U/materialize
+ty  r4=U/materialize
+ty  r5=U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d1.s1.ty
+
+statement ok
+CREATE TYPE d2.s2.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  r1=U/materialize
+ty  r2=U/materialize
+ty  r3=U/materialize
+ty  r4=U/materialize
+ty  r5=U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d2.s2.ty
+
+simple conn=r6,user=r6
+CREATE TYPE materialize.public.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r6
+ty  r6=U/r6
+ty  r8=U/r6
+
+simple conn=r6,user=r6
+DROP TYPE materialize.public.ty;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE TYPE materialize.public.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r7
+ty  r7=U/r7
+ty  r8=U/r7
+
+simple conn=r7,user=r7
+DROP TYPE materialize.public.ty;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TYPE d1.s1.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r9
+ty  r9=U/r9
+ty  r10=U/r9
+
+simple conn=r9,user=r9
+DROP TYPE d1.s1.ty;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TYPE d2.s2.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r9
+ty  r9=U/r9
+ty  r10=U/r9
+
+simple conn=r9,user=r9
+DROP TYPE d2.s2.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d1.s1.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+ty  r12=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d1.s1.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d1.s11.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d1.s11.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d2.s2.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+ty  r12=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d2.s2.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d2.s22.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d2.s22.ty;
+----
+COMPLETE 0
+
+### Revokes
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON TYPES FROM r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  r3      U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON TYPES FROM r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  d1    NULL  TYPE  r4      U
+materialize  d2    NULL  TYPE  r4      U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE USAGE ON TYPES FROM r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+materialize  d1    s1    TYPE  r5      U
+materialize  d2    s2    TYPE  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON TYPES FROM r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  TYPE  r8      U
+r7           NULL  NULL  TYPE  r8      U
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE USAGE ON TYPES FROM r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r9           d1    NULL  TYPE  r10     U
+r9           d2    NULL  TYPE  r10     U
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 REVOKE USAGE ON TYPES FROM r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r11          d1    s1    TYPE  r12     U
+r11          d2    s2    TYPE  r12     U
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON TYPES FROM r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+materialize  NULL  NULL  TYPE  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON TYPES FROM PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE  PUBLIC  U
+
+statement ok
+CREATE TYPE materialize.public.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE ty
+
+statement ok
+CREATE TYPE d1.s11.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d1.s11.ty
+
+statement ok
+CREATE TYPE d2.s22.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d2.s22.ty
+
+statement ok
+CREATE TYPE d1.s1.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d1.s1.ty
+
+statement ok
+CREATE TYPE d2.s2.ty as (a int)
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP TYPE d2.s2.ty
+
+simple conn=r6,user=r6
+CREATE TYPE materialize.public.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r6
+ty  r6=U/r6
+
+simple conn=r6,user=r6
+DROP TYPE materialize.public.ty;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE TYPE materialize.public.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r7
+ty  r7=U/r7
+
+simple conn=r7,user=r7
+DROP TYPE materialize.public.ty;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TYPE d1.s1.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r9
+ty  r9=U/r9
+
+simple conn=r9,user=r9
+DROP TYPE d1.s1.ty;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE TYPE d2.s2.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r9
+ty  r9=U/r9
+
+simple conn=r9,user=r9
+DROP TYPE d2.s2.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d1.s1.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d1.s1.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d1.s11.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d1.s11.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d2.s2.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d2.s2.ty;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE TYPE d2.s22.ty as (a int)
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+ty  =U/r11
+ty  r11=U/r11
+
+simple conn=r11,user=r11
+DROP TYPE d2.s22.ty;
+----
+COMPLETE 0
+
+## Secrets
+
+### Grants
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON SECRETS TO r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON SECRETS TO r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+materialize  NULL  NULL  SECRET  r3      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT USAGE ON SECRETS TO r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+materialize  NULL  NULL  SECRET  r3      U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON SECRETS TO r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+materialize  NULL  NULL  SECRET  r3      U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT USAGE ON SECRETS TO r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+materialize  NULL  NULL  SECRET  r3      U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 GRANT USAGE ON SECRETS TO r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+materialize  NULL  NULL  SECRET  r3      U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON SECRETS TO r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+materialize  NULL  NULL  SECRET  r3      U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON SECRETS TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  NULL  NULL  SECRET  r1      U
+materialize  NULL  NULL  SECRET  r2      U
+materialize  NULL  NULL  SECRET  r3      U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+CREATE SECRET materialize.public.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  =U/materialize
+se  r1=U/materialize
+se  r2=U/materialize
+se  r3=U/materialize
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET se
+
+statement ok
+CREATE SECRET d1.s11.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  =U/materialize
+se  r1=U/materialize
+se  r2=U/materialize
+se  r3=U/materialize
+se  r4=U/materialize
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d1.s11.se
+
+statement ok
+CREATE SECRET d2.s22.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  =U/materialize
+se  r1=U/materialize
+se  r2=U/materialize
+se  r3=U/materialize
+se  r4=U/materialize
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d2.s22.se
+
+statement ok
+CREATE SECRET d1.s1.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  =U/materialize
+se  r1=U/materialize
+se  r2=U/materialize
+se  r3=U/materialize
+se  r4=U/materialize
+se  r5=U/materialize
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d1.s1.se
+
+statement ok
+CREATE SECRET d2.s2.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  =U/materialize
+se  r1=U/materialize
+se  r2=U/materialize
+se  r3=U/materialize
+se  r4=U/materialize
+se  r5=U/materialize
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d2.s2.se
+
+simple conn=r6,user=r6
+CREATE SECRET materialize.public.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r6=U/r6
+se  r8=U/r6
+
+simple conn=r6,user=r6
+DROP SECRET materialize.public.se;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE SECRET materialize.public.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r7=U/r7
+se  r8=U/r7
+
+simple conn=r7,user=r7
+DROP SECRET materialize.public.se;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SECRET d1.s1.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r9=U/r9
+se  r10=U/r9
+
+simple conn=r9,user=r9
+DROP SECRET d1.s1.se;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SECRET d2.s2.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r9=U/r9
+se  r10=U/r9
+
+simple conn=r9,user=r9
+DROP SECRET d2.s2.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d1.s1.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+se  r12=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d1.s1.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d1.s11.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d1.s11.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d2.s2.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+se  r12=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d2.s2.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d2.s22.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d2.s22.se;
+----
+COMPLETE 0
+
+### Revokes
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SECRETS FROM r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  NULL  NULL  SECRET  r3      U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON SECRETS FROM r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  d1    NULL  SECRET  r4      U
+materialize  d2    NULL  SECRET  r4      U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE USAGE ON SECRETS FROM r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+materialize  d1    s1    SECRET  r5      U
+materialize  d2    s2    SECRET  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON SECRETS FROM r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SECRET  r8      U
+r7           NULL  NULL  SECRET  r8      U
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE USAGE ON SECRETS FROM r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r9           d1    NULL  SECRET  r10     U
+r9           d2    NULL  SECRET  r10     U
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 REVOKE USAGE ON SECRETS FROM r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+r11          d1    s1    SECRET  r12     U
+r11          d2    s2    SECRET  r12     U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON SECRETS FROM r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SECRET  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SECRETS FROM PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+
+statement ok
+CREATE SECRET materialize.public.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET se
+
+statement ok
+CREATE SECRET d1.s11.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d1.s11.se
+
+statement ok
+CREATE SECRET d2.s22.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d2.s22.se
+
+statement ok
+CREATE SECRET d1.s1.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d1.s1.se
+
+statement ok
+CREATE SECRET d2.s2.se AS decode('c2VjcmV0Cg==', 'base64')
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  materialize=U/materialize
+
+statement ok
+DROP SECRET d2.s2.se
+
+simple conn=r6,user=r6
+CREATE SECRET materialize.public.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r6=U/r6
+
+simple conn=r6,user=r6
+DROP SECRET materialize.public.se;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE SECRET materialize.public.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r7=U/r7
+
+simple conn=r7,user=r7
+DROP SECRET materialize.public.se;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SECRET d1.s1.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r9=U/r9
+
+simple conn=r9,user=r9
+DROP SECRET d1.s1.se;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SECRET d2.s2.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r9=U/r9
+
+simple conn=r9,user=r9
+DROP SECRET d2.s2.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d1.s1.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d1.s1.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d1.s11.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d1.s11.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d2.s2.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d2.s2.se;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE SECRET d2.s22.se AS decode('c2VjcmV0Cg==', 'base64')
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name = 'se'
+----
+se  r11=U/r11
+
+simple conn=r11,user=r11
+DROP SECRET d2.s22.se;
+----
+COMPLETE 0
+
+## Connection
+
+### Grants
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON CONNECTIONS TO r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON CONNECTIONS TO r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+materialize  NULL  NULL  CONNECTION  r3      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT USAGE ON CONNECTIONS TO r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+materialize  NULL  NULL  CONNECTION  r3      U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON CONNECTIONS TO r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+materialize  NULL  NULL  CONNECTION  r3      U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT USAGE ON CONNECTIONS TO r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+materialize  NULL  NULL  CONNECTION  r3      U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 GRANT USAGE ON CONNECTIONS TO r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+materialize  NULL  NULL  CONNECTION  r3      U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON CONNECTIONS TO r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+materialize  NULL  NULL  CONNECTION  r3      U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON CONNECTIONS TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  NULL  NULL  CONNECTION  r1      U
+materialize  NULL  NULL  CONNECTION  r2      U
+materialize  NULL  NULL  CONNECTION  r3      U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  =U/materialize
+c  r1=U/materialize
+c  r2=U/materialize
+c  r3=U/materialize
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION c
+
+statement ok
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  =U/materialize
+c  r1=U/materialize
+c  r2=U/materialize
+c  r3=U/materialize
+c  r4=U/materialize
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d1.s11.c
+
+statement ok
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  =U/materialize
+c  r1=U/materialize
+c  r2=U/materialize
+c  r3=U/materialize
+c  r4=U/materialize
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d2.s22.c
+
+statement ok
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  =U/materialize
+c  r1=U/materialize
+c  r2=U/materialize
+c  r3=U/materialize
+c  r4=U/materialize
+c  r5=U/materialize
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d1.s1.c
+
+statement ok
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  =U/materialize
+c  r1=U/materialize
+c  r2=U/materialize
+c  r3=U/materialize
+c  r4=U/materialize
+c  r5=U/materialize
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d2.s2.c
+
+simple conn=r6,user=r6
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r6=U/r6
+c  r8=U/r6
+
+simple conn=r6,user=r6
+DROP CONNECTION materialize.public.c;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r7=U/r7
+c  r8=U/r7
+
+simple conn=r7,user=r7
+DROP CONNECTION materialize.public.c;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r9=U/r9
+c  r10=U/r9
+
+simple conn=r9,user=r9
+DROP CONNECTION d1.s1.c;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r9=U/r9
+c  r10=U/r9
+
+simple conn=r9,user=r9
+DROP CONNECTION d2.s2.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+c  r12=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d1.s1.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d1.s11.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+c  r12=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d2.s2.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d2.s22.c;
+----
+COMPLETE 0
+
+### Revokes
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CONNECTIONS FROM r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  NULL  NULL  CONNECTION  r3      U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON CONNECTIONS FROM r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  d1    NULL  CONNECTION  r4      U
+materialize  d2    NULL  CONNECTION  r4      U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE USAGE ON CONNECTIONS FROM r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+materialize  d1    s1    CONNECTION  r5      U
+materialize  d2    s2    CONNECTION  r5      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON CONNECTIONS FROM r5
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CONNECTION  r8      U
+r7           NULL  NULL  CONNECTION  r8      U
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE USAGE ON CONNECTIONS FROM r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r9           d1    NULL  CONNECTION  r10     U
+r9           d2    NULL  CONNECTION  r10     U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 REVOKE USAGE ON CONNECTIONS FROM r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+r11          d1    s1    CONNECTION  r12     U
+r11          d2    s2    CONNECTION  r12     U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r11 IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON CONNECTIONS FROM r12
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+materialize  NULL  NULL  CONNECTION  PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CONNECTIONS FROM PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE        PUBLIC  U
+
+statement ok
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION c
+
+statement ok
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d1.s11.c
+
+statement ok
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d2.s22.c
+
+statement ok
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d1.s1.c
+
+statement ok
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  materialize=U/materialize
+
+statement ok
+DROP CONNECTION d2.s2.c
+
+simple conn=r6,user=r6
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r6=U/r6
+
+simple conn=r6,user=r6
+DROP CONNECTION materialize.public.c;
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r7=U/r7
+
+simple conn=r7,user=r7
+DROP CONNECTION materialize.public.c;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r9=U/r9
+
+simple conn=r9,user=r9
+DROP CONNECTION d1.s1.c;
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r9=U/r9
+
+simple conn=r9,user=r9
+DROP CONNECTION d2.s2.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d1.s1.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d1.s11.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d2.s2.c;
+----
+COMPLETE 0
+
+simple conn=r11,user=r11
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
+----
+c  r11=U/r11
+
+simple conn=r11,user=r11
+DROP CONNECTION d2.s22.c;
+----
+COMPLETE 0
+
+## Schemas
+
+### Grants
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON SCHEMAS TO r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      U
+materialize  NULL  NULL  SCHEMA  r2      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      U
+materialize  NULL  NULL  SCHEMA  r2      U
+materialize  NULL  NULL  SCHEMA  r3      UC
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT CREATE ON SCHEMAS TO r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      U
+materialize  NULL  NULL  SCHEMA  r2      U
+materialize  NULL  NULL  SCHEMA  r3      UC
+materialize  d1    NULL  SCHEMA  r4      C
+materialize  d2    NULL  SCHEMA  r4      C
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT CREATE ON SCHEMAS TO r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SCHEMA  r8      C
+r7           NULL  NULL  SCHEMA  r8      C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      U
+materialize  NULL  NULL  SCHEMA  r2      U
+materialize  NULL  NULL  SCHEMA  r3      UC
+materialize  d1    NULL  SCHEMA  r4      C
+materialize  d2    NULL  SCHEMA  r4      C
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 GRANT CREATE ON SCHEMAS TO r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SCHEMA  r8      C
+r7           NULL  NULL  SCHEMA  r8      C
+r9           d1    NULL  SCHEMA  r10     C
+r9           d2    NULL  SCHEMA  r10     C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      U
+materialize  NULL  NULL  SCHEMA  r2      U
+materialize  NULL  NULL  SCHEMA  r3      UC
+materialize  d1    NULL  SCHEMA  r4      C
+materialize  d2    NULL  SCHEMA  r4      C
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT CREATE ON SCHEMAS TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SCHEMA  r8      C
+r7           NULL  NULL  SCHEMA  r8      C
+r9           d1    NULL  SCHEMA  r10     C
+r9           d2    NULL  SCHEMA  r10     C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      U
+materialize  NULL  NULL  SCHEMA  r2      U
+materialize  NULL  NULL  SCHEMA  r3      UC
+materialize  d1    NULL  SCHEMA  r4      C
+materialize  d2    NULL  SCHEMA  r4      C
+materialize  NULL  NULL  SCHEMA  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT CREATE ON SCHEMAS TO r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SCHEMA  r8      C
+r7           NULL  NULL  SCHEMA  r8      C
+r9           d1    NULL  SCHEMA  r10     C
+r9           d2    NULL  SCHEMA  r10     C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r2      U
+materialize  NULL  NULL  SCHEMA  r1      UC
+materialize  NULL  NULL  SCHEMA  r3      UC
+materialize  d1    NULL  SCHEMA  r4      C
+materialize  d2    NULL  SCHEMA  r4      C
+materialize  NULL  NULL  SCHEMA  PUBLIC  C
+
+statement ok
+CREATE SCHEMA materialize.sch
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  =C/materialize
+sch  r2=U/materialize
+sch  r1=UC/materialize
+sch  r3=UC/materialize
+sch  materialize=UC/materialize
+
+statement ok
+DROP SCHEMA sch
+
+statement ok
+CREATE SCHEMA d1.sch
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  =C/materialize
+sch  r2=U/materialize
+sch  r4=C/materialize
+sch  r1=UC/materialize
+sch  r3=UC/materialize
+sch  materialize=UC/materialize
+
+statement ok
+DROP SCHEMA d1.sch
+
+statement ok
+CREATE SCHEMA d2.sch
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  =C/materialize
+sch  r2=U/materialize
+sch  r4=C/materialize
+sch  r1=UC/materialize
+sch  r3=UC/materialize
+sch  materialize=UC/materialize
+
+statement ok
+DROP SCHEMA d2.sch
+
+simple conn=r6,user=r6
+CREATE SCHEMA materialize.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r8=C/r6
+sch  r6=UC/r6
+
+simple conn=r6,user=r6
+DROP SCHEMA materialize.sch
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE SCHEMA materialize.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r8=C/r7
+sch  r7=UC/r7
+
+simple conn=r7,user=r7
+DROP SCHEMA materialize.sch
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SCHEMA d1.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r10=C/r9
+sch  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP SCHEMA d1.sch
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SCHEMA d2.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r10=C/r9
+sch  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP SCHEMA d2.sch
+----
+COMPLETE 0
+
+### Revokes
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SCHEMAS FROM r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SCHEMA  r8      C
+r7           NULL  NULL  SCHEMA  r8      C
+r9           d1    NULL  SCHEMA  r10     C
+r9           d2    NULL  SCHEMA  r10     C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      C
+materialize  NULL  NULL  SCHEMA  r3      UC
+materialize  d1    NULL  SCHEMA  r4      C
+materialize  d2    NULL  SCHEMA  r4      C
+materialize  NULL  NULL  SCHEMA  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON SCHEMAS FROM r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SCHEMA  r8      C
+r7           NULL  NULL  SCHEMA  r8      C
+r9           d1    NULL  SCHEMA  r10     C
+r9           d2    NULL  SCHEMA  r10     C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      C
+materialize  d1    NULL  SCHEMA  r4      C
+materialize  d2    NULL  SCHEMA  r4      C
+materialize  NULL  NULL  SCHEMA  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE CREATE ON SCHEMAS FROM r4
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  SCHEMA  r8      C
+r7           NULL  NULL  SCHEMA  r8      C
+r9           d1    NULL  SCHEMA  r10     C
+r9           d2    NULL  SCHEMA  r10     C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      C
+materialize  NULL  NULL  SCHEMA  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE CREATE ON SCHEMAS FROM r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r9           d1    NULL  SCHEMA  r10     C
+r9           d2    NULL  SCHEMA  r10     C
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      C
+materialize  NULL  NULL  SCHEMA  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 REVOKE CREATE ON SCHEMAS FROM r10
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      C
+materialize  NULL  NULL  SCHEMA  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE    PUBLIC  U
+materialize  NULL  NULL  SCHEMA  r1      C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC NULL  NULL  TYPE   PUBLIC  U
+
+statement ok
+CREATE SCHEMA materialize.sch
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  materialize=UC/materialize
+
+statement ok
+DROP SCHEMA sch
+
+statement ok
+CREATE SCHEMA d1.sch
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  materialize=UC/materialize
+
+statement ok
+DROP SCHEMA d1.sch
+
+statement ok
+CREATE SCHEMA d2.sch
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  materialize=UC/materialize
+
+statement ok
+DROP SCHEMA d2.sch
+
+simple conn=r6,user=r6
+CREATE SCHEMA materialize.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r6=UC/r6
+
+simple conn=r6,user=r6
+DROP SCHEMA materialize.sch
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE SCHEMA materialize.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r7=UC/r7
+
+simple conn=r7,user=r7
+DROP SCHEMA materialize.sch
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SCHEMA d1.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP SCHEMA d1.sch
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE SCHEMA d2.sch
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
+----
+sch  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP SCHEMA d2.sch
+----
+COMPLETE 0
+
+## Databases
+
+### Grants
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON DATABASES TO r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      U
+materialize  NULL  NULL  DATABASE  r2      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT ALL ON DATABASES TO r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      U
+materialize  NULL  NULL  DATABASE  r2      U
+materialize  NULL  NULL  DATABASE  r3      UC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT CREATE ON DATABASES TO r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  DATABASE  r8      C
+r7           NULL  NULL  DATABASE  r8      C
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      U
+materialize  NULL  NULL  DATABASE  r2      U
+materialize  NULL  NULL  DATABASE  r3      UC
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT CREATE ON DATABASES TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  DATABASE  r8      C
+r7           NULL  NULL  DATABASE  r8      C
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      U
+materialize  NULL  NULL  DATABASE  r2      U
+materialize  NULL  NULL  DATABASE  r3      UC
+materialize  NULL  NULL  DATABASE  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT CREATE ON DATABASES TO r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  DATABASE  r8      C
+r7           NULL  NULL  DATABASE  r8      C
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r2      U
+materialize  NULL  NULL  DATABASE  r1      UC
+materialize  NULL  NULL  DATABASE  r3      UC
+materialize  NULL  NULL  DATABASE  PUBLIC  C
+
+statement ok
+CREATE DATABASE d
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  =C/materialize
+d  r2=U/materialize
+d  r1=UC/materialize
+d  r3=UC/materialize
+d  materialize=UC/materialize
+
+statement ok
+DROP DATABASE d
+
+simple conn=r6,user=r6
+CREATE DATABASE d
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  r8=C/r6
+d  r6=UC/r6
+
+simple conn=r6,user=r6
+DROP DATABASE d
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE DATABASE d
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  r8=C/r7
+d  r7=UC/r7
+
+simple conn=r7,user=r7
+DROP DATABASE d
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE DATABASE d
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP DATABASE d
+----
+COMPLETE 0
+
+### Revokes
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON DATABASES FROM r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  DATABASE  r8      C
+r7           NULL  NULL  DATABASE  r8      C
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      C
+materialize  NULL  NULL  DATABASE  r3      UC
+materialize  NULL  NULL  DATABASE  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON DATABASES FROM r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  DATABASE  r8      C
+r7           NULL  NULL  DATABASE  r8      C
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      C
+materialize  NULL  NULL  DATABASE  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE CREATE ON DATABASES FROM r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      C
+materialize  NULL  NULL  DATABASE  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE CREATE ON DATABASES FROM PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE      PUBLIC  U
+materialize  NULL  NULL  DATABASE  r1      C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE CREATE ON DATABASES FROM r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC NULL  NULL  TYPE   PUBLIC  U
+
+statement ok
+CREATE DATABASE d
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  materialize=UC/materialize
+
+statement ok
+DROP DATABASE d
+
+simple conn=r6,user=r6
+CREATE DATABASE d
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  r6=UC/r6
+
+simple conn=r6,user=r6
+DROP DATABASE d
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE DATABASE d
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  r7=UC/r7
+
+simple conn=r7,user=r7
+DROP DATABASE d
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE DATABASE d
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
+----
+d  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP DATABASE d
+----
+COMPLETE 0
+
+## Clusters
+
+### Grants
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON CLUSTERS TO r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      U
+materialize  NULL  NULL  CLUSTER  r2      U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT ALL ON CLUSTERS TO r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      U
+materialize  NULL  NULL  CLUSTER  r2      U
+materialize  NULL  NULL  CLUSTER  r3      UC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT CREATE ON CLUSTERS TO r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CLUSTER  r8      C
+r7           NULL  NULL  CLUSTER  r8      C
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      U
+materialize  NULL  NULL  CLUSTER  r2      U
+materialize  NULL  NULL  CLUSTER  r3      UC
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT CREATE ON CLUSTERS TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CLUSTER  r8      C
+r7           NULL  NULL  CLUSTER  r8      C
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      U
+materialize  NULL  NULL  CLUSTER  r2      U
+materialize  NULL  NULL  CLUSTER  r3      UC
+materialize  NULL  NULL  CLUSTER  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT CREATE ON CLUSTERS TO r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CLUSTER  r8      C
+r7           NULL  NULL  CLUSTER  r8      C
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r2      U
+materialize  NULL  NULL  CLUSTER  r1      UC
+materialize  NULL  NULL  CLUSTER  r3      UC
+materialize  NULL  NULL  CLUSTER  PUBLIC  C
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  =C/materialize
+c  r2=U/materialize
+c  r1=UC/materialize
+c  r3=UC/materialize
+c  materialize=UC/materialize
+
+statement ok
+DROP CLUSTER c
+
+simple conn=r6,user=r6
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  r8=C/r6
+c  r6=UC/r6
+
+simple conn=r6,user=r6
+DROP CLUSTER c
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  r8=C/r7
+c  r7=UC/r7
+
+simple conn=r7,user=r7
+DROP CLUSTER c
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP CLUSTER c
+----
+COMPLETE 0
+
+### Revokes
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CLUSTERS FROM r1, r2
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CLUSTER  r8      C
+r7           NULL  NULL  CLUSTER  r8      C
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      C
+materialize  NULL  NULL  CLUSTER  r3      UC
+materialize  NULL  NULL  CLUSTER  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE ALL ON CLUSTERS FROM r3
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+r6           NULL  NULL  CLUSTER  r8      C
+r7           NULL  NULL  CLUSTER  r8      C
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      C
+materialize  NULL  NULL  CLUSTER  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE CREATE ON CLUSTERS FROM r8
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      C
+materialize  NULL  NULL  CLUSTER  PUBLIC  C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE CREATE ON CLUSTERS FROM PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE     PUBLIC  U
+materialize  NULL  NULL  CLUSTER  r1      C
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE CREATE ON CLUSTERS FROM r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC NULL  NULL  TYPE  PUBLIC  U
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  materialize=UC/materialize
+
+statement ok
+DROP CLUSTER c
+
+simple conn=r6,user=r6
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  r6=UC/r6
+
+simple conn=r6,user=r6
+DROP CLUSTER c
+----
+COMPLETE 0
+
+simple conn=r7,user=r7
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  r7=UC/r7
+
+simple conn=r7,user=r7
+DROP CLUSTER c
+----
+COMPLETE 0
+
+simple conn=r9,user=r9
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
+----
+c  r9=UC/r9
+
+simple conn=r9,user=r9
+DROP CLUSTER c
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA materialize.public FROM r6, r7;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE, USAGE ON SCHEMA d1.s1, d1.s11, d2.s2, d2.s22 FROM r9, r11;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON DATABASE d1, d2 FROM r9, r11;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON DATABASE materialize, d1, d2 FROM r6, r7, r9;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON CLUSTER default FROM r6, r7, r9, r11;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE r1
+
+statement ok
+DROP ROLE r2
+
+statement ok
+DROP ROLE r3
+
+statement ok
+DROP ROLE r4
+
+statement ok
+DROP ROLE r5
+
+statement ok
+DROP ROLE r6
+
+statement ok
+DROP ROLE r7
+
+statement ok
+DROP ROLE r8
+
+statement ok
+DROP ROLE r9
+
+statement ok
+DROP ROLE r10
+
+statement ok
+DROP ROLE r11
+
+statement ok
+DROP ROLE r12
+
+# Test that default privileges prevent dropping a role
+
+statement ok
+CREATE ROLE r1
+
+statement ok
+GRANT r1 TO materialize
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r1 GRANT SELECT ON TABLES TO materialize
+
+simple conn=materialize,user=materialize
+DROP ROLE r1
+----
+db error: ERROR: role "r1" cannot be dropped because some objects depend on it
+DETAIL: r1: default privileges on TABLES created by r1
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r1 REVOKE SELECT ON TABLES FROM materialize
+
+statement ok
+DROP ROLE r1
+
+statement ok
+CREATE ROLE r1
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON CONNECTIONS TO r1
+
+simple conn=materialize,user=materialize
+DROP ROLE r1
+----
+db error: ERROR: role "r1" cannot be dropped because some objects depend on it
+DETAIL: r1: default privileges on CONNECTIONS granted to r1
+
+statement ok
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CONNECTIONS FROM r1
+
+statement ok
+DROP ROLE r1
+
+# Test that DROP OWNED drops default privileges
+
+statement ok
+CREATE ROLE r1
+
+statement ok
+GRANT r1 TO materialize
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r1 GRANT SELECT ON TABLES TO materialize
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TYPE   PUBLIC       U
+r1      NULL  NULL  TABLE  materialize  r
+
+statement ok
+DROP OWNED BY r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TYPE   PUBLIC  U
+
+statement ok
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  TYPE   PUBLIC  U
+materialize  NULL  NULL  TABLE  r1      r
+
+statement ok
+DROP OWNED BY r1
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TYPE   PUBLIC  U
+
+statement ok
+DROP ROLE r1
+
+# Test error scenarios
+
+statement error For object type VIEW, you must specify 'TABLE' or omit the object type
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON VIEWS TO PUBLIC
+
+statement error For object type MATERIALIZED VIEW, you must specify 'TABLE' or omit the object type
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON MATERIALIZED VIEWS TO PUBLIC
+
+statement error For object type SOURCE, you must specify 'TABLE' or omit the object type
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON SOURCES TO PUBLIC
+
+statement error Unsupported GRANT on SINK
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON SINKS TO PUBLIC
+
+statement error Unsupported GRANT on CLUSTER REPLICA
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON CLUSTER REPLICAS TO PUBLIC
+
+statement error Unsupported GRANT on ROLE
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON ROLES TO PUBLIC
+
+statement error Unsupported GRANT on INDEX
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON INDEXES TO PUBLIC
+
+statement error Expected one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON FUNCTIONS TO PUBLIC
+
+statement error cannot specify CLUSTERS and IN DATABASE
+ALTER DEFAULT PRIVILEGES IN DATABASE materialize GRANT USAGE ON CLUSTERS TO PUBLIC
+
+statement error cannot specify DATABASES and IN DATABASE
+ALTER DEFAULT PRIVILEGES IN DATABASE materialize GRANT USAGE ON DATABASES TO PUBLIC
+
+statement error cannot specify CLUSTERS and IN SCHEMA
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON CLUSTERS TO PUBLIC
+
+statement error cannot specify DATABASES and IN SCHEMA
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON DATABASES TO PUBLIC
+
+statement error cannot specify SCHEMAS and IN SCHEMA
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SCHEMAS TO PUBLIC
+
+statement error invalid privilege types INSERT for TYPE
+ALTER DEFAULT PRIVILEGES GRANT INSERT ON TYPES TO PUBLIC
+
+statement error invalid privilege types DELETE for CLUSTER
+ALTER DEFAULT PRIVILEGES GRANT DELETE ON CLUSTERS TO PUBLIC
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE mz_introspection GRANT SELECT ON TABLES TO PUBLIC
+----
+db error: ERROR: role name "mz_introspection" is reserved
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
+statement error system schema 'mz_catalog' cannot be modified
+ALTER DEFAULT PRIVILEGES IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO PUBLIC
+
+statement error role name "mz_system" is reserved
+ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO mz_system
+
+statement error role name "public" is reserved
+ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC GRANT INSERT ON TABLES TO materialize
+
+# Disable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0

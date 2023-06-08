@@ -4077,7 +4077,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
         let target_roles = if self.parse_keyword(FOR) {
-            let _ = self.parse_one_of_keywords(&[ROLE, USER]);
+            let _ = self.expect_one_of_keywords(&[ROLE, USER])?;
             Some(self.parse_comma_separated(Parser::parse_identifier)?)
         } else {
             None

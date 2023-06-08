@@ -3755,15 +3755,16 @@ pub fn plan_drop_owned(
 ) -> Result<Plan, PlanError> {
     let role_ids: BTreeSet<_> = role_names.into_iter().map(|role| role.id).collect();
     let mut drop_ids = Vec::new();
-    let mut revokes = Vec::new();
+    let mut privilege_revokes = Vec::new();
+    let mut default_privilege_revokes = Vec::new();
 
-    fn update_revokes(
+    fn update_privilege_revokes(
         object_id: ObjectId,
         privileges: &PrivilegeMap,
         role_ids: &BTreeSet<RoleId>,
-        revokes: &mut Vec<(ObjectId, MzAclItem)>,
+        privilege_revokes: &mut Vec<(ObjectId, MzAclItem)>,
     ) {
-        revokes.extend(iter::zip(
+        privilege_revokes.extend(iter::zip(
             iter::repeat(object_id),
             privileges
                 .all_values()
@@ -3790,11 +3791,11 @@ pub fn plan_drop_owned(
             }
             drop_ids.push(cluster.id().into());
         }
-        update_revokes(
+        update_privilege_revokes(
             cluster.id().into(),
             cluster.privileges(),
             &role_ids,
-            &mut revokes,
+            &mut privilege_revokes,
         );
     }
 
@@ -3833,7 +3834,12 @@ pub fn plan_drop_owned(
             }
             drop_ids.push(item.id().into());
         }
-        update_revokes(item.id().into(), item.privileges(), &role_ids, &mut revokes);
+        update_privilege_revokes(
+            item.id().into(),
+            item.privileges(),
+            &role_ids,
+            &mut privilege_revokes,
+        );
     }
 
     // Schemas
@@ -3858,11 +3864,11 @@ pub fn plan_drop_owned(
                 }
                 drop_ids.push((*schema.database(), *schema.id()).into())
             }
-            update_revokes(
+            update_privilege_revokes(
                 (*schema.database(), *schema.id()).into(),
                 schema.privileges(),
                 &role_ids,
-                &mut revokes,
+                &mut privilege_revokes,
             );
         }
     }
@@ -3885,12 +3891,27 @@ pub fn plan_drop_owned(
             }
             drop_ids.push(database.id().into());
         }
-        update_revokes(
+        update_privilege_revokes(
             database.id().into(),
             database.privileges(),
             &role_ids,
-            &mut revokes,
+            &mut privilege_revokes,
         );
+    }
+
+    for (default_privilege_object, default_privilege_acl_items) in
+        scx.catalog.get_default_privileges()
+    {
+        for default_privilege_acl_item in default_privilege_acl_items {
+            if role_ids.contains(&default_privilege_object.role_id)
+                || role_ids.contains(&default_privilege_acl_item.grantee)
+            {
+                default_privilege_revokes.push((
+                    default_privilege_object.clone(),
+                    default_privilege_acl_item.clone(),
+                ));
+            }
+        }
     }
 
     let drop_ids = scx.catalog.object_dependents(&drop_ids);
@@ -3912,7 +3933,8 @@ pub fn plan_drop_owned(
     Ok(Plan::DropOwned(DropOwnedPlan {
         role_ids: role_ids.into_iter().collect(),
         drop_ids,
-        revokes,
+        privilege_revokes,
+        default_privilege_revokes,
     }))
 }
 

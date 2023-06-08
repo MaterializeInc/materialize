@@ -986,6 +986,7 @@ impl Coordinator {
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::UpdatePrivilege { .. }
+                | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
                 | Op::RenameCluster { .. }
                 | Op::RenameClusterReplica { .. }
