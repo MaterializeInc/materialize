@@ -24,7 +24,8 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
-use mz_repr::adt::numeric::Numeric;
+
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{
     ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc,
     RelationType, Row, RowArena, ScalarType, Timestamp,
@@ -394,7 +395,7 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
 }
 
 impl PersistSourceDataStats<'_> {
-    fn json_spec(len: usize, stats: &JsonStats) -> ResultSpec {
+    fn json_spec<'a>(len: usize, stats: &'a JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
             JsonStats::Bools(bools) => {
@@ -404,21 +405,15 @@ impl PersistSourceDataStats<'_> {
                 strings.lower.as_str().into(),
                 strings.upper.as_str().into(),
             ),
-            JsonStats::Numerics(floats) => {
-                fn float_to_datum(float: f64) -> Datum<'static> {
-                    let numeric: Numeric = float.into();
-                    numeric.into()
-                }
-                ResultSpec::value_between(
-                    float_to_datum(floats.lower.floor()),
-                    float_to_datum(floats.upper.ceil()),
-                )
-            }
+            JsonStats::Numerics(numerics) => ResultSpec::value_between(
+                arena.make_datum(|r| Jsonb::decode(&numerics.lower, r)),
+                arena.make_datum(|r| Jsonb::decode(&numerics.upper, r)),
+            ),
             JsonStats::Maps(maps) => {
                 ResultSpec::map_spec(
                     maps.into_iter()
                         .map(|(k, v)| {
-                            let mut v_spec = Self::json_spec(v.len, &v.stats);
+                            let mut v_spec = Self::json_spec(v.len, &v.stats, arena);
                             if v.len != len {
                                 // This field is not always present, so assume
                                 // that accessing it might be null.
@@ -434,7 +429,7 @@ impl PersistSourceDataStats<'_> {
         }
     }
 
-    fn col_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> ResultSpec<'a> {
+    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> ResultSpec<'a> {
         let name = self.desc.get_name(idx);
         let typ = &self.desc.typ().column_types[idx];
         match typ {
@@ -450,7 +445,7 @@ impl PersistSourceDataStats<'_> {
                 if let Some(byte_stats) = stats {
                     let value_range = match byte_stats {
                         BytesStats::Json(json_stats) => {
-                            Self::json_spec(self.stats.key.len, json_stats)
+                            Self::json_spec(self.stats.key.len, json_stats, arena)
                         }
                         BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
                     };
@@ -475,7 +470,7 @@ impl PersistSourceDataStats<'_> {
                     };
                     let value_range = match &option_stats.some {
                         BytesStats::Json(json_stats) => {
-                            Self::json_spec(self.stats.key.len, json_stats)
+                            Self::json_spec(self.stats.key.len, json_stats, arena)
                         }
                         BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
                     };

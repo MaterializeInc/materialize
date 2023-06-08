@@ -80,10 +80,11 @@ message ProtoJsonStats {
         google.protobuf.Empty json_nulls = 3;
         ProtoPrimitiveStats bools = 4;
         ProtoPrimitiveStats strings = 5;
-        ProtoPrimitiveStats numerics = 6;
+        ProtoPrimitiveBytesStats numerics = 9;
         google.protobuf.Empty lists = 7;
         ProtoJsonMapStats maps = 8;
     }
+    reserved 6;
 }
 
 message ProtoJsonMapStats {

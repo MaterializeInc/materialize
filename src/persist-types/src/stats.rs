@@ -291,9 +291,9 @@ pub enum JsonStats {
     /// The min and max strings, or None if there were none.
     Strings(PrimitiveStats<String>),
     /// The min and max numerics, or None if there were none.
-    ///
-    /// TODO(mfp): Storing this as an f64 is not correct.
-    Numerics(PrimitiveStats<f64>),
+    /// Since we don't have a decimal type here yet, this is stored in serialized
+    /// form.
+    Numerics(PrimitiveStats<Vec<u8>>),
     /// A sentinel that indicates all elements were `Datum::List`s.
     ///
     /// TODO: We could also do something for list indexes analogous to what we
@@ -1037,7 +1037,8 @@ mod impls {
                     }
                     JsonStats::Maps(elements)
                 }
-                None => return Err(TryFromProtoError::missing_field("ProtoJsonStats::values")),
+                // Unknown JSON stats type: assume this might have any value.
+                None => JsonStats::Mixed,
             })
         }
     }
