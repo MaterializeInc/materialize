@@ -655,6 +655,10 @@ message ProtoVariadicFunc {
         google.protobuf.Empty array_position = 30;
         mz_repr.relation_and_scalar.ProtoScalarType array_fill = 31;
         google.protobuf.Empty concat_ws = 32;
+        google.protobuf.Empty date_diff_timestamp = 33;
+        google.protobuf.Empty date_diff_timestamp_tz = 34;
+        google.protobuf.Empty date_diff_date = 35;
+        google.protobuf.Empty date_diff_time = 36;
     }
 }
 
@@ -713,6 +717,11 @@ message ProtoEvalError {
     }
     message ProtoValueOutOfRange {
         string value = 1;
+    }
+    message ProtoDateDiffOverflow {
+        string unit = 1;
+        string a = 2;
+        string b = 3;
     }
     oneof kind {
         int32 character_not_valid_for_encoding = 1;
@@ -785,5 +794,7 @@ message ProtoEvalError {
         ProtoInvalidIdentifier invalid_identifier = 68;
         google.protobuf.Empty array_fill_wrong_array_subscripts = 69;
         uint64 max_array_size_exceeded = 70;
+        string invalid_date_part = 71;
+        ProtoDateDiffOverflow date_diff_overflow = 72;
     }
 }
