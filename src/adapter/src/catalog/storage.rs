@@ -516,7 +516,7 @@ impl Connection {
                 (
                     DefaultPrivilegeObject::new(
                         k.role_id,
-                        k.database_spec,
+                        k.database_id,
                         k.schema_id,
                         k.object_type,
                     ),
@@ -2171,7 +2171,7 @@ pub struct ServerConfigurationValue {
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DefaultPrivilegesKey {
     role_id: RoleId,
-    database_spec: Option<ResolvedDatabaseSpecifier>,
+    database_id: Option<DatabaseId>,
     schema_id: Option<SchemaId>,
     object_type: ObjectType,
     grantee: RoleId,

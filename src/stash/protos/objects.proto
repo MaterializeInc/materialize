@@ -252,13 +252,6 @@ message DatabaseId {
     }
 }
 
-message ResolvedDatabaseSpecifier {
-    oneof value {
-        Empty ambient = 1;
-        DatabaseId id = 2;
-    }
-}
-
 message SchemaId {
     oneof value {
         uint64 system = 1;
@@ -362,7 +355,7 @@ enum ObjectType {
 
 message DefaultPrivilegesKey {
     RoleId role_id = 1;
-    ResolvedDatabaseSpecifier database_spec = 2;
+    DatabaseId database_id = 2;
     SchemaId schema_id = 3;
     ObjectType object_type = 4;
     RoleId grantee = 5;

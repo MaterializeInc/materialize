@@ -2684,7 +2684,7 @@ struct AllocatedBuiltinSystemIds<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DefaultPrivilegeObject {
     pub role_id: RoleId,
-    pub database_spec: Option<ResolvedDatabaseSpecifier>,
+    pub database_id: Option<DatabaseId>,
     pub schema_id: Option<SchemaId>,
     pub object_type: mz_sql::catalog::ObjectType,
 }
@@ -2692,13 +2692,13 @@ pub struct DefaultPrivilegeObject {
 impl DefaultPrivilegeObject {
     fn new(
         role_id: RoleId,
-        database_spec: Option<ResolvedDatabaseSpecifier>,
+        database_id: Option<DatabaseId>,
         schema_id: Option<SchemaId>,
         object_type: mz_sql::catalog::ObjectType,
     ) -> DefaultPrivilegeObject {
         DefaultPrivilegeObject {
             role_id,
-            database_spec,
+            database_id,
             schema_id,
             object_type,
         }
@@ -2774,47 +2774,47 @@ impl DefaultPrivileges {
     fn get_applicable_privileges(
         &self,
         role_id: RoleId,
-        database_spec: Option<ResolvedDatabaseSpecifier>,
+        database_id: Option<DatabaseId>,
         schema_id: Option<SchemaId>,
         object_type: mz_sql::catalog::ObjectType,
     ) -> impl Iterator<Item = DefaultPrivilegeAclItem> + '_ {
         // Collect all entries that apply to the provided object details.
-        // If either `database_spec` or `schema_id` are `None`, then we might end up with duplicate
+        // If either `database_id` or `schema_id` are `None`, then we might end up with duplicate
         // entries in the vec below. That's OK because we consolidate the results after.
         [
             DefaultPrivilegeObject {
                 role_id,
-                database_spec,
+                database_id,
                 schema_id,
                 object_type,
             },
             DefaultPrivilegeObject {
                 role_id,
-                database_spec,
+                database_id,
                 schema_id: None,
                 object_type,
             },
             DefaultPrivilegeObject {
                 role_id,
-                database_spec: None,
+                database_id: None,
                 schema_id: None,
                 object_type,
             },
             DefaultPrivilegeObject {
                 role_id: RoleId::Public,
-                database_spec,
+                database_id,
                 schema_id,
                 object_type,
             },
             DefaultPrivilegeObject {
                 role_id: RoleId::Public,
-                database_spec,
+                database_id,
                 schema_id: None,
                 object_type,
             },
             DefaultPrivilegeObject {
                 role_id: RoleId::Public,
-                database_spec: None,
+                database_id: None,
                 schema_id: None,
                 object_type,
             },
@@ -5761,7 +5761,7 @@ impl Catalog {
                         .default_privileges
                         .get_applicable_privileges(
                             owner_id,
-                            Some(name.qualifiers.database_spec),
+                            name.qualifiers.database_spec.id(),
                             Some(name.qualifiers.schema_spec.into()),
                             item.typ().into(),
                         )

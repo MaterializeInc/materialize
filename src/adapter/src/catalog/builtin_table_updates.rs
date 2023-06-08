@@ -1280,11 +1280,7 @@ impl CatalogState {
             .get_privileges_for_grantee(default_privilege_object, grantee)
             .expect("catalog out of sync");
         let database_id = default_privilege_object
-            .database_spec
-            .and_then(|database_spec| match database_spec {
-                ResolvedDatabaseSpecifier::Ambient => None,
-                ResolvedDatabaseSpecifier::Id(id) => Some(id),
-            })
+            .database_id
             .map(|database_id| database_id.to_string());
         let schema_id = default_privilege_object
             .schema_id

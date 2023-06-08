@@ -18,7 +18,6 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
-use mz_proto::ProtoType;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
@@ -266,6 +265,15 @@ pub enum ResolvedDatabaseSpecifier {
     Id(DatabaseId),
 }
 
+impl ResolvedDatabaseSpecifier {
+    pub fn id(&self) -> Option<DatabaseId> {
+        match self {
+            ResolvedDatabaseSpecifier::Ambient => None,
+            ResolvedDatabaseSpecifier::Id(id) => Some(*id),
+        }
+    }
+}
+
 impl fmt::Display for ResolvedDatabaseSpecifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -284,35 +292,6 @@ impl AstDisplay for ResolvedDatabaseSpecifier {
 impl From<DatabaseId> for ResolvedDatabaseSpecifier {
     fn from(id: DatabaseId) -> Self {
         Self::Id(id)
-    }
-}
-
-impl RustType<proto::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpecifier {
-    fn into_proto(&self) -> proto::ResolvedDatabaseSpecifier {
-        let value = match self {
-            ResolvedDatabaseSpecifier::Ambient => {
-                proto::resolved_database_specifier::Value::Ambient(Default::default())
-            }
-            ResolvedDatabaseSpecifier::Id(id) => {
-                proto::resolved_database_specifier::Value::Id(id.into_proto())
-            }
-        };
-
-        proto::ResolvedDatabaseSpecifier { value: Some(value) }
-    }
-
-    fn from_proto(proto: proto::ResolvedDatabaseSpecifier) -> Result<Self, TryFromProtoError> {
-        match proto.value {
-            Some(proto::resolved_database_specifier::Value::Ambient(_)) => {
-                Ok(ResolvedDatabaseSpecifier::Ambient)
-            }
-            Some(proto::resolved_database_specifier::Value::Id(id)) => {
-                Ok(ResolvedDatabaseSpecifier::Id(id.into_rust()?))
-            }
-            None => Err(TryFromProtoError::missing_field(
-                "ResolvedDatabaseSpecifier::value",
-            )),
-        }
     }
 }
 
