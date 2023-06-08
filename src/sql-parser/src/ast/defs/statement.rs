@@ -1675,7 +1675,7 @@ pub enum AlterSourceAction<T: AstInfo> {
     ResetOptions(Vec<CreateSourceOptionName>),
     AddSubsources {
         subsources: Vec<CreateSourceSubsource<T>>,
-        details: Option<String>,
+        details: Option<WithOptionValue<T>>,
     },
     DropSubsources {
         if_exists: bool,

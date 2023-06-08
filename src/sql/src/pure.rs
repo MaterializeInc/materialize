@@ -815,7 +815,9 @@ async fn purify_alter_source(
         slot: pg_source_connection.publication_details.slot.clone(),
     };
 
-    *details = Some(hex::encode(new_details.into_proto().encode_to_vec()));
+    *details = Some(WithOptionValue::Value(Value::String(hex::encode(
+        new_details.into_proto().encode_to_vec(),
+    ))));
 
     Ok((new_subsources, Statement::AlterSource(stmt)))
 }
