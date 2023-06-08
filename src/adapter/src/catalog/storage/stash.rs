@@ -70,6 +70,10 @@ pub const ID_ALLOCATOR_COLLECTION: TypedCollection<proto::IdAllocKey, proto::IdA
     TypedCollection::new("id_alloc");
 pub const STORAGE_USAGE_COLLECTION: TypedCollection<proto::StorageUsageKey, ()> =
     TypedCollection::new("storage_usage");
+pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
+    proto::DefaultPrivilegesKey,
+    proto::DefaultPrivilegesValue,
+> = TypedCollection::new("default_privileges");
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
@@ -541,6 +545,23 @@ pub async fn initialize(
                     },
                 ),
             ],
+        )
+        .await?;
+    DEFAULT_PRIVILEGES_COLLECTION
+        .initialize(
+            tx,
+            vec![(
+                proto::DefaultPrivilegesKey {
+                    role_id: Some(RoleId::Public.into_proto()),
+                    database_spec: None,
+                    schema_id: None,
+                    object_type: mz_sql::catalog::ObjectType::Type.into_proto().into(),
+                    grantee: Some(RoleId::Public.into_proto()),
+                },
+                proto::DefaultPrivilegesValue {
+                    privileges: Some(AclMode::USAGE.into_proto()),
+                },
+            )],
         )
         .await?;
 

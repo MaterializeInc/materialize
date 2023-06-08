@@ -19,12 +19,12 @@ use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType};
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
-    CatalogSchema, RoleAttributes,
+    CatalogSchema, ObjectType, RoleAttributes,
 };
 use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
@@ -49,6 +49,7 @@ use crate::coord::timeline;
 pub mod objects;
 pub mod stash;
 
+use crate::catalog::storage::stash::DEFAULT_PRIVILEGES_COLLECTION;
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
     CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION, ID_ALLOCATOR_COLLECTION,
@@ -767,6 +768,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         timestamps,
         system_gid_mapping,
         system_configurations,
+        default_privileges,
     ) = stash
         .with_transaction(|tx| {
             Box::pin(async move {
@@ -789,8 +791,9 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
                     tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
                     tx.peek_one(
                         tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
-                            .await?,
-                    )
+                            .await?
+                    ),
+                    tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
                 )
             })
         })
@@ -817,6 +820,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
         system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
         system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
+        default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
         audit_log_updates: Vec::new(),
         storage_usage_updates: Vec::new(),
     })
@@ -838,6 +842,7 @@ pub struct Transaction<'a> {
     timestamps: TableTransaction<TimestampKey, TimestampValue>,
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
+    default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -1670,6 +1675,7 @@ impl<'a> Transaction<'a> {
         let timestamps = Arc::new(self.timestamps.pending());
         let system_gid_mapping = Arc::new(self.system_gid_mapping.pending());
         let system_configurations = Arc::new(self.system_configurations.pending());
+        let default_privileges = Arc::new(self.default_privileges.pending());
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
@@ -1713,6 +1719,13 @@ impl<'a> Transaction<'a> {
                         &mut batches,
                         &SYSTEM_CONFIGURATION_COLLECTION,
                         &system_configurations,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &DEFAULT_PRIVILEGES_COLLECTION,
+                        &default_privileges,
                     )
                     .await?;
                     add_batch(&tx, &mut batches, &AUDIT_LOG_COLLECTION, &audit_log_updates).await?;
@@ -1785,6 +1798,7 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     role,
                     timestamp,
                     system_configuration,
+                    default_privileges,
                     audit_log,
                     storage_usage,
                 ) = futures::try_join!(
@@ -1801,6 +1815,7 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     add_batch(&tx, &ROLES_COLLECTION),
                     add_batch(&tx, &TIMESTAMP_COLLECTION),
                     add_batch(&tx, &SYSTEM_CONFIGURATION_COLLECTION),
+                    add_batch(&tx, &DEFAULT_PRIVILEGES_COLLECTION),
                     add_batch(&tx, &AUDIT_LOG_COLLECTION),
                     add_batch(&tx, &STORAGE_USAGE_COLLECTION),
                 )?;
@@ -1818,6 +1833,7 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     role,
                     timestamp,
                     system_configuration,
+                    default_privileges,
                     audit_log,
                     storage_usage,
                 ]
@@ -2127,6 +2143,20 @@ pub struct ServerConfigurationValue {
     value: String,
 }
 
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct DefaultPrivilegesKey {
+    role_id: RoleId,
+    database_spec: Option<ResolvedDatabaseSpecifier>,
+    schema_id: Option<SchemaId>,
+    object_type: ObjectType,
+    grantee: RoleId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct DefaultPrivilegesValue {
+    privileges: AclMode,
+}
+
 pub const ALL_COLLECTIONS: &[&str] = &[
     AUDIT_LOG_COLLECTION.name(),
     CLUSTER_COLLECTION.name(),
@@ -2143,6 +2173,7 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     SYSTEM_CONFIGURATION_COLLECTION.name(),
     SYSTEM_GID_MAPPING_COLLECTION.name(),
     TIMESTAMP_COLLECTION.name(),
+    DEFAULT_PRIVILEGES_COLLECTION.name(),
 ];
 
 #[cfg(test)]

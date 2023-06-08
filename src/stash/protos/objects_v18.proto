@@ -18,7 +18,7 @@
 
 syntax = "proto3";
 
-package objects;
+package objects_v18;
 
 message ConfigKey {
     string key = 1;
@@ -252,13 +252,6 @@ message DatabaseId {
     }
 }
 
-message ResolvedDatabaseSpecifier {
-    oneof value {
-        Empty ambient = 1;
-        DatabaseId id = 2;
-    }
-}
-
 message SchemaId {
     oneof value {
         uint64 system = 1;
@@ -339,37 +332,6 @@ message MzAclItem {
 
 message TimestampAntichain {
     repeated Timestamp elements = 1;
-}
-
-enum ObjectType {
-    OBJECT_TYPE_UNKNOWN = 0;
-    OBJECT_TYPE_TABLE = 1;
-    OBJECT_TYPE_VIEW = 2;
-    OBJECT_TYPE_MATERIALIZED_VIEW = 3;
-    OBJECT_TYPE_SOURCE = 4;
-    OBJECT_TYPE_SINK = 5;
-    OBJECT_TYPE_INDEX = 6;
-    OBJECT_TYPE_TYPE = 7;
-    OBJECT_TYPE_ROLE = 8;
-    OBJECT_TYPE_CLUSTER = 9;
-    OBJECT_TYPE_CLUSTER_REPLICA = 10;
-    OBJECT_TYPE_SECRET = 11;
-    OBJECT_TYPE_CONNECTION = 12;
-    OBJECT_TYPE_DATABASE = 13;
-    OBJECT_TYPE_SCHEMA = 14;
-    OBJECT_TYPE_FUNC = 15;
-}
-
-message DefaultPrivilegesKey {
-    RoleId role_id = 1;
-    ResolvedDatabaseSpecifier database_spec = 2;
-    SchemaId schema_id = 3;
-    ObjectType object_type = 4;
-    RoleId grantee = 5;
-}
-
-message DefaultPrivilegesValue {
-    AclMode privileges = 1;
 }
 
 message AuditLogEventV1 {
