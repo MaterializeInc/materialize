@@ -194,20 +194,7 @@ The payload is an array of JSON values corresponding to the columns from the `Ro
 
 #### `ParameterStatus`
 
-Executing a statement caused a session parameter to change. The parameters reported are:
-
-* `application_name`
-* `client_encoding`
-* `cluster_replica`
-* `cluster`
-* `DateStyle`
-* `integer_datetimes`
-* `IntervalStyle`
-* `server_version`
-* `standard_conforming_strings`
-* `TimeZone`
-
-The payload has the following structure:
+Executing a statement caused a session parameter to change. The payload has the following structure:
 
 ```
 {

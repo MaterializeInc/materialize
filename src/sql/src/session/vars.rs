@@ -1274,12 +1274,13 @@ impl SessionVars {
             &STANDARD_CONFORMING_STRINGS,
             &TIMEZONE,
             &INTERVAL_STYLE,
-            // Including `cluster` and `cluster_replica` in the notify set is a Materialize
-            // extension. Doing so allows users to more easily identify where their queries
-            // will be executing, which is important to know when you consider the size of a
-            // cluster, what indexes are present, etc.
+            // Including `cluster`, `cluster_replica`, and `database` in the notify set is a
+            // Materialize extension. Doing so allows users to more easily identify where their
+            // queries will be executing, which is important to know when you consider the size of
+            // a cluster, what indexes are present, etc.
             &*CLUSTER,
             &CLUSTER_REPLICA,
+            &*DATABASE,
         ]
         .into_iter()
         .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
@@ -1395,6 +1396,8 @@ impl SessionVars {
 
     /// Commits or rolls back configuration parameter updates made via
     /// [`SessionVars::set`] since the last call to `end_transaction`.
+    ///
+    /// Returns any session parameters that changed because the transaction ended.
     pub fn end_transaction(
         &mut self,
         action: EndTransactionAction,
