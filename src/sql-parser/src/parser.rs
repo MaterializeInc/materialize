@@ -3649,9 +3649,15 @@ impl<'a> Parser<'a> {
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
         if self.parse_keyword(SYSTEM) {
-            return self.parse_alter_system();
+            self.parse_alter_system()
+        } else if self.parse_keywords(&[DEFAULT, PRIVILEGES]) {
+            self.parse_alter_default_privileges()
+        } else {
+            self.parse_alter_object()
         }
+    }
 
+    fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = self.expect_object_type()?;
 
         match object_type {
@@ -4062,6 +4068,68 @@ impl<'a> Parser<'a> {
         let _ = self.parse_keyword(WITH);
         let options = self.parse_role_attributes();
         Ok(Statement::AlterRole(AlterRoleStatement { name, options }))
+    }
+
+    fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let target_roles = if self.parse_keyword(FOR) {
+            let _ = self.parse_one_of_keywords(&[ROLE, USER]);
+            Some(self.parse_comma_separated(Parser::parse_identifier)?)
+        } else {
+            None
+        };
+        let target_objects = if self.parse_keyword(IN) {
+            match self.expect_one_of_keywords(&[SCHEMA, DATABASE])? {
+                SCHEMA => GrantTargetAllSpecification::AllSchemas {
+                    schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
+                },
+                DATABASE => GrantTargetAllSpecification::AllDatabases {
+                    databases: self.parse_comma_separated(Parser::parse_database_name)?,
+                },
+                _ => unreachable!(),
+            }
+        } else {
+            GrantTargetAllSpecification::All
+        };
+        let is_grant = self.expect_one_of_keywords(&[GRANT, REVOKE])? == GRANT;
+        let privileges = self.parse_privilege_specification().ok_or_else(|| {
+            self.expected::<_, PrivilegeSpecification>(
+                self.peek_pos(),
+                "ALL or INSERT or SELECT or UPDATE or DELETE or USAGE or CREATE",
+                self.peek_token(),
+            )
+            .expect_err("only returns errors")
+        })?;
+        self.expect_keyword(ON)?;
+        let object_type =
+            self.expect_grant_revoke_plural_object_type(if is_grant { "GRANT" } else { "REVOKE" })?;
+        if is_grant {
+            self.expect_keyword(TO)?;
+        } else {
+            self.expect_keyword(FROM)?;
+        }
+        let grantees = self.parse_comma_separated(Parser::expect_role_specification)?;
+
+        let grant_or_revoke = if is_grant {
+            AbbreviatedGrantOrRevokeStatement::Grant(AbbreviatedGrantStatement {
+                privileges,
+                object_type,
+                grantees,
+            })
+        } else {
+            AbbreviatedGrantOrRevokeStatement::Revoke(AbbreviatedRevokeStatement {
+                privileges,
+                object_type,
+                revokees: grantees,
+            })
+        };
+
+        Ok(Statement::AlterDefaultPrivileges(
+            AlterDefaultPrivilegesStatement {
+                target_roles,
+                target_objects,
+                grant_or_revoke,
+            },
+        ))
     }
 
     /// Parse a copy statement
@@ -6148,22 +6216,26 @@ impl<'a> Parser<'a> {
                     );
                 }
                 match self.expect_one_of_keywords(&[DATABASE, SCHEMA])? {
-                    DATABASE => GrantTargetSpecificationInner::AllDatabases {
-                        databases: self.parse_comma_separated(Parser::parse_database_name)?,
-                    },
+                    DATABASE => GrantTargetSpecificationInner::All(
+                        GrantTargetAllSpecification::AllDatabases {
+                            databases: self.parse_comma_separated(Parser::parse_database_name)?,
+                        },
+                    ),
                     SCHEMA => {
                         if object_type == ObjectType::Schema {
                             self.prev_token();
                             self.expected(self.peek_pos(), DATABASE, self.peek_token())?;
                         }
-                        GrantTargetSpecificationInner::AllSchemas {
-                            schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
-                        }
+                        GrantTargetSpecificationInner::All(
+                            GrantTargetAllSpecification::AllSchemas {
+                                schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
+                            },
+                        )
                     }
                     _ => unreachable!(),
                 }
             } else {
-                GrantTargetSpecificationInner::All
+                GrantTargetSpecificationInner::All(GrantTargetAllSpecification::All)
             };
             (object_type, object_spec_inner)
         } else {

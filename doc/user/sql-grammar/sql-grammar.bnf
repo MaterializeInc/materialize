@@ -1,6 +1,12 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_connection ::=
   'ALTER' 'CONNECTION' 'IF EXISTS'? name 'ROTATE' 'KEYS'
+alter_default_privileges ::=
+  'ALTER' 'DEFAULT' 'PRIVILEGES' ( 'FOR' ( 'ROLE' | 'USER' )? role )? ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
+abbreviated_grant ::=
+  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
+abbreviated_revoke ::=
+  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'FROM' 'GROUP'? revokee (',' revokee)*
 alter_owner ::=
   'ALTER' ('CLUSTER' | 'CLUSTER REPLICA' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'TYPE' | 'SECRET' ) name 'OWNER TO' new_owner
 alter_rename ::=
