@@ -12,7 +12,6 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
@@ -265,39 +264,6 @@ pub struct KafkaConnection {
 impl KafkaConnection {
     /// Creates a Kafka client for the connection.
     pub async fn create_with_context<C, T>(
-        &self,
-        connection_context: &ConnectionContext,
-        context: C,
-        extra_options: &BTreeMap<&str, String>,
-    ) -> Result<T, anyhow::Error>
-    where
-        C: ClientContext + Clone,
-        T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
-    {
-        let retry = if self
-            .brokers
-            .iter()
-            .any(|b| matches!(b.tunnel, Tunnel::Ssh(_)))
-        {
-            // This is a temporary workaround until
-            // <https://github.com/MaterializeInc/materialize/issues/18491>
-            // happens. This can slow down ddl statements.
-            mz_ore::retry::Retry::default().max_duration(Duration::from_secs(30))
-        } else {
-            mz_ore::retry::Retry::default().max_tries(1)
-        };
-
-        retry
-            .retry_async(|_| async {
-                let context = context.clone();
-                self.create_with_context_inner(connection_context, context, extra_options)
-                    .await
-            })
-            .await
-    }
-
-    /// Creates a Kafka client for the connection.
-    pub async fn create_with_context_inner<C, T>(
         &self,
         connection_context: &ConnectionContext,
         context: C,
