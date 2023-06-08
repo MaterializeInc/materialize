@@ -7,17 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 use mz_persist_types::columnar::{ColumnGet, Data};
 use mz_persist_types::dyn_struct::ValidityRef;
-use mz_persist_types::stats::{JsonStats, PrimitiveStats};
+use mz_persist_types::stats::{JsonMapElementStats, JsonStats, PrimitiveStats};
 use prost::Message;
 
 use crate::row::encoding::{DatumToPersist, NullableProtoDatumToPersist};
 use crate::row::ProtoDatum;
-use crate::{Datum, Row};
+use crate::{Datum, Row, RowArena};
 
 fn as_optional_datum<'a>(row: &'a Row) -> Option<Datum<'a>> {
     let mut datums = row.iter();
@@ -84,123 +83,87 @@ pub(crate) fn jsonb_stats_nulls(
     col: &<Option<Vec<u8>> as Data>::Col,
     validity: ValidityRef<'_>,
 ) -> Result<(JsonStats, usize), String> {
-    let mut stats = JsonStats::default();
+    let mut datums = JsonDatums::default();
     let mut null_count = 0;
 
-    let mut buf = Row::default();
+    let arena = RowArena::new();
     for idx in 0..col.len() {
         let val = ColumnGet::<Option<Vec<u8>>>::get(col, idx);
         if !validity.get(idx) {
             assert!(val.map_or(true, |x| x.is_empty()));
             continue;
         }
-        NullableProtoDatumToPersist::decode(val, &mut buf.packer());
-        let datum = as_optional_datum(&buf).expect("not enough datums");
+        let datum = arena.make_datum(|r| NullableProtoDatumToPersist::decode(val, r));
         // Datum::Null only shows up at the top level of Jsonb, so we handle it
         // here instead of in the recursing function.
         if let Datum::Null = datum {
             null_count += 1;
         } else {
-            let () = jsonb_stats_datum(&mut stats, datum)?;
+            let () = datums.push(datum);
         }
     }
-    Ok((stats, null_count))
+    Ok((datums.to_stats(), null_count))
 }
 
-fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), String> {
-    fn update_stats<T: PartialOrd + ToOwned + ?Sized>(
-        stats: &mut PrimitiveStats<T::Owned>,
-        val: &T,
-    ) {
-        if val < stats.lower.borrow() {
-            stats.lower = val.to_owned();
-        }
-        if val > stats.upper.borrow() {
-            stats.upper = val.to_owned();
-        }
-    }
+#[derive(Default)]
+struct JsonDatums<'a> {
+    count: usize,
+    min_max: Option<(Datum<'a>, Datum<'a>)>,
+    nested: BTreeMap<String, JsonDatums<'a>>,
+}
 
-    match datum {
-        Datum::JsonNull => match stats {
-            JsonStats::None => *stats = JsonStats::JsonNulls,
-            JsonStats::JsonNulls => {}
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::False => match stats {
-            JsonStats::None => {
-                *stats = JsonStats::Bools(PrimitiveStats {
-                    lower: false,
-                    upper: false,
-                })
+impl<'a> JsonDatums<'a> {
+    fn push(&mut self, datum: Datum<'a>) {
+        self.count += 1;
+        self.min_max = match self.min_max.take() {
+            None => Some((datum, datum)),
+            Some((min, max)) => Some((min.min(datum), max.max(datum))),
+        };
+        if let Datum::Map(map) = datum {
+            for (key, val) in map.iter() {
+                let val_datums = self.nested.entry(key.to_owned()).or_default();
+                val_datums.push(val);
             }
-            JsonStats::Bools(stats) => update_stats(stats, &false),
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::True => match stats {
-            JsonStats::None => {
-                *stats = JsonStats::Bools(PrimitiveStats {
-                    lower: true,
-                    upper: true,
-                })
-            }
-            JsonStats::Bools(stats) => update_stats(stats, &true),
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::String(val) => match stats {
-            JsonStats::None => {
-                *stats = JsonStats::Strings(PrimitiveStats {
-                    lower: val.to_owned(),
-                    upper: val.to_owned(),
-                })
-            }
-            JsonStats::Strings(stats) => update_stats(stats, val),
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::Numeric(val) => {
-            let val = f64::try_from(val.0)
-                .map_err(|_| format!("TODO: Could not collect stats for decimal: {}", val))?;
-            match stats {
-                JsonStats::None => {
-                    *stats = JsonStats::Numerics(PrimitiveStats {
-                        lower: val,
-                        upper: val,
-                    })
-                }
-                JsonStats::Numerics(stats) => update_stats(stats, &val),
-                _ => *stats = JsonStats::Mixed,
-            }
-        }
-        Datum::List(_) => match stats {
-            JsonStats::None => *stats = JsonStats::Lists,
-            JsonStats::Lists => {}
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::Map(val) => {
-            if let JsonStats::None = stats {
-                *stats = JsonStats::Maps(BTreeMap::new());
-            }
-            match stats {
-                JsonStats::None => unreachable!("set to Maps above"),
-                JsonStats::Maps(stats) => {
-                    for (k, v) in val.iter() {
-                        let key_stats = stats.entry(k.to_owned()).or_default();
-                        key_stats.len += 1;
-                        let () = jsonb_stats_datum(&mut key_stats.stats, v)?;
-                    }
-                }
-                _ => {
-                    *stats = JsonStats::Mixed;
-                }
-            };
-        }
-        _ => {
-            return Err(format!(
-                "invalid Datum type for ScalarType::Jsonb: {}",
-                datum
-            ))
         }
     }
-    Ok(())
+    fn to_stats(self) -> JsonStats {
+        match self.min_max {
+            None => JsonStats::None,
+            Some((Datum::JsonNull, Datum::JsonNull)) => JsonStats::JsonNulls,
+            Some((min @ (Datum::True | Datum::False), max @ (Datum::True | Datum::False))) => {
+                JsonStats::Bools(PrimitiveStats {
+                    lower: min.unwrap_bool(),
+                    upper: max.unwrap_bool(),
+                })
+            }
+            Some((Datum::String(min), Datum::String(max))) => JsonStats::Strings(PrimitiveStats {
+                lower: min.to_owned(),
+                upper: max.to_owned(),
+            }),
+            Some((min @ Datum::Numeric(_), max @ Datum::Numeric(_))) => {
+                JsonStats::Numerics(PrimitiveStats {
+                    lower: ProtoDatum::from(min).encode_to_vec(),
+                    upper: ProtoDatum::from(max).encode_to_vec(),
+                })
+            }
+            Some((Datum::List(_), Datum::List(_))) => JsonStats::Lists,
+            Some((Datum::Map(_), Datum::Map(_))) => JsonStats::Maps(
+                self.nested
+                    .into_iter()
+                    .map(|(key, value)| {
+                        (
+                            key,
+                            JsonMapElementStats {
+                                len: value.count,
+                                stats: value.to_stats(),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            Some(_) => JsonStats::Mixed,
+        }
+    }
 }
 
 #[cfg(test)]
