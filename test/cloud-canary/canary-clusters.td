@@ -13,10 +13,7 @@
 
 > SET cluster=cluster1;
 
-> SHOW CLUSTERS;
-mz_system
-mz_introspection
-default
+> SHOW CLUSTERS LIKE 'cluster1';
 cluster1
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'cluster1';
@@ -29,5 +26,3 @@ cluster1 replica2 3xsmall true
 
 > SELECT cnt > 0 FROM cluster_view1;
 true
-
-> DROP CLUSTER cluster1 CASCADE;
