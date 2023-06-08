@@ -46,7 +46,7 @@ this exact purpose.
 
 Materialize follows the SQL standard (SQL-92) implementation, so you interact
 with it like any relational database: using SQL. You can build complex
-analytical workloads using **[any type of join](/sql/join/)**(including
+analytical workloads using **[any type of join](/sql/join/)** (including
 non-windowed joins and joins on arbitrary conditions), but you can also
 leverage exciting new SQL patterns enabled by streaming like
 [**Change Data Capture (CDC)**](/integrations/#databases),
