@@ -10,6 +10,8 @@ menu:
     weight: 10
 ---
 
+{{< alpha />}}
+
 This page introduces role-based access management (RBAC) in Materialize. RBAC
 allows you to apply granular privileges to your Materialize objects and clusters. Organizations
 using RBAC can manage user roles and privileges to ensure there is not

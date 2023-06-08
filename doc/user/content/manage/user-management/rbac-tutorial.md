@@ -7,6 +7,8 @@ menu:
     weight: 25
 ---
 
+{{< alpha />}}
+
 This guide walks you through creating a new user and managing roles in Materialize. By
 the end of this tutorial you will:
 
@@ -207,7 +209,7 @@ to a user in your Materialize organization.
    In this example, role ID `u1` has append, read, write, and delete
    privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges,
    which were assigned by the `u1` user.
-   
+
 ## Step 7. Create a second role
 
 Next, you will create a new role with different privileges to other objects.
@@ -314,7 +316,7 @@ inherited from another role.
    {{< note >}}
    If you need to revoke specific privileges from a role that have been
    inheritied from another role, you must revoke the role with those privileges.
-   
+
    ```sql
    REVOKE qa_role FROM dev_role;
    ```
@@ -322,9 +324,9 @@ inherited from another role.
    **all** privileges of `qa_role`. You cannot revoke specific privileges for an
    inherited role because inheritance gives effective permissions for the
    entire role.
-  
+
    {{</ note >}}
-  
+
 ## Next steps
 
 You just altered privileges and attributes on your Materialize roles! Remember

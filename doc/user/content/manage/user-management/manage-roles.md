@@ -7,6 +7,8 @@ menu:
     weight: 15
 ---
 
+{{< alpha />}}
+
 This page outlines how to create and manage roles in Materialize.
 
 ## Create a role

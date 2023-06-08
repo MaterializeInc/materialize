@@ -7,6 +7,8 @@ menu:
     weight: 20
 ---
 
+{{< alpha />}}
+
 This page outlines how to assign and manage role privileges.
 
 ## Grant privileges
