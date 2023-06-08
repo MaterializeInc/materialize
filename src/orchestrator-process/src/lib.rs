@@ -104,12 +104,13 @@ use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
 use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_pid_file::PidFile;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
 use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
+use tokio::fs::remove_dir_all;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::broadcast::{self, Sender};
@@ -497,10 +498,12 @@ impl NamespacedProcessOrchestrator {
             "--secrets-reader-process-dir={}",
             self.secrets_dir.display()
         ));
-        if let Some(scratch_directory) = &self.scratch_directory {
+
+        let scratch_directory = self.scratch_directory.as_ref().map(|dir| dir.join(id));
+        if let Some(scratch_directory) = &scratch_directory {
             args.push(format!(
                 "--scratch-directory={}",
-                scratch_directory.join(id).display()
+                scratch_directory.display()
             ));
         }
 
@@ -524,6 +527,24 @@ impl NamespacedProcessOrchestrator {
                     proxy_handles.push(handle.abort_on_drop());
                 }
             }
+
+            // Clean up scratch directory when the service is terminated.
+            // This is best effort as a development and testing convenience.
+            // Because the process orchestrator is not used in production, we
+            // don't need to be perfectly robust with the cleanup.
+            let _guard = scopeguard::guard((), |_| {
+                if let Some(scratch) = scratch_directory {
+                    info!(scratch_dir = %scratch.display(), "cleaning up scratch directory");
+                    task::spawn(|| "clean_cluster_scratch_directory", async {
+                        if let Err(e) = remove_dir_all(scratch).await {
+                            warn!(
+                                "Error cleaning up scratch directory: {}",
+                                e.display_with_causes()
+                            );
+                        }
+                    });
+                }
+            });
 
             supervise_existing_process(&state_updater, &pid_file).await;
 
