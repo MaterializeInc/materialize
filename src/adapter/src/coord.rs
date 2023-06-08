@@ -100,7 +100,7 @@ use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
-use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
+use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
@@ -183,7 +183,7 @@ pub const DUMMY_AVAILABILITY_ZONE: &str = "";
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
     ControllerReady,
-    CreateSourceStatementReady(CreateSourceStatementReady),
+    PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
@@ -238,9 +238,9 @@ pub struct BackgroundWorkResult<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
-pub type CreateSourceStatementReady = BackgroundWorkResult<(
+pub type PurifiedStatementReady = BackgroundWorkResult<(
     Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-    CreateSourceStatement<Aug>,
+    Statement<Aug>,
 )>;
 
 #[derive(Derivative)]
