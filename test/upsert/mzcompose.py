@@ -322,7 +322,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     ]
     c.up(*dependencies)
 
-    def rocksdb_path(source_name) -> tuple[str, str]:
+    def rocksdb_path(source_name: str) -> tuple[str, str]:
         (source_id, cluster_id, replica_id) = c.sql_query(
             f"select s.id, s.cluster_id, c.id from mz_sources s join mz_cluster_replicas c on s.cluster_id = c.cluster_id where s.name ='{source_name}'"
         )[0]
@@ -330,7 +330,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         cluster_prefix = f"{cluster_id}-replica-{replica_id[1:]}"
         return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
 
-    def files_at_path(path) -> int:
+    def files_at_path(path: str) -> int:
         num_files = c.exec(
             "materialized", "bash", "-c", f"find {path} -type f | wc -l", capture=True
         ).stdout.strip()
@@ -364,4 +364,4 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             else:
                 assert files_at_path(dropped_source_path) == 0
 
-        c.testdrive("# reset testdrive")
+        c.testdrive("#reset testdrive")
