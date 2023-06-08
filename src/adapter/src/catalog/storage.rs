@@ -202,9 +202,11 @@ impl Connection {
 
             Connection { stash, boot_ts }
         } else {
-            // Before we do anything with the Stash, we need to run any pending upgrades.
+            // Before we do anything with the Stash, we need to run any pending upgrades and
+            // initialize new collections.
             if !stash.is_readonly() {
                 stash.upgrade().await?;
+                initialize_stash(&mut stash).await?;
             }
 
             // Choose a time at which to boot. This is the time at which we will run
