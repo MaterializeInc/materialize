@@ -44,8 +44,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-
-use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
+use mz_sql_parser::ast::{
+    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode,
+    WithOptionValue,
+};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -861,7 +863,13 @@ pub struct AlterSinkPlan {
 #[derive(Debug)]
 pub enum AlterSourceAction {
     Resize(AlterOptionParameter),
-    DropSubsourceExports { to_drop: BTreeSet<GlobalId> },
+    DropSubsourceExports {
+        to_drop: BTreeSet<GlobalId>,
+    },
+    AddSubsourceExports {
+        subsources: Vec<CreateSourceSubsource<Aug>>,
+        details: Option<WithOptionValue<Aug>>,
+    },
 }
 
 #[derive(Debug)]

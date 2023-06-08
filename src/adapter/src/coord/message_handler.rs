@@ -464,6 +464,10 @@ impl Coordinator {
                 )
                 .await;
             }
+            Ok(plan @ Plan::AlterNoop(..)) => {
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await
+            }
             Ok(p) => {
                 unreachable!("{:?} is not purified", p)
             }
