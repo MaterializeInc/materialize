@@ -550,7 +550,10 @@ impl From<ValueWindowFunc> for Operation<(HirScalarExpr, ValueWindowFunc)> {
 /// Note that this is not exhaustive and will likely require additions.
 pub enum ParamList {
     Exact(Vec<ParamType>),
-    Variadic(ParamType),
+    Variadic {
+        leading: Vec<ParamType>,
+        trailing: ParamType,
+    },
 }
 
 impl ParamList {
@@ -584,7 +587,7 @@ impl ParamList {
     fn validate_arg_len(&self, input_len: usize) -> bool {
         match self {
             Self::Exact(p) => p.len() == input_len,
-            Self::Variadic(_) => input_len > 0,
+            Self::Variadic { leading, .. } => input_len > leading.len(),
         }
     }
 
@@ -598,7 +601,11 @@ impl ParamList {
     fn arg_names(&self) -> Vec<&'static str> {
         match self {
             ParamList::Exact(p) => p.iter().map(|p| p.name()).collect::<Vec<_>>(),
-            ParamList::Variadic(p) => vec![p.name()],
+            ParamList::Variadic { leading, trailing } => leading
+                .iter()
+                .chain([trailing].into_iter())
+                .map(|p| p.name())
+                .collect::<Vec<_>>(),
         }
     }
 
@@ -606,7 +613,7 @@ impl ParamList {
     fn variadic_name(&self) -> Option<&'static str> {
         match self {
             ParamList::Exact(_) => None,
-            ParamList::Variadic(p) => Some(p.name()),
+            ParamList::Variadic { trailing, .. } => Some(trailing.name()),
         }
     }
 }
@@ -617,7 +624,7 @@ impl std::ops::Index<usize> for ParamList {
     fn index(&self, i: usize) -> &Self::Output {
         match self {
             Self::Exact(p) => &p[i],
-            Self::Variadic(p) => p,
+            Self::Variadic { leading, trailing } => leading.get(i).unwrap_or(trailing),
         }
     }
 }
@@ -1553,7 +1560,8 @@ fn coerce_args_to_types(
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
-    ($p:ident...) => { ParamList::Variadic($p.into()) };
+    ([$($p:expr),*], $v:ident...) => { ParamList::Variadic { leading: vec![$($p.into(),)*], trailing: $v.into() } };
+    ($v:ident...) => { ParamList::Variadic { leading: vec![], trailing: $v.into() } };
     ($($p:expr),*) => { ParamList::Exact(vec![$($p.into(),)*]) };
 }
 
@@ -1825,6 +1833,26 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 }
                 Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
             }) => String, 3058;
+        },
+        "concat_ws" => Scalar {
+            params!([String], Any...) => Operation::variadic(|ecx, cexprs| {
+                if cexprs.len() < 2 {
+                    sql_bail!("No function matches the given name and argument types. \
+                    You might need to add explicit type casts.")
+                }
+                let mut exprs = vec![];
+                for expr in cexprs {
+                    exprs.push(match ecx.scalar_type(&expr) {
+                        // concat uses nonstandard bool -> string casts
+                        // to match historical baggage in PostgreSQL.
+                        ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
+                        // TODO(#7572): remove call to PadChar
+                        ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                        _ => typeconv::to_string(ecx, expr)
+                    });
+                }
+                Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ConcatWs, exprs })
+            }) => String, 3059;
         },
         "convert_from" => Scalar {
             params!(Bytes, String) => BinaryFunc::ConvertFrom => String, 1714;

@@ -725,6 +725,54 @@ SELECT '你' || '好'
 query error db error: ERROR: operator does not exist: boolean \|\| boolean
 SELECT true || false
 
+# concat_ws
+
+query error db error: ERROR: function concat_ws\(\) does not exist
+SELECT concat_ws();
+
+query error db error: ERROR: function concat_ws\(unknown\) does not exist
+SELECT concat_ws('a');
+
+query T
+SELECT concat_ws('', 'a', 'b') AS word;
+----
+ab
+
+query T
+SELECT concat_ws(E'\t', 'S', 'M', 'T');
+----
+S	M	T
+
+query T
+SELECT concat_ws(', ', interval '1d', 1.23::numeric, 4.56::float);
+----
+1 day, 1.23, 4.56
+
+query T
+SELECT concat_ws(', ', interval '1d', null, 1.23::numeric, null, 4.57::float);
+----
+1 day, 1.23, 4.57
+
+query T
+SELECT concat_ws(', ', interval '1d', null, 1.23::numeric, null, 4.57::float, null);
+----
+1 day, 1.23, 4.57
+
+query T
+SELECT concat_ws(null, interval '1d', null, 1.23::numeric, null, 4.57::float, null);
+----
+NULL
+
+query T
+SELECT concat_ws(null, null);
+----
+NULL
+
+query T
+SELECT concat_ws('x', null);
+----
+(empty)
+
 query T
 SELECT split_part('abc~@~def~@~ghi', '~@~', 2)
 ----

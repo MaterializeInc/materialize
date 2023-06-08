@@ -5750,6 +5750,23 @@ fn text_concat_variadic<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) ->
     Datum::String(temp_storage.push_string(buf))
 }
 
+fn text_concat_ws<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    let ws = match datums[0] {
+        Datum::Null => return Datum::Null,
+        d => d.unwrap_str(),
+    };
+
+    let buf = Itertools::join(
+        &mut datums[1..].iter().filter_map(|d| match d {
+            Datum::Null => None,
+            d => Some(d.unwrap_str()),
+        }),
+        ws,
+    );
+
+    Datum::String(temp_storage.push_string(buf))
+}
+
 fn pad_leading<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -7055,6 +7072,7 @@ pub enum VariadicFunc {
     Greatest,
     Least,
     Concat,
+    ConcatWs,
     MakeTimestamp,
     PadLeading,
     Substr,
@@ -7139,6 +7157,7 @@ impl VariadicFunc {
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::Least => unreachable!(),
             VariadicFunc::Concat => Ok(text_concat_variadic(&ds, temp_storage)),
+            VariadicFunc::ConcatWs => Ok(text_concat_ws(&ds, temp_storage)),
             VariadicFunc::MakeTimestamp => make_timestamp(&ds),
             VariadicFunc::PadLeading => pad_leading(&ds, temp_storage),
             VariadicFunc::Substr => substr(&ds),
@@ -7187,6 +7206,7 @@ impl VariadicFunc {
             | VariadicFunc::Greatest
             | VariadicFunc::Least
             | VariadicFunc::Concat
+            | VariadicFunc::ConcatWs
             | VariadicFunc::And
             | VariadicFunc::Or => true,
 
@@ -7226,7 +7246,7 @@ impl VariadicFunc {
                 .into_iter()
                 .reduce(|l, r| l.union(&r).unwrap())
                 .unwrap(),
-            Concat => ScalarType::String.nullable(in_nullable),
+            Concat | ConcatWs => ScalarType::String.nullable(in_nullable),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
             PadLeading => ScalarType::String.nullable(in_nullable),
             Substr => ScalarType::String.nullable(in_nullable),
@@ -7308,6 +7328,7 @@ impl VariadicFunc {
                 | VariadicFunc::Greatest
                 | VariadicFunc::Least
                 | VariadicFunc::Concat
+                | VariadicFunc::ConcatWs
                 | VariadicFunc::JsonbBuildArray
                 | VariadicFunc::JsonbBuildObject
                 | VariadicFunc::ListCreate { .. }
@@ -7330,6 +7351,7 @@ impl VariadicFunc {
         use VariadicFunc::*;
         match self {
             Concat
+            | ConcatWs
             | PadLeading
             | Substr
             | Replace
@@ -7424,6 +7446,7 @@ impl VariadicFunc {
             | VariadicFunc::And
             | VariadicFunc::Or => true,
             VariadicFunc::Concat
+            | VariadicFunc::ConcatWs
             | VariadicFunc::MakeTimestamp
             | VariadicFunc::PadLeading
             | VariadicFunc::Substr
@@ -7460,6 +7483,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Greatest => f.write_str("greatest"),
             VariadicFunc::Least => f.write_str("least"),
             VariadicFunc::Concat => f.write_str("concat"),
+            VariadicFunc::ConcatWs => f.write_str("concat_ws"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::PadLeading => f.write_str("lpad"),
             VariadicFunc::Substr => f.write_str("substr"),
@@ -7517,6 +7541,7 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::Greatest).boxed(),
             Just(VariadicFunc::Least).boxed(),
             Just(VariadicFunc::Concat).boxed(),
+            Just(VariadicFunc::ConcatWs).boxed(),
             Just(VariadicFunc::MakeTimestamp).boxed(),
             Just(VariadicFunc::PadLeading).boxed(),
             Just(VariadicFunc::Substr).boxed(),
@@ -7570,6 +7595,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::Greatest => Greatest(()),
             VariadicFunc::Least => Least(()),
             VariadicFunc::Concat => Concat(()),
+            VariadicFunc::ConcatWs => ConcatWs(()),
             VariadicFunc::MakeTimestamp => MakeTimestamp(()),
             VariadicFunc::PadLeading => PadLeading(()),
             VariadicFunc::Substr => Substr(()),
@@ -7612,6 +7638,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 Greatest(()) => Ok(VariadicFunc::Greatest),
                 Least(()) => Ok(VariadicFunc::Least),
                 Concat(()) => Ok(VariadicFunc::Concat),
+                ConcatWs(()) => Ok(VariadicFunc::ConcatWs),
                 MakeTimestamp(()) => Ok(VariadicFunc::MakeTimestamp),
                 PadLeading(()) => Ok(VariadicFunc::PadLeading),
                 Substr(()) => Ok(VariadicFunc::Substr),
