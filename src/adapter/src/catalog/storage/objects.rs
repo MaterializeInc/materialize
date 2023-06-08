@@ -716,9 +716,7 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
     fn into_proto(&self) -> proto::DefaultPrivilegesKey {
         proto::DefaultPrivilegesKey {
             role_id: Some(self.role_id.into_proto()),
-            database_spec: self
-                .database_spec
-                .map(|database_spec| database_spec.into_proto()),
+            database_id: self.database_id.map(|database_id| database_id.into_proto()),
             schema_id: self.schema_id.map(|schema_id| schema_id.into_proto()),
             object_type: self.object_type.into_proto().into(),
             grantee: Some(self.grantee.into_proto()),
@@ -730,7 +728,7 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
             role_id: proto
                 .role_id
                 .into_rust_if_some("DefaultPrivilegesKey::role_id")?,
-            database_spec: proto.database_spec.into_rust()?,
+            database_id: proto.database_id.into_rust()?,
             schema_id: proto.schema_id.into_rust()?,
             object_type: proto::ObjectType::from_i32(proto.object_type)
                 .ok_or_else(|| TryFromProtoError::unknown_enum_variant("ObjectType"))?

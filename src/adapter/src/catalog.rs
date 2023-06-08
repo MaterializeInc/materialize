@@ -42,7 +42,7 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
@@ -189,6 +189,7 @@ pub struct CatalogState {
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
+    default_privileges: DefaultPrivileges,
 }
 
 impl CatalogState {
@@ -223,6 +224,7 @@ impl CatalogState {
             egress_ips: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
+            default_privileges: Default::default(),
         }
     }
 
@@ -2679,6 +2681,174 @@ struct AllocatedBuiltinSystemIds<T> {
     migrated_builtins: Vec<GlobalId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DefaultPrivilegeObject {
+    pub role_id: RoleId,
+    pub database_id: Option<DatabaseId>,
+    pub schema_id: Option<SchemaId>,
+    pub object_type: mz_sql::catalog::ObjectType,
+}
+
+impl DefaultPrivilegeObject {
+    fn new(
+        role_id: RoleId,
+        database_id: Option<DatabaseId>,
+        schema_id: Option<SchemaId>,
+        object_type: mz_sql::catalog::ObjectType,
+    ) -> DefaultPrivilegeObject {
+        DefaultPrivilegeObject {
+            role_id,
+            database_id,
+            schema_id,
+            object_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DefaultPrivilegeAclItem {
+    pub grantee: RoleId,
+    pub acl_mode: AclMode,
+}
+
+impl DefaultPrivilegeAclItem {
+    fn new(grantee: RoleId, acl_mode: AclMode) -> DefaultPrivilegeAclItem {
+        DefaultPrivilegeAclItem { grantee, acl_mode }
+    }
+
+    /// Converts this [`DefaultPrivilegeAclItem`] into an [`MzAclItem`].
+    fn mz_acl_item(self, grantor: RoleId) -> MzAclItem {
+        MzAclItem {
+            grantee: self.grantee,
+            grantor,
+            acl_mode: self.acl_mode,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DefaultPrivileges {
+    privileges: BTreeMap<DefaultPrivilegeObject, Vec<DefaultPrivilegeAclItem>>,
+}
+
+impl Default for DefaultPrivileges {
+    fn default() -> DefaultPrivileges {
+        DefaultPrivileges {
+            privileges: Default::default(),
+        }
+    }
+}
+
+impl DefaultPrivileges {
+    /// Add a new default privilege into the set of all default privileges.
+    fn grant(&mut self, object: DefaultPrivilegeObject, privilege: DefaultPrivilegeAclItem) {
+        let privileges = self.privileges.entry(object).or_default();
+        if let Some(default_privilege) = privileges
+            .into_iter()
+            .find(|default_privilege| default_privilege.grantee == privilege.grantee)
+        {
+            default_privilege.acl_mode |= privilege.acl_mode;
+        } else {
+            privileges.push(privilege);
+        }
+    }
+
+    /// Get the privileges that will be granted on all objects matching `object` to `grantee`, if
+    /// any exist.
+    fn get_privileges_for_grantee(
+        &self,
+        object: &DefaultPrivilegeObject,
+        grantee: &RoleId,
+    ) -> Option<AclMode> {
+        self.privileges
+            .get(object)
+            .and_then(|privileges| {
+                privileges
+                    .into_iter()
+                    .find(|privilege| &privilege.grantee == grantee)
+            })
+            .map(|privilege| privilege.acl_mode)
+    }
+
+    /// Get all default privileges that apply to the provided object details.
+    fn get_applicable_privileges(
+        &self,
+        role_id: RoleId,
+        database_id: Option<DatabaseId>,
+        schema_id: Option<SchemaId>,
+        object_type: mz_sql::catalog::ObjectType,
+    ) -> impl Iterator<Item = DefaultPrivilegeAclItem> + '_ {
+        // Collect all entries that apply to the provided object details.
+        // If either `database_id` or `schema_id` are `None`, then we might end up with duplicate
+        // entries in the vec below. That's OK because we consolidate the results after.
+        [
+            DefaultPrivilegeObject {
+                role_id,
+                database_id,
+                schema_id,
+                object_type,
+            },
+            DefaultPrivilegeObject {
+                role_id,
+                database_id,
+                schema_id: None,
+                object_type,
+            },
+            DefaultPrivilegeObject {
+                role_id,
+                database_id: None,
+                schema_id: None,
+                object_type,
+            },
+            DefaultPrivilegeObject {
+                role_id: RoleId::Public,
+                database_id,
+                schema_id,
+                object_type,
+            },
+            DefaultPrivilegeObject {
+                role_id: RoleId::Public,
+                database_id,
+                schema_id: None,
+                object_type,
+            },
+            DefaultPrivilegeObject {
+                role_id: RoleId::Public,
+                database_id: None,
+                schema_id: None,
+                object_type,
+            },
+        ]
+        .into_iter()
+        .filter_map(|object| self.privileges.get(&object))
+        .flatten()
+        // Consolidate privileges with a common grantee.
+        .fold(
+            BTreeMap::new(),
+            |mut accum,
+             DefaultPrivilegeAclItem {
+                 grantee,
+                 acl_mode: privileges,
+             }| {
+                let acl_mode = accum.entry(grantee).or_insert_with(AclMode::empty);
+                *acl_mode |= *privileges;
+                accum
+            },
+        )
+        .into_iter()
+        .map(|(grantee, privileges)| DefaultPrivilegeAclItem {
+            grantee: *grantee,
+            acl_mode: privileges,
+        })
+    }
+
+    fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&DefaultPrivilegeObject, &Vec<DefaultPrivilegeAclItem>)> {
+        self.privileges.iter()
+    }
+}
+
 /// Functions can share the same name as any other catalog item type
 /// within a given schema.
 /// For example, a function can have the same name as a type, e.g.
@@ -2850,6 +3020,7 @@ impl Catalog {
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+                default_privileges: DefaultPrivileges::default(),
             },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
@@ -2951,6 +3122,14 @@ impl Catalog {
                     membership,
                 },
             );
+        }
+
+        let default_privileges = catalog.storage().await.load_default_privileges().await?;
+        for (default_privilege_object, default_privilege) in default_privileges {
+            catalog
+                .state
+                .default_privileges
+                .grant(default_privilege_object, default_privilege);
         }
 
         catalog
@@ -3397,6 +3576,17 @@ impl Catalog {
                         .state
                         .pack_role_members_update(*group_id, role.id, 1),
                 )
+            }
+        }
+        for (default_privilege_object, default_privilege_acl_items) in
+            catalog.state.default_privileges.iter()
+        {
+            for default_privilege_acl_item in default_privilege_acl_items {
+                builtin_table_updates.push(catalog.state.pack_default_privileges_update(
+                    default_privilege_object,
+                    &default_privilege_acl_item.grantee,
+                    1,
+                ));
             }
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
@@ -5188,26 +5378,59 @@ impl Catalog {
                     public_schema_oid,
                     owner_id,
                 } => {
-                    let database_privileges = vec![rbac::owner_privilege(
+                    let database_owner_privileges = vec![rbac::owner_privilege(
                         mz_sql::catalog::ObjectType::Database,
                         owner_id,
                     )];
-                    let default_schema_privileges = vec![
-                        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, owner_id),
-                        // Default schemas provide USAGE privileges to PUBLIC by default.
-                        MzAclItem {
+                    let database_default_privileges = state
+                        .default_privileges
+                        .get_applicable_privileges(
+                            owner_id,
+                            None,
+                            None,
+                            mz_sql::catalog::ObjectType::Database,
+                        )
+                        .map(|item| item.mz_acl_item(owner_id));
+                    let database_privileges: Vec<_> = merge_mz_acl_items(
+                        database_owner_privileges
+                            .into_iter()
+                            .chain(database_default_privileges),
+                    )
+                    .collect();
+
+                    let schema_owner_privileges = vec![rbac::owner_privilege(
+                        mz_sql::catalog::ObjectType::Schema,
+                        owner_id,
+                    )];
+                    let schema_default_privileges = state
+                        .default_privileges
+                        .get_applicable_privileges(
+                            owner_id,
+                            None,
+                            None,
+                            mz_sql::catalog::ObjectType::Schema,
+                        )
+                        .map(|item| item.mz_acl_item(owner_id))
+                        // Special default privilege on public schemas.
+                        .chain(std::iter::once(MzAclItem {
                             grantee: RoleId::Public,
                             grantor: owner_id,
                             acl_mode: AclMode::USAGE,
-                        },
-                    ];
+                        }));
+                    let schema_privileges: Vec<_> = merge_mz_acl_items(
+                        schema_owner_privileges
+                            .into_iter()
+                            .chain(schema_default_privileges),
+                    )
+                    .collect();
+
                     let database_id =
                         tx.insert_user_database(&name, owner_id, database_privileges.clone())?;
                     let schema_id = tx.insert_user_schema(
                         database_id,
                         DEFAULT_SCHEMA,
                         owner_id,
-                        default_schema_privileges.clone(),
+                        schema_privileges.clone(),
                     )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5263,7 +5486,7 @@ impl Catalog {
                         database_id,
                         DEFAULT_SCHEMA.to_string(),
                         owner_id,
-                        MzAclItem::group_by_grantee(default_schema_privileges),
+                        MzAclItem::group_by_grantee(schema_privileges),
                     )?;
                 }
                 Op::CreateSchema {
@@ -5285,10 +5508,22 @@ impl Catalog {
                             )));
                         }
                     };
-                    let privileges = vec![rbac::owner_privilege(
+                    let owner_privileges = vec![rbac::owner_privilege(
                         mz_sql::catalog::ObjectType::Schema,
                         owner_id,
                     )];
+                    let default_privileges = state
+                        .default_privileges
+                        .get_applicable_privileges(
+                            owner_id,
+                            Some(database_id),
+                            None,
+                            mz_sql::catalog::ObjectType::Schema,
+                        )
+                        .map(|item| item.mz_acl_item(owner_id));
+                    let privileges: Vec<_> =
+                        merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                            .collect();
                     let schema_id = tx.insert_user_schema(
                         database_id,
                         &schema_name,
@@ -5378,10 +5613,23 @@ impl Catalog {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let privileges = vec![rbac::owner_privilege(
+                    let owner_privileges = vec![rbac::owner_privilege(
                         mz_sql::catalog::ObjectType::Cluster,
                         owner_id,
                     )];
+                    let default_privileges = state
+                        .default_privileges
+                        .get_applicable_privileges(
+                            owner_id,
+                            None,
+                            None,
+                            mz_sql::catalog::ObjectType::Cluster,
+                        )
+                        .map(|item| item.mz_acl_item(owner_id));
+                    let privileges: Vec<_> =
+                        merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                            .collect();
+
                     tx.insert_user_cluster(
                         id,
                         &name,
@@ -5508,15 +5756,19 @@ impl Catalog {
                         )));
                     }
 
-                    let mut privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];
-                    // Everyone has default USAGE privileges on types.
-                    if item.typ() == CatalogItemType::Type {
-                        privileges.push(MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: owner_id,
-                            acl_mode: AclMode::USAGE,
-                        });
-                    }
+                    let owner_privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];
+                    let default_privileges = state
+                        .default_privileges
+                        .get_applicable_privileges(
+                            owner_id,
+                            name.qualifiers.database_spec.id(),
+                            Some(name.qualifiers.schema_spec.into()),
+                            item.typ().into(),
+                        )
+                        .map(|item| item.mz_acl_item(owner_id));
+                    let privileges: Vec<_> =
+                        merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                            .collect();
 
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient

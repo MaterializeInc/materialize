@@ -81,6 +81,10 @@ mz_databases
 BASE TABLE
 materialize
 mz_catalog
+mz_default_privileges
+BASE TABLE
+materialize
+mz_catalog
 mz_egress_ips
 BASE TABLE
 materialize

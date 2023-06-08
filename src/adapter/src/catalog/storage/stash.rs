@@ -553,7 +553,7 @@ pub async fn initialize(
             vec![(
                 proto::DefaultPrivilegesKey {
                     role_id: Some(RoleId::Public.into_proto()),
-                    database_spec: None,
+                    database_id: None,
                     schema_id: None,
                     object_type: mz_sql::catalog::ObjectType::Type.into_proto().into(),
                     grantee: Some(RoleId::Public.into_proto()),

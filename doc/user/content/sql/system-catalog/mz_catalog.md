@@ -123,6 +123,20 @@ Field       | Type                 | Meaning
 `owner_id`  | [`text`]             | The role ID of the owner of the database. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the database.
 
+### `mz_default_privileges`
+
+The `mz_default_privileges` table contains information on default privileges
+that will be applied to new objects when they are created.
+
+Field         | Type     | Meaning
+--------------|----------|--------
+`role_id`     | [`text`] | Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.
+`database_id` | [`text`] | Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null.
+`schema_id`   | [`text`] | Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null.
+`object_type` | [`text`] | Privileges described in this row will be granted only on objects of type `object_type`.
+`grantee`     | [`text`] | Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.
+`privileges`  | [`text`] | The set of privileges that will be granted.
+
 ### `mz_egress_ips`
 
 The `mz_egress_ips` table contains a row for each potential IP address that the
