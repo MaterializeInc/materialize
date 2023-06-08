@@ -1392,10 +1392,10 @@ SELECT justify_interval(interval '-2147483648 months -30 days 24 hrs');
 ----
 -178956970 years -8 months -29 days
 
-query error "178956970 years 7 months -30 days +1440:00:00" interval out of range
+query error "178956970 years 7 months -30 days \+1440:00:00" interval out of range
 SELECT justify_interval(interval '2147483647 months -30 days 1440 hrs');
 
-query error "-178956970 years -8 months +30 days -1440:00:00" interval out of range
+query error "-178956970 years -8 months \+30 days -1440:00:00" interval out of range
 SELECT justify_interval(interval '-2147483648 months 30 days -1440 hrs');
 
 # TIMESTAMP/DATE builtins.

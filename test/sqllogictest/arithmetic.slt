@@ -1119,7 +1119,7 @@ SELECT - '-32768'::int2
 query error "-32768" smallint out of range
 SELECT  ABS('-32768'::int2)
 
-query "-2147483648" error integer out of range
+query error "-2147483648" integer out of range
 SELECT - '-2147483648'::int4
 
 query error "-2147483648" integer out of range
