@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use futures_util::task::ArcWake;
-use futures_util::FutureExt;
+use futures::task::ArcWake;
+use futures::FutureExt;
 use polonius_the_crab::{polonius, WithLifetime};
 use timely::communication::message::RefOrMut;
 use timely::communication::{Message, Pull, Push};
@@ -512,7 +512,7 @@ impl<G: Scope> OperatorBuilder<G> {
                     // Schedule the logic future if any of the wakers above marked the task as ready
                     if let Some(fut) = logic_fut.as_mut() {
                         if operator_waker.task_ready.load(Ordering::SeqCst) {
-                            let waker = futures_util::task::waker_ref(&operator_waker);
+                            let waker = futures::task::waker_ref(&operator_waker);
                             let mut cx = Context::from_waker(&waker);
                             operator_waker.task_ready.store(false, Ordering::SeqCst);
                             if Pin::new(fut).poll(&mut cx).is_ready() {

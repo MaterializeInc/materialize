@@ -20,6 +20,7 @@ use std::rc::Rc;
 use timely::dataflow::operators::{CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::timestamp::PathSummary;
 use timely::progress::Timestamp;
 use timely::{Container, PartialOrder};
 use tokio::sync::Notify;
@@ -153,11 +154,17 @@ impl<T: Timestamp> Clone for Handle<T> {
     }
 }
 
-/// Creates a stream that flows progress updates from a probe.
+/// Creates a stream that flows progress updates from a probe. These progress updates
+/// are adjusted by the `summary`.
 ///
 /// The returned stream is guaranteed to never yield any data updates, as is reflected by its type.
 // TODO: Replace `Infallible` with `!` once the latter stabilizes.
-pub fn source<G, T>(scope: G, name: String, handle: Handle<T>) -> Stream<G, Infallible>
+pub fn source<G, T>(
+    scope: G,
+    name: String,
+    handle: Handle<T>,
+    summary: <G::Timestamp as Timestamp>::Summary,
+) -> Stream<G, Infallible>
 where
     G: Scope<Timestamp = T>,
     T: Timestamp,
@@ -172,7 +179,7 @@ where
         let mut downgrade_capability = |f: AntichainRef<T>| {
             if PartialOrder::less_than(&frontier.borrow(), &f) {
                 frontier = f.to_owned();
-                cap_set.downgrade(&f);
+                cap_set.downgrade(f.iter().filter_map(|ts| summary.results_in(ts)));
             }
             !frontier.is_empty()
         };
@@ -183,4 +190,57 @@ where
     });
 
     output_stream
+}
+
+#[cfg(test)]
+mod test {
+    use timely::dataflow::operators::capture::event::EventCore;
+    use timely::dataflow::operators::Capture;
+    use timely::progress::frontier::MutableAntichain;
+
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    fn probe_summary() {
+        timely::execute_directly(|worker| {
+            let (_tokens, capture) = worker.dataflow::<u64, _, _>(move |scope| {
+                let handle = Handle::default();
+
+                let mut builder = AsyncOperatorBuilder::new("test".to_string(), scope.clone());
+                let (_output, output_stream) = builder.new_output::<Vec<()>>();
+
+                let button = builder
+                    .build(move |mut capabilities| async move {
+                        let mut cap = capabilities.pop().unwrap();
+
+                        cap.downgrade(&10);
+                        futures::future::pending::<()>().await
+                    })
+                    .press_on_drop();
+                output_stream.probe_notify_with(vec![handle.clone()]);
+
+                let delayed_stream = source(scope.clone(), "probe".to_string(), handle, 3);
+                (button, delayed_stream.capture())
+            });
+
+            let mut frontier = MutableAntichain::new_bottom(0);
+            loop {
+                worker.step();
+                match capture.try_recv() {
+                    Ok(EventCore::Progress(progress)) => {
+                        frontier.update_iter(progress);
+
+                        if !frontier.less_than(&13) {
+                            // We successfully moved the frontier past the frontier the
+                            // main operator
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!(),
+                    _ => {}
+                }
+            }
+        });
+    }
 }

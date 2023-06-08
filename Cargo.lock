@@ -5208,7 +5208,7 @@ name = "mz-timely-util"
 version = "0.0.0"
 dependencies = [
  "differential-dataflow",
- "futures-util",
+ "futures",
  "mz-ore",
  "num-traits",
  "polonius-the-crab",

@@ -214,6 +214,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         inner.clone(),
                         format!("flow_control_input({source_id})"),
                         probe.clone(),
+                        Timestamp::minimum(),
                     );
                     let flow_control = FlowControl {
                         progress_stream: flow_control_input,
