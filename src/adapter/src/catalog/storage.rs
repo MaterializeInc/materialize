@@ -34,7 +34,6 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
-use serde::{Deserialize, Serialize};
 
 use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
@@ -318,7 +317,7 @@ impl Connection {
                 id: DatabaseId::from(k),
                 name: v.name,
                 owner_id: v.owner_id,
-                privileges: v.privileges.expect("privileges not migrated"),
+                privileges: v.privileges,
             })
             .collect::<Result<_, _>>()?;
 
@@ -371,7 +370,7 @@ impl Connection {
                 name: v.name,
                 linked_object_id: v.linked_object_id,
                 owner_id: v.owner_id,
-                privileges: v.privileges.expect("privileges not migrated"),
+                privileges: v.privileges,
             })
             .collect::<Result<_, _>>()?;
 
@@ -952,7 +951,7 @@ impl<'a> Transaction<'a> {
             DatabaseValue {
                 name: database_name.to_string(),
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
             },
         ) {
             // TODO(parkertimmerman): Support creating databases in the System namespace.
@@ -1057,7 +1056,7 @@ impl<'a> Transaction<'a> {
                 name: cluster_name.to_string(),
                 linked_object_id,
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -1495,7 +1494,7 @@ impl<'a> Transaction<'a> {
                     name: cluster.name().to_string(),
                     linked_object_id: cluster.linked_object_id(),
                     owner_id: cluster.owner_id,
-                    privileges: Some(MzAclItem::flatten(cluster.privileges())),
+                    privileges: MzAclItem::flatten(cluster.privileges()),
                 })
             } else {
                 None
@@ -1557,7 +1556,7 @@ impl<'a> Transaction<'a> {
                 Some(DatabaseValue {
                     name: database.name().to_string(),
                     owner_id: database.owner_id,
-                    privileges: Some(MzAclItem::flatten(database.privileges())),
+                    privileges: MzAclItem::flatten(database.privileges()),
                 })
             } else {
                 None
@@ -1833,67 +1832,65 @@ pub struct Item {
 
 // Structs used internally to represent on disk-state.
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SettingKey {
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct SettingValue {
     value: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct IdAllocKey {
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct IdAllocValue {
     next_id: u64,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct GidMappingKey {
     schema_name: String,
     object_type: CatalogItemType,
     object_name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
     id: u64,
     fingerprint: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterKey {
     id: ClusterId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterValue {
     name: String,
     linked_object_id: Option<GlobalId>,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterIntrospectionSourceIndexKey {
-    #[serde(rename = "compute_id")] // historical name
     cluster_id: ClusterId,
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
     index_id: u64,
 }
 
 #[derive(
-    Default, Debug, Clone, Copy, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash,
+    Default, Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Ord, Hash,
 )]
 pub enum DatabaseNamespace {
     #[default]
@@ -1901,11 +1898,10 @@ pub enum DatabaseNamespace {
     System,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DatabaseKey {
     id: u64,
     // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
     ns: Option<DatabaseNamespace>,
 }
 
@@ -1933,30 +1929,29 @@ impl From<DatabaseId> for DatabaseKey {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterReplicaKey {
     id: ReplicaId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterReplicaValue {
-    #[serde(rename = "compute_instance_id")] // historical name
+
     cluster_id: ClusterId,
     name: String,
     config: SerializedReplicaConfig,
     owner_id: RoleId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct DatabaseValue {
     name: String,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
 }
 
 #[derive(
-    Default, Debug, Copy, Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash,
+    Default, Debug, Copy, Clone, PartialOrd, PartialEq, Eq, Ord, Hash,
 )]
 pub enum SchemaNamespace {
     #[default]
@@ -1964,11 +1959,10 @@ pub enum SchemaNamespace {
     System,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Copy, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SchemaKey {
     id: u64,
     // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
     ns: Option<SchemaNamespace>,
 }
 
@@ -1996,11 +1990,10 @@ impl From<SchemaId> for SchemaKey {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct SchemaValue {
     database_id: Option<u64>,
     // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
     database_ns: Option<DatabaseNamespace>,
     name: String,
     owner_id: RoleId,
@@ -2008,16 +2001,15 @@ pub struct SchemaValue {
     privileges: Option<Vec<MzAclItem>>,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct ItemKey {
     gid: GlobalId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct ItemValue {
     schema_id: u64,
     // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
     schema_ns: Option<SchemaNamespace>,
     name: String,
     definition: SerializedCatalogItem,
@@ -2026,15 +2018,14 @@ pub struct ItemValue {
     privileges: Option<Vec<MzAclItem>>,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct RoleKey {
     id: RoleId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
     // flatten needed for backwards compatibility.
-    #[serde(flatten)]
     role: SerializedRole,
 }
 
@@ -2043,37 +2034,37 @@ pub struct ConfigKey {
     key: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ConfigValue {
     value: u64,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct AuditLogKey {
     event: VersionedEvent,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageKey {
     metric: VersionedStorageUsage,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct TimestampKey {
     id: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TimestampValue {
     ts: mz_repr::Timestamp,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ServerConfigurationKey {
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ServerConfigurationValue {
     value: String,
 }
@@ -2110,40 +2101,3 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     TIMESTAMP_COLLECTION.name(),
     DEFAULT_PRIVILEGES_COLLECTION.name(),
 ];
-
-#[cfg(test)]
-mod test {
-    use super::{DatabaseKey, DatabaseNamespace};
-
-    #[mz_ore::test]
-    fn test_database_key_roundtrips() {
-        let k_none = DatabaseKey { id: 42, ns: None };
-        let k_user = DatabaseKey {
-            id: 24,
-            ns: Some(DatabaseNamespace::User),
-        };
-        let k_sys = DatabaseKey {
-            id: 0,
-            ns: Some(DatabaseNamespace::System),
-        };
-
-        for key in [k_none, k_user, k_sys] {
-            let og_json = serde_json::to_string(&key).expect("valid key");
-
-            // Make sure our type roundtrips.
-            let after: DatabaseKey = serde_json::from_str(&og_json).expect("valid json");
-            assert_eq!(after, key);
-
-            // Our JSON should roundtrip too.
-            let af_json = serde_json::to_string(&after).expect("valid key");
-            assert_eq!(og_json, af_json);
-        }
-
-        let json_none = serde_json::json!({ "id": 42 }).to_string();
-
-        let key: DatabaseKey = serde_json::from_str(&json_none).expect("valid json");
-        let json_after = serde_json::to_string(&key).expect("valid key");
-
-        assert_eq!(json_none, json_after);
-    }
-}

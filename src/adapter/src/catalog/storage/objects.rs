@@ -152,12 +152,7 @@ impl RustType<proto::ClusterValue> for ClusterValue {
             name: self.name.to_string(),
             linked_object_id: self.linked_object_id.into_proto(),
             owner_id: Some(self.owner_id.into_proto()),
-            privileges: self
-                .privileges
-                .as_ref()
-                .cloned()
-                .unwrap_or_default()
-                .into_proto(),
+            privileges: self.privileges.into_proto(),
         }
     }
 
@@ -166,7 +161,7 @@ impl RustType<proto::ClusterValue> for ClusterValue {
             name: proto.name,
             linked_object_id: proto.linked_object_id.into_rust()?,
             owner_id: proto.owner_id.into_rust_if_some("ClusterValue::owner_id")?,
-            privileges: Some(proto.privileges.into_rust()?),
+            privileges: proto.privileges.into_rust()?,
         })
     }
 }
@@ -377,12 +372,7 @@ impl RustType<proto::DatabaseValue> for DatabaseValue {
         proto::DatabaseValue {
             name: self.name.clone(),
             owner_id: Some(self.owner_id.into_proto()),
-            privileges: self
-                .privileges
-                .as_ref()
-                .cloned()
-                .unwrap_or_default()
-                .into_proto(),
+            privileges: self.privileges.into_proto(),
         }
     }
 
@@ -392,7 +382,7 @@ impl RustType<proto::DatabaseValue> for DatabaseValue {
             owner_id: (proto
                 .owner_id
                 .into_rust_if_some("DatabaseValue::owner_id")?),
-            privileges: Some(proto.privileges.into_rust()?),
+            privileges: proto.privileges.into_rust()?,
         })
     }
 }
