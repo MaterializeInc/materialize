@@ -5516,7 +5516,7 @@ impl Catalog {
                         .default_privileges
                         .get_applicable_privileges(
                             owner_id,
-                            Some(database_id.into()),
+                            Some(database_id),
                             None,
                             mz_sql::catalog::ObjectType::Schema,
                         )
