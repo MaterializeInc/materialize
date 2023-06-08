@@ -4171,9 +4171,27 @@ impl<'a> Parser<'a> {
 
         Ok(
             match self
-                .expect_one_of_keywords(&[DROP, RESET, SET, RENAME, OWNER])
+                .expect_one_of_keywords(&[ADD, DROP, RESET, SET, RENAME, OWNER])
                 .map_no_statement_parser_err()?
             {
+                ADD => {
+                    self.expect_one_of_keywords(&[SUBSOURCE, TABLE])
+                        .map_parser_err(StatementKind::AlterSource)?;
+
+                    // TODO: Add IF NOT EXISTS?
+                    let subsources = self
+                        .parse_comma_separated(Parser::parse_subsource_references)
+                        .map_parser_err(StatementKind::AlterSource)?;
+
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name,
+                        if_exists,
+                        action: AlterSourceAction::AddSubsources {
+                            subsources,
+                            details: None,
+                        },
+                    })
+                }
                 DROP => {
                     self.expect_one_of_keywords(&[SUBSOURCE, TABLE])
                         .map_parser_err(StatementKind::AlterSource)?;
