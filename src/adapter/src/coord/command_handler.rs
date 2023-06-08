@@ -42,7 +42,7 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
+use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
@@ -577,16 +577,16 @@ impl Coordinator {
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
         // purification.  This should be done back on the main thread.
         // We do the validation:
-        //   - In the handler for `Message::CreateSourceStatementReady`, before we handle the purified statement.
+        //   - In the handler for `Message::PurifiedStatementReady`, before we handle the purified statement.
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
-            Statement::CreateSource(stmt) => {
+            stmt @ (Statement::CreateSource(_) | Statement::AlterSource(_)) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
-                let purify_fut = mz_sql::pure::purify_create_source(
+                let purify_fut = mz_sql::pure::purify_statement(
                     Box::new(catalog.into_owned()),
                     self.now(),
                     stmt,
@@ -596,8 +596,8 @@ impl Coordinator {
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
-                        CreateSourceStatementReady {
+                    let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
+                        PurifiedStatementReady {
                             ctx,
                             result,
                             params,

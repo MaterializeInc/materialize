@@ -28,7 +28,7 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
     CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName,
     Envelope, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
+    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
     UnresolvedItemName,
 };
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
@@ -126,7 +126,30 @@ fn subsource_name_gen(
 ///
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
-pub async fn purify_create_source(
+pub async fn purify_statement(
+    catalog: Box<dyn SessionCatalog>,
+    now: u64,
+    stmt: Statement<Aug>,
+    connection_context: ConnectionContext,
+) -> Result<
+    (
+        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        Statement<Aug>,
+    ),
+    PlanError,
+> {
+    match stmt {
+        Statement::CreateSource(stmt) => {
+            purify_create_source(catalog, now, stmt, connection_context).await
+        }
+        Statement::AlterSource(stmt) => {
+            purify_alter_source(catalog, stmt, connection_context).await
+        }
+        o => unreachable!("{:?} does not need to be purified", o),
+    }
+}
+
+async fn purify_create_source(
     catalog: Box<dyn SessionCatalog>,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
@@ -134,7 +157,7 @@ pub async fn purify_create_source(
 ) -> Result<
     (
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        CreateSourceStatement<Aug>,
+        Statement<Aug>,
     ),
     PlanError,
 > {
@@ -599,17 +622,23 @@ pub async fn purify_create_source(
 
     purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 
-    Ok((subsources, stmt))
+    Ok((subsources, Statement::CreateSource(stmt)))
 }
 
-pub async fn purify_alter_source(
+/// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
+///
+/// On success, returns the `GlobalId` and `CreateSubsourceStatement`s for any
+/// subsources created by this statement, in addition to the
+/// `AlterSourceStatement` with any modifications that are only accessible while
+/// we are permitted to use async code.
+async fn purify_alter_source(
     catalog: Box<dyn SessionCatalog>,
     mut stmt: AlterSourceStatement<Aug>,
     connection_context: ConnectionContext,
 ) -> Result<
     (
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        AlterSourceStatement<Aug>,
+        Statement<Aug>,
     ),
     PlanError,
 > {
@@ -620,35 +649,46 @@ pub async fn purify_alter_source(
         if_exists,
     } = &mut stmt;
 
-    // Get name.
-    let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
-        Err(_) if !*if_exists => {
-            return Ok((vec![], stmt));
-        }
-        Ok(item) => item,
-        Err(e) => return Err(e.into()),
-    };
+    // Get connection
+    let pg_source_connection = {
+        // Get name.
+        let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
+            Err(_) if !*if_exists => {
+                return Ok((vec![], Statement::AlterSource(stmt)));
+            }
+            Ok(item) => item,
+            Err(e) => return Err(e),
+        };
 
-    // Ensure it's an ingestion-based and alterable source.
-    let desc = match item.source_desc() {
-        Ok(Some(desc)) => desc,
-        Ok(None) => {
-            sql_bail!(
-                "{} is a {} not a source",
+        // Ensure it's an ingestion-based and alterable source.
+        let desc = match item.source_desc()? {
+            Some(desc) => desc,
+            None => {
+                sql_bail!("cannot ALTER this type of source")
+            }
+        };
+
+        // If there's no further work to do here, early return.
+        if !matches!(action, AlterSourceAction::AddSubsources { .. }) {
+            return Ok((vec![], Statement::AlterSource(stmt)));
+        }
+
+        match &desc.connection {
+            GenericSourceConnection::Postgres(pg_connection) => pg_connection.clone(),
+            _ => sql_bail!(
+                "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
                 scx.catalog.minimal_qualification(item.name()),
-                item.item_type()
-            )
+                desc.connection.name()
+            ),
         }
-        Err(e) => return Err(e.into()),
     };
 
-    // If there's no further work to do here, early return.
     let (targeted_subsources, details) = match action {
         AlterSourceAction::AddSubsources {
             subsources,
             details,
         } => (subsources, details),
-        _ => return Ok((vec![], stmt)),
+        _ => unreachable!(),
     };
 
     assert!(
@@ -663,18 +703,6 @@ pub async fn purify_alter_source(
     {
         named_subsource_err(subsource)?;
     }
-
-    // Get connection
-    let pg_source_connection = {
-        match &desc.connection {
-            GenericSourceConnection::Postgres(pg_connection) => pg_connection,
-            _ => sql_bail!(
-                "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
-                scx.catalog.minimal_qualification(item.name()),
-                desc.connection.name()
-            ),
-        }
-    };
 
     // Get PostgresConnection for generating subsources.
     let pg_connection = &pg_source_connection.connection;
@@ -789,7 +817,7 @@ pub async fn purify_alter_source(
 
     *details = Some(hex::encode(new_details.into_proto().encode_to_vec()));
 
-    Ok((new_subsources, stmt))
+    Ok((new_subsources, Statement::AlterSource(stmt)))
 }
 
 async fn purify_source_format(
