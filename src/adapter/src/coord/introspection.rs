@@ -94,6 +94,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AlterIndexResetOptions(_)
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
+        | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
@@ -296,6 +297,7 @@ pub fn user_privilege_hack(
         | Plan::AlterRole(_)
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
+        | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)

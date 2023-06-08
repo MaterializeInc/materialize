@@ -653,10 +653,10 @@ async fn purify_alter_source(
     let pg_source_connection = {
         // Get name.
         let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
-            Err(_) if !*if_exists => {
+            Ok(item) => item,
+            Err(_) if *if_exists => {
                 return Ok((vec![], Statement::AlterSource(stmt)));
             }
-            Ok(item) => item,
             Err(e) => return Err(e),
         };
 
