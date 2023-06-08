@@ -338,6 +338,11 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
 }
 
 impl DynStructMut {
+    /// Returns the number of elements in this column
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
     /// Explodes this _non-optional_ struct column into its component fields.
     ///
     /// Panics if this struct is optional.

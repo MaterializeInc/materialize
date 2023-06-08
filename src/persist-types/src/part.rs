@@ -241,6 +241,10 @@ impl PartBuilder {
 
     /// Returns a [PartMut] for this in-progress part.
     pub fn get_mut<'a>(&'a mut self) -> PartMut<'a> {
+        let len = self.diff.len();
+        debug_assert_eq!(self.key.len(), len);
+        debug_assert_eq!(self.val.len(), len);
+        debug_assert_eq!(self.ts.len(), len);
         PartMut {
             key: self.key.as_mut(),
             val: self.val.as_mut(),
@@ -270,9 +274,6 @@ impl PartBuilder {
 }
 
 /// Mutable access to the columns in a [PartBuilder].
-///
-/// TODO(mfp): In debug_assertions, verify that the lengths match when this is
-/// created and when it is dropped.
 pub struct PartMut<'a> {
     /// The key column.
     pub key: ColumnsMut<'a>,

@@ -2658,7 +2658,6 @@ impl Schema<SourceData> for RelationDesc {
                     optional: true,
                     format: ColumnFormat::Bytes,
                 },
-                // TODO(mfp): We likely only care if there were errors or not.
                 StatsFn::Default,
             ),
         ];
