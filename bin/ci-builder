@@ -134,6 +134,15 @@ case "$cmd" in
         docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
+        if [[ $1 == "--detach" ]]; then
+              shift
+              detach_container=true
+              container_name_param=$1 && shift
+              container_name_param=$(echo "$container_name_param" | sed  's/^--name=\(.*\)$/\1/g')
+        else
+              detach_container=false
+        fi
+
         mkdir -p target-xcompile ~/.kube
         args=(
             --cidfile "$cid_file"
@@ -157,6 +166,11 @@ case "$cmd" in
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
             --env PYPI_TOKEN
         )
+
+        if [[ $detach_container == "true" ]]; then
+            args+=("--detach" "--name=$container_name_param")
+        fi
+
         for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
             args+=(--env "$env")
         done
@@ -236,6 +250,11 @@ case "$cmd" in
         ;;
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
+        ;;
+    stop)
+        container_name_param=$1 && shift
+        container_name_param=$(echo "$container_name_param" | sed  's/^--name=\(.*\)$/\1/g')
+        docker stop "$container_name_param"
         ;;
     *)
         printf "unknown command %q\n" "$cmd"
