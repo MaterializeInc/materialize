@@ -16,6 +16,12 @@ the end of this tutorial you will:
 * Assign a role to the new user
 * Modify and remove privileges on roles
 
+In this scenario, you are an administrator on your Materialize account. You
+recently hired a new developer who needs privileges in a non-production cluster.
+You will create specific permissions for the new role that align with your
+business needs and restrict the developer role from having access to your
+production cluster.
+
 ## Before you begin
 
 * Make sure you have `psql` or another client installed locally.
@@ -136,6 +142,7 @@ In this example, let's say your `dev_role` needs the following permissions:
 * Read, write, and append privileges on the table
 * Usage privileges on the schema
 * All available privileges on the database
+* Usage and create privileges on the cluster
 
 1. In your terminal, grant table-level privileges to the `dev_role`:
 
@@ -200,7 +207,7 @@ to a user in your Materialize organization.
    In this example, role ID `u1` has append, read, write, and delete
    privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges,
    which were assigned by the `u1` user.
-
+   
 ## Step 7. Create a second role
 
 Next, you will create a new role with different privileges to other objects.
@@ -290,10 +297,10 @@ inherited from another role.
    ```
 
 3. Let's say you decide `dev_role` no longer needs `CREATE` privileges on the
-   `qa_db` object. You can revoke that privilege for the role:
+   `dev_table` object. You can revoke that privilege for the role:
 
    ```sql
-   REVOKE CREATE ON DATABASE qa_db FROM dev_role;
+   REVOKE CREATE ON DATABASE dev_table FROM dev_role;
    ```
 
    Your output should contain the new privileges for `dev_role`:
@@ -304,6 +311,20 @@ inherited from another role.
    (1 row)
    ```
 
+   {{< note >}}
+   If you need to revoke specific privileges from a role that have been
+   inheritied from another role, you must revoke the role with those privileges.
+   
+   ```sql
+   REVOKE qa_role FROM dev_role;
+   ```
+   In this example, when `dev_role` inherits from `qa_role`, `dev_role` always has
+   **all** privileges of `qa_role`. You cannot revoke specific privileges for an
+   inherited role because inheritance gives effective permissions for the
+   entire role.
+  
+   {{</ note >}}
+  
 ## Next steps
 
 You just altered privileges and attributes on your Materialize roles! Remember

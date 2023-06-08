@@ -110,9 +110,10 @@ Materialize supports the following object type privileges:
 
 ### Inheritance
 
-Inheritance in RBAC allows you to create roles that inherit permissions
-from other roles. Inheriting permissions allows you to minimize the number of
-roles you have to manage.
+Inheritance in RBAC allows you to create roles that inherit permissions from
+other roles. Inheritance only applies to role permissions. Role attributes are
+not inherited. Inheriting permissions allows you to minimize the number of roles
+you have to manage.
 
 ## Next steps
 
