@@ -529,7 +529,7 @@ impl PersistSourceDataStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColMin(stats.as_ref(), arena))
+        typ.to_persist(ColMin(stats.as_ref(), arena))?
     }
 
     fn col_max<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
@@ -554,7 +554,7 @@ impl PersistSourceDataStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColMax(stats.as_ref(), arena))
+        typ.to_persist(ColMax(stats.as_ref(), arena))?
     }
 
     fn col_null_count(&self, idx: usize) -> Option<usize> {
@@ -575,7 +575,7 @@ impl PersistSourceDataStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColNullCount(stats.as_ref()))
+        typ.to_persist(ColNullCount(stats.as_ref()))?
     }
 }
 
@@ -586,8 +586,8 @@ mod tests {
     use mz_persist_types::columnar::{PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
     use mz_repr::{
-        ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
-        ScalarType,
+        is_no_stats_type, ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row,
+        RowArena, ScalarType,
     };
     use proptest::prelude::*;
 
@@ -595,6 +595,11 @@ mod tests {
     use crate::types::sources::SourceData;
 
     fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+        // Skip types that we don't keep stats for (yet).
+        if is_no_stats_type(&scalar_type) {
+            return;
+        }
+
         struct ValidateStatsSome<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
         impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
             fn call<T: DatumToPersist>(self) -> () {

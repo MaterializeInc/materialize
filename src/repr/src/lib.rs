@@ -115,7 +115,8 @@ pub use crate::relation::{
     ProtoRelationType, RelationDesc, RelationType,
 };
 pub use crate::row::encoding::{
-    DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder, RowEncoder,
+    is_no_stats_type, DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder,
+    RowEncoder,
 };
 pub use crate::row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,

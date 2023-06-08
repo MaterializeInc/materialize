@@ -80,69 +80,87 @@ impl ColumnType {
     /// There is a 1:N correspondence between DatumToPersist impls and
     /// ColumnTypes because a number of ScalarTypes map to the same set of
     /// `Datum`s (e.g. `String` and `VarChar`).
-    pub fn to_persist<R, F: DatumToPersistFn<R>>(&self, f: F) -> R {
+    ///
+    /// This returns a None if we don't care to keep stats for this column type
+    /// (for now). We'll have to remove this if/when we start actually using the
+    /// schema'd part encoding.
+    pub fn to_persist<R, F: DatumToPersistFn<R>>(&self, f: F) -> Option<R> {
         use ScalarType::*;
         let ColumnType {
             nullable,
             scalar_type,
         } = self;
         match (nullable, scalar_type) {
-            (false, Bool) => f.call::<bool>(),
-            (true, Bool) => f.call::<Option<bool>>(),
-            (false, Int16) => f.call::<i16>(),
-            (true, Int16) => f.call::<Option<i16>>(),
-            (false, Int32) => f.call::<i32>(),
-            (true, Int32) => f.call::<Option<i32>>(),
-            (false, Int64) => f.call::<i64>(),
-            (true, Int64) => f.call::<Option<i64>>(),
-            (false, UInt16) => f.call::<u16>(),
-            (true, UInt16) => f.call::<Option<u16>>(),
-            (false, UInt32 | Oid | RegClass | RegProc | RegType) => f.call::<u32>(),
-            (true, UInt32 | Oid | RegClass | RegProc | RegType) => f.call::<Option<u32>>(),
-            (false, UInt64) => f.call::<u64>(),
-            (true, UInt64) => f.call::<Option<u64>>(),
-            (false, Float32) => f.call::<f32>(),
-            (true, Float32) => f.call::<Option<f32>>(),
-            (false, Float64) => f.call::<f64>(),
-            (true, Float64) => f.call::<Option<f64>>(),
-            (false, Date) => f.call::<crate::adt::date::Date>(),
-            (true, Date) => f.call::<Option<crate::adt::date::Date>>(),
-            (false, PgLegacyChar) => f.call::<u8>(),
-            (true, PgLegacyChar) => f.call::<Option<u8>>(),
-            (false, Bytes) => f.call::<Vec<u8>>(),
-            (true, Bytes) => f.call::<Option<Vec<u8>>>(),
-            (false, String | Char { .. } | VarChar { .. }) => f.call::<std::string::String>(),
+            (false, Bool) => Some(f.call::<bool>()),
+            (true, Bool) => Some(f.call::<Option<bool>>()),
+            (false, Int16) => Some(f.call::<i16>()),
+            (true, Int16) => Some(f.call::<Option<i16>>()),
+            (false, Int32) => Some(f.call::<i32>()),
+            (true, Int32) => Some(f.call::<Option<i32>>()),
+            (false, Int64) => Some(f.call::<i64>()),
+            (true, Int64) => Some(f.call::<Option<i64>>()),
+            (false, UInt16) => Some(f.call::<u16>()),
+            (true, UInt16) => Some(f.call::<Option<u16>>()),
+            (false, UInt32 | Oid | RegClass | RegProc | RegType) => Some(f.call::<u32>()),
+            (true, UInt32 | Oid | RegClass | RegProc | RegType) => Some(f.call::<Option<u32>>()),
+            (false, UInt64) => Some(f.call::<u64>()),
+            (true, UInt64) => Some(f.call::<Option<u64>>()),
+            (false, Float32) => Some(f.call::<f32>()),
+            (true, Float32) => Some(f.call::<Option<f32>>()),
+            (false, Float64) => Some(f.call::<f64>()),
+            (true, Float64) => Some(f.call::<Option<f64>>()),
+            (false, Date) => Some(f.call::<crate::adt::date::Date>()),
+            (true, Date) => Some(f.call::<Option<crate::adt::date::Date>>()),
+            (false, PgLegacyChar) => Some(f.call::<u8>()),
+            (true, PgLegacyChar) => Some(f.call::<Option<u8>>()),
+            (false, Bytes) => Some(f.call::<Vec<u8>>()),
+            (true, Bytes) => Some(f.call::<Option<Vec<u8>>>()),
+            (false, String | Char { .. } | VarChar { .. }) => Some(f.call::<std::string::String>()),
             (true, String | Char { .. } | VarChar { .. }) => {
-                f.call::<Option<std::string::String>>()
+                Some(f.call::<Option<std::string::String>>())
             }
-            (false, Jsonb) => f.call::<crate::adt::jsonb::Jsonb>(),
-            (true, Jsonb) => f.call::<Option<crate::adt::jsonb::Jsonb>>(),
-            (false, MzTimestamp) => f.call::<crate::Timestamp>(),
-            (true, MzTimestamp) => f.call::<Option<crate::Timestamp>>(),
+            (false, Jsonb) => Some(f.call::<crate::adt::jsonb::Jsonb>()),
+            (true, Jsonb) => Some(f.call::<Option<crate::adt::jsonb::Jsonb>>()),
+            (false, MzTimestamp) => Some(f.call::<crate::Timestamp>()),
+            (true, MzTimestamp) => Some(f.call::<Option<crate::Timestamp>>()),
+            (_, Numeric { .. } | Time | Timestamp | TimestampTz | Interval | Uuid) => {
+                if *nullable {
+                    Some(f.call::<NullableProtoDatumToPersist>())
+                } else {
+                    Some(f.call::<ProtoDatumToPersist>())
+                }
+            }
             (
                 _,
-                Numeric { .. }
-                | Time
-                | Timestamp
-                | TimestampTz
-                | Interval
-                | Uuid
-                | Array(..)
+                Array(..)
                 | List { .. }
                 | Record { .. }
                 | Map { .. }
                 | Int2Vector
                 | Range { .. }
                 | MzAclItem,
-            ) => {
-                if *nullable {
-                    f.call::<NullableProtoDatumToPersist>()
-                } else {
-                    f.call::<ProtoDatumToPersist>()
-                }
-            }
+            ) => None,
         }
     }
+}
+
+/// This returns true if we don't care to keep stats for this column type (for
+/// now). We'll have to remove this if/when we start actually using the schema'd
+/// part encoding.
+///
+/// This is only used in tests, but we sadly can't cfg(test) gate it because
+/// it's also used from mz_storage_client tests.
+pub fn is_no_stats_type(typ: &ScalarType) -> bool {
+    impl DatumToPersistFn<()> for () {
+        fn call<T: DatumToPersist>(self) -> ()
+        where
+            for<'a> DatumDecoder<'a>: From<DataRef<'a, T>>,
+            for<'a> DatumEncoder<'a>: From<DataMut<'a, T>>,
+        {
+            ()
+        }
+    }
+    typ.clone().nullable(true).to_persist(()).is_none()
 }
 
 /// Implementation of mapping between mz [Datum] and persist [Data].
@@ -435,6 +453,12 @@ impl DatumToPersist for Option<Jsonb> {
     }
 }
 
+/// A sentinel for column types we don't care to keep stats for (for now). We'll
+/// have to remove this if/when we start actually using the schema'd part
+/// encoding.
+#[derive(Debug)]
+pub struct NoStats(ColumnType);
+
 /// A helper for adapting mz's [Datum] to persist's columnar [Data].
 #[enum_dispatch]
 #[derive(Debug)]
@@ -471,6 +495,7 @@ pub enum DatumEncoder<'a> {
     OptMzTimestamp(DataMut<'a, Option<Timestamp>>),
     Todo(DataMut<'a, ProtoDatumToPersist>),
     OptTodo(DataMut<'a, NullableProtoDatumToPersist>),
+    NoStats(NoStats),
 }
 
 /// An `enum_dispatch` companion for `DatumEncoder`.
@@ -504,6 +529,11 @@ impl<'a, T: DatumToPersist> DatumEncoderT<'a> for DataMut<'a, T> {
     fn encode_default(&mut self) {
         T::encode_default(self.0);
     }
+}
+
+impl DatumEncoderT<'_> for NoStats {
+    fn encode(&mut self, _datum: Datum) {}
+    fn encode_default(&mut self) {}
 }
 
 /// An implementation of [PartEncoder] for [Row].
@@ -563,6 +593,7 @@ pub enum DatumDecoder<'a> {
     OptMzTimestamp(DataRef<'a, Option<Timestamp>>),
     Todo(DataRef<'a, ProtoDatumToPersist>),
     OptTodo(DataRef<'a, NullableProtoDatumToPersist>),
+    NoStats(NoStats),
 }
 
 /// An `enum_dispatch` companion for `DatumDecoder`.
@@ -591,6 +622,12 @@ impl<T: DatumToPersist> std::fmt::Debug for DataRef<'_, T> {
 impl<'a, T: DatumToPersist> DatumDecoderT<'a> for DataRef<'a, T> {
     fn decode(&self, idx: usize, row: &mut RowPacker) {
         T::decode(ColumnGet::<T::Data>::get(self.0, idx), row);
+    }
+}
+
+impl DatumDecoderT<'_> for NoStats {
+    fn decode(&self, _idx: usize, _row: &mut RowPacker) {
+        unreachable!("the schema'd encoding is not yet used for: {:?}", self.0)
     }
 }
 
@@ -637,7 +674,9 @@ impl RelationDesc {
 
         let mut col_decoders = Vec::new();
         for (name, typ) in self.iter() {
-            let col_decoder = typ.to_persist(DatumDecoderFn(name.as_str(), &mut part));
+            let col_decoder = typ
+                .to_persist(DatumDecoderFn(name.as_str(), &mut part))
+                .unwrap_or_else(|| DatumDecoder::NoStats(NoStats(typ.clone())));
             col_decoders.push(col_decoder);
         }
         let validity = part.finish()?;
@@ -664,7 +703,9 @@ impl RelationDesc {
 
         let mut col_encoders = Vec::new();
         for (name, typ) in self.iter() {
-            let col_encoder = typ.to_persist(DatumEncoderFn(name.as_str(), &mut part));
+            let col_encoder = typ
+                .to_persist(DatumEncoderFn(name.as_str(), &mut part))
+                .unwrap_or_else(|| DatumEncoder::NoStats(NoStats(typ.clone())));
             col_encoders.push(col_encoder);
         }
         let validity = part.finish()?;
@@ -686,9 +727,9 @@ impl Schema<Row> for RelationDesc {
 
         let cols = self
             .iter()
-            .map(|(name, typ)| {
-                let (data_type, stats_fn) = typ.to_persist(ToPersist);
-                (name.0.clone(), data_type, stats_fn)
+            .flat_map(|(name, typ)| {
+                typ.to_persist(ToPersist)
+                    .map(|(data_type, stats_fn)| (name.0.clone(), data_type, stats_fn))
             })
             .collect::<Vec<_>>();
         DynStructCfg::from(cols)
@@ -995,6 +1036,8 @@ mod tests {
     use crate::adt::timestamp::CheckedTimestamp;
     use crate::{ColumnType, Datum, RelationDesc, Row, ScalarType};
 
+    use super::*;
+
     // TODO: datadriven golden tests for various interesting Datums and Rows to
     // catch any changes in the encoding.
 
@@ -1152,6 +1195,11 @@ mod tests {
     }
 
     fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
+        // Skip types that we don't keep stats for (yet).
+        if is_no_stats_type(&scalar_type) {
+            return;
+        }
+
         use mz_persist_types::parquet::validate_roundtrip;
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {

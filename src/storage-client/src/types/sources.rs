@@ -2682,6 +2682,7 @@ impl Schema<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
+    use mz_repr::is_no_stats_type;
     use proptest::prelude::*;
 
     use crate::types::errors::EnvelopeError;
@@ -2702,6 +2703,11 @@ mod tests {
     }
 
     fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
+        // Skip types that we don't keep stats for (yet).
+        if is_no_stats_type(&scalar_type) {
+            return;
+        }
+
         use mz_persist_types::columnar::validate_roundtrip;
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {

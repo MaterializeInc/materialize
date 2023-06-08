@@ -212,6 +212,7 @@ mod tests {
     use mz_proto::RustType;
     use proptest::prelude::*;
 
+    use crate::row::encoding::is_no_stats_type;
     use crate::{Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena, ScalarType};
 
     fn datum_stats_roundtrip_trim<'a>(
@@ -257,11 +258,16 @@ mod tests {
                 }
             }
             let col_stats = actual.cols.get(name.as_str()).unwrap();
-            typ.to_persist(ColMinMaxNulls(col_stats.as_ref()))
+            typ.to_persist(ColMinMaxNulls(col_stats.as_ref()));
         }
     }
 
     fn scalar_type_stats_roundtrip_trim(scalar_type: ScalarType) {
+        // Skip types that we don't keep stats for (yet).
+        if is_no_stats_type(&scalar_type) {
+            return;
+        }
+
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {
             rows.push(Row::pack(std::iter::once(datum)));
