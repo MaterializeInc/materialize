@@ -205,6 +205,10 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("AuditLogEventV1.details", "#[derive(Eq, PartialOrd, Ord)]")
         .enum_attribute("AuditLogKey.event", "#[derive(Eq, PartialOrd, Ord)]")
         .enum_attribute("StorageUsageKey.usage", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute(
+            "ResolvedDatabaseSpecifier.value",
+            "#[derive(Eq, PartialOrd, Ord)]",
+        )
         .compile_protos(
             &paths,
             &[ /*

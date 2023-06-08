@@ -11,6 +11,7 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
+use crate::catalog::storage::{DefaultPrivilegesKey, DefaultPrivilegesValue};
 use crate::catalog::{RoleMembership, SerializedCatalogItem, SerializedRole};
 
 use super::{
@@ -707,6 +708,52 @@ impl RustType<proto::AuditLogKey> for AuditLogKey {
     fn from_proto(proto: proto::AuditLogKey) -> Result<Self, TryFromProtoError> {
         Ok(AuditLogKey {
             event: proto.event.into_rust_if_some("AuditLogKey::event")?,
+        })
+    }
+}
+
+impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
+    fn into_proto(&self) -> proto::DefaultPrivilegesKey {
+        proto::DefaultPrivilegesKey {
+            role_id: Some(self.role_id.into_proto()),
+            database_spec: self
+                .database_spec
+                .map(|database_spec| database_spec.into_proto()),
+            schema_id: self.schema_id.map(|schema_id| schema_id.into_proto()),
+            object_type: self.object_type.into_proto().into(),
+            grantee: Some(self.grantee.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::DefaultPrivilegesKey) -> Result<Self, TryFromProtoError> {
+        Ok(DefaultPrivilegesKey {
+            role_id: proto
+                .role_id
+                .into_rust_if_some("DefaultPrivilegesKey::role_id")?,
+            database_spec: proto.database_spec.into_rust()?,
+            schema_id: proto.schema_id.into_rust()?,
+            object_type: proto::ObjectType::from_i32(proto.object_type)
+                .ok_or_else(|| TryFromProtoError::unknown_enum_variant("ObjectType"))?
+                .into_rust()?,
+            grantee: proto
+                .grantee
+                .into_rust_if_some("DefaultPrivilegesKey::grantee")?,
+        })
+    }
+}
+
+impl RustType<proto::DefaultPrivilegesValue> for DefaultPrivilegesValue {
+    fn into_proto(&self) -> proto::DefaultPrivilegesValue {
+        proto::DefaultPrivilegesValue {
+            privileges: Some(self.privileges.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::DefaultPrivilegesValue) -> Result<Self, TryFromProtoError> {
+        Ok(DefaultPrivilegesValue {
+            privileges: proto
+                .privileges
+                .into_rust_if_some("DefaultPrivilegesValue::privileges")?,
         })
     }
 }

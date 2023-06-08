@@ -1238,7 +1238,7 @@ impl<'a, T> ErsatzCatalog<'a, T> {
 
 // Enum variant docs would be useless here.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
 /// The types of objects stored in the catalog.
 pub enum ObjectType {
     Table,
@@ -1322,6 +1322,51 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
         })
+    }
+}
+
+impl RustType<proto::ObjectType> for ObjectType {
+    fn into_proto(&self) -> proto::ObjectType {
+        match self {
+            ObjectType::Table => proto::ObjectType::Table,
+            ObjectType::View => proto::ObjectType::View,
+            ObjectType::MaterializedView => proto::ObjectType::MaterializedView,
+            ObjectType::Source => proto::ObjectType::Source,
+            ObjectType::Sink => proto::ObjectType::Sink,
+            ObjectType::Index => proto::ObjectType::Index,
+            ObjectType::Type => proto::ObjectType::Type,
+            ObjectType::Role => proto::ObjectType::Role,
+            ObjectType::Cluster => proto::ObjectType::Cluster,
+            ObjectType::ClusterReplica => proto::ObjectType::ClusterReplica,
+            ObjectType::Secret => proto::ObjectType::Secret,
+            ObjectType::Connection => proto::ObjectType::Connection,
+            ObjectType::Database => proto::ObjectType::Database,
+            ObjectType::Schema => proto::ObjectType::Schema,
+            ObjectType::Func => proto::ObjectType::Func,
+        }
+    }
+
+    fn from_proto(proto: proto::ObjectType) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::ObjectType::Table => Ok(ObjectType::Table),
+            proto::ObjectType::View => Ok(ObjectType::View),
+            proto::ObjectType::MaterializedView => Ok(ObjectType::MaterializedView),
+            proto::ObjectType::Source => Ok(ObjectType::Source),
+            proto::ObjectType::Sink => Ok(ObjectType::Sink),
+            proto::ObjectType::Index => Ok(ObjectType::Index),
+            proto::ObjectType::Type => Ok(ObjectType::Type),
+            proto::ObjectType::Role => Ok(ObjectType::Role),
+            proto::ObjectType::Cluster => Ok(ObjectType::Cluster),
+            proto::ObjectType::ClusterReplica => Ok(ObjectType::ClusterReplica),
+            proto::ObjectType::Secret => Ok(ObjectType::Secret),
+            proto::ObjectType::Connection => Ok(ObjectType::Connection),
+            proto::ObjectType::Database => Ok(ObjectType::Database),
+            proto::ObjectType::Schema => Ok(ObjectType::Schema),
+            proto::ObjectType::Func => Ok(ObjectType::Func),
+            proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
+                "ObjectType::Unknown",
+            )),
+        }
     }
 }
 
