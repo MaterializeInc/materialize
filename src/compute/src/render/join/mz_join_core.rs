@@ -36,15 +36,18 @@
 //! join and as responsive as `mz_join_core`. Whether that means adding merge-join matching to
 //! `mz_join_core` or adding better fueling to DD's join implementation is still TBD.
 
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::pin::Pin;
+use std::rc::Rc;
 
-use differential_dataflow::consolidation::consolidate_updates;
-use differential_dataflow::difference::Multiply;
+use differential_dataflow::consolidation::{consolidate_from, consolidate_updates};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data};
+use futures::Future;
 use mz_repr::{Diff, Row};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
@@ -54,6 +57,7 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Timestamp;
 use timely::scheduling::Activator;
 use timely::PartialOrder;
+use tokio::task::yield_now;
 
 /// Joins two arranged collections with the same key type.
 ///
@@ -63,7 +67,7 @@ use timely::PartialOrder;
 pub(super) fn mz_join_core<G, Tr1, Tr2, L, I>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
-    mut result: L,
+    result: L,
 ) -> Collection<G, I::Item, Diff>
 where
     G: Scope,
@@ -71,7 +75,7 @@ where
     Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
     Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
     L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
-    I: IntoIterator,
+    I: IntoIterator + 'static,
     I::Item: Data,
 {
     let mut trace1 = arranged1.trace.clone();
@@ -104,8 +108,9 @@ where
                 let mut acknowledged2 = Antichain::from_elem(<G::Timestamp>::minimum());
 
                 // deferred work of batches from each input.
-                let mut todo1 = VecDeque::new();
-                let mut todo2 = VecDeque::new();
+                let result_fn = Rc::new(RefCell::new(result));
+                let mut todo1 = Work::new(Rc::clone(&result_fn));
+                let mut todo2 = Work::new(Rc::clone(&result_fn));
 
                 // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
                 trace1.map_batches(|batch1| {
@@ -150,13 +155,13 @@ where
                     // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
                     // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
                     // that property.
-                    todo2.push_back(Deferred::new(
+                    todo2.push(
                         trace1_cursor,
                         trace1_storage,
                         batch2_cursor,
                         batch2.clone(),
                         capability.clone(),
-                    ));
+                    );
                 }
 
                 // Droppable handles to shared trace data structures.
@@ -196,14 +201,13 @@ where
                                     // at start-up, and have held back physical compaction ever since.
                                     let (trace2_cursor, trace2_storage) =
                                         trace2.cursor_through(acknowledged2.borrow()).unwrap();
-                                    let batch1_cursor = batch1.cursor();
-                                    todo1.push_back(Deferred::new(
+                                    todo1.push(
+                                        batch1.cursor(),
+                                        batch1.clone(),
                                         trace2_cursor,
                                         trace2_storage,
-                                        batch1_cursor,
-                                        batch1.clone(),
                                         capability.clone(),
-                                    ));
+                                    );
                                 }
 
                                 // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
@@ -233,14 +237,13 @@ where
                                     // at start-up, and have held back physical compaction ever since.
                                     let (trace1_cursor, trace1_storage) =
                                         trace1.cursor_through(acknowledged1.borrow()).unwrap();
-                                    let batch2_cursor = batch2.cursor();
-                                    todo2.push_back(Deferred::new(
+                                    todo2.push(
                                         trace1_cursor,
                                         trace1_storage,
-                                        batch2_cursor,
+                                        batch2.cursor(),
                                         batch2.clone(),
                                         capability.clone(),
-                                    ));
+                                    );
                                 }
 
                                 // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
@@ -273,46 +276,13 @@ where
                     // which results in unintentionally quadratic processing time (each batch of either
                     // input must scan all batches from the other input).
 
-                    let mut work_result = |k: &Tr1::Key,
-                                           v1: &Tr1::Val,
-                                           v2: &Tr2::Val,
-                                           t: &G::Timestamp,
-                                           r1: &Tr1::R,
-                                           r2: &Tr2::R| {
-                        let t = t.clone();
-                        let r = r1.clone().multiply(r2);
-                        result(k, v1, v2)
-                            .into_iter()
-                            .map(move |d| (d, t.clone(), r.clone()))
-                    };
-
                     // Perform some amount of outstanding work.
-                    let mut fuel = 1_000_000;
-                    while !todo1.is_empty() && fuel > 0 {
-                        todo1.front_mut().unwrap().work(
-                            output,
-                            |k, v2, v1, t, r2, r1| work_result(k, v1, v2, t, r1, r2),
-                            &mut fuel,
-                        );
-                        if !todo1.front().unwrap().work_remains() {
-                            todo1.pop_front();
-                        }
-                    }
-
-                    // Perform some amount of outstanding work.
-                    let mut fuel = 1_000_000;
-                    while !todo2.is_empty() && fuel > 0 {
-                        todo2
-                            .front_mut()
-                            .unwrap()
-                            .work(output, &mut work_result, &mut fuel);
-                        if !todo2.front().unwrap().work_remains() {
-                            todo2.pop_front();
-                        }
-                    }
+                    let fuel = 1_000_000;
+                    todo1.process(output, fuel);
+                    todo2.process(output, fuel);
 
                     // Re-activate operator if work remains.
-                    if !todo1.is_empty() || !todo2.is_empty() {
+                    if todo1.work_remaining() || todo2.work_remaining() {
                         activator.activate();
                     }
 
@@ -362,123 +332,497 @@ where
         .as_collection()
 }
 
-/// Deferred join computation.
+/// Work collected by the join operator.
 ///
-/// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
-/// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
-/// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, C1, C2, D>
+/// Work can be reduced by calling the `process` method. The amount of work processed in one go is
+/// controlled by the amount of fuel provided. Once the given fuel is exhausted, `process` returns,
+/// to allow the join operator to yield control back to Timely and thereby retain responsiveness of
+/// the system.
+///
+/// Parts of the joining work operator on references, rather than `Cursor`s directly. If we would
+/// store these directly we would end up with a self-referential struct, which safe Rust doesn't
+/// support normally. An exception is the `async` keyword with lets us construct `Future`s which do
+/// have the ability to store references to their own state. So we can wrap the joining work inside
+/// an `in_progress` future and manually poll that. At any point throughout work processing (e.g.,
+/// when the fuel is exhausted) we can yield back to the operator by calling `await` inside the
+/// `async fn` that constructs the future.
+struct Work<C1, C2, D, T, L>
 where
-    T: Timestamp,
     C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
     C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    T: Timestamp,
 {
-    trace: C1,
-    trace_storage: C1::Storage,
-    batch: C2,
-    batch_storage: C2::Storage,
-    capability: Capability<T>,
-    done: bool,
-    temp: Vec<(D, T, Diff)>,
+    /// Work we have not yet started.
+    backlog: VecDeque<Deferred<C1, C2, T>>,
+    /// Work currently in progress, if any.
+    in_progress: Option<(Pin<Box<dyn Future<Output = ()>>>, Capability<T>)>,
+
+    // Stuff shared with the `in_progress` future:
+    /// A function that transforms raw join matches into join results.
+    result_fn: Rc<RefCell<L>>,
+    /// A buffer holding the join results.
+    /// Written by the `in_progress` future, collected by us.
+    results: Rc<RefCell<Vec<(D, T, Diff)>>>,
+    /// The fuel available for join processing.
+    /// Consumed by the `in_progress` future, replenished by us.
+    fuel: Rc<Cell<u64>>,
 }
 
-impl<T, C1, C2, D> Deferred<T, C1, C2, D>
+impl<C1, C2, D, T, L, I> Work<C1, C2, D, T, L>
 where
-    T: Timestamp + Lattice,
-    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
-    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff> + 'static,
+    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff> + 'static,
     D: Data,
+    T: Timestamp + Lattice,
+    L: FnMut(&C1::Key, &C1::Val, &C2::Val) -> I + 'static,
+    I: IntoIterator<Item = D> + 'static,
 {
-    fn new(
+    fn new(result_fn: Rc<RefCell<L>>) -> Self {
+        Self {
+            backlog: Default::default(),
+            in_progress: Default::default(),
+            result_fn,
+            results: Default::default(),
+            fuel: Default::default(),
+        }
+    }
+
+    fn work_remaining(&self) -> bool {
+        self.in_progress.is_some() || !self.backlog.is_empty()
+    }
+
+    /// Append some pending work.
+    fn push(
+        &mut self,
         trace: C1,
         trace_storage: C1::Storage,
         batch: C2,
         batch_storage: C2::Storage,
         capability: Capability<T>,
-    ) -> Self {
-        Deferred {
-            trace,
-            trace_storage,
-            batch,
-            batch_storage,
+    ) {
+        self.backlog.push_back(Deferred {
+            cursor1: trace,
+            storage1: trace_storage,
+            cursor2: batch,
+            storage2: batch_storage,
             capability,
-            done: false,
-            temp: Vec::new(),
-        }
+        });
     }
 
-    fn work_remains(&self) -> bool {
-        !self.done
-    }
-
-    /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    fn work<L, I>(
+    /// Process pending work until none is remaining of the `fuel` is exhausted.
+    fn process(
         &mut self,
         output: &mut OutputHandle<T, (D, T, Diff), Tee<T, (D, T, Diff)>>,
-        mut logic: L,
-        fuel: &mut usize,
+        fuel: u64,
+    ) {
+        // Replenish the fuel available to the `in_progress` future.
+        self.fuel.set(fuel);
+
+        while self.work_remaining() && self.fuel.get() > 0 {
+            let (fut, cap) = match &mut self.in_progress {
+                Some(progress) => progress,
+                None => {
+                    // Start new progress.
+                    let deferred = self.backlog.pop_front().expect("work is remaining");
+                    let cap = deferred.capability.clone();
+                    let fut = deferred.work(
+                        Rc::clone(&self.result_fn),
+                        Rc::clone(&self.results),
+                        Rc::clone(&self.fuel),
+                    );
+                    self.in_progress = Some((Box::pin(fut), cap));
+                    self.in_progress.as_mut().unwrap()
+                }
+            };
+
+            // Poll the future. When the `poll` returns the in-progress work has either finished or
+            // the fuel was exhausted. In any case the `results` buffer will contain a chunk of
+            // output that we can produce.
+            //
+            // Why use a `noop_waker` which ignores `wake` calls. We could wire up a waker so that
+            // it activates the join operator again, but it is easier to just manually invoke an
+            // `Activator` if work is remaining after we return.
+            let waker = futures::task::noop_waker();
+            let mut ctx = std::task::Context::from_waker(&waker);
+            let done = fut.as_mut().poll(&mut ctx).is_ready();
+
+            // Here we could instead `drain` the `results` buffer. `take`ing it instead ensures
+            // that we don't keep excess memory around if earlier produced batches (e.g. from
+            // processing a snapshot) are large but later ones are much smaller.
+            let mut results = std::mem::take(&mut *self.results.borrow_mut());
+
+            // TODO: This consolidation is optional, and it may not be very helpful. We might try
+            //       harder to understand whether we should do this work here, or downstream at
+            //       consumers.
+            consolidate_updates(&mut results);
+
+            output.session(cap).give_container(&mut results);
+
+            if done {
+                self.in_progress = None;
+            }
+        }
+    }
+}
+
+/// A batch of pending join work.
+struct Deferred<C1, C2, T>
+where
+    T: Timestamp,
+    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+{
+    cursor1: C1,
+    storage1: C1::Storage,
+    cursor2: C2,
+    storage2: C2::Storage,
+    capability: Capability<T>,
+}
+
+impl<C1, C2, T> Deferred<C1, C2, T>
+where
+    T: Timestamp + Lattice,
+    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+{
+    /// Start processing the pending join work.
+    ///
+    /// This is an `async fn` to allow us to pause the work at any point, specifically when the
+    /// given `fuel` is exhausted. Fuel exhaustion is the only reason why this method yields.
+    ///
+    /// Join matches are transformed through `result_fn` and then pushed to the `results` buffer.
+    async fn work<D, L, I>(
+        mut self,
+        result_fn: Rc<RefCell<L>>,
+        results: Rc<RefCell<Vec<(D, T, Diff)>>>,
+        fuel: Rc<Cell<u64>>,
     ) where
-        I: IntoIterator<Item = (D, T, Diff)>,
-        L: FnMut(&C1::Key, &C1::Val, &C2::Val, &T, &C1::R, &C2::R) -> I,
+        D: Data,
+        L: FnMut(&C1::Key, &C1::Val, &C2::Val) -> I + 'static,
+        I: IntoIterator<Item = D>,
     {
         let meet = self.capability.time();
 
-        let mut session = output.session(&self.capability);
+        let cursor1 = &mut self.cursor1;
+        let storage1 = &self.storage1;
+        let cursor2 = &mut self.cursor2;
+        let storage2 = &self.storage2;
 
-        let trace_storage = &self.trace_storage;
-        let batch_storage = &self.batch_storage;
-
-        let trace = &mut self.trace;
-        let batch = &mut self.batch;
-
-        let temp = &mut self.temp;
-
-        while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) {
-            match trace.key(trace_storage).cmp(batch.key(batch_storage)) {
-                Ordering::Less => trace.seek_key(trace_storage, batch.key(batch_storage)),
-                Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
+        while cursor1.key_valid(storage1) && cursor2.key_valid(storage2) {
+            let key1 = cursor1.key(storage1);
+            let key2 = cursor2.key(storage2);
+            match key1.cmp(key2) {
+                Ordering::Less => cursor1.seek_key(storage1, key2),
+                Ordering::Greater => cursor2.seek_key(storage2, key1),
                 Ordering::Equal => {
-                    assert_eq!(temp.len(), 0);
+                    let history1 = ValueHistory::load(cursor1, storage1, meet);
+                    let history2 = ValueHistory::load(cursor2, storage2, meet);
+                    let mut joiner = ValueJoiner { history1, history2 };
 
-                    // Populate `temp` with the results, as long as fuel remains.
-                    let key = batch.key(batch_storage);
-                    while let Some(val1) = trace.get_val(trace_storage) {
-                        while let Some(val2) = batch.get_val(batch_storage) {
-                            trace.map_times(trace_storage, |time1, diff1| {
-                                let time1 = time1.join(meet);
-                                batch.map_times(batch_storage, |time2, diff2| {
-                                    let time = time1.join(time2);
-                                    temp.extend(logic(key, val1, val2, &time, diff1, diff2))
-                                });
-                            });
-                            batch.step_val(batch_storage);
-                        }
-                        batch.rewind_vals(batch_storage);
-                        trace.step_val(trace_storage);
+                    joiner
+                        .join(|val1, val2, time, diff| {
+                            // Invoke `result_fn` to produce join results, push these to the
+                            // `results` buffer, then subtract fuel and tell the `joiner` to yield
+                            // if necessary.
 
-                        // TODO: This consolidation is optional, and it may not be very
-                        //       helpful. We might try harder to understand whether we
-                        //       should do this work here, or downstream at consumers.
-                        consolidate_updates(temp);
+                            let mut count = 0;
+                            let updates = result_fn.borrow_mut()(key1, val1, val2)
+                                .into_iter()
+                                .map(|d| (d, time.clone(), diff))
+                                .inspect(|_| count += 1);
+                            results.borrow_mut().extend(updates);
 
-                        *fuel = fuel.saturating_sub(temp.len());
-                        session.give_container(temp);
+                            let remaining_fuel = fuel.get().saturating_sub(count);
+                            let must_yield = remaining_fuel == 0;
+                            fuel.set(remaining_fuel);
+                            must_yield
+                        })
+                        .await;
 
-                        if *fuel == 0 {
-                            // The fuel is exhausted, so we should yield. Returning here is only
-                            // allowed because we leave the cursors in a state that will let us
-                            // pick up the work correctly on the next invocation.
-                            return;
-                        }
-                    }
-
-                    batch.step_key(batch_storage);
-                    trace.step_key(trace_storage);
+                    cursor1.step_key(storage1);
+                    cursor2.step_key(storage2);
                 }
             }
         }
+    }
+}
 
-        // We only get here after having iterated through all keys.
-        self.done = true;
+struct ValueJoiner<'a, T> {
+    history1: ValueHistory<'a, T>,
+    history2: ValueHistory<'a, T>,
+}
+
+impl<'a, T> ValueJoiner<'a, T>
+where
+    T: Timestamp + Lattice,
+{
+    async fn join<F>(&mut self, result_fn: F)
+    where
+        F: FnMut(&Row, &Row, T, Diff) -> bool,
+    {
+        if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
+            self.nested_loop_join(result_fn);
+        } else {
+            self.merge_join(result_fn).await;
+        }
+    }
+
+    fn nested_loop_join<F>(&mut self, mut result_fn: F)
+    where
+        F: FnMut(&Row, &Row, T, Diff) -> bool,
+    {
+        self.history1.edits.map(|v1, t1, r1| {
+            self.history2.edits.map(|v2, t2, r2| {
+                let t = t1.join(t2);
+                let r = r1 * r2;
+                result_fn(v1, v2, t, r);
+            })
+        })
+    }
+
+    async fn merge_join<F>(&mut self, mut result_fn: F)
+    where
+        F: FnMut(&Row, &Row, T, Diff) -> bool,
+    {
+        let mut replay1 = self.history1.replay();
+        let mut replay2 = self.history2.replay();
+
+        let mut emit_result = move |v1: &Row, v2: &Row, t1: &T, t2: &T, r1: Diff, r2: Diff| {
+            let t = t1.join(t2);
+            let r = r1 * r2;
+            let must_yield = result_fn(v1, v2, t, r);
+
+            async move {
+                if must_yield {
+                    yield_now().await;
+                }
+            }
+        };
+
+        // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
+        //       in here. If a time is ever repeated, for example, the call will be identical
+        //       and accomplish nothing. If only a single record has been added, it may not
+        //       be worth the time to collapse (advance, re-sort) the data when a linear scan
+        //       is sufficient.
+
+        while !replay1.is_done() && !replay2.is_done() {
+            if replay1.time().unwrap() < replay2.time().unwrap() {
+                replay2.advance_buffer_by(replay1.meet().unwrap());
+                for (v2, t2, r2) in replay2.buffer().iter() {
+                    let (v1, t1, r1) = replay1.edit().unwrap();
+                    emit_result(v1, v2, t1, t2, r1, *r2).await;
+                }
+                replay1.step();
+            } else {
+                replay1.advance_buffer_by(replay2.meet().unwrap());
+                for (v1, t1, r1) in replay1.buffer().iter() {
+                    let (v2, t2, r2) = replay2.edit().unwrap();
+                    emit_result(v1, v2, t1, t2, *r1, r2).await;
+                }
+                replay2.step();
+            }
+        }
+
+        while !replay1.is_done() {
+            replay2.advance_buffer_by(replay1.meet().unwrap());
+            for (v2, t2, r2) in replay2.buffer().iter() {
+                let (v1, t1, r1) = replay1.edit().unwrap();
+                emit_result(v1, v2, t1, t2, r1, *r2).await;
+            }
+            replay1.step();
+        }
+        while !replay2.is_done() {
+            replay1.advance_buffer_by(replay2.meet().unwrap());
+            for (v1, t1, r1) in replay1.buffer().iter() {
+                let (v2, t2, r2) = replay2.edit().unwrap();
+                emit_result(v1, v2, t1, t2, *r1, r2).await;
+            }
+            replay2.step();
+        }
+    }
+}
+
+struct ValueHistory<'storage, T> {
+    edits: EditList<'storage, T>,
+    history: Vec<(T, T, usize, usize)>, // (time, meet, value_index, edit_offset)
+    buffer: Vec<(&'storage Row, T, Diff)>, // where we accumulate / collapse updates.
+}
+
+impl<'storage, T> ValueHistory<'storage, T>
+where
+    T: Timestamp + Lattice,
+{
+    fn load<C>(cursor: &mut C, storage: &'storage C::Storage, meet: &T) -> Self
+    where
+        C: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    {
+        let mut edits = EditList::new();
+        edits.load(cursor, storage, |t| t.join(meet));
+
+        Self {
+            edits,
+            history: Vec::new(),
+            buffer: Vec::new(),
+        }
+    }
+
+    /// Organizes history based on current contents of edits.
+    fn replay<'history>(&'history mut self) -> HistoryReplay<'storage, 'history, T> {
+        self.buffer.clear();
+        self.history.clear();
+        for value_index in 0..self.edits.values.len() {
+            let lower = if value_index > 0 {
+                self.edits.values[value_index - 1].1
+            } else {
+                0
+            };
+            let upper = self.edits.values[value_index].1;
+            for edit_index in lower..upper {
+                let time = self.edits.edits[edit_index].0.clone();
+                self.history
+                    .push((time.clone(), time.clone(), value_index, edit_index));
+            }
+        }
+
+        self.history.sort_by(|x, y| y.cmp(x));
+        for index in 1..self.history.len() {
+            self.history[index].1 = self.history[index].1.meet(&self.history[index - 1].1);
+        }
+
+        HistoryReplay { replay: self }
+    }
+}
+
+/// An accumulation of (value, time, diff) updates.
+struct EditList<'a, T> {
+    values: Vec<(&'a Row, usize)>,
+    edits: Vec<(T, Diff)>,
+}
+
+impl<'a, T> EditList<'a, T>
+where
+    T: Timestamp,
+{
+    /// Creates an empty list of edits.
+    fn new() -> Self {
+        EditList {
+            values: Vec::new(),
+            edits: Vec::new(),
+        }
+    }
+
+    /// Loads the contents of a cursor.
+    fn load<C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
+    where
+        C: Cursor<Val = Row, Time = T, R = Diff>,
+        C::Key: Eq,
+        L: Fn(&T) -> T,
+    {
+        self.clear();
+        while cursor.val_valid(storage) {
+            cursor.map_times(storage, |time1, diff1| {
+                self.push(logic(time1), diff1.clone())
+            });
+            self.seal(cursor.val(storage));
+            cursor.step_val(storage);
+        }
+    }
+
+    /// Clears the list of edits.
+    fn clear(&mut self) {
+        self.values.clear();
+        self.edits.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.edits.len()
+    }
+
+    /// Inserts a new edit for an as-yet undetermined value.
+    fn push(&mut self, time: T, diff: Diff) {
+        // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
+        self.edits.push((time, diff));
+    }
+
+    /// Associates all edits pushed since the previous `seal_value` call with `value`.
+    fn seal(&mut self, value: &'a Row) {
+        let prev = self.values.last().map(|x| x.1).unwrap_or(0);
+        consolidate_from(&mut self.edits, prev);
+        if self.edits.len() > prev {
+            self.values.push((value, self.edits.len()));
+        }
+    }
+
+    fn map<F>(&self, mut logic: F)
+    where
+        F: FnMut(&Row, &T, Diff),
+    {
+        for index in 0..self.values.len() {
+            let lower = if index == 0 {
+                0
+            } else {
+                self.values[index - 1].1
+            };
+            let upper = self.values[index].1;
+            for edit in lower..upper {
+                logic(
+                    self.values[index].0,
+                    &self.edits[edit].0,
+                    self.edits[edit].1.clone(),
+                );
+            }
+        }
+    }
+}
+
+struct HistoryReplay<'storage, 'history, T> {
+    replay: &'history mut ValueHistory<'storage, T>,
+}
+
+impl<'storage, 'history, T> HistoryReplay<'storage, 'history, T>
+where
+    'storage: 'history,
+    T: Timestamp + Lattice,
+{
+    fn time(&self) -> Option<&T> {
+        self.replay.history.last().map(|x| &x.0)
+    }
+
+    fn meet(&self) -> Option<&T> {
+        self.replay.history.last().map(|x| &x.1)
+    }
+
+    fn edit(&self) -> Option<(&Row, &T, Diff)> {
+        self.replay.history.last().map(|&(ref t, _, v, e)| {
+            (
+                self.replay.edits.values[v].0,
+                t,
+                self.replay.edits.edits[e].1.clone(),
+            )
+        })
+    }
+
+    fn buffer(&self) -> &[(&'storage Row, T, Diff)] {
+        &self.replay.buffer
+    }
+
+    fn step(&mut self) {
+        let (time, _, value_index, edit_offset) = self.replay.history.pop().unwrap();
+        self.replay.buffer.push((
+            self.replay.edits.values[value_index].0,
+            time,
+            self.replay.edits.edits[edit_offset].1.clone(),
+        ));
+    }
+
+    fn advance_buffer_by(&mut self, meet: &T) {
+        for (_, time, _) in self.replay.buffer.iter_mut() {
+            *time = time.join(meet);
+        }
+        consolidate_updates(&mut self.replay.buffer);
+    }
+
+    fn is_done(&self) -> bool {
+        self.replay.history.len() == 0
     }
 }
