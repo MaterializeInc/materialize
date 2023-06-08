@@ -2143,12 +2143,10 @@ pub struct ServerConfigurationValue {
     value: String,
 }
 
-#[derive(Clone PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DefaultPrivilegesKey {
     role_id: RoleId,
-    #[serde(skip_serializing_if = "Option::is_none")]
     database_spec: Option<ResolvedDatabaseSpecifier>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     schema_id: Option<SchemaId>,
     object_type: ObjectType,
     grantee: RoleId,
