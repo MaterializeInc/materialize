@@ -322,17 +322,23 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     ]
     c.up(*dependencies)
 
+    # Returns rockdb's cluster level and source level paths for a given source name
     def rocksdb_path(source_name: str) -> tuple[str, str]:
         (source_id, cluster_id, replica_id) = c.sql_query(
-            f"select s.id, s.cluster_id, c.id from mz_sources s join mz_cluster_replicas c on s.cluster_id = c.cluster_id where s.name ='{source_name}'"
+            f"""select s.id, s.cluster_id, c.id
+            from mz_sources s
+            join mz_cluster_replicas c
+            on s.cluster_id = c.cluster_id
+            where s.name ='{source_name}'"""
         )[0]
         prefix = "/mzdata/source_data"
         cluster_prefix = f"{cluster_id}-replica-{replica_id[1:]}"
         return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
 
-    def files_at_path(path: str) -> int:
+    # Returns the number of files recursive in a given directory
+    def num_files(dir: str) -> int:
         num_files = c.exec(
-            "materialized", "bash", "-c", f"find {path} -type f | wc -l", capture=True
+            "materialized", "bash", "-c", f"find {dir} -type f | wc -l", capture=True
         ).stdout.strip()
         return int(num_files)
 
@@ -352,16 +358,16 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             (_, kept_source_path) = rocksdb_path("kept_upsert")
             (dropped_cluster_path, dropped_source_path) = rocksdb_path("dropped_upsert")
 
-            assert files_at_path(kept_source_path) > 0
-            assert files_at_path(dropped_source_path) > 0
+            assert num_files(kept_source_path) > 0
+            assert num_files(dropped_source_path) > 0
 
             c.testdrive(f"> {drop_stmt}")
 
-            assert files_at_path(kept_source_path) > 0
+            assert num_files(kept_source_path) > 0
 
             if cluster_dropped:
-                assert files_at_path(dropped_cluster_path) == 0
+                assert num_files(dropped_cluster_path) == 0
             else:
-                assert files_at_path(dropped_source_path) == 0
+                assert num_files(dropped_source_path) == 0
 
         c.testdrive("#reset testdrive")
