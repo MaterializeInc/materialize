@@ -653,6 +653,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty translate = 29;
         google.protobuf.Empty array_position = 30;
         mz_repr.relation_and_scalar.ProtoScalarType array_fill = 31;
+        google.protobuf.Empty concat_ws = 32;
     }
 }
 

@@ -272,6 +272,12 @@
       Only supports codepoints that can be encoded in UTF-8.
       The NULL (0) character is not allowed.
 
+  - signature: 'concat(f: any, r: any...) -> text'
+    description: Concatenates the text representation of non-NULL arguments`.
+
+  - signature: 'concat_ws(sep: str, f: any, r: any...) -> text'
+    description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`.
+
   - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
     description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
 

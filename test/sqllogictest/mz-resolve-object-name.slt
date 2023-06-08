@@ -30,7 +30,7 @@ CREATE TABLE d.s.t (a int);
 
 # This goofy structure is because we can't just return the record from mz_resolve_object_name.
 query T
-SELECT concat(o.id, ' ', o.schema_id, ' ', o.name, ' ', o.type, ' ', o.owner_id, ' ', o.privileges::text) FROM (
+SELECT concat_ws(' ', o.id, o.schema_id, o.name, o.type, o.owner_id, o.privileges::text) FROM (
     SELECT * FROM mz_internal.mz_resolve_object_name('t')
 ) AS o;
 ----
@@ -217,7 +217,7 @@ NULL
 # Check many objects with same GlobalId
 
 query T
-SELECT concat(id LIKE 's%', ' ', oid) FROM mz_internal.mz_resolve_object_name('abs');
+SELECT concat_ws(' ', id LIKE 's%', oid) FROM mz_internal.mz_resolve_object_name('abs');
 ----
 t 1394
 t 1395
@@ -238,7 +238,7 @@ CREATE TABLE public.abs (a int);
 # Ensure that competing names in items lower in the search path do not creep in.
 
 query T
-SELECT concat(id LIKE 's%', ' ', oid) FROM mz_internal.mz_resolve_object_name('abs');
+SELECT concat_ws(' ', id LIKE 's%', oid) FROM mz_internal.mz_resolve_object_name('abs');
 ----
 t 1394
 t 1395

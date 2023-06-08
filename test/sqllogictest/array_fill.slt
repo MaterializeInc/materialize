@@ -80,13 +80,7 @@ SELECT array_fill(5, array[3, 1], array[]::int[])
 # Reveal structure of array
 query T
 SELECT
-    concat(
-        o,
-        ' ',
-        i,
-        ' ',
-        COALESCE(((array_fill(5, ARRAY[3, 2]))[o][i])::text, 'null')
-    )
+    concat_ws(' ', o, i, COALESCE(((array_fill(5, ARRAY[3, 2]))[o][i])::text, 'null'))
 FROM generate_series(1, 4) AS o, generate_series(1, 4) AS i
 ORDER BY 1;
 ----
@@ -115,13 +109,7 @@ SELECT array_fill(5, array[3, 2], array[2, 3])
 # Reveal structure of 2D array
 query T
 SELECT
-    concat(
-        o,
-        ' ',
-        i,
-        ' ',
-        COALESCE(((array_fill(5, ARRAY[3, 2], ARRAY[2, 3]))[o][i])::text, 'null')
-    )
+    concat_ws(' ', o, i, COALESCE(((array_fill(5, ARRAY[3, 2], ARRAY[2, 3]))[o][i])::text, 'null'))
 FROM generate_series(1, 4) AS o, generate_series(1, 4) AS i
 ORDER BY 1;
 ----
@@ -145,15 +133,7 @@ ORDER BY 1;
 # Reveal structure of 3D array
 query T
 SELECT
-    concat(
-        a,
-        ' ',
-        b,
-        ' ',
-        c,
-        ' ',
-        COALESCE(((array_fill(5, ARRAY[3, 2, 1], ARRAY[1, 2, 3]))[a][b][c])::text, 'null')
-    )
+    concat_ws(' ', a, b, c, COALESCE(((array_fill(5, ARRAY[3, 2, 1], ARRAY[1, 2, 3]))[a][b][c])::text, 'null'))
 FROM
     generate_series(1, 3) AS a,
     generate_series(1, 3) AS b,
@@ -376,13 +356,7 @@ SELECT (array_fill(3, ARRAY[2], ARRAY[-3]))[-3];
 
 query T
 SELECT
-    concat(
-        o,
-        E'\t',
-        i,
-        E'\t',
-        COALESCE(((array_fill(5, ARRAY[2, 2], ARRAY[-2, -1]))[o][i])::text, 'null')
-    )
+    concat_ws(E'\t', o, i, COALESCE(((array_fill(5, ARRAY[2, 2], ARRAY[-2, -1]))[o][i])::text, 'null'))
 FROM generate_series(-3, 0) AS o, generate_series(-2, 0) AS i
 ORDER BY o, i;
 ----
