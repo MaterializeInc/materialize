@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Set
+from typing import Optional, Set
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategyKey,
@@ -32,6 +32,20 @@ from materialize.output_consistency.validation.validation_message import (
 )
 
 
+class IgnoreVerdict:
+    def __init__(self, ignore: bool, reason: Optional[str]):
+        self.ignore = ignore
+        self.reason = reason
+
+
+def yes_ignore(reason: str) -> IgnoreVerdict:
+    return IgnoreVerdict(True, reason)
+
+
+def no_ignore() -> IgnoreVerdict:
+    return IgnoreVerdict(False, None)
+
+
 class InconsistencyIgnoreFilter:
     """Allows specifying and excluding expressions with known output inconsistencies"""
 
@@ -41,13 +55,13 @@ class InconsistencyIgnoreFilter:
 
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
-    ) -> bool:
+    ) -> IgnoreVerdict:
         """This filter is applied before the query execution."""
         return self.pre_execution_filter.shall_ignore_expression(
             expression, row_selection
         )
 
-    def shall_ignore_error(self, error: ValidationError) -> bool:
+    def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
         """This filter is applied on an error after the query execution."""
         return self.post_execution_filter.shall_ignore_error(error)
 
@@ -55,9 +69,9 @@ class InconsistencyIgnoreFilter:
 class PreExecutionInconsistencyIgnoreFilter:
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
-    ) -> bool:
+    ) -> IgnoreVerdict:
         if expression.is_leaf():
-            return False
+            return no_ignore()
         elif isinstance(expression, ExpressionWithArgs):
             return self._shall_ignore_expression_with_args(expression, row_selection)
         else:
@@ -67,54 +81,58 @@ class PreExecutionInconsistencyIgnoreFilter:
         self,
         expression: ExpressionWithArgs,
         row_selection: DataRowSelection,
-    ) -> bool:
+    ) -> IgnoreVerdict:
         # check expression itself
-        if self._visit_expression_with_args(expression, row_selection):
-            return True
+        expression_verdict = self._visit_expression_with_args(expression, row_selection)
+        if expression_verdict.ignore:
+            return expression_verdict
 
         # recursively check arguments
         for arg in expression.args:
-            if self.shall_ignore_expression(arg, row_selection):
-                return True
+            arg_expression_verdict = self.shall_ignore_expression(arg, row_selection)
+            if arg_expression_verdict.ignore:
+                return arg_expression_verdict
 
-        return False
+        return no_ignore()
 
     def _visit_expression_with_args(
         self,
         expression: ExpressionWithArgs,
         row_selection: DataRowSelection,
-    ) -> bool:
+    ) -> IgnoreVerdict:
         """True if the expression shall be ignored."""
         if not expression.operation.is_aggregation:
             # currently no issues without aggregation are known
-            return False
+            return no_ignore()
 
         expression_characteristics = (
             expression.recursively_collect_involved_characteristics(row_selection)
         )
 
-        if self._matches_problematic_operation_or_function_invocation(
+        invocation_verdict = self._matches_problematic_operation_or_function_invocation(
             expression, expression.operation, expression_characteristics
-        ):
-            return True
+        )
+        if invocation_verdict.ignore:
+            return invocation_verdict
 
         if isinstance(expression.operation, DbFunction):
             # currently only issues with functions are known, therefore ignore operations
             db_function = expression.operation
 
-            if self._matches_problematic_function_invocation(
+            invocation_verdict = self._matches_problematic_function_invocation(
                 db_function, expression_characteristics
-            ):
-                return True
+            )
+            if invocation_verdict.ignore:
+                return invocation_verdict
 
-        return False
+        return no_ignore()
 
     def _matches_problematic_operation_or_function_invocation(
         self,
         expression: ExpressionWithArgs,
         operation: DbOperationOrFunction,
         _all_involved_characteristics: Set[ExpressionCharacteristics],
-    ) -> bool:
+    ) -> IgnoreVerdict:
         if operation.is_aggregation:
             for arg in expression.args:
                 if arg.is_leaf():
@@ -126,15 +144,15 @@ class PreExecutionInconsistencyIgnoreFilter:
                     and not arg_type_spec.only_integer
                 ):
                     # tracked with https://github.com/MaterializeInc/materialize/issues/19592
-                    return True
+                    return yes_ignore("#19592")
 
-        return False
+        return no_ignore()
 
     def _matches_problematic_function_invocation(
         self,
         db_function: DbFunction,
         all_involved_characteristics: Set[ExpressionCharacteristics],
-    ) -> bool:
+    ) -> IgnoreVerdict:
         # Note that function names are always provided in lower case.
         if db_function.function_name in {
             "sum",
@@ -146,25 +164,25 @@ class PreExecutionInconsistencyIgnoreFilter:
         }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
-                return True
+                return yes_ignore("#19511")
 
             if (
                 ExpressionCharacteristics.DECIMAL in all_involved_characteristics
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
-                return True
+                return yes_ignore("#19511")
 
         if db_function.function_name in {"array_agg", "string_agg"}:
             # They would require a special comparison because the order of items in the resulting array differs.
             # related to https://github.com/MaterializeInc/materialize/issues/17189
-            return True
+            return yes_ignore("#17189")
 
-        return False
+        return no_ignore()
 
 
 class PostExecutionInconsistencyIgnoreFilter:
-    def shall_ignore_error(self, error: ValidationError) -> bool:
+    def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
             outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
@@ -181,6 +199,6 @@ class PostExecutionInconsistencyIgnoreFilter:
                 and ctf_successful
             ):
                 # see https://github.com/MaterializeInc/materialize/issues/19662
-                return True
+                return yes_ignore("#19662")
 
-        return False
+        return no_ignore()

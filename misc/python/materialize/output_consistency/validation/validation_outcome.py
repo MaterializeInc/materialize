@@ -32,10 +32,11 @@ class ValidationOutcome:
     def add_error(
         self, ignore_filter: InconsistencyIgnoreFilter, error: ValidationError
     ) -> None:
-        if ignore_filter.shall_ignore_error(error):
+        ignore_verdict = ignore_filter.shall_ignore_error(error)
+        if ignore_verdict.ignore:
             self.add_warning(
                 ValidationWarning(
-                    f"Ignoring {error.error_type} ({error.message})",
+                    f"Ignoring {error.error_type} ({error.message}) because of {ignore_verdict.reason}",
                     f"SQL is {error.query_execution.generic_sql}",
                 )
             )

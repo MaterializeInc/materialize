@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
+from typing import List, Optional
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -187,8 +187,11 @@ class QueryGenerator:
         for expression in expressions:
             row_selection = self._select_rows(expression.storage_layout)
 
-            if self.ignore_filter.shall_ignore_expression(expression, row_selection):
-                self._log_skipped_expression(logger, expression)
+            ignore_verdict = self.ignore_filter.shall_ignore_expression(
+                expression, row_selection
+            )
+            if ignore_verdict.ignore:
+                self._log_skipped_expression(logger, expression, ignore_verdict.reason)
                 continue
 
             queries.append(
@@ -234,8 +237,11 @@ class QueryGenerator:
         indices_to_remove = []
 
         for index, expression in enumerate(expressions):
-            if self.ignore_filter.shall_ignore_expression(expression, row_selection):
-                self._log_skipped_expression(logger, expression)
+            ignore_verdict = self.ignore_filter.shall_ignore_expression(
+                expression, row_selection
+            )
+            if ignore_verdict.ignore:
+                self._log_skipped_expression(logger, expression, ignore_verdict.reason)
                 indices_to_remove.append(index)
 
         for index_to_remove in sorted(indices_to_remove, reverse=True):
@@ -244,11 +250,15 @@ class QueryGenerator:
         return expressions
 
     def _log_skipped_expression(
-        self, logger: ConsistencyTestLogger, expression: Expression
+        self,
+        logger: ConsistencyTestLogger,
+        expression: Expression,
+        reason: Optional[str],
     ) -> None:
         if self.config.verbose_output:
+            reason_desc = f" ({reason})" if reason else ""
             logger.add_global_warning(
-                f"Skipping expression with known inconsistency: {expression}"
+                f"Skipping expression with known inconsistency{reason_desc}: {expression}"
             )
 
     def reset_state(self) -> None:
