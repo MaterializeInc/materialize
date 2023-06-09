@@ -300,35 +300,16 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
     // Intentionally not even pub(crate) because all callers should use
     // [Self::apply_diffs].
     fn apply_diff(&mut self, metrics: &Metrics, diff: StateDiff<T>) -> Result<(), String> {
-        // Deconstruct diff so we get a compile failure if new fields are added.
-        let StateDiff {
-            applier_version: diff_applier_version,
-            seqno_from: diff_seqno_from,
-            seqno_to: diff_seqno_to,
-            walltime_ms: diff_walltime_ms,
-            latest_rollup_key: _,
-            rollups: diff_rollups,
-            hostname: diff_hostname,
-            last_gc_req: diff_last_gc_req,
-            leased_readers: diff_leased_readers,
-            critical_readers: diff_critical_readers,
-            writers: diff_writers,
-            since: diff_since,
-            spine: diff_spine,
-        } = diff;
-        if self.seqno == diff_seqno_to {
+        if self.seqno == diff.seqno_to {
             return Ok(());
         }
-        if self.seqno != diff_seqno_from {
+        if self.seqno != diff.seqno_from {
             return Err(format!(
                 "could not apply diff {} -> {} to state {}",
-                diff_seqno_from, diff_seqno_to, self.seqno
+                diff.seqno_from, diff.seqno_to, self.seqno
             ));
         }
-        self.seqno = diff_seqno_to;
-        self.applier_version = diff_applier_version;
-        self.walltime_ms = diff_walltime_ms;
-        apply_diffs_single("hostname", diff_hostname, &mut self.hostname)?;
+        self.seqno = diff.seqno_to;
 
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
@@ -341,13 +322,13 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             trace,
         } = &mut self.collections;
 
-        apply_diffs_map("rollups", diff_rollups, rollups)?;
-        apply_diffs_single("last_gc_req", diff_last_gc_req, last_gc_req)?;
-        apply_diffs_map("leased_readers", diff_leased_readers, leased_readers)?;
-        apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
-        apply_diffs_map("writers", diff_writers, writers)?;
+        apply_diffs_map("rollups", diff.rollups, rollups)?;
+        apply_diffs_single("last_gc_req", diff.last_gc_req, last_gc_req)?;
+        apply_diffs_map("leased_readers", diff.leased_readers, leased_readers)?;
+        apply_diffs_map("critical_readers", diff.critical_readers, critical_readers)?;
+        apply_diffs_map("writers", diff.writers, writers)?;
 
-        for x in diff_since {
+        for x in diff.since {
             match x.val {
                 Update(from, to) => {
                     if trace.since() != &from {
@@ -363,7 +344,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff_spine, trace)?;
+        apply_diffs_spine(metrics, diff.spine, trace)?;
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==
