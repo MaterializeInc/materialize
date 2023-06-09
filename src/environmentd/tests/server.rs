@@ -1061,12 +1061,7 @@ fn test_max_statement_batch_size() {
                 "error should indicate that the statement was too large: {}",
                 err.message,
             ),
-            msg @ WebSocketResponse::ReadyForQuery(_)
-            | msg @ WebSocketResponse::Notice(_)
-            | msg @ WebSocketResponse::Rows(_)
-            | msg @ WebSocketResponse::Row(_)
-            | msg @ WebSocketResponse::CommandComplete(_)
-            | msg @ WebSocketResponse::ParameterStatus(_) => {
+            msg => {
                 panic!("response should be error: {msg:?}")
             }
         }
@@ -1121,8 +1116,13 @@ fn test_ws_passes_options() {
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
+    let starting = read_msg();
     let col_name = read_msg();
     let row_val = read_msg();
+
+    if !matches!(starting, WebSocketResponse::CommandStarting(_)) {
+        panic!("wrong message!, {starting:?}");
+    };
 
     if let WebSocketResponse::Rows(rows) = col_name {
         assert_eq!(rows, ["application_name"]);
@@ -1340,7 +1340,14 @@ fn test_max_connections_on_all_interfaces() {
     // The specific error isn't forwarded to the client, the connection is just closed.
     match ws.read_message() {
         Ok(Message::Text(msg)) => {
-            assert_eq!(msg, "{\"type\":\"Rows\",\"payload\":[\"?column?\"]}");
+            assert_eq!(
+                msg,
+                r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#
+            );
+            assert_eq!(
+                ws.read_message().unwrap(),
+                Message::Text("{\"type\":\"Rows\",\"payload\":[\"?column?\"]}".to_string())
+            );
             assert_eq!(
                 ws.read_message().unwrap(),
                 Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())

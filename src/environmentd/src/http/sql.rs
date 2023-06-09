@@ -394,6 +394,7 @@ pub enum WebSocketResponse {
     Notice(Notice),
     Rows(Vec<String>),
     Row(Vec<serde_json::Value>),
+    CommandStarting(CommandStarting),
     CommandComplete(String),
     Error(SqlError),
     ParameterStatus(ParameterStatus),
@@ -419,6 +420,12 @@ impl Notice {
 pub struct ParameterStatus {
     name: String,
     value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandStarting {
+    has_rows: bool,
+    is_streaming: bool,
 }
 
 /// Trait describing how to transmit a response to a client. HTTP clients
@@ -483,6 +490,21 @@ impl ResultSender for WebSocket {
             let msg = serde_json::to_string(&msg).expect("must serialize");
             Ok(ws.send(Message::Text(msg)).await?)
         }
+
+        let (has_rows, is_streaming) = match res {
+            StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Ok { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Rows { .. }) => (true, false),
+            StatementResult::Subscribe { .. } => (true, true),
+        };
+        send(
+            self,
+            WebSocketResponse::CommandStarting(CommandStarting {
+                has_rows,
+                is_streaming,
+            }),
+        )
+        .await?;
 
         let (is_err, msgs) = match res {
             StatementResult::SqlResult(SqlResult::Rows {
