@@ -134,6 +134,7 @@ The response messages are WebSocket Text messages containing a JSON object that 
 `Error` | Executing a statement resulted in an error.
 `Rows` | A rows-returning statement is executing, and some `Row` messages may follow.
 `Row` | A single row result.
+`ParameterStatus` | Executing a statement caused some session parameters to change.
 
 #### `ReadyForQuery`
 
@@ -190,6 +191,17 @@ Either a `CommandComplete` or `Error` message will always follow indicating ther
 A single row result.
 Will only occur after a `Rows` message.
 The payload is an array of JSON values corresponding to the columns from the `Rows` message.
+
+#### `ParameterStatus`
+
+Executing a statement caused a session parameter to change. The payload has the following structure:
+
+```
+{
+    "name": <name of parameter>,
+    "value": <new value of parameter>,
+}
+```
 
 #### TypeScript definition
 

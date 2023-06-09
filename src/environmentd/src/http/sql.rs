@@ -297,6 +297,11 @@ pub enum SqlResult {
         ok: String,
         /// Any notices generated during execution of the query.
         notices: Vec<Notice>,
+        /// Any parameters that may have changed.
+        ///
+        /// Note: skip serializing this field in a response if the list of parameters is empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        parameters: Vec<ParameterStatus>,
     },
     /// The query returned an error.
     Err {
@@ -328,9 +333,10 @@ impl SqlResult {
         }
     }
 
-    fn ok(client: &mut SessionClient, tag: String) -> SqlResult {
+    fn ok(client: &mut SessionClient, tag: String, params: Vec<ParameterStatus>) -> SqlResult {
         SqlResult::Ok {
             ok: tag,
+            parameters: params,
             notices: make_notices(client),
         }
     }
@@ -390,6 +396,7 @@ pub enum WebSocketResponse {
     Row(Vec<serde_json::Value>),
     CommandComplete(String),
     Error(SqlError),
+    ParameterStatus(ParameterStatus),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -406,6 +413,12 @@ impl Notice {
     pub fn message(&self) -> &str {
         &self.message
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ParameterStatus {
+    name: String,
+    value: String,
 }
 
 /// Trait describing how to transmit a response to a client. HTTP clients
@@ -484,9 +497,18 @@ impl ResultSender for WebSocket {
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (false, msgs)
             }
-            StatementResult::SqlResult(SqlResult::Ok { ok, notices }) => {
+            StatementResult::SqlResult(SqlResult::Ok {
+                ok,
+                parameters,
+                notices,
+            }) => {
                 let mut msgs = vec![WebSocketResponse::CommandComplete(ok)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
+                msgs.extend(
+                    parameters
+                        .into_iter()
+                        .map(WebSocketResponse::ParameterStatus),
+                );
                 (false, msgs)
             }
             StatementResult::SqlResult(SqlResult::Err { error, notices }) => {
@@ -863,17 +885,35 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege
         | ExecuteResponse::RevokedRole
-        | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::StartedTransaction { .. }
-        | ExecuteResponse::TransactionCommitted
-        | ExecuteResponse::TransactionRolledBack
         | ExecuteResponse::Updated(_)
         | ExecuteResponse::AlteredObject(_)
         | ExecuteResponse::AlteredIndexLogicalCompaction
         | ExecuteResponse::AlteredRole
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
-        | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results")).into(),
+        | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), Vec::default()).into(),
+        ExecuteResponse::TransactionCommitted { params } | ExecuteResponse::TransactionRolledBack { params }=> {
+            let notify_set: mz_ore::collections::HashSet<String> = client
+                .session()
+                .vars()
+                .notify_set()
+                .map(|v| v.name().to_string())
+                .collect();
+            let params = params
+                .into_iter()
+                .filter(|(name, _value)| notify_set.contains(*name))
+                .map(|(name, value)| ParameterStatus { name: name.to_string(), value })
+                .collect();
+            SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), params).into()
+        },
+        ExecuteResponse::SetVariable { name, .. } => {
+            let mut params = Vec::with_capacity(1);
+            if let Some(var) = client.session().vars().notify_set().find(|v| v.name() == &name) {
+                params.push(ParameterStatus { name, value: var.value() });
+            };
+            SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), params).into()
+        }
         ExecuteResponse::SendingRows {
             future: rows,
             span: _,

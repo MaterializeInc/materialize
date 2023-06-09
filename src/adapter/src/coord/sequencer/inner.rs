@@ -91,8 +91,9 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
-    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, PendingTxnResponse,
+    RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
+    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -1919,8 +1920,12 @@ impl Coordinator {
             action = EndTransactionAction::Rollback;
         }
         let response = match action {
-            EndTransactionAction::Commit => Ok(ExecuteResponse::TransactionCommitted),
-            EndTransactionAction::Rollback => Ok(ExecuteResponse::TransactionRolledBack),
+            EndTransactionAction::Commit => Ok(PendingTxnResponse::Committed {
+                params: BTreeMap::new(),
+            }),
+            EndTransactionAction::Rollback => Ok(PendingTxnResponse::Rolledback {
+                params: BTreeMap::new(),
+            }),
         };
 
         let result = self.sequence_end_transaction_inner(&mut session, action);
@@ -1962,7 +1967,13 @@ impl Coordinator {
             Ok((_, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
-        session.vars_mut().end_transaction(action);
+        let changed = session.vars_mut().end_transaction(action);
+        // Append any parameters that changed to the response.
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+
         tx.send(response, session);
     }
 

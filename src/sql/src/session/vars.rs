@@ -1274,6 +1274,13 @@ impl SessionVars {
             &STANDARD_CONFORMING_STRINGS,
             &TIMEZONE,
             &INTERVAL_STYLE,
+            // Including `cluster`, `cluster_replica`, and `database` in the notify set is a
+            // Materialize extension. Doing so allows users to more easily identify where their
+            // queries will be executing, which is important to know when you consider the size of
+            // a cluster, what indexes are present, etc.
+            &*CLUSTER,
+            &CLUSTER_REPLICA,
+            &*DATABASE,
         ]
         .into_iter()
         .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
@@ -1389,10 +1396,24 @@ impl SessionVars {
 
     /// Commits or rolls back configuration parameter updates made via
     /// [`SessionVars::set`] since the last call to `end_transaction`.
-    pub fn end_transaction(&mut self, action: EndTransactionAction) {
+    ///
+    /// Returns any session parameters that changed because the transaction ended.
+    pub fn end_transaction(
+        &mut self,
+        action: EndTransactionAction,
+    ) -> BTreeMap<&'static str, String> {
+        let mut changed = BTreeMap::new();
         for var in self.vars.values_mut() {
+            let before = var.value();
             var.end_transaction(action);
+            let after = var.value();
+
+            // Report the new value of the parameter.
+            if before != after {
+                changed.insert(var.name(), after);
+            }
         }
+        changed
     }
 
     /// Returns the value of the `application_name` configuration parameter.
