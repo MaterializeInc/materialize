@@ -134,14 +134,28 @@ case "$cmd" in
         docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
-        if [[ $1 == "--detach" ]]; then
-              shift
-              detach_container=true
-              container_name_param=$1 && shift
-              container_name_param=$(echo "$container_name_param" | sed  's/^--name=\(.*\)$/\1/g')
-        else
-              detach_container=false
-        fi
+        docker_command=()
+
+        detach_container=false
+        container_name_param=""
+
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --detach)
+                    detach_container=true
+                    shift # past argument
+                    ;;
+                --name)
+                    container_name_param="$2"
+                    shift # past argument
+                    shift # past value
+                    ;;
+                *)
+                    docker_command+=("$1")
+                    shift # past argument
+                    ;;
+            esac
+        done
 
         mkdir -p target-xcompile ~/.kube
         args=(
@@ -168,7 +182,11 @@ case "$cmd" in
         )
 
         if [[ $detach_container == "true" ]]; then
-            args+=("--detach" "--name=$container_name_param")
+            args+=("--detach")
+        fi
+
+        if [[ -n "$container_name_param" ]]; then
+            args+=("--name=$container_name_param")
         fi
 
         for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
@@ -246,7 +264,7 @@ case "$cmd" in
             )
         fi
         rm -f "$cid_file"
-        docker run "${args[@]}" "materialize/ci-builder:$tag" "$@"
+        docker run "${args[@]}" "materialize/ci-builder:$tag" "${docker_command[@]}"
         ;;
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
