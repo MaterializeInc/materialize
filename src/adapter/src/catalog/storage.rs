@@ -208,7 +208,6 @@ impl Connection {
             // initialize new collections.
             if !stash.is_readonly() {
                 stash.upgrade().await?;
-                initialize_stash(&mut stash).await?;
             }
 
             // Choose a time at which to boot. This is the time at which we will run
@@ -1782,95 +1781,6 @@ where
     V: mz_stash::Data,
 {
     Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
-}
-
-/// Inserts empty values into all new collections, so the collections are readable.
-#[tracing::instrument(level = "info", skip_all)]
-pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
-    async fn add_batch<'tx, K, V>(
-        tx: &'tx mz_stash::Transaction<'tx>,
-        typed: &TypedCollection<K, V>,
-    ) -> Result<Option<AppendBatch>, StashError>
-    where
-        K: mz_stash::Data,
-        V: mz_stash::Data,
-    {
-        let collection = tx.collection::<K, V>(typed.name()).await?;
-        let upper = tx.upper(collection.id).await?;
-        if upper.elements() == [mz_stash::Timestamp::MIN] {
-            Ok(Some(collection.make_batch_lower(upper)?))
-        } else {
-            Ok(None)
-        }
-    }
-
-    stash
-        .with_transaction(move |tx| {
-            Box::pin(async move {
-                // Query all collections in parallel. Makes for triplicated
-                // names, but runs quick.
-                let (
-                    config,
-                    setting,
-                    id_alloc,
-                    system_gid_mapping,
-                    clusters,
-                    cluster_introspection,
-                    cluster_replicas,
-                    database,
-                    schema,
-                    item,
-                    role,
-                    timestamp,
-                    system_configuration,
-                    default_privileges,
-                    audit_log,
-                    storage_usage,
-                ) = futures::try_join!(
-                    add_batch(&tx, &CONFIG_COLLECTION),
-                    add_batch(&tx, &SETTING_COLLECTION),
-                    add_batch(&tx, &ID_ALLOCATOR_COLLECTION),
-                    add_batch(&tx, &SYSTEM_GID_MAPPING_COLLECTION),
-                    add_batch(&tx, &CLUSTER_COLLECTION),
-                    add_batch(&tx, &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION),
-                    add_batch(&tx, &CLUSTER_REPLICA_COLLECTION),
-                    add_batch(&tx, &DATABASES_COLLECTION),
-                    add_batch(&tx, &SCHEMAS_COLLECTION),
-                    add_batch(&tx, &ITEM_COLLECTION),
-                    add_batch(&tx, &ROLES_COLLECTION),
-                    add_batch(&tx, &TIMESTAMP_COLLECTION),
-                    add_batch(&tx, &SYSTEM_CONFIGURATION_COLLECTION),
-                    add_batch(&tx, &DEFAULT_PRIVILEGES_COLLECTION),
-                    add_batch(&tx, &AUDIT_LOG_COLLECTION),
-                    add_batch(&tx, &STORAGE_USAGE_COLLECTION),
-                )?;
-                let batches: Vec<AppendBatch> = [
-                    config,
-                    setting,
-                    id_alloc,
-                    system_gid_mapping,
-                    clusters,
-                    cluster_introspection,
-                    cluster_replicas,
-                    database,
-                    schema,
-                    item,
-                    role,
-                    timestamp,
-                    system_configuration,
-                    default_privileges,
-                    audit_log,
-                    storage_usage,
-                ]
-                .into_iter()
-                .filter_map(|b| b)
-                .collect();
-                tx.append(batches).await?;
-                Ok(())
-            })
-        })
-        .await
-        .map_err(|err| err.into())
 }
 
 // Structs used to pass information to outside modules.
