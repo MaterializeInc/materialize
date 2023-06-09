@@ -1986,7 +1986,7 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_count", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_statistics",
@@ -3705,6 +3705,15 @@ pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_source_status_history_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_source_status_history (source_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statistics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_statistics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statistics (id)",
     is_retained_metrics_object: false,
 };
 
