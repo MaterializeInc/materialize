@@ -173,11 +173,6 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return yes_ignore("#19511")
 
-        if db_function.function_name in {"array_agg", "string_agg"}:
-            # They would require a special comparison because the order of items in the resulting array differs.
-            # related to https://github.com/MaterializeInc/materialize/issues/17189
-            return yes_ignore("#17189")
-
         return no_ignore()
 
 

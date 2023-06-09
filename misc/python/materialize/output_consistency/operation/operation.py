@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.expression.expression import Expression
@@ -194,3 +194,37 @@ class DbFunction(DbOperationOrFunction):
 
     def __str__(self) -> str:
         return f"DbFunction: {self.function_name}"
+
+
+class DbFunctionWithCustomPattern(DbFunction):
+    def __init__(
+        self,
+        function_name: str,
+        pattern_per_param_count: Dict[int, str],
+        params: List[OperationParam],
+        return_type_spec: ReturnTypeSpec,
+        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        is_aggregation: bool = False,
+        relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_disabled: bool = False,
+    ):
+        super().__init__(
+            function_name,
+            params,
+            return_type_spec,
+            args_validators,
+            is_aggregation,
+            relevance,
+            is_disabled,
+        )
+        self.pattern_per_param_count = pattern_per_param_count
+
+    def to_pattern(self, args_count: int) -> str:
+        self.validate_args_count_in_range(args_count)
+
+        if args_count not in self.pattern_per_param_count:
+            raise RuntimeError(
+                f"No pattern specified for {self.function_name} with {args_count} params"
+            )
+
+        return self.pattern_per_param_count[args_count]
