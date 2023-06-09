@@ -334,6 +334,37 @@ message TimestampAntichain {
     repeated Timestamp elements = 1;
 }
 
+enum ObjectType {
+    OBJECT_TYPE_UNKNOWN = 0;
+    OBJECT_TYPE_TABLE = 1;
+    OBJECT_TYPE_VIEW = 2;
+    OBJECT_TYPE_MATERIALIZED_VIEW = 3;
+    OBJECT_TYPE_SOURCE = 4;
+    OBJECT_TYPE_SINK = 5;
+    OBJECT_TYPE_INDEX = 6;
+    OBJECT_TYPE_TYPE = 7;
+    OBJECT_TYPE_ROLE = 8;
+    OBJECT_TYPE_CLUSTER = 9;
+    OBJECT_TYPE_CLUSTER_REPLICA = 10;
+    OBJECT_TYPE_SECRET = 11;
+    OBJECT_TYPE_CONNECTION = 12;
+    OBJECT_TYPE_DATABASE = 13;
+    OBJECT_TYPE_SCHEMA = 14;
+    OBJECT_TYPE_FUNC = 15;
+}
+
+message DefaultPrivilegesKey {
+    RoleId role_id = 1;
+    DatabaseId database_id = 2;
+    SchemaId schema_id = 3;
+    ObjectType object_type = 4;
+    RoleId grantee = 5;
+}
+
+message DefaultPrivilegesValue {
+    AclMode privileges = 1;
+}
+
 message AuditLogEventV1 {
     enum EventType {
         EVENT_TYPE_UNKNOWN = 0;
