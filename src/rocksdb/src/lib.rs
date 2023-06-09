@@ -91,7 +91,8 @@ use itertools::Itertools;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
-use rocksdb::{Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB};
+use mz_ore::retry::{Retry, RetryResult};
+use rocksdb::{Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
@@ -536,10 +537,9 @@ fn rocksdb_core_loop<K, V, M, O>(
                 let latency = now.elapsed();
 
                 let gets: Result<Vec<_>, _> = gets.into_iter().collect();
-                match gets {
+                let result = Retry::default().max_tries(3).retry(|_| match &gets {
                     Ok(gets) => {
-                        metrics.multi_get_latency.observe(latency.as_secs_f64());
-                        metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
+                        results_scratch.clear();
                         let result = MultiGetResult {
                             processed_gets: gets.len().try_into().unwrap(),
                         };
@@ -547,29 +547,38 @@ fn rocksdb_core_loop<K, V, M, O>(
                         for previous_value in gets {
                             let get_result = match previous_value {
                                 Some(previous_value) => {
-                                    match enc_opts.deserialize(&previous_value) {
+                                    match enc_opts.deserialize(previous_value) {
                                         Ok(value) => Some(GetResult {
                                             value,
                                             size: u64::cast_from(previous_value.len()),
                                         }),
                                         Err(e) => {
-                                            let _ =
-                                                response_sender.send(Err(Error::DecodeError(e)));
-                                            return;
+                                            return RetryResult::FatalErr(Error::DecodeError(e));
                                         }
                                     }
                                 }
                                 None => None,
                             };
-                            results_scratch.push(get_result)
+                            results_scratch.push(get_result);
                         }
 
-                        let _ = response_sender.send(Ok((result, batch, results_scratch)));
+                        RetryResult::Ok(result)
                     }
-                    Err(e) => {
-                        let _ = response_sender.send(Err(Error::RocksDB(e)));
-                        return;
+                    Err(e) => match e.kind() {
+                        ErrorKind::TryAgain => {
+                            RetryResult::RetryableErr(Error::RocksDB(e.to_owned()))
+                        }
+                        _ => RetryResult::FatalErr(Error::RocksDB(e.to_owned())),
+                    },
+                });
+
+                let _ = match result {
+                    Ok(result) => {
+                        metrics.multi_get_latency.observe(latency.as_secs_f64());
+                        metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
+                        response_sender.send(Ok((result, batch, results_scratch)))
                     }
+                    Err(e) => response_sender.send(Err(e)),
                 };
             }
             Command::MultiPut {
