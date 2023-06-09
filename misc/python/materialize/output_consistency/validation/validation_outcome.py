@@ -10,6 +10,7 @@ from typing import List, Optional, Sequence
 
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     InconsistencyIgnoreFilter,
+    YesIgnore,
 )
 from materialize.output_consistency.output.format_constants import LI_PREFIX
 from materialize.output_consistency.validation.validation_message import (
@@ -33,7 +34,7 @@ class ValidationOutcome:
         self, ignore_filter: InconsistencyIgnoreFilter, error: ValidationError
     ) -> None:
         ignore_verdict = ignore_filter.shall_ignore_error(error)
-        if ignore_verdict.ignore:
+        if isinstance(ignore_verdict, YesIgnore):
             self.add_warning(
                 ValidationWarning(
                     f"Ignoring {error.error_type} ({error.message}) because of {ignore_verdict.reason}",

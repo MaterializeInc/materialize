@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Optional, Set
+from typing import Set
+
+from attr import dataclass
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategyKey,
@@ -32,18 +34,20 @@ from materialize.output_consistency.validation.validation_message import (
 )
 
 
+@dataclass
 class IgnoreVerdict:
-    def __init__(self, ignore: bool, reason: Optional[str]):
-        self.ignore = ignore
-        self.reason = reason
+    ignore: bool
 
 
-def yes_ignore(reason: str) -> IgnoreVerdict:
-    return IgnoreVerdict(True, reason)
+@dataclass(frozen=True)
+class YesIgnore(IgnoreVerdict):
+    reason: str
+    ignore: bool = True
 
 
-def no_ignore() -> IgnoreVerdict:
-    return IgnoreVerdict(False, None)
+@dataclass(frozen=True)
+class NoIgnore(IgnoreVerdict):
+    ignore: bool = False
 
 
 class InconsistencyIgnoreFilter:
@@ -71,7 +75,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         self, expression: Expression, row_selection: DataRowSelection
     ) -> IgnoreVerdict:
         if expression.is_leaf():
-            return no_ignore()
+            return NoIgnore()
         elif isinstance(expression, ExpressionWithArgs):
             return self._shall_ignore_expression_with_args(expression, row_selection)
         else:
@@ -93,7 +97,7 @@ class PreExecutionInconsistencyIgnoreFilter:
             if arg_expression_verdict.ignore:
                 return arg_expression_verdict
 
-        return no_ignore()
+        return NoIgnore()
 
     def _visit_expression_with_args(
         self,
@@ -103,7 +107,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         """True if the expression shall be ignored."""
         if not expression.operation.is_aggregation:
             # currently no issues without aggregation are known
-            return no_ignore()
+            return NoIgnore()
 
         expression_characteristics = (
             expression.recursively_collect_involved_characteristics(row_selection)
@@ -125,7 +129,7 @@ class PreExecutionInconsistencyIgnoreFilter:
             if invocation_verdict.ignore:
                 return invocation_verdict
 
-        return no_ignore()
+        return NoIgnore()
 
     def _matches_problematic_operation_or_function_invocation(
         self,
@@ -144,9 +148,9 @@ class PreExecutionInconsistencyIgnoreFilter:
                     and not arg_type_spec.only_integer
                 ):
                     # tracked with https://github.com/MaterializeInc/materialize/issues/19592
-                    return yes_ignore("#19592")
+                    return YesIgnore("#19592")
 
-        return no_ignore()
+        return NoIgnore()
 
     def _matches_problematic_function_invocation(
         self,
@@ -164,16 +168,16 @@ class PreExecutionInconsistencyIgnoreFilter:
         }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
-                return yes_ignore("#19511")
+                return YesIgnore("#19511")
 
             if (
                 ExpressionCharacteristics.DECIMAL in all_involved_characteristics
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
-                return yes_ignore("#19511")
+                return YesIgnore("#19511")
 
-        return no_ignore()
+        return NoIgnore()
 
 
 class PostExecutionInconsistencyIgnoreFilter:
@@ -194,6 +198,6 @@ class PostExecutionInconsistencyIgnoreFilter:
                 and ctf_successful
             ):
                 # see https://github.com/MaterializeInc/materialize/issues/19662
-                return yes_ignore("#19662")
+                return YesIgnore("#19662")
 
-        return no_ignore()
+        return NoIgnore()

@@ -19,6 +19,7 @@ from materialize.output_consistency.execution.value_storage_layout import (
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     InconsistencyIgnoreFilter,
+    YesIgnore,
 )
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
@@ -190,7 +191,7 @@ class QueryGenerator:
             ignore_verdict = self.ignore_filter.shall_ignore_expression(
                 expression, row_selection
             )
-            if ignore_verdict.ignore:
+            if isinstance(ignore_verdict, YesIgnore):
                 self._log_skipped_expression(logger, expression, ignore_verdict.reason)
                 continue
 
@@ -240,7 +241,7 @@ class QueryGenerator:
             ignore_verdict = self.ignore_filter.shall_ignore_expression(
                 expression, row_selection
             )
-            if ignore_verdict.ignore:
+            if isinstance(ignore_verdict, YesIgnore):
                 self._log_skipped_expression(logger, expression, ignore_verdict.reason)
                 indices_to_remove.append(index)
 
