@@ -7,7 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# TopK
+# ArrangeBy
+
+roundtrip
+ArrangeBy keys=[[#0], [#1]]
+  Constant // { types: "(bigint, bigint)" }
+    - (1, 2)
+    - (3, 4)
+----
+roundtrip OK
+
+# NB this doesn't typecheck, but the parser still accepts it
 roundtrip
 ArrangeBy keys=[[#1], [#2, #3]]
   Constant // { types: "(bigint, bigint)" }
