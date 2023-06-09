@@ -45,7 +45,9 @@ use crate::util::{send_immediate_rows, ClientTransmitter};
 // this scenario, the session has not been properly initialized and we
 // need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
+mod cluster;
 mod inner;
+mod linked_cluster;
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
