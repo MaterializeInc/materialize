@@ -9,7 +9,7 @@
 
 //! Transaction control language (TCL).
 //!
-//! This module houses the handlers for statements that manipulate the session,
+//! This module houses the handlers for statements that manipulate the session's transaction,
 //! like `BEGIN` and `COMMIT`.
 
 use mz_sql_parser::ast::TransactionIsolationLevel;
