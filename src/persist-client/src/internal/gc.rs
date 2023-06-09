@@ -208,7 +208,7 @@ where
     pub(crate) async fn gc_and_truncate(
         machine: &mut Machine<K, V, T, D>,
         req: GcReq,
-    ) -> (RoutineMaintenance, GcStats) {
+    ) -> (RoutineMaintenance, GcResults) {
         let mut step_start = Instant::now();
         let mut report_step_timing = |counter: &Counter| {
             let now = Instant::now();
@@ -220,13 +220,19 @@ where
         // Double check our GC req: seqno_since will never regress
         // so we can verify it's not somehow greater than the last-
         // known seqno_since
-        let current_seqno_since = machine.applier.seqno_since();
-        assert!(
-            req.new_seqno_since <= current_seqno_since,
-            "invalid gc req: {:?} vs machine seqno_since {}",
-            req,
-            current_seqno_since
-        );
+        if req.new_seqno_since > machine.applier.seqno_since() {
+            machine
+                .applier
+                .fetch_and_update_state(Some(req.new_seqno_since))
+                .await;
+            let current_seqno_since = machine.applier.seqno_since();
+            assert!(
+                req.new_seqno_since <= current_seqno_since,
+                "invalid gc req: {:?} vs machine seqno_since {}",
+                req,
+                current_seqno_since
+            );
+        }
 
         // First, check the latest known state to this process to see
         // if there's relevant GC work for this seqno_since
@@ -235,14 +241,14 @@ where
         let rollups_to_remove_from_state = gc_rollups.rollups_to_remove_from_state();
         report_step_timing(&machine.applier.metrics.gc.steps.find_removable_rollups);
 
-        let mut gc_stats = GcStats::default();
+        let mut gc_results = GcResults::default();
 
         if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
             // to delete), we can safely exit.
             machine.applier.metrics.gc.noop.inc();
-            return (RoutineMaintenance::default(), gc_stats);
+            return (RoutineMaintenance::default(), gc_results);
         }
 
         debug!(
@@ -280,7 +286,7 @@ where
             &gc_rollups,
             machine,
             &mut report_step_timing,
-            &mut gc_stats,
+            &mut gc_results,
         )
         .await;
 
@@ -304,7 +310,7 @@ where
             machine.remove_rollups(rollups_to_remove_from_state).await;
         report_step_timing(&machine.applier.metrics.gc.steps.remove_rollups_from_state);
         debug!("CaS removed rollups from state: {:?}", removed_rollups);
-        gc_stats.rollups_removed_from_state = removed_rollups;
+        gc_results.rollups_removed_from_state = removed_rollups;
 
         // Everything here and below is not strictly needed for GC to complete,
         // but it's a good opportunity, while we have all live states in hand,
@@ -355,7 +361,7 @@ where
                 .post_gc_calculations_seconds,
         );
 
-        (maintenance, gc_stats)
+        (maintenance, gc_results)
     }
 
     /// Physically deletes all blobs from Blob and live diffs from Consensus that
@@ -370,7 +376,7 @@ where
         gc_rollups: &GcRollups,
         machine: &mut Machine<K, V, T, D>,
         timer: &mut F,
-        gc_stats: &mut GcStats,
+        gc_results: &mut GcResults,
     ) where
         F: FnMut(&Counter),
     {
@@ -435,11 +441,11 @@ where
             states.state().map_blobs(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
-                        assert!(batch_parts_to_delete.get(&live_part.key).is_none());
+                        assert_eq!(batch_parts_to_delete.get(&live_part.key), None);
                     }
                 }
                 HollowBlobRef::Rollup(live_rollup) => {
-                    assert!(rollups_to_delete.get(&live_rollup.key).is_none());
+                    assert_eq!(rollups_to_delete.get(&live_rollup.key), None);
                     // And double check that the rollups we're about to delete are
                     // earlier than our truncation point:
                     match BlobKey::parse_ids(&live_rollup.key.complete(&shard_id)) {
@@ -453,9 +459,9 @@ where
                 }
             });
 
-            gc_stats.truncated_consensus_to.push(truncate_lt);
-            gc_stats.batch_parts_deleted_from_blob += batch_parts_to_delete.len();
-            gc_stats.rollups_deleted_from_blob += rollups_to_delete.len();
+            gc_results.truncated_consensus_to.push(truncate_lt);
+            gc_results.batch_parts_deleted_from_blob += batch_parts_to_delete.len();
+            gc_results.rollups_deleted_from_blob += rollups_to_delete.len();
 
             Self::delete_and_truncate(
                 truncate_lt,
@@ -592,7 +598,7 @@ where
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct GcStats {
+pub(crate) struct GcResults {
     pub(crate) batch_parts_deleted_from_blob: usize,
     pub(crate) rollups_deleted_from_blob: usize,
     pub(crate) truncated_consensus_to: Vec<SeqNo>,
@@ -610,10 +616,7 @@ impl GcRollups {
         assert!(rollups_lte_seqno_since
             .iter()
             .all(|(seqno, _rollup)| *seqno <= gc_req.new_seqno_since));
-        let rollup_seqnos = rollups_lte_seqno_since
-            .iter()
-            .map(|(x, _)| *x)
-            .collect::<HashSet<_>>();
+        let rollup_seqnos = rollups_lte_seqno_since.iter().map(|(x, _)| *x).collect();
         Self {
             rollups_lte_seqno_since,
             rollup_seqnos,

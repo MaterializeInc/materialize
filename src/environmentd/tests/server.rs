@@ -644,6 +644,16 @@ fn test_storage_usage_collection_interval() {
     info!(%pre_create_storage_usage);
     assert_eq!(pre_create_storage_usage, 0);
 
+    // Test that the storage usage for the table is nonzero after it is created
+    // (there is some overhead even for empty tables). We wait out two storage
+    // collection intervals (here and below) because the next storage collection
+    // may have been concurrent with the previous operation.
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let post_create_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+    info!(%post_create_storage_usage);
+    assert!(post_create_storage_usage > 0);
+
     // Insert some data into the table.
     for _ in 0..3 {
         client
@@ -656,7 +666,7 @@ fn test_storage_usage_collection_interval() {
     let timestamp = wait_for_next_collection(&mut client, timestamp);
     let after_insert_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
     info!(%after_insert_storage_usage);
-    assert!(after_insert_storage_usage > pre_create_storage_usage);
+    assert!(after_insert_storage_usage > post_create_storage_usage);
 
     // Drop the table.
     client.batch_execute("DROP TABLE usage_test").unwrap();

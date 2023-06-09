@@ -179,8 +179,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 }
                 StateFieldValDiff::Update((), ()) => {
                     // No-op. Logically, we've removed and reinserted the same
-                    // key. We don't see this in practice, so it could also
-                    // easily be a panic, if necessary.
+                    // key. We don't see this in practice, so this suggests an
+                    // invalid diff.
+                    panic!("")
                 }
                 StateFieldValDiff::Delete(()) => {} // No-op
             }

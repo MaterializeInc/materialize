@@ -125,7 +125,7 @@ where
         let mut applied_ever_true = false;
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, _applied, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_rollup, |_, _, state| {
                 let ret = state.add_rollup(add_rollup);
                 if let Continue(applied) = ret {
                     applied_ever_true = applied_ever_true || applied;
@@ -142,7 +142,7 @@ where
     ) -> (Vec<SeqNo>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, removed_rollup_seqnos, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.remove_rollups, |_, _, state| {
                 state.remove_rollups(remove_rollups)
             })
             .await;

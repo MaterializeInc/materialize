@@ -359,7 +359,8 @@ impl MetricsVecs {
     fn cmds_metrics(&self, registry: &MetricsRegistry) -> CmdsMetrics {
         CmdsMetrics {
             init_state: self.cmd_metrics("init_state"),
-            add_and_remove_rollups: self.cmd_metrics("add_and_remove_rollups"),
+            add_rollup: self.cmd_metrics("add_rollup"),
+            remove_rollups: self.cmd_metrics("remove_rollups"),
             register: self.cmd_metrics("register"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
             compare_and_append_noop:             registry.register(metric!(
@@ -562,7 +563,8 @@ impl CmdMetrics {
 #[derive(Debug)]
 pub struct CmdsMetrics {
     pub(crate) init_state: CmdMetrics,
-    pub(crate) add_and_remove_rollups: CmdMetrics,
+    pub(crate) add_rollup: CmdMetrics,
+    pub(crate) remove_rollups: CmdMetrics,
     pub(crate) register: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) compare_and_append_noop: IntCounter,
