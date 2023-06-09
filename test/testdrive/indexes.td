@@ -329,5 +329,7 @@ mz_show_sources_ind                                         mz_sources          
 mz_show_tables_ind                                          mz_tables                                    mz_introspection    {schema_id}
 mz_show_types_ind                                           mz_types                                     mz_introspection    {schema_id}
 mz_show_views_ind                                           mz_views                                     mz_introspection    {schema_id}
+mz_sink_statistics_ind                                      mz_sink_statistics                           mz_introspection    {id}
+mz_source_statistics_ind                                    mz_source_statistics                         mz_introspection    {id}
 mz_source_status_history_ind                                mz_source_status_history                     mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}

@@ -1986,7 +1986,7 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_count", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_statistics",
@@ -1999,7 +1999,7 @@ pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3708,6 +3708,24 @@ ON mz_internal.mz_source_status_history (source_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statistics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_statistics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statistics (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sink_statistics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sink_statistics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_sink_statistics (id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4077,6 +4095,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_CLUSTERS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
+        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
+        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
