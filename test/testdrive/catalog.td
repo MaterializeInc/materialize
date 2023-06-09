@@ -598,6 +598,7 @@ mz_dataflows
 mz_dataflows_per_worker
 mz_message_counts
 mz_message_counts_per_worker
+mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
 mz_records_per_dataflow

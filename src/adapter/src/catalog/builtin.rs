@@ -2140,6 +2140,24 @@ FROM mz_internal.mz_dataflow_operator_dataflows_per_worker
 WHERE worker_id = 0",
 };
 
+pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES: BuiltinView = BuiltinView {
+    name: "mz_object_transitive_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_object_transitive_dependencies AS
+WITH MUTUALLY RECURSIVE
+  base(id text, referenced_object_id text) AS (
+    SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies
+  ),
+  reach(id text, referenced_object_id text) AS (
+    SELECT id, referenced_object_id FROM base
+    UNION ALL -- (TODO use UNION once #19817 is fixed)
+    SELECT id, referenced_object_id FROM reach
+    UNION
+    SELECT r1.id, r2.referenced_object_id FROM reach r1 JOIN reach r2 ON r1.referenced_object_id = r2.id
+  )
+SELECT id, referenced_object_id FROM reach;",
+};
+
 pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
     name: "mz_compute_exports",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4002,6 +4020,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
+        Builtin::View(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
