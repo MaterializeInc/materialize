@@ -12,7 +12,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
 from materialize.output_consistency.execution.value_storage_layout import (
-    VERTICAL_LAYOUT_ROW_INDEX_COL_NAME,
+    ROW_INDEX_COL_NAME,
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
@@ -94,14 +94,14 @@ FROM{space_separator}{db_object_name}
             row_index_string = ", ".join(
                 str(index) for index in self.row_selection.keys
             )
-        return f"WHERE {VERTICAL_LAYOUT_ROW_INDEX_COL_NAME} IN ({row_index_string})"
+        return f"WHERE {ROW_INDEX_COL_NAME} IN ({row_index_string})"
 
     def _create_order_by_clause(self) -> str:
         if (
             self.storage_layout == ValueStorageLayout.VERTICAL
             and not self.contains_aggregations
         ):
-            return f"ORDER BY {VERTICAL_LAYOUT_ROW_INDEX_COL_NAME} ASC"
+            return f"ORDER BY {ROW_INDEX_COL_NAME} ASC"
 
         return ""
 
