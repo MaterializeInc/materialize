@@ -80,7 +80,7 @@ FROM{space_separator}{db_object_name}
         expressions_as_sql = []
         for index, expression in enumerate(self.select_expressions):
             if query_column_selection.is_included(index):
-                expressions_as_sql.append(expression.to_sql())
+                expressions_as_sql.append(expression.to_sql(True))
 
         return f",{space_separator}".join(expressions_as_sql)
 

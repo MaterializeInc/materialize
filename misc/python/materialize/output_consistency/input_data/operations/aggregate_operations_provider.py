@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 from typing import List
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
 )
@@ -32,7 +31,6 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
     OperationRelevance,
 )
-from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
@@ -40,7 +38,7 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "array_agg",
         [AnyOperationParam()],
-        ReturnTypeSpec(DataTypeCategory.DYNAMIC_ARRAY),
+        DynamicReturnTypeSpec(),
         is_aggregation=True,
     ),
 )

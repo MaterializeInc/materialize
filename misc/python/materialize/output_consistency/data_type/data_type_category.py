@@ -23,5 +23,6 @@ class DataTypeCategory(Enum):
     NUMERIC = 101
     BOOLEAN = 102
     TEXT = 103
+    DATE_TIME = 104
 
     ENUM = 200

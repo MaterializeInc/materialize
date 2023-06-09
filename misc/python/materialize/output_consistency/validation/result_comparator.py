@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import math
-import re
 from decimal import Decimal
 from typing import Any, cast
 
@@ -19,6 +18,9 @@ from materialize.output_consistency.query.query_result import (
     QueryFailure,
     QueryOutcome,
     QueryResult,
+)
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
 )
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
@@ -36,6 +38,7 @@ class ResultComparator:
 
     def __init__(self, ignore_filter: InconsistencyIgnoreFilter):
         self.ignore_filter = ignore_filter
+        self.error_message_normalizer = ErrorMessageNormalizer()
 
     def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
         validation_outcome = ValidationOutcome()
@@ -173,8 +176,12 @@ class ResultComparator:
         failure2: QueryFailure,
         validation_outcome: ValidationOutcome,
     ) -> None:
-        norm_error_message_1 = self.normalize_error_message(failure1.error_message)
-        norm_error_message_2 = self.normalize_error_message(failure2.error_message)
+        norm_error_message_1 = self.error_message_normalizer.normalize(
+            failure1.error_message
+        )
+        norm_error_message_2 = self.error_message_normalizer.normalize(
+            failure2.error_message
+        )
 
         if norm_error_message_1 != norm_error_message_2:
             validation_outcome.add_error(
@@ -191,24 +198,6 @@ class ResultComparator:
                     sql2=failure2.sql,
                 ),
             )
-
-    def normalize_error_message(self, error_message: str) -> str:
-        # replace source prefix in column
-        normalized_message = error_message
-        normalized_message = re.sub(
-            'column "[^.]*\\.', 'column "<source>.', normalized_message
-        )
-
-        # This will replace ln, log, and log10 mentions with log
-        # see https://github.com/MaterializeInc/materialize/issues/19815
-        normalized_message = re.sub(
-            "(?<=function )(ln|log|log10)(?= is not defined for zero)",
-            "log",
-            normalized_message,
-        )
-
-        normalized_message = normalized_message.replace("Evaluation error: ", "")
-        return normalized_message
 
     def warn_on_failure_with_multiple_columns(
         self,
@@ -297,7 +286,7 @@ class ResultComparator:
             result_value2 = result2.result_rows[row_index][col_index]
             expression = query_execution.query_template.select_expressions[
                 col_index
-            ].to_sql()
+            ].to_sql(True)
 
             if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(

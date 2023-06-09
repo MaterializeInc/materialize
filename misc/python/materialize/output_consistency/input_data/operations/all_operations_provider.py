@@ -16,6 +16,9 @@ from materialize.output_consistency.input_data.operations.aggregate_operations_p
 from materialize.output_consistency.input_data.operations.boolean_operations_provider import (
     BOOLEAN_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.date_time_operations_provider import (
+    DATE_TIME_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
     GENERIC_OPERATION_TYPES,
 )
@@ -34,5 +37,6 @@ ALL_OPERATION_TYPES: List[DbOperationOrFunction] = list(
         BOOLEAN_OPERATION_TYPES,
         NUMERIC_OPERATION_TYPES,
         TRIGONOMETRIC_OPERATION_TYPES,
+        DATE_TIME_OPERATION_TYPES,
     )
 )

@@ -52,16 +52,23 @@ class ExpressionWithArgs(Expression):
     def has_args(self) -> bool:
         return len(self.args) > 0
 
-    def to_sql(self) -> str:
+    def to_sql(self, is_root_level: bool) -> str:
         sql: str = self.pattern
 
         for arg in self.args:
-            sql = sql.replace(EXPRESSION_PLACEHOLDER, arg.to_sql(), 1)
+            sql = sql.replace(EXPRESSION_PLACEHOLDER, arg.to_sql(False), 1)
 
         if len(self.args) != self.pattern.count(EXPRESSION_PLACEHOLDER):
             raise RuntimeError(
                 f"Not enough arguments to fill all placeholders in pattern {self.pattern}"
             )
+
+        if (
+            is_root_level
+            and self.resolve_return_type_category() == DataTypeCategory.DATE_TIME
+        ):
+            # workaround because the max date type in python is smaller than values supported by mz
+            sql = f"({sql})::TEXT"
 
         return sql
 
@@ -69,15 +76,19 @@ class ExpressionWithArgs(Expression):
         return self.return_type_spec
 
     def resolve_return_type_category(self) -> DataTypeCategory:
-        first_arg_type_category_hint = None
+        input_type_hints = []
 
-        if self.return_type_spec.type_category == DataTypeCategory.DYNAMIC:
-            # Only compute the hint for this category
-            first_arg_type_category_hint = (
-                self.args[0].resolve_return_type_category() if self.has_args() else None
-            )
+        if self.return_type_spec.indices_of_required_input_type_hints is not None:
+            # provide input types that are required as hints to determine the output type
+            for arg_index in self.return_type_spec.indices_of_required_input_type_hints:
+                assert (
+                    0 <= arg_index <= len(self.args)
+                ), f"Invalid requested index: {arg_index} as hint for {self.operation}"
+                input_type_hints.append(
+                    self.args[arg_index].resolve_return_type_category()
+                )
 
-        return self.return_type_spec.resolve_type_category(first_arg_type_category_hint)
+        return self.return_type_spec.resolve_type_category(input_type_hints)
 
     def try_resolve_exact_data_type(self) -> Optional[DataType]:
         return self.operation.try_resolve_exact_data_type(self.args)

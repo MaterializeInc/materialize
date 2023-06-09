@@ -7,24 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
+from typing import List
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class DynamicReturnTypeSpec(ReturnTypeSpec):
-    def __init__(
-        self,
-    ) -> None:
-        super().__init__(DataTypeCategory.DYNAMIC)
+    def __init__(self, param_index_to_take_type: int = 0):
+        super().__init__(DataTypeCategory.DYNAMIC, [param_index_to_take_type])
 
     def resolve_type_category(
-        self, first_arg_type_category: Optional[DataTypeCategory]
+        self, input_arg_type_hints: List[DataTypeCategory]
     ) -> DataTypeCategory:
-        if first_arg_type_category is None:
+        if input_arg_type_hints is None:
             raise RuntimeError(
-                f"Return type category {DataTypeCategory.DYNAMIC} must not be used without arguments"
+                f"Return type category {DataTypeCategory.DYNAMIC} requires arg hints"
             )
 
-        return first_arg_type_category
+        assert len(input_arg_type_hints) == 1, "Missing input type hint"
+        return input_arg_type_hints[0]

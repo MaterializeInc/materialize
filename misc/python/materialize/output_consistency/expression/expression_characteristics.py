@@ -27,3 +27,6 @@ class ExpressionCharacteristics(Enum):
     NEGATIVE = 121
     DECIMAL = 122
     """value is not an integer"""
+
+    INTERVAL_WITH_MONTHS = 130
+    """time interval containing months or years"""
