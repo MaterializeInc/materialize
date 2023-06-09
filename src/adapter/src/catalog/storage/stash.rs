@@ -74,6 +74,9 @@ pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
     proto::DefaultPrivilegesKey,
     proto::DefaultPrivilegesValue,
 > = TypedCollection::new("default_privileges");
+// If you add a new collection, then don't forget to write a migration that initializes the
+// collection either with some initial values or as empty. See
+// [`mz_stash::upgrade::v17_to_v18`] as an example.
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
