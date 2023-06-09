@@ -340,31 +340,25 @@ impl StashFactory {
             metrics: Arc::clone(&self.metrics),
             collections: BTreeMap::new(),
         };
-        // Do the initial connection once here so we don't get stuck in
-        // transact's retry loop if the url is bad.
+
+        // Do the initial connection once here so we don't get stuck in transact's retry loop if the
+        // url is bad. We also need to allow for a down server, though, so retry for a while before
+        // bailing. These numbers are made up.
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = Box::pin(retry);
         loop {
-            let res = conn.connect().await;
-            if let Err(StashError {
-                inner: InternalStashError::Postgres(err),
-            }) = &res
-            {
-                // We want this function (`new`) to quickly return an error if
-                // the connection string is bad or the server is unreachable. If
-                // the server returns a retryable transaction error though,
-                // allow it to retry. This is mostly useful for tests which hit
-                // this particular error a lot, but is also good for production.
-                // See: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference.html
-                if let Some(dberr) = err.as_db_error() {
-                    if dberr.code() == &SqlState::T_R_SERIALIZATION_FAILURE
-                        && dberr.message().contains("restart transaction")
-                    {
-                        warn!("tokio-postgres stash connection error, retrying: {err}");
-                        continue;
+            match conn.connect().await {
+                Ok(()) => break,
+                Err(err) => {
+                    warn!("initial stash connection error, retrying: {err}");
+                    if retry.next().await.is_none() {
+                        return Err(err);
                     }
                 }
             }
-            res?;
-            break;
         }
 
         if matches!(conn.txn_mode, TransactionMode::Savepoint) {
