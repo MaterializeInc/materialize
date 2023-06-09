@@ -78,6 +78,7 @@ class ConsistencyTestRunner:
             if expression_count > 0 and expression_count % 200 == 0:
                 self.output_printer.print_status(
                     f"Status: Expression {expression_count}..."
+                    f" (last executed query #{self.execution_manager.query_counter})"
                 )
 
             operation = self.expression_generator.pick_random_operation(True)

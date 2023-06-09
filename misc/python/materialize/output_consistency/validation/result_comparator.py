@@ -194,9 +194,19 @@ class ResultComparator:
 
     def normalize_error_message(self, error_message: str) -> str:
         # replace source prefix in column
+        normalized_message = error_message
         normalized_message = re.sub(
-            'column "[^.]*\\.', 'column "<source>.', error_message
+            'column "[^.]*\\.', 'column "<source>.', normalized_message
         )
+
+        # This will replace ln, log, and log10 mentions with log
+        # see https://github.com/MaterializeInc/materialize/issues/19815
+        normalized_message = re.sub(
+            "(?<=function )(ln|log|log10)(?= is not defined for zero)",
+            "log",
+            normalized_message,
+        )
+
         normalized_message = normalized_message.replace("Evaluation error: ", "")
         return normalized_message
 
