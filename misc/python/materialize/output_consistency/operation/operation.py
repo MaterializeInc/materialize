@@ -42,10 +42,10 @@ class DbOperationOrFunction:
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
-        is_disabled: bool = False,
+        is_enabled: bool = True,
     ):
         """
-        :param is_disabled: an operation should only be disabled if its execution causes problems;
+        :param is_enabled: an operation should only be disabled if its execution causes problems;
                             if it just fails, it should be ignored
         """
         if args_validators is None:
@@ -58,7 +58,7 @@ class DbOperationOrFunction:
         self.args_validators: Set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
         self.relevance = relevance
-        self.is_disabled = is_disabled
+        self.is_enabled = is_enabled
 
     def to_pattern(self, args_count: int) -> str:
         raise NotImplementedError
@@ -115,7 +115,7 @@ class DbOperation(DbOperationOrFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
-        is_disabled: bool = False,
+        is_enabled: bool = True,
     ):
         param_count = len(params)
         super().__init__(
@@ -126,7 +126,7 @@ class DbOperation(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=False,
             relevance=relevance,
-            is_disabled=is_disabled,
+            is_enabled=is_enabled,
         )
         self.pattern = pattern
 
@@ -154,7 +154,7 @@ class DbFunction(DbOperationOrFunction):
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
-        is_disabled: bool = False,
+        is_enabled: bool = True,
     ):
         self.validate_params(params)
 
@@ -166,7 +166,7 @@ class DbFunction(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=is_aggregation,
             relevance=relevance,
-            is_disabled=is_disabled,
+            is_enabled=is_enabled,
         )
         self.function_name = function_name.lower()
 
@@ -206,7 +206,7 @@ class DbFunctionWithCustomPattern(DbFunction):
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
-        is_disabled: bool = False,
+        is_enabled: bool = True,
     ):
         super().__init__(
             function_name,
@@ -215,7 +215,7 @@ class DbFunctionWithCustomPattern(DbFunction):
             args_validators,
             is_aggregation,
             relevance,
-            is_disabled,
+            is_enabled,
         )
         self.pattern_per_param_count = pattern_per_param_count
 

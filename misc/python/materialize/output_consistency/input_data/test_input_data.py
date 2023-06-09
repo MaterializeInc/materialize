@@ -43,7 +43,7 @@ class ConsistencyTestInputData:
         filtered_operations = []
 
         for operation in operations:
-            if not operation.is_disabled:
+            if operation.is_enabled:
                 filtered_operations.append(operation)
 
         return filtered_operations
