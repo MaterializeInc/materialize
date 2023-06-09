@@ -153,8 +153,9 @@ AGGREGATE_OPERATION_TYPES.append(
 )
 
 AGGREGATE_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "string_agg",
+        {2: "string_agg($, $ ORDER BY row_index)"},
         [TextOperationParam(), TextOperationParam()],
         TextReturnTypeSpec(),
         is_aggregation=True,
