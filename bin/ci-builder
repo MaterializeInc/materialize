@@ -251,11 +251,6 @@ case "$cmd" in
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
         ;;
-    stop)
-        container_name_param=$1 && shift
-        container_name_param=$(echo "$container_name_param" | sed  's/^--name=\(.*\)$/\1/g')
-        docker stop "$container_name_param"
-        ;;
     *)
         printf "unknown command %q\n" "$cmd"
         exit 1
