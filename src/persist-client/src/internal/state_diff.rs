@@ -20,7 +20,7 @@ use mz_persist_types::Codec64;
 use mz_proto::TryFromProtoError;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
@@ -353,7 +353,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         self.seqno = diff_seqno_to;
         self.applier_version = diff_applier_version;
         self.walltime_ms = diff_walltime_ms;
-        apply_diffs_single("hostname", diff_hostname, &mut self.hostname)?;
+        force_apply_diffs_single("hostname", diff_hostname, &mut self.hostname)?;
 
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
@@ -437,6 +437,44 @@ fn apply_diff_single<X: PartialEq + Debug>(
                     "{} update didn't match: {:?} vs {:?}",
                     name, single, &from
                 ));
+            }
+            *single = to
+        }
+        Insert(_) => return Err(format!("cannot insert {} field", name)),
+        Delete(_) => return Err(format!("cannot delete {} field", name)),
+    }
+    Ok(())
+}
+
+// A hack to force apply a diff, making `single` equal to
+// the Update `to` value, ignoring a mismatch on `from`.
+// Used to migrate forward after writing down incorrect
+// diffs.
+//
+// TODO: delete this once `hostname` has zero mismatches
+fn force_apply_diffs_single<X: PartialEq + Debug>(
+    name: &str,
+    diffs: Vec<StateFieldDiff<(), X>>,
+    single: &mut X,
+) -> Result<(), String> {
+    for diff in diffs {
+        force_apply_diff_single(name, diff, single)?;
+    }
+    Ok(())
+}
+
+fn force_apply_diff_single<X: PartialEq + Debug>(
+    name: &str,
+    diff: StateFieldDiff<(), X>,
+    single: &mut X,
+) -> Result<(), String> {
+    match diff.val {
+        Update(from, to) => {
+            if single != &from {
+                error!(
+                    "{} update didn't match: {:?} vs {:?}, continuing to force apply diff...",
+                    name, single, &from
+                );
             }
             *single = to
         }
