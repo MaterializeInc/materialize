@@ -710,6 +710,9 @@ message ProtoEvalError {
         string ident = 1;
         optional string detail = 2;
     }
+    message ProtoValueOutOfRange {
+        string value = 1;
+    }
     oneof kind {
         int32 character_not_valid_for_encoding = 1;
         int32 character_too_large_for_encoding = 2;
@@ -719,13 +722,13 @@ message ProtoEvalError {
         google.protobuf.Empty float_overflow = 6;
         google.protobuf.Empty float_underflow = 7;
         google.protobuf.Empty numeric_field_overflow = 8;
-        google.protobuf.Empty float32_out_of_range = 9;
-        google.protobuf.Empty float64_out_of_range = 10;
-        google.protobuf.Empty int16_out_of_range = 11;
-        google.protobuf.Empty int32_out_of_range = 12;
-        google.protobuf.Empty int64_out_of_range = 13;
-        google.protobuf.Empty oid_out_of_range = 14;
-        google.protobuf.Empty interval_out_of_range = 15;
+        ProtoValueOutOfRange float32_out_of_range = 9;
+        ProtoValueOutOfRange float64_out_of_range = 10;
+        ProtoValueOutOfRange int16_out_of_range = 11;
+        ProtoValueOutOfRange int32_out_of_range = 12;
+        ProtoValueOutOfRange int64_out_of_range = 13;
+        ProtoValueOutOfRange oid_out_of_range = 14;
+        ProtoValueOutOfRange interval_out_of_range = 15;
         google.protobuf.Empty timestamp_out_of_range = 16;
         google.protobuf.Empty char_out_of_range = 17;
         google.protobuf.Empty invalid_base64_equals = 18;
@@ -765,11 +768,11 @@ message ProtoEvalError {
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
         ProtoIndexOutOfRange index_out_of_range = 54;
-        google.protobuf.Empty uint16_out_of_range = 55;
-        google.protobuf.Empty uint32_out_of_range = 56;
-        google.protobuf.Empty uint64_out_of_range = 57;
+        ProtoValueOutOfRange uint16_out_of_range = 55;
+        ProtoValueOutOfRange uint32_out_of_range = 56;
+        ProtoValueOutOfRange uint64_out_of_range = 57;
         google.protobuf.Empty date_out_of_range = 58;
-        google.protobuf.Empty mz_timestamp_out_of_range = 59;
+        ProtoValueOutOfRange mz_timestamp_out_of_range = 59;
         google.protobuf.Empty mz_timestamp_step_overflow = 60;
         google.protobuf.Empty timestamp_cannot_be_nan = 61;
         mz_repr.adt.range.ProtoInvalidRangeError invalid_range = 62;

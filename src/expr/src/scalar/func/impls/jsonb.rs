@@ -184,10 +184,13 @@ sqlfunc!(
 sqlfunc!(
     fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {
         match a.into_datum() {
-            Datum::List(list) => match i32::try_from(list.iter().count()) {
-                Ok(len) => Ok(Some(len)),
-                Err(_) => Err(EvalError::Int32OutOfRange),
-            },
+            Datum::List(list) => {
+                let count = list.iter().count();
+                match i32::try_from(count) {
+                    Ok(len) => Ok(Some(len)),
+                    Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
+                }
+            }
             _ => Ok(None),
         }
     }

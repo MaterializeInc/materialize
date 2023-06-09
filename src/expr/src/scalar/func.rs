@@ -290,21 +290,21 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_add(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
 fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_add(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
 fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_add(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
@@ -497,9 +497,10 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
         }
     };
 
-    match i32::try_from(decoded_string.chars().count()) {
+    let count = decoded_string.chars().count();
+    match i32::try_from(count) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
     }
 }
 
@@ -568,7 +569,7 @@ fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_add(&b.unwrap_interval())
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
@@ -768,21 +769,21 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn sub_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_sub(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
 fn sub_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_sub(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
 fn sub_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_sub(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
@@ -855,7 +856,7 @@ fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     b.unwrap_interval()
         .checked_neg()
         .and_then(|b| b.checked_add(&a.unwrap_interval()))
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
@@ -867,7 +868,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let dt = interval
         .months
         .checked_neg()
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(interval.months.to_string()))
         .and_then(|months| add_timestamp_months(&dt, months))?;
     let dt = dt
         .checked_sub_signed(interval.duration_as_chrono())
@@ -906,21 +907,21 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_mul(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
 fn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_mul(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
 fn mul_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_mul(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
@@ -968,7 +969,7 @@ fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_mul(b.unwrap_float64())
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
@@ -980,7 +981,7 @@ fn div_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int16()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int16OutOfRange)
+            .ok_or(EvalError::Int16OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -992,7 +993,7 @@ fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int32()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int32OutOfRange)
+            .ok_or(EvalError::Int32OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -1004,7 +1005,7 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int64()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int64OutOfRange)
+            .ok_or(EvalError::Int64OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -1098,7 +1099,7 @@ fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     } else {
         a.unwrap_interval()
             .checked_div(b)
-            .ok_or(EvalError::IntervalOutOfRange)
+            .ok_or(EvalError::IntervalOutOfRange(format!("{a} / {b}")))
             .map(Datum::from)
     }
 }
@@ -1195,7 +1196,7 @@ pub fn neg_interval(a: Datum) -> Result<Datum, EvalError> {
 fn neg_interval_inner(a: Datum) -> Result<Interval, EvalError> {
     a.unwrap_interval()
         .checked_neg()
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(a.to_string()))
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
@@ -6528,8 +6529,8 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         let string_prefix = &string[0..char_index];
 
         let num_prefix_chars = string_prefix.chars().count();
-        let num_prefix_chars =
-            i32::try_from(num_prefix_chars).map_err(|_| EvalError::Int32OutOfRange)?;
+        let num_prefix_chars = i32::try_from(num_prefix_chars)
+            .map_err(|_| EvalError::Int32OutOfRange(num_prefix_chars.to_string()))?;
 
         Ok(Datum::Int32(num_prefix_chars + 1))
     } else {
@@ -6622,7 +6623,7 @@ fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
         Some(dim) => Datum::Int32(
             dim.length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange)?,
+                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
         ),
     })
 }
@@ -6684,7 +6685,7 @@ fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
             Some(dim) => Datum::Int32(
                 dim.length
                     .try_into()
-                    .map_err(|_| EvalError::Int32OutOfRange)?,
+                    .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
             ),
             None => Datum::Null,
         },
@@ -6726,7 +6727,7 @@ fn list_length_max<'a>(
         match max_len_on_layer(a, b) {
             Some(l) => match l.try_into() {
                 Ok(c) => Ok(Datum::Int32(c)),
-                Err(_) => Err(EvalError::Int32OutOfRange),
+                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string())),
             },
             None => Ok(Datum::Null),
         }

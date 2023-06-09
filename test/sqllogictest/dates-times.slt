@@ -1292,7 +1292,7 @@ select ('0001-01-01'::date - interval '1 DAY')::date
 ----
 0001-12-31 BC
 
-query error interval out of range
+query error "-2147483648" interval out of range
 select '0001-02-24'::date - interval '-2147483648 MONTHS'
 
 query T
@@ -1310,10 +1310,10 @@ select '0001-02-24 03:04:05.6789 +00:00'::timestamptz - interval '1 YEAR'
 ----
 0001-02-24 03:04:05.6789+00 BC
 
-query error interval out of range
+query error "-178956970 years -8 months" interval out of range
 select '0001-02-24 03:04:05.6789'::timestamp - interval '-2147483648 MONTHS'
 
-query error interval out of range
+query error "-178956970 years -8 months" interval out of range
 select '0001-02-24 03:04:05.6789 +00:00'::timestamptz - interval '-2147483648 MONTHS'
 
 # Infinity dates not supported.

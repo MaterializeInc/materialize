@@ -80,7 +80,7 @@ sqlfunc!(
         if (f >= (i16::MIN as f32)) && (f < -(i16::MIN as f32)) {
             Ok(f as i16)
         } else {
-            Err(EvalError::Int16OutOfRange)
+            Err(EvalError::Int16OutOfRange(f.to_string()))
         }
     }
 );
@@ -101,7 +101,7 @@ sqlfunc!(
         if (f >= (i32::MIN as f32)) && (f < -(i32::MIN as f32)) {
             Ok(f as i32)
         } else {
-            Err(EvalError::Int32OutOfRange)
+            Err(EvalError::Int32OutOfRange(f.to_string()))
         }
     }
 );
@@ -122,7 +122,7 @@ sqlfunc!(
         if (f >= (i64::MIN as f32)) && (f < -(i64::MIN as f32)) {
             Ok(f as i64)
         } else {
-            Err(EvalError::Int64OutOfRange)
+            Err(EvalError::Int64OutOfRange(f.to_string()))
         }
     }
 );
@@ -160,7 +160,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u16::MAX as f32)) {
             Ok(f as u16)
         } else {
-            Err(EvalError::UInt16OutOfRange)
+            Err(EvalError::UInt16OutOfRange(f.to_string()))
         }
     }
 );
@@ -177,7 +177,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u32::MAX as f32)) {
             Ok(f as u32)
         } else {
-            Err(EvalError::UInt32OutOfRange)
+            Err(EvalError::UInt32OutOfRange(f.to_string()))
         }
     }
 );
@@ -194,7 +194,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u64::MAX as f32)) {
             Ok(f as u64)
         } else {
-            Err(EvalError::UInt64OutOfRange)
+            Err(EvalError::UInt64OutOfRange(f.to_string()))
         }
     }
 );
