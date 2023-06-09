@@ -62,7 +62,8 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
 fi
 
 ci_unimportant_heading "kail: Stopping instance..."
-bin/ci-builder stop stable --name="kail"
+docker logs kail > kail-output.log 2>&1
+docker stop kail
 
 ci_unimportant_heading "cloudtest: Uploading logs..."
 for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
