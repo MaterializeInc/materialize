@@ -146,33 +146,6 @@ impl<T: Timestamp + Lattice + Codec64> CreateResumptionFrontierCalc<T>
             upper_states.insert(*id, UpperState::new(handle));
         }
 
-        let remap_relation_desc = self.desc.connection.timestamp_desc();
-
-        if let CollectionMetadata {
-            persist_location,
-            remap_shard: Some(remap_shard),
-            data_shard: _,
-            // The status shard only contains non-definite status updates
-            status_shard: _,
-            relation_desc: _,
-        } = &self.ingestion_metadata
-        {
-            let handle = client_cache
-                .open(persist_location.clone())
-                .await
-                .expect("error creating persist client")
-                // TODO: Any way to plumb the GlobalId to this?
-                .open_writer::<SourceData, (), T, Diff>(
-                    *remap_shard,
-                    "resumption remap",
-                    Arc::new(remap_relation_desc),
-                    Arc::new(UnitSchema),
-                )
-                .await
-                .unwrap();
-            upper_states.insert(self.remap_collection_id, UpperState::new(handle));
-        }
-
         let initial_frontier = match self.desc.envelope {
             // We can only resume with the None envelope, which is stateless,
             // or with the [Debezium] Upsert envelope, which is easy
