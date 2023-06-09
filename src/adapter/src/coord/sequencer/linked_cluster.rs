@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Coordinator functionality to sequence linked-cluster-related plans
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -17,10 +19,7 @@ use mz_controller::clusters::{
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema,
-    SessionCatalog,
-};
+use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::SourceSinkClusterConfig;
 
@@ -120,7 +119,7 @@ impl Coordinator {
 
     /// Generates the catalog operations to alter the linked cluster for the
     /// source or sink with the given ID, if such a cluster exists.
-    pub(crate) async fn alter_linked_cluster_ops(
+    pub(super) async fn alter_linked_cluster_ops(
         &mut self,
         linked_object_id: GlobalId,
         config: &SourceSinkClusterConfig,
@@ -193,7 +192,7 @@ impl Coordinator {
 
     /// Updates the replicas of the cluster linked to the specified object after
     /// an alter operation, if such a linked cluster exists.
-    pub(crate) async fn maybe_alter_linked_cluster(&mut self, linked_object_id: GlobalId) {
+    pub(super) async fn maybe_alter_linked_cluster(&mut self, linked_object_id: GlobalId) {
         if let Some(cluster) = self.catalog().get_linked_cluster(linked_object_id) {
             // The old replicas of the linked cluster will have been dropped by
             // `catalog_transact`, both from the catalog state and from the

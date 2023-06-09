@@ -37,8 +37,8 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
-    CatalogRole, CatalogSchema, CatalogTypeDetails, ObjectType, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
+    CatalogTypeDetails, ObjectType, SessionCatalog,
 };
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{

@@ -7,16 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Coordinator functionality to sequence cluster-related plans
+
 use std::collections::BTreeMap;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
     ClusterConfig, ClusterId, CreateReplicaConfig, ReplicaConfig, ReplicaId, ReplicaLogging,
 };
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole,
-    CatalogSchema, ObjectType, SessionCatalog,
-};
+use mz_sql::catalog::{CatalogCluster, CatalogItem as SqlCatalogItem, CatalogItemType, ObjectType};
 use mz_sql::plan::{
     AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, CreateClusterPlan,
     CreateClusterReplicaPlan,
@@ -301,7 +300,7 @@ impl Coordinator {
         Ok(ExecuteResponse::CreatedClusterReplica)
     }
 
-    pub(crate) async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
+    pub(super) async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
         let mut replicas_to_start = Vec::new();
 
         for (cluster_id, replica_id) in replicas.iter().copied() {
@@ -359,7 +358,7 @@ impl Coordinator {
 
     /// Returns whether the given cluster exclusively maintains items
     /// that were formerly maintained on `computed`.
-    pub(crate) fn is_compute_cluster(&self, id: ClusterId) -> bool {
+    pub(super) fn is_compute_cluster(&self, id: ClusterId) -> bool {
         let cluster = self.catalog().get_cluster(id);
         cluster.bound_objects().iter().all(|id| {
             matches!(
