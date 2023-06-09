@@ -11,15 +11,13 @@
 
 > CREATE TABLE table1 (f1 INTEGER);
 
-> INSERT INTO table1 VALUES (1);
+> INSERT INTO table1 SELECT generate_series FROM generate_series(1, 10000);
 
 > CREATE MATERIALIZED VIEW table_view1 AS SELECT COUNT(*) FROM table1;
 
 > CREATE DEFAULT INDEX ON table_view1;
 
-> INSERT INTO table1 VALUES (2);
+> INSERT INTO table1 SELECT generate_series FROM generate_series(1, 10000);
 
 > SELECT * FROM table_view1;
-2
-
-> DROP TABLE table1 CASCADE;
+20000

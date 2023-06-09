@@ -133,7 +133,7 @@ def wait_for_cloud(c: Composition) -> None:
         port=6875,
         query="SELECT 1",
         expected=[[1]],
-        timeout_secs=600,
+        timeout_secs=900,
         dbname="materialize",
         ssl_context=ssl.SSLContext(),
         # print_result=True
