@@ -63,9 +63,9 @@ class ValidationWarning(ValidationMessage):
         self.sql = sql
 
     def __str__(self) -> str:
-        warning_desc = f" ({self.description})" if self.description else ""
+        warning_desc = f": {self.description}" if self.description else ""
         strategy_desc = f" with strategy '{self.strategy}'" if self.strategy else ""
-        query_desc = f"\n  Query: {self.sql}"
+        query_desc = f"\n  Query: {self.sql}" if self.sql else ""
 
         return f"{self.message}{strategy_desc}{warning_desc}{query_desc}"
 
