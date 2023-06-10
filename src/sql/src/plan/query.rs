@@ -3299,7 +3299,7 @@ fn plan_expr_inner<'a>(
             expr,
             construct,
             negated,
-        } => Ok(plan_is_expr(ecx, expr, *construct, *negated)?.into()),
+        } => Ok(plan_is_expr(ecx, expr, construct, *negated)?.into()),
         Expr::Case {
             operand,
             conditions,
@@ -4588,38 +4588,52 @@ pub fn resolve_func(
 
 fn plan_is_expr<'a>(
     ecx: &ExprContext,
-    inner: &'a Expr<Aug>,
-    construct: IsExprConstruct,
+    expr: &'a Expr<Aug>,
+    construct: &IsExprConstruct<Aug>,
     not: bool,
 ) -> Result<HirScalarExpr, PlanError> {
-    let planned_expr = plan_expr(ecx, inner)?;
-    let expr = if construct.requires_boolean_expr() {
-        planned_expr.type_as(ecx, &ScalarType::Bool)?
-    } else {
-        // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
-        // with our type coercion rules, which treat `NULL` literals and
-        // unconstrained parameters identically. Providing a type hint of string
-        // means we wind up supporting both.
-        planned_expr.type_as_any(ecx)?
+    let expr = plan_expr(ecx, expr)?;
+    let mut expr = match construct {
+        IsExprConstruct::Null => {
+            // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is
+            // at odds with our type coercion rules, which treat `NULL` literals
+            // and unconstrained parameters identically. Providing a type hint
+            // of string means we wind up supporting both.
+            let expr = expr.type_as_any(ecx)?;
+            expr.call_is_null()
+        }
+        IsExprConstruct::Unknown => {
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
+            expr.call_is_null()
+        }
+        IsExprConstruct::True => {
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
+            expr.call_unary(UnaryFunc::IsTrue(expr_func::IsTrue))
+        }
+        IsExprConstruct::False => {
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
+            expr.call_unary(UnaryFunc::IsFalse(expr_func::IsFalse))
+        }
+        IsExprConstruct::DistinctFrom(expr2) => {
+            let expr1 = expr.type_as_any(ecx)?;
+            let expr2 = plan_expr(ecx, expr2)?.type_as_any(ecx)?;
+            let expr1_is_null = expr1.clone().call_is_null();
+            let expr2_is_null = expr2.clone().call_is_null();
+            HirScalarExpr::If {
+                cond: Box::new(expr1_is_null.clone()),
+                then: Box::new(expr2_is_null.clone().not()),
+                els: Box::new(HirScalarExpr::If {
+                    cond: Box::new(expr2_is_null),
+                    then: Box::new(expr1_is_null.not()),
+                    els: Box::new(expr1.call_binary(expr2, BinaryFunc::NotEq)),
+                }),
+            }
+        }
     };
-    let func = match construct {
-        IsExprConstruct::Null | IsExprConstruct::Unknown => UnaryFunc::IsNull(expr_func::IsNull),
-        IsExprConstruct::True => UnaryFunc::IsTrue(expr_func::IsTrue),
-        IsExprConstruct::False => UnaryFunc::IsFalse(expr_func::IsFalse),
-    };
-    let expr = HirScalarExpr::CallUnary {
-        func,
-        expr: Box::new(expr),
-    };
-
     if not {
-        Ok(HirScalarExpr::CallUnary {
-            func: UnaryFunc::Not(expr_func::Not),
-            expr: Box::new(expr),
-        })
-    } else {
-        Ok(expr)
+        expr = expr.not();
     }
+    Ok(expr)
 }
 
 fn plan_case<'a>(
