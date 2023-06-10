@@ -546,21 +546,11 @@ impl Value {
         let s = str::from_utf8(raw)?;
         Ok(match ty {
             Type::Array(elem_type) => {
-                let elements = strconv::parse_array(
+                let (elements, dims) = strconv::parse_array(
                     s,
                     || None,
                     |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
                 )?;
-                // At the moment, we only support one dimensional arrays. Note
-                // that empty arrays are represented as zero dimensional arrays,
-                // per PostgreSQL.
-                let mut dims = vec![];
-                if !elements.is_empty() {
-                    dims.push(ArrayDimension {
-                        lower_bound: 1,
-                        length: elements.len(),
-                    })
-                }
                 Value::Array { dims, elements }
             }
             Type::Int2Vector { .. } => {
@@ -736,7 +726,7 @@ mod tests {
 
         assert_eq!(
             decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
-            "invalid input syntax for type array: specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
+            "invalid input syntax for type array: Specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
         );
     }
 }
