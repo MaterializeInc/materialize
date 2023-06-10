@@ -186,7 +186,7 @@ query error db error: ERROR: operator is not unique: unknown \? unknown
 SELECT NULL ? 'a'
 
 ## ?&
-query error malformed array literal: missing opening left brace
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "a"
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
 
 query error db error: ERROR: operator does not exist: map\[text=>integer\] \?\& integer\[\]
@@ -252,7 +252,7 @@ SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text
 false
 
 ## ?|
-query error malformed array literal: missing opening left brace
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "a"
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
 
 query error db error: ERROR: operator does not exist: map\[text=>integer\] \?\| integer\[\]

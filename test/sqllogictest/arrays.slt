@@ -26,17 +26,18 @@ SELECT '{  1,   2  , 3 }'::int[]
 ----
 {1,2,3}
 
-query error invalid input syntax for type array: malformed array literal: missing opening left brace
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": ""
 SELECT ''::int[]
 
-query error invalid input syntax for type array: malformed array literal: junk after closing right brace
+query error db error: ERROR: invalid input syntax for type array: Junk after closing right brace\.: "\{1, 2, 3\} 4"
 SELECT '{1, 2, 3} 4'::int[]
 
-# This ought to be supported one day, but it is a lot of work.
-query error parsing multi-dimensional arrays is not supported
+query T
 SELECT '{{1}, {2}}'::int[]
+----
+{{1},{2}}
 
-query error specifying array lower bounds is not supported
+query error db error: ERROR: invalid input syntax for type array: Specifying array lower bounds is not supported: "\[1:2\]=\{1,2\}"
 SELECT '[1:2]={1,2}'::int[]
 
 # Test coercion behavior of multidimensional arrays.
@@ -1033,3 +1034,275 @@ SELECT array_position(ARRAY[['mon']]::text[], null, 1)
 
 query error searching for elements in multidimensional arrays is not supported
 SELECT array_position(ARRAY[['mon']]::text[], 'mon', null)
+
+# multi-dimensional arrays
+# how else can we handle whitespace terminals in strings?
+query T
+SELECT
+    concat_ws(
+        E'\t',
+        v,
+        array_length(v, 1),
+        array_length(v, 2),
+        array_length(v, 3),
+        array_length(v, 4),
+        v[1],
+        v[1][1],
+        v[1][1][1],
+        v[1][1][1][1],
+        'end'
+    )
+FROM (
+    SELECT a::text[] AS v FROM (
+        VALUES (null),
+        ('{a}'),
+        ('{""}'),
+        ('{''}'),
+        ('{" "}'),
+        ('{" 🌍 "}'),
+        ('{\\}'),
+        ('{"{",\\}'),
+        ('{\"\", \"\\\"\"}'),
+        ('{null}'),
+        ('{b,b}'),
+        ('{{c},{c},{c}}'),
+        ('{{a}}'),
+        ('{{a},{a}}'),
+        ('{{a,b,c},{a,b,c}}'),
+        ('{{{b},{b}},{{b},{b}}}'),
+        ('{{{c},{c},{c}}}'),
+        ('{{"c", d},{"c", d},{"c", d}}'),
+        ('{{c, null},{null, d},{"null", null}}'),
+        ('{{{{b},{b}}},{{{b},{b}}},{{{b},{b}}}}'),
+        ('{{{a}}}'),
+        ('{{{a}},{{a}}}'),
+        ('{{{a}},{{null}}}'),
+        ('{}'),
+        ('{{},{}}'),
+        ('{{{}},{{}}}'),
+        ('{{{null}},{{null}}}'),
+        -- Can exceed max dims with empty array which consolidates down
+        ('{{{{{{{},{}}}}}}}')
+    ) AS x (a)
+) AS x (v);
+----
+end
+{}	end
+{}	end
+{}	end
+{}	end
+{""}	1		end
+{'}	1	'	end
+{a}	1	a	end
+{NULL}	1	end
+{" "}	1	 	end
+{b,b}	2	b	end
+{"\\"}	1	\	end
+{{a}}	1	1	a	end
+{"{","\\"}	2	{	end
+{{a},{a}}	2	1	a	end
+{{{a}}}	1	1	1	a	end
+{" 🌍 "}	1	 🌍 	end
+{{c},{c},{c}}	3	1	c	end
+{{{a}},{{a}}}	2	1	1	a	end
+{{a,b,c},{a,b,c}}	2	3	a	end
+{{{c},{c},{c}}}	1	3	1	c	end
+{"\"\"","\"\\\"\""}	2	""	end
+{{{a}},{{NULL}}}	2	1	1	a	end
+{{c,d},{c,d},{c,d}}	3	2	c	end
+{{{NULL}},{{NULL}}}	2	1	1	end
+{{{b},{b}},{{b},{b}}}	2	2	1	b	end
+{{c,NULL},{NULL,d},{null,NULL}}	3	2	c	end
+{{{{b},{b}}},{{{b},{b}}},{{{b},{b}}}}	3	1	2	1	b	end
+
+# Test that whitespace produces same results
+query T
+SELECT
+    concat_ws(
+        E'\t',
+        v,
+        array_length(v, 1),
+        array_length(v, 2),
+        array_length(v, 3),
+        array_length(v, 4),
+        v[1],
+        v[1][1],
+        v[1][1][1],
+        v[1][1][1][1]
+    )
+FROM (
+    SELECT a::text[] AS v FROM (
+        VALUES (null),
+        ('       {a}'),
+        ('{null}        '),
+        ('{      b,b}'),
+        ('{{c      },{c},{c}}'),
+        ('{{a       }}'),
+        ('{{a},        {a}}'),
+        ('{{a,b,c},{    a,b,c}}'),
+        ('{{{b},{b}},{{b},{b}}      }'),
+        ('{{{c},{c},{c}}}         '),
+        ('{  {  c  ,  d  }  ,  {  c  ,  d  }  ,  {  c  ,  d  }  }  ')
+    ) AS x (a)
+) AS x (v);
+----
+(empty)
+{a}	1	a
+{NULL}	1
+{b,b}	2	b
+{{a}}	1	1	a
+{{a},{a}}	2	1	a
+{{c},{c},{c}}	3	1	c
+{{a,b,c},{a,b,c}}	2	3	a
+{{{c},{c},{c}}}	1	3	1	c
+{{c,d},{c,d},{c,d}}	3	2	c
+{{{b},{b}},{{b},{b}}}	2	2	1	b
+
+#
+# Empty
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": ""
+SELECT ''::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "          "
+SELECT '          '::int[];
+
+#
+# Missing elems
+query error db error: ERROR: invalid input syntax for type array: Unexpected "\}" character\.: "\{1,\}"
+SELECT '{1,}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "," character\.: "\{,1\}"
+SELECT '{,1}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "," character\.: "\{,\}"
+SELECT '{,}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "\}" character\.: "\{\\" \\",\}"
+SELECT '{" ",}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "," character\.: "\{,\\" \\"\}"
+SELECT '{," "}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "\}" character\.: "\{',\}"
+SELECT '{'',}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "," character\.: "\{,'\}"
+SELECT '{,''}'::int[];
+
+#
+# Escapes
+query error db error: ERROR: invalid input syntax for type array: unterminated element: "\{\\\}"
+SELECT '{\}'::text[];
+
+#
+# Single chars
+query error db error: ERROR: invalid input syntax for type array: Unexpected end of input\.: "\{"
+SELECT '{'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "\}"
+SELECT '}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": ","
+SELECT ','::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "a"
+SELECT 'a'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "'"
+SELECT ''''::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "\\""
+SELECT '"'::int[];
+
+#
+# Lopsided brackets
+query error db error: ERROR: invalid input syntax for type array: Unexpected end of input\.: "\{\{a\}"
+SELECT '{{a}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Junk after closing right brace\.: "\{a\}\}"
+SELECT '{a}}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected end of input\.: "\{\{\}"
+SELECT '{{}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Junk after closing right brace\.: "\{\}\}"
+SELECT '{}}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected end of input\.: "\{  \{a\}"
+SELECT '{  {a}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Junk after closing right brace\.: "\{  a\}\}"
+SELECT '{  a}}'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected end of input\.: "\{\{  \}"
+SELECT '{{  }'::int[];
+
+query error db error: ERROR: invalid input syntax for type array: Junk after closing right brace\.: "\{\}  \}"
+SELECT '{}  }'::int[];
+
+#
+# Missing commas++
+query error db error: ERROR: invalid input syntax for type array: Junk after closing right brace\.: "\{1\}\{1\}"
+SELECT '{1}{1}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "\{" character\.: "\{\{1\}\{1\}\}"
+SELECT '{{1}{1}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Junk after closing right brace\.: "\{\}\{\}"
+SELECT '{}{}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected "\{" character\.: "\{\{\}\{\}\}"
+SELECT '{{}{}}'::text[];
+
+#
+# Manged seps
+query error db error: ERROR: invalid input syntax for type array: Unexpected array element\.: "\{\{1,2\},\\\{2,3\}\}"
+SELECT E'{{1,2},\\{2,3}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected array element\.: "\{\{\\"1 2\\" x\},\{3\}\}"
+SELECT '{{"1 2" x},{3}}'::text[];
+
+#
+# Non-rectilinear
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1,\{2\}\},\{2,3\}\}"
+SELECT '{{1,{2}},{2,3}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1\},\{\{2\}\}\}"
+SELECT '{{1},{{2}}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected array element\.: "\{\{\{1\}\},\{2\}\}"
+SELECT '{{{1}},{2}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\},\{\{\}\}\}"
+SELECT '{{},{{}}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\{\}\},\{\}\}"
+SELECT '{{{}},{}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1\},\{\}\}"
+SELECT '{{1},{}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\},\{1\}\}"
+SELECT '{{},{1}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1,2\},\{1\}\}"
+SELECT '{{1,2},{1}}'::text[];
+
+#
+# Non-rectilinear w/ null
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{null, \{1\}\}"
+SELECT '{null, {1}}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Unexpected array element\.: "\{\{1\}, null\}"
+SELECT '{{1}, null}'::text[];
+
+query error db error: ERROR: invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\{null\}\},\{\{\}\}\}"
+SELECT '{{{null}},{{}}}'::text[];
+
+# Exceeded dimensions
+query error db error: ERROR: number of array dimensions \(7\) exceeds the maximum allowed \(6\)
+SELECT '{{{{{{{7}}}}}}}'::int[];
+
+# We check max depth only after successfully parsing
+query error db error: ERROR: invalid input syntax for type array: Unexpected end of input\.: "\{\{\{\{\{\{\{7\}\}\}\}\}\}"
+SELECT '{{{{{{{7}}}}}}'::int[];
