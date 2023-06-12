@@ -787,7 +787,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
-        let mapped_spec = if func.is_associative() && !args.is_empty() {
+        let mapped_spec = if func.is_associative() && args.len() >= 2 {
             let col_type = func.output_type(args.iter().map(|cs| cs.col_type.clone()).collect());
             let mut expr = MirScalarExpr::CallVariadic {
                 func: func.clone(),
