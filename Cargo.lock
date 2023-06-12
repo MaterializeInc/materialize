@@ -7548,7 +7548,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7566,12 +7566,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7587,7 +7587,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
 dependencies = [
  "columnation",
  "serde",
@@ -7596,7 +7596,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#382d24fea39189719e5cedf5a606a3ed6f02133b"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
 
 [[package]]
 name = "tiny-keccak"
