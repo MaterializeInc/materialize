@@ -28,7 +28,7 @@ You must be an Admin in your organization to invite new users.
      
     These roles do not refer to RBAC roles and privileges and refer to
     actions users can take in the Materialize Console.
-     
+
 2. Click the **Invite** button at the bottom right section of the screen.
 
    Materialize will email the user with a verification link. The user will
