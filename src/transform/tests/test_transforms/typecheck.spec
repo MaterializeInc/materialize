@@ -340,7 +340,7 @@ Join on=(eq(#0, #1, #3, #4))
   Get t0
   Get t0
 ----
-(Int64, Int64, String, Int64, Int64, String)
+(Int64, Int64?, String, Int64, Int64?, String)
 
 ############################################################################
 # Case: Union
