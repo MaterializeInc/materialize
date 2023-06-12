@@ -2792,10 +2792,7 @@ fn invent_column_name(
                         .qcx
                         .scx
                         .catalog
-                        .resolve_schema(
-                            Some("materialize"),
-                            mz_repr::namespaces::MZ_INTERNAL_SCHEMA,
-                        )
+                        .resolve_schema(None, mz_repr::namespaces::MZ_INTERNAL_SCHEMA)
                         .expect("mz_internal schema must exist")
                         .id()
                 {
