@@ -258,7 +258,7 @@ pub struct RocksDBInstance<K, V> {
 impl<K, V> RocksDBInstance<K, V>
 where
     K: AsRef<[u8]> + Send + Sync + Clone + 'static,
-    V: Serialize + DeserializeOwned + Send + Sync + 'static,
+    V: Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
 {
     /// Start a new RocksDB instance at the path, using
     /// the `Options` and `RocksDBTuningParameters` to
@@ -496,7 +496,7 @@ fn rocksdb_core_loop<K, V, M, O>(
     enc_opts: O,
 ) where
     K: AsRef<[u8]> + Send + Sync + Clone + 'static,
-    V: Serialize + DeserializeOwned + Send + Sync + 'static,
+    V: Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
 {
@@ -586,13 +586,14 @@ fn rocksdb_core_loop<K, V, M, O>(
                 response_sender,
             } => {
                 let batch_size = batch.len();
-                let mut writes = rocksdb::WriteBatch::default();
+
                 let mut encode_buf = Vec::new();
 
                 let mut ret = MultiPutResult {
                     processed_puts: 0,
                     size_written: 0,
                 };
+                let mut encoded_batch = Vec::new();
                 // TODO(guswynn): sort by key before writing.
                 for (key, value) in batch.drain(..) {
                     ret.processed_puts += 1;
@@ -609,26 +610,41 @@ fn rocksdb_core_loop<K, V, M, O>(
                                     return;
                                 }
                             };
-                            writes.put(&key, encode_buf.as_slice());
+                            encoded_batch.push((key, Some(encode_buf.clone())));
                         }
-                        None => writes.delete(&key),
+                        None => encoded_batch.push((key, None)),
                     }
                 }
-                // Perform the multi_get and record metrics, if there wasn't an error.
+                // Perform the multi_put and record metrics, if there wasn't an error.
                 let now = Instant::now();
+                let result = Retry::default().max_tries(3).retry(|_| {
+                    let mut writes = rocksdb::WriteBatch::default();
 
-                match db.write_opt(writes, &wo) {
-                    Ok(()) => {
-                        let latency = now.elapsed();
-                        metrics.multi_put_latency.observe(latency.as_secs_f64());
-                        metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
-                        let _ = response_sender.send(Ok((ret, batch)));
+                    for (key, value) in encoded_batch.drain(..) {
+                        match value {
+                            Some(update) => writes.put(&key, update.as_slice()),
+                            None => writes.delete(&key),
+                        }
                     }
-                    Err(e) => {
-                        let _ = response_sender.send(Err(Error::RocksDB(e)));
-                        return;
+
+                    match db.write_opt(writes, &wo) {
+                        Ok(()) => {
+                            let latency = now.elapsed();
+                            metrics.multi_put_latency.observe(latency.as_secs_f64());
+                            metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
+                            RetryResult::Ok(())
+                        }
+                        Err(e) => match e.kind() {
+                            ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                            _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                        },
                     }
-                }
+                });
+
+                let _ = match result {
+                    Ok(()) => response_sender.send(Ok((ret, batch))),
+                    Err(e) => response_sender.send(Err(e)),
+                };
             }
         }
     }
