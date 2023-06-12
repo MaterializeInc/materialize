@@ -286,6 +286,24 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     )
 
 
+def workflow_drop_materialize_database(c: Composition) -> None:
+    c.up("materialized")
+
+    # Drop materialize database
+    c.sql(
+        "DROP DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Restart mz.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify that materialize hasn't blown up
+    c.sql("SELECT 1")
+
+
 def workflow_default(c: Composition) -> None:
     c.workflow("github-17578")
     c.workflow("github-8021")
@@ -293,3 +311,4 @@ def workflow_default(c: Composition) -> None:
     c.workflow("timelines")
     c.workflow("stash")
     c.workflow("allowed-cluster-replica-sizes")
+    c.workflow("drop-materialize-database")
