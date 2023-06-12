@@ -39,7 +39,7 @@ use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::subscriber::Interest;
-use tracing::{warn, Callsite, Event, Level, Metadata, Subscriber};
+use tracing::{info, warn, Callsite, Event, Level, Metadata, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
@@ -180,13 +180,13 @@ impl TracingHandle {
     }
 
     /// Dynamically reloads the stderr log filter.
-    pub fn reload_stderr_log_filter(&self, targets: EnvFilter) -> Result<(), anyhow::Error> {
-        (self.stderr_log)(targets)
+    pub fn reload_stderr_log_filter(&self, filter: EnvFilter) -> Result<(), anyhow::Error> {
+        (self.stderr_log)(filter)
     }
 
     /// Dynamically reloads the OpenTelemetry log filter.
-    pub fn reload_opentelemetry_filter(&self, targets: EnvFilter) -> Result<(), anyhow::Error> {
-        (self.opentelemetry)(targets)
+    pub fn reload_opentelemetry_filter(&self, filter: EnvFilter) -> Result<(), anyhow::Error> {
+        (self.opentelemetry)(filter)
     }
 }
 
@@ -323,17 +323,20 @@ where
         //
         // Note: folks should feel free to add more crates here if we find more
         // with long lived Spans.
-        fn default_filter() -> EnvFilter {
-            EnvFilter::default()
-                .add_directive(Directive::from_str("h2=off").expect("valid directive"))
-                .add_directive(Directive::from_str("hyper=off").expect("valid directive"))
-        }
+        let default_directives: Vec<Directive> = vec![
+            Directive::from_str("h2=off").expect("valid directive"),
+            Directive::from_str("hyper=off").expect("valid directive"),
+        ];
 
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            default_filter().with_filter(otel_config.filter).boxed()
+            let mut filter = EnvFilter::from_str(&format!("{}", otel_config.filter)).expect("WIP");
+            for directive in &default_directives {
+                filter = filter.add_directive(directive.clone());
+            }
+            filter
         } else {
             // The default `EnvFilter` has everything disabled.
-            EnvFilter::default().boxed()
+            EnvFilter::default()
         });
         let layer = tracing_opentelemetry::layer()
             // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
@@ -344,9 +347,11 @@ where
             .max_events_per_span(2048)
             .with_tracer(tracer)
             .and_then(filter);
-        let reloader = Arc::new(move |filter: EnvFilter| {
+        let reloader = Arc::new(move |mut filter: EnvFilter| {
             // Re-apply our defaults on reload.
-            let filter = default_filter().with_filter(filter).boxed();
+            for directive in &default_directives {
+                filter = filter.add_directive(directive.clone());
+            }
             Ok(filter_handle.reload(filter)?)
         });
         (Some(layer), reloader)
