@@ -380,7 +380,7 @@ impl InternalHttpServer {
             .route("/api/leader/promote", routing::post(handle_leader_promote))
             .with_state(Arc::new(Mutex::new(LeaderState::Initializing {
                 promote_leader: Some(promote_leader),
-                ready_to_promote: ready_to_promote,
+                ready_to_promote,
             })));
 
         InternalHttpServer {
