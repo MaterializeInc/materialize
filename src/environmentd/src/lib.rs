@@ -326,18 +326,14 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             }
         };
         // TODO: once all stashes have a deploy_generation, don't need to handle the Option
-        let maybe_stash_generation = stash
+        let stash_generation = stash
             .with_transaction(move |tx| {
                 Box::pin(async move { stash::deploy_generation(&tx).await })
             })
             .await?;
-        let Some(stash_generation) = maybe_stash_generation else {
-            tracing::info!("Stash has no generation, not waiting for leader promotion");
-            break 'leader_promotion;
-         };
         tracing::info!("Found stash generation {stash_generation:?}");
-        if stash_generation < deploy_generation {
-            tracing::info!("Stash generation {stash_generation} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
+        if stash_generation < Some(deploy_generation) {
+            tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
             if let Err(e) = mz_adapter::catalog::storage::Connection::open(
                 stash,
                 config.now.clone(),
@@ -376,7 +372,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                     "internal http server closed its end of promote_leader"
                 ));
             }
-        } else if stash_generation == deploy_generation {
+        } else if stash_generation == Some(deploy_generation) {
             tracing::info!("Server requested generation {deploy_generation} which is equal to stash's generation");
             if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
                 waiting_on_leader_promotion
@@ -385,7 +381,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                     .expect("other side disappeared");
             }
         } else {
-            mz_ore::halt!("Server started with requested generation {deploy_generation} but stash was already at {stash_generation}. Deploy generations must increase monotonically");
+            mz_ore::halt!("Server started with requested generation {deploy_generation} but stash was already at {stash_generation:?}. Deploy generations must increase monotonically");
         }
     }
 
