@@ -502,17 +502,29 @@ fn rocksdb_core_loop<K, V, M, O>(
 {
     let rocksdb_options = options.as_rocksdb_options(&tuning_config);
 
-    let db: DB = match DB::open(&rocksdb_options, &instance_path) {
+    let retry_result =
+        Retry::default()
+            .max_tries(3)
+            .retry(|_| match DB::open(&rocksdb_options, &instance_path) {
+                Ok(db) => RetryResult::Ok(db),
+                Err(e) => match e.kind() {
+                    ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                    _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                },
+            });
+
+    let db: DB = match retry_result {
         Ok(db) => {
             drop(creation_error_tx);
             db
         }
         Err(e) => {
             // Communicate the error back to `new`.
-            let _ = creation_error_tx.send(Error::RocksDB(e));
+            let _ = creation_error_tx.send(e);
             return;
         }
     };
+
     let wo = options.as_rocksdb_write_options();
 
     while let Some(cmd) = cmd_rx.blocking_recv() {
@@ -532,7 +544,7 @@ fn rocksdb_core_loop<K, V, M, O>(
 
                 // Perform the multi_get and record metrics, if there wasn't an error.
                 let now = Instant::now();
-                let result = Retry::default().max_tries(3).retry(|_| {
+                let retry_result = Retry::default().max_tries(3).retry(|_| {
                     let mut cloned_batch = batch.clone();
                     let gets = db.multi_get(cloned_batch.drain(..));
                     let latency = now.elapsed();
@@ -555,7 +567,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                     }
                 });
 
-                let _ = match result {
+                let _ = match retry_result {
                     Ok((result, batch, gets)) => {
                         for previous_value in gets {
                             let get_result = match previous_value {
@@ -617,7 +629,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 }
                 // Perform the multi_put and record metrics, if there wasn't an error.
                 let now = Instant::now();
-                let result = Retry::default().max_tries(3).retry(|_| {
+                let retry_result = Retry::default().max_tries(3).retry(|_| {
                     let mut writes = rocksdb::WriteBatch::default();
 
                     for (key, value) in encoded_batch.drain(..) {
@@ -641,7 +653,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                     }
                 });
 
-                let _ = match result {
+                let _ = match retry_result {
                     Ok(()) => response_sender.send(Ok((ret, batch))),
                     Err(e) => response_sender.send(Err(e)),
                 };
