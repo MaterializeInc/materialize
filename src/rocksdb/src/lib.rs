@@ -525,6 +525,9 @@ fn rocksdb_core_loop<K, V, M, O>(
         }
     };
 
+    let mut encoded_batch_buffers: Vec<Option<Vec<u8>>> = Vec::new();
+    let mut encoded_batch: Vec<(K, Option<Vec<u8>>)> = Vec::new();
+
     let wo = options.as_rocksdb_write_options();
 
     while let Some(cmd) = cmd_rx.blocking_recv() {
@@ -599,19 +602,26 @@ fn rocksdb_core_loop<K, V, M, O>(
             } => {
                 let batch_size = batch.len();
 
-                let mut encode_buf = Vec::new();
-
                 let mut ret = MultiPutResult {
                     processed_puts: 0,
                     size_written: 0,
                 };
-                let mut encoded_batch = Vec::new();
+
+                // initialize and push values into the buffer to match the batch size
+                let buf_size = encoded_batch_buffers.len();
+                for _ in buf_size..batch_size {
+                    encoded_batch_buffers.push(Some(Vec::new()));
+                }
+
                 // TODO(guswynn): sort by key before writing.
-                for (key, value) in batch.drain(..) {
+                for ((key, value), encode_buf) in
+                    batch.drain(..).zip(encoded_batch_buffers.iter_mut())
+                {
                     ret.processed_puts += 1;
 
                     match value {
                         Some(update) => {
+                            let mut encode_buf = encode_buf.take().unwrap();
                             encode_buf.clear();
                             match enc_opts
                                 .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, &update)
@@ -622,7 +632,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                                     return;
                                 }
                             };
-                            encoded_batch.push((key, Some(encode_buf.clone())));
+                            encoded_batch.push((key, Some(encode_buf)));
                         }
                         None => encoded_batch.push((key, None)),
                     }
@@ -632,10 +642,10 @@ fn rocksdb_core_loop<K, V, M, O>(
                 let retry_result = Retry::default().max_tries(3).retry(|_| {
                     let mut writes = rocksdb::WriteBatch::default();
 
-                    for (key, value) in encoded_batch.drain(..) {
+                    for (key, value) in encoded_batch.iter() {
                         match value {
-                            Some(update) => writes.put(&key, update.as_slice()),
-                            None => writes.delete(&key),
+                            Some(update) => writes.put(key, update),
+                            None => writes.delete(key),
                         }
                     }
 
@@ -653,8 +663,18 @@ fn rocksdb_core_loop<K, V, M, O>(
                     }
                 });
 
+                // put back the vaules in the buffer so we don't lose allocation
+                for (i, (_, encoded_buffer)) in encoded_batch.drain(..).enumerate() {
+                    if let Some(encoded_buffer) = encoded_buffer {
+                        encoded_batch_buffers.insert(i, Some(encoded_buffer));
+                    }
+                }
+
                 let _ = match retry_result {
-                    Ok(()) => response_sender.send(Ok((ret, batch))),
+                    Ok(()) => {
+                        batch.clear();
+                        response_sender.send(Ok((ret, batch)))
+                    }
                     Err(e) => response_sender.send(Err(e)),
                 };
             }
