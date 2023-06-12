@@ -37,7 +37,6 @@ Materialize roles have the following available attributes:
 | `NOCREATEROLE`    | Denies the role the ability to create, alter, delete roles or grant/revoke. |
 | `NOCREATECLUSTER` | Denies the role the ability to create clusters.                             |
 
-
 ## Grant a role to a user
 
 To grant a role assignment to a user, use the [`GRANT`](https://materialize.com/docs/sql/grant-role/) statement:
@@ -61,7 +60,6 @@ To remove a user from a role, use the [`REVOKE`](https://materialize.com/docs/sq
 ```sql
 REVOKE <role_name> FROM <user_name>;
 ```
-
 
 ## Drop a role
 

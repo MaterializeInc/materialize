@@ -69,7 +69,7 @@ other external tools.
 
     ```sql
     SELECT * FROM mz_roles WHERE name = 'dev_role';
-    ```
+   ```
 
     Your `dev_role` returns attributes similar to the following:
 
@@ -113,7 +113,6 @@ privileges the role needs.
    ```
 
 1. Change into the example cluster:
-
 
    ```sql
    SET CLUSTER TO dev_cluster;

@@ -75,7 +75,6 @@ Role attributes are actions available to any role you create. Attributes are
 independent of any other object in Materialize and apply to the entire
 organization. You can edit these actions when you create the role:
 
-
 | Name              | Description                                                                 |
 |-------------------|-----------------------------------------------------------------------------|
 | `CREATEDB`        | Can create a database.                                                      |
@@ -119,14 +118,8 @@ Materialize supports the following object type privileges:
 | `SECRET`             | `USAGE`                                |
 | `CLUSTER`            | `USAGE`, `CREATE`                      |
 
-
 ### Inheritance
 
 Inheritance in RBAC allows you to create roles that inherit privileges from
 other roles. Inheritance only applies to role privileges. Role attributes are
 not inherited. Inheriting privileges allows you to minimize the number of roles you have to manage.
-
-## Next steps
-
-In the next guide, you will create a new user and a new role. Later in this
-tutorial series, you will assign and manage privileges for roles.
