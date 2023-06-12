@@ -19,12 +19,10 @@ To create a new role, use the [`CREATE ROLE`](https://materialize.com/docs/sql/c
 CREATE ROLE <role_name>;
 ```
 
-## Grant a role to a user
-
-To grant a role assignment to a user, use the [`GRANT`](https://materialize.com/docs/sql/grant-role/) statement:
+You can also create the role with specific attributes.
 
 ```sql
-GRANT <role_name> to <user_name>;
+CREATE ROLE <role_name> WITH <role_attribute>;
 ```
 
 Materialize roles have the following available attributes:
@@ -39,6 +37,14 @@ Materialize roles have the following available attributes:
 | `NOCREATEROLE`    | Denies the role the ability to create, alter, delete roles or grant/revoke. |
 | `NOCREATECLUSTER` | Denies the role the ability to create clusters.                             |
 
+
+## Grant a role to a user
+
+To grant a role assignment to a user, use the [`GRANT`](https://materialize.com/docs/sql/grant-role/) statement:
+
+```sql
+GRANT <role_name> to <user_name>;
+```
 
 ## Alter a role's attributes
 
