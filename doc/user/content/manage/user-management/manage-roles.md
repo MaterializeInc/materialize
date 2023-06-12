@@ -16,12 +16,6 @@ This page outlines how to create and manage roles in Materialize.
 To create a new role, use the [`CREATE ROLE`](https://materialize.com/docs/sql/create-role/) statement:
 
 ```sql
-CREATE ROLE <role_name>;
-```
-
-You can also create the role with specific attributes.
-
-```sql
 CREATE ROLE <role_name> WITH <role_attribute>;
 ```
 
@@ -37,20 +31,20 @@ Materialize roles have the following available attributes:
 | `NOCREATEROLE`    | Denies the role the ability to create, alter, delete roles or grant/revoke. |
 | `NOCREATECLUSTER` | Denies the role the ability to create clusters.                             |
 
-## Grant a role to a user
-
-To grant a role assignment to a user, use the [`GRANT`](https://materialize.com/docs/sql/grant-role/) statement:
-
-```sql
-GRANT <role_name> to <user_name>;
-```
-
 ## Alter a role's attributes
 
 To change a role's attributes, use the [`ALTER ROLE`](https://materialize.com/docs/sql/alter-role/) statement:
 
 ```sql
 ALTER ROLE <role_name> WITH <ATTRIBUTE>;
+```
+
+## Grant a role to a user
+
+To grant a role assignment to a user, use the [`GRANT`](https://materialize.com/docs/sql/grant-role/) statement:
+
+```sql
+GRANT <role_name> to <user_name>;
 ```
 
 ## Remove a user from a role
