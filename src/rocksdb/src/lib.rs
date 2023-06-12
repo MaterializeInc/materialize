@@ -257,8 +257,8 @@ pub struct RocksDBInstance<K, V> {
 
 impl<K, V> RocksDBInstance<K, V>
 where
-    K: AsRef<[u8]> + Send + Sync + Clone + 'static,
-    V: Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
+    K: AsRef<[u8]> + Send + Sync + 'static,
+    V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     /// Start a new RocksDB instance at the path, using
     /// the `Options` and `RocksDBTuningParameters` to
@@ -495,8 +495,8 @@ fn rocksdb_core_loop<K, V, M, O>(
     creation_error_tx: oneshot::Sender<Error>,
     enc_opts: O,
 ) where
-    K: AsRef<[u8]> + Send + Sync + Clone + 'static,
-    V: Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
+    K: AsRef<[u8]> + Send + Sync + 'static,
+    V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
 {
