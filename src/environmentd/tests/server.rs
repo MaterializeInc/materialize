@@ -102,7 +102,7 @@ use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
-use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
@@ -1485,10 +1485,10 @@ fn test_leader_promotion() {
     let config = config.with_deploy_generation(Some(2));
     {
         // start with different deploy generation, we need acknowledgement before starting sql port
-        let (internal_http_addr_tx, internal_http_addr_rx) = oneshot::channel();
+        let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
         let config = config
             .with_deploy_generation(Some(3))
-            .with_waiting_on_leader_promotion(Some(Arc::new(internal_http_addr_tx)));
+            .with_waiting_on_leader_promotion(Some(internal_http_addr_tx));
         thread::scope(|s| {
             let server_handle = s.spawn(|| util::start_server(config).unwrap());
 
@@ -1514,7 +1514,7 @@ fn test_leader_promotion() {
             let promote_http_url =
                 Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
 
-            let res = Client::new().post(promote_http_url).send().unwrap();
+            let res = Client::new().post(promote_http_url.clone()).send().unwrap();
             assert_eq!(res.status(), StatusCode::OK);
             let response: BecomeLeaderResponse = res.json().unwrap();
             assert_eq!(
@@ -1527,6 +1527,22 @@ fn test_leader_promotion() {
             let server = server_handle.join().unwrap();
             let mut client = server.connect(postgres::NoTls).unwrap();
             client.simple_query("SELECT 1").unwrap();
+
+            // check the we're the leader and promotion doesn't do anything
+            let res = Client::new().get(status_http_url).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: LeaderStatusResponse = res.json().unwrap();
+            assert_eq!(response.status, LeaderStatus::IsLeader);
+
+            let res = Client::new().post(promote_http_url).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: BecomeLeaderResponse = res.json().unwrap();
+            assert_eq!(
+                response,
+                BecomeLeaderResponse {
+                    result: BecomeLeaderResult::Success
+                }
+            );
         });
     }
 }
@@ -1535,6 +1551,7 @@ fn test_leader_promotion() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
+    let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
     let config = util::Config::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
@@ -1547,8 +1564,35 @@ fn test_leader_promotion_always_using_deploy_generation() {
     }
     {
         // keep it the same, no need to promote the leader
-        let server = util::start_server(config).unwrap();
+        let server = util::start_server(
+            config.with_waiting_on_leader_promotion(Some(internal_http_addr_tx)),
+        )
+        .unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
+
+        let internal_http_addr = internal_http_addr_rx
+            .blocking_recv()
+            .expect("should be populated");
+
+        // check the we're the leader and promotion doesn't do anything
+        let status_http_url =
+            Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
+        let res = Client::new().get(status_http_url).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: LeaderStatusResponse = res.json().unwrap();
+        assert_eq!(response.status, LeaderStatus::IsLeader);
+
+        let promote_http_url =
+            Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
+        let res = Client::new().post(promote_http_url).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: BecomeLeaderResponse = res.json().unwrap();
+        assert_eq!(
+            response,
+            BecomeLeaderResponse {
+                result: BecomeLeaderResult::Success
+            }
+        );
     }
 }

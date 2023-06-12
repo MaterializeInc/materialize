@@ -79,7 +79,6 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -109,8 +108,8 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use rand::seq::SliceRandom;
-use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
+use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
@@ -225,7 +224,7 @@ pub struct Config {
     pub now: NowFn,
     /// When waiting for leader promotion, the server will send the socket addr of
     /// the internal http server
-    pub waiting_on_leader_promotion: Option<Arc<oneshot::Sender<SocketAddr>>>,
+    pub waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
 }
 
 /// Configures TLS encryption for connections.
@@ -327,47 +326,66 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             }
         };
         // TODO: once all stashes have a deploy_generation, don't need to handle the Option
-        let Some(stash_generation) = stash.with_transaction(move |tx| {
-            Box::pin(async move {
-                stash::deploy_generation(&tx).await
+        let maybe_stash_generation = stash
+            .with_transaction(move |tx| {
+                Box::pin(async move { stash::deploy_generation(&tx).await })
             })
-        }).await? else {
+            .await?;
+        let Some(stash_generation) = maybe_stash_generation else {
             tracing::info!("Stash has no generation, not waiting for leader promotion");
             break 'leader_promotion;
          };
         tracing::info!("Found stash generation {stash_generation:?}");
-        match stash_generation.cmp(&deploy_generation) {
-            Ordering::Less => {
-                tracing::info!("Stash generation {stash_generation} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                if let Err(e) = mz_adapter::catalog::storage::Connection::open(
-                    stash,
-                    config.now.clone(),
-                    &BootstrapArgs {
-                        default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
-                        builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size.clone(),
-                        default_availability_zone: mz_adapter::DUMMY_AVAILABILITY_ZONE.into(),
-                        bootstrap_role: config.bootstrap_role.clone(),
-                    },
-                    None,
-                )
-                .await {
-                    return Err(anyhow!(e).context("Stash upgrade would have failed with this error"));
-                }
-
-                if let Err(()) = ready_to_promote_tx.send(()) {
-                    return Err(anyhow!("internal http server closed its end of ready_to_promote"));
-                }
-
-                tracing::info!("Waiting for user to promote this envd to leader. For example, `curl -H 'Content-Type: application/json' -X POST 'http://{}/api/leader/promote'`", config.internal_http_listen_addr);
-                if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
-                    Arc::try_unwrap(waiting_on_leader_promotion).expect("for testing").send(internal_http_listener.local_addr()).expect("other side disappeared");
-                }
-                if let Err(RecvError{..}) = promote_leader_rx.await {
-                    return Err(anyhow!("internal http server closed its end of promote_leader"));
-                }
+        if stash_generation < deploy_generation {
+            tracing::info!("Stash generation {stash_generation} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
+            if let Err(e) = mz_adapter::catalog::storage::Connection::open(
+                stash,
+                config.now.clone(),
+                &BootstrapArgs {
+                    default_cluster_replica_size: config
+                        .bootstrap_default_cluster_replica_size
+                        .clone(),
+                    builtin_cluster_replica_size: config
+                        .bootstrap_builtin_cluster_replica_size
+                        .clone(),
+                    default_availability_zone: mz_adapter::DUMMY_AVAILABILITY_ZONE.into(),
+                    bootstrap_role: config.bootstrap_role.clone(),
+                },
+                None,
+            )
+            .await
+            {
+                return Err(anyhow!(e).context("Stash upgrade would have failed with this error"));
             }
-            Ordering::Equal => tracing::info!("Server requested generation {deploy_generation} which is equal to stash's generation"),
-            Ordering::Greater => mz_ore::halt!("Server started with requested generation {deploy_generation} but stash was already at {stash_generation}. Deploy generations must increase monotonically"),
+
+            if let Err(()) = ready_to_promote_tx.send(()) {
+                return Err(anyhow!(
+                    "internal http server closed its end of ready_to_promote"
+                ));
+            }
+
+            tracing::info!("Waiting for user to promote this envd to leader. For example, `curl -H 'Content-Type: application/json' -X POST 'http://{}/api/leader/promote'`", config.internal_http_listen_addr);
+            if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
+                waiting_on_leader_promotion
+                    .send(internal_http_listener.local_addr())
+                    .await
+                    .expect("other side disappeared");
+            }
+            if let Err(RecvError { .. }) = promote_leader_rx.await {
+                return Err(anyhow!(
+                    "internal http server closed its end of promote_leader"
+                ));
+            }
+        } else if stash_generation == deploy_generation {
+            tracing::info!("Server requested generation {deploy_generation} which is equal to stash's generation");
+            if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
+                waiting_on_leader_promotion
+                    .send(internal_http_listener.local_addr())
+                    .await
+                    .expect("other side disappeared");
+            }
+        } else {
+            mz_ore::halt!("Server started with requested generation {deploy_generation} but stash was already at {stash_generation}. Deploy generations must increase monotonically");
         }
     }
 

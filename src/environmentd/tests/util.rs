@@ -111,7 +111,7 @@ use regex::Regex;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
-use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -140,7 +140,7 @@ pub struct Config {
     enable_tracing: bool,
     bootstrap_role: Option<String>,
     deploy_generation: Option<u64>,
-    waiting_on_leader_promotion: Option<Arc<oneshot::Sender<SocketAddr>>>,
+    waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
 }
 
 impl Default for Config {
@@ -254,7 +254,7 @@ impl Config {
 
     pub fn with_waiting_on_leader_promotion(
         mut self,
-        waiting_on_leader_promotion: Option<Arc<oneshot::Sender<SocketAddr>>>,
+        waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
     ) -> Self {
         self.waiting_on_leader_promotion = waiting_on_leader_promotion;
         self
