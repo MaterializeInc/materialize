@@ -10,6 +10,7 @@
 //! Since capabilities and handles
 
 use std::fmt::Debug;
+use std::future::Future;
 use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
@@ -24,6 +25,7 @@ use uuid::Uuid;
 
 use crate::internal::machine::Machine;
 use crate::internal::state::Since;
+use crate::stats::SnapshotStats;
 use crate::{parse_id, GarbageCollector};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -292,6 +294,32 @@ where
                 self.opaque = actual_opaque.clone();
                 Err(actual_opaque)
             }
+        }
+    }
+
+    /// Returns aggregate statistics about the contents of the shard TVC at the
+    /// given frontier.
+    ///
+    /// This command returns the contents of this shard as of `as_of` once they
+    /// are known. This may "block" (in an async-friendly way) if `as_of` is
+    /// greater or equal to the current `upper` of the shard.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
+    pub fn snapshot_stats(
+        &self,
+        as_of: Antichain<T>,
+    ) -> impl Future<Output = Result<SnapshotStats<T>, Since<T>>> + Send + 'static {
+        let mut machine = self.machine.clone();
+        async move {
+            let batches = machine.snapshot(&as_of).await?;
+            let num_updates = batches.iter().map(|b| b.len).sum();
+            Ok(SnapshotStats {
+                shard_id: machine.shard_id(),
+                as_of,
+                num_updates,
+            })
         }
     }
 
