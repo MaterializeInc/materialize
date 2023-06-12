@@ -1048,21 +1048,22 @@ mod tests {
 
     const INTERESTING_VARIADIC_FUNCS: &[VariadicFunc] = {
         use VariadicFunc::*;
-        &[Coalesce, Greatest, Least, And, Or]
+        &[Coalesce, Greatest, Least, And, Or, Concat, ConcatWs]
     };
 
     fn variadic_typecheck(func: &VariadicFunc, args: &[ColumnType]) -> bool {
         use VariadicFunc::*;
+        fn all_eq<'a>(iter: impl IntoIterator<Item = &'a ColumnType>, other: &ScalarType) -> bool {
+            iter.into_iter().all(|t| t.scalar_type.base_eq(other))
+        }
         match func {
             Coalesce | Greatest | Least => match args {
                 [] => true,
-                [first, rest @ ..] => rest
-                    .iter()
-                    .all(|t| first.scalar_type.base_eq(&t.scalar_type)),
+                [first, rest @ ..] => all_eq(rest, &first.scalar_type),
             },
-            And | Or => args
-                .iter()
-                .all(|t| t.scalar_type.base_eq(&ScalarType::Bool)),
+            And | Or => all_eq(args, &ScalarType::Bool),
+            Concat => all_eq(args, &ScalarType::String),
+            ConcatWs => args.len() > 1 && all_eq(args, &ScalarType::String),
             _ => false,
         }
     }
