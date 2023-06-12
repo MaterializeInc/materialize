@@ -26,7 +26,7 @@ cat > config.deployment.toml <<EOF
 name = "preview"
 url = "s3://materialize-website-previews?region=us-east-1&prefix=materialize/$BUILDKITE_PULL_REQUEST/"
 EOF
-hugo deploy --config config.toml,config.deployment.toml
+hugo deploy --config config.toml,config.deployment.toml --force
 
 curl -fsSL \
     -H "Authorization: Bearer $GITHUB_TOKEN" \
