@@ -13,7 +13,7 @@ from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
 from materialize.output_consistency.execution.value_storage_layout import (
-    VERTICAL_LAYOUT_ROW_INDEX_COL_NAME,
+    ROW_INDEX_COL_NAME,
     ValueStorageLayout,
 )
 from materialize.output_consistency.input_data.test_input_data import (
@@ -197,9 +197,9 @@ def _create_column_specs(
 ) -> List[str]:
     column_specs = []
 
-    if storage_layout == ValueStorageLayout.VERTICAL:
-        type_info = " INT" if include_type else ""
-        column_specs.append(f"{VERTICAL_LAYOUT_ROW_INDEX_COL_NAME}{type_info}")
+    # row index as first column (also for horizontal layout helpful to simplify aggregate functions with order spec)
+    type_info = " INT" if include_type else ""
+    column_specs.append(f"{ROW_INDEX_COL_NAME}{type_info}")
 
     for type_with_values in input_data.all_data_types_with_values:
         type_info = f" {type_with_values.data_type.type_name}" if include_type else ""
@@ -246,6 +246,9 @@ def __create_horizontal_value_row(
     table_column_selection: TableColumnByNameSelection,
 ) -> str:
     row_values = []
+
+    # row index
+    row_values.append("0")
 
     for type_with_values in data_type_with_values:
         for data_value in type_with_values.raw_values:

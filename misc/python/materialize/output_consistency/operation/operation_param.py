@@ -15,6 +15,7 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class OperationParam:
@@ -35,7 +36,7 @@ class OperationParam:
         :param incompatibilities: a value annotated with any of these characteristics is considered invalid
         :param incompatibility_combinations: a value annotated with all characteristics of any entry is considered invalid
         """
-        self.type_category = type_category
+        self._type_category = type_category
         self.optional = optional
 
         if incompatibility_combinations is None:
@@ -47,8 +48,15 @@ class OperationParam:
             for incompatibility in incompatibilities:
                 self.incompatibility_combinations.append({incompatibility})
 
-    def supports_type(self, data_type: DataType) -> bool:
+    def supports_type(
+        self, data_type: DataType, previous_args: List[Expression]
+    ) -> bool:
         raise NotImplementedError
+
+    def might_support_as_input_assuming_category_matches(
+        self, return_type_spec: ReturnTypeSpec
+    ) -> bool:
+        return True
 
     def supports_expression(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:
@@ -56,6 +64,11 @@ class OperationParam:
                 return False
 
         return True
+
+    def resolve_type_category(
+        self, previous_args: List[Expression]
+    ) -> DataTypeCategory:
+        return self._type_category
 
     def __str__(self) -> str:
         return f"{type(self).__name__} (optional={self.optional})"

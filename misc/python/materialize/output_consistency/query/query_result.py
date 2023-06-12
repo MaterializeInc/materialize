@@ -32,13 +32,12 @@ class QueryExecution:
             ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
         )
         self.query_id = query_id
-        self.outcomes: List[QueryOutcome] = []
         self.query_template = query_template
+        self.outcomes: List[QueryOutcome] = []
+        self.durations: List[float] = []
 
     def get_outcome_by_strategy_key(self) -> Dict[EvaluationStrategyKey, QueryOutcome]:
-        return dict(
-            [(outcome.strategy.identifier, outcome) for outcome in self.outcomes]
-        )
+        return {outcome.strategy.identifier: outcome for outcome in self.outcomes}
 
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"

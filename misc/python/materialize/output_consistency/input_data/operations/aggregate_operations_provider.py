@@ -28,6 +28,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperationOrFunction,
     OperationRelevance,
 )
@@ -35,8 +36,9 @@ from materialize.output_consistency.operation.operation import (
 AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 AGGREGATE_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "array_agg",
+        {1: "array_agg($ ORDER BY row_index)"},
         [AnyOperationParam()],
         DynamicReturnTypeSpec(),
         is_aggregation=True,

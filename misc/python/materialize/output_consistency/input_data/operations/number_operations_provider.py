@@ -171,7 +171,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "CBRT",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 # CEIL == CEILING
@@ -208,7 +208,7 @@ NUMERIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -250,7 +250,7 @@ NUMERIC_OPERATION_TYPES.append(
                 },
             ),
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -298,13 +298,14 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "SQRT",
         [NumericOperationParam(incompatibilities={ExpressionCharacteristics.NEGATIVE})],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "TRUNC",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(only_integer=True),
+        # Unlike one might expect, this is not guaranteed to return an integer. Postgres allows specifying the precision.
+        NumericReturnTypeSpec(),
     )
 )

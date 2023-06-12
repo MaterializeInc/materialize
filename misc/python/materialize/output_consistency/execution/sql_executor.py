@@ -10,7 +10,7 @@ from typing import Any, Sequence, Union
 
 from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
-from pg8000.exceptions import DatabaseError
+from pg8000.exceptions import DatabaseError, InterfaceError
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -88,6 +88,9 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         except ValueError as err:
             self.output_printer.print_error(f"Query with value error is: {sql}")
             raise err
+        except InterfaceError:
+            print("A network error occurred! Aborting!")
+            exit(1)
         except Exception:
             self.output_printer.print_error(f"Query with unexpected error is: {sql}")
             raise

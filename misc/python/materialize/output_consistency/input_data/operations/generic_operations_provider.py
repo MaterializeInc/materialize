@@ -9,6 +9,7 @@
 from typing import List
 
 from materialize.output_consistency.input_data.params.any_operation_param import (
+    AnyLikeOtherOperationParam,
     AnyOperationParam,
 )
 from materialize.output_consistency.input_data.params.boolean_operation_param import (
@@ -19,9 +20,6 @@ from materialize.output_consistency.input_data.params.number_operation_param imp
 )
 from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
     DynamicReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.validators.generic_args_validator import (
-    DataTypeCategoryMatchesArgsValidator,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -56,8 +54,7 @@ GENERIC_OPERATION_TYPES.append(
 GENERIC_OPERATION_TYPES.append(
     DbOperation(
         "CASE WHEN $ THEN $ ELSE $ END",
-        [BooleanOperationParam(), AnyOperationParam(), AnyOperationParam()],
+        [BooleanOperationParam(), AnyOperationParam(), AnyLikeOtherOperationParam(1)],
         DynamicReturnTypeSpec(param_index_to_take_type=1),
-        {DataTypeCategoryMatchesArgsValidator(1, 2)},
     )
 )
