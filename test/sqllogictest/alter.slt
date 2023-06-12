@@ -9,13 +9,13 @@
 
 mode cockroach
 
-query error system schema 'mz_catalog.mz_tables' cannot be modified
+query error system schema 'mz_catalog' cannot be modified
 ALTER TABLE mz_tables RENAME TO foo;
 
-query error system schema 'mz_internal.mz_storage_shards' cannot be modified
+query error system schema 'mz_internal' cannot be modified
 ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
 
-query error system schema 'mz_internal.mz_storage_shards' cannot be modified
+query error cannot ALTER this type of source
 ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
 
 statement ok

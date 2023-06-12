@@ -451,7 +451,7 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.foo
 
-query error CLUSTER foo has no CLUSTER REPLICA named foo
+query error CLUSTER foo has no CLUSTER REPLICA named "foo"
 DROP CLUSTER REPLICA default.size_1, foo.foo
 
 statement ok

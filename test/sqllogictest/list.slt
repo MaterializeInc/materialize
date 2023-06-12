@@ -1986,10 +1986,10 @@ SELECT '{1}'::float4 list = '{2}'::float8 list
 query error ELEMENT TYPE must be of class type, but received pg_catalog.pg_enum which is of class view
 CREATE TYPE tbl_list AS LIST (ELEMENT TYPE=pg_enum)
 
-query error CREATE TYPE ... AS LIST option "ELEMENT TYPE" cannot accept type modifier on numeric, you must use the default type
+query error CREATE TYPE ... AS LIST option ELEMENT TYPE cannot accept type modifier on pg_catalog.numeric, you must use the default type
 CREATE TYPE typ_mod_list AS LIST (ELEMENT TYPE=numeric(38,0))
 
-query error CREATE TYPE ... AS LIST option "ELEMENT TYPE" can only use named data types, but found unnamed data type int4 list. Use CREATE TYPE to create a named type first
+query error CREATE TYPE ... AS LIST option ELEMENT TYPE can only use named data types, but found unnamed data type \[s20 AS pg_catalog.int4\] list. Use CREATE TYPE to create a named type first
 CREATE TYPE unnamed_element_list AS LIST (ELEMENT TYPE=int4 list)
 
 statement ok
@@ -2023,10 +2023,10 @@ SELECT '{{1,2}}'::int4_list_list_c::text;
 ----
 {{1,2}}
 
-query error unknown catalog item bool list
+query error unknown catalog item 'bool list'
 CREATE TYPE nested_list AS LIST (ELEMENT TYPE = "bool list")
 
-query error unknown catalog item list
+statement ok
 CREATE TYPE nested_list AS LIST (ELEMENT TYPE = list)
 
 # 🔬🔬 Check each valid non-array element type
