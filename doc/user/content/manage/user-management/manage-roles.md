@@ -13,7 +13,7 @@ This page outlines how to create and manage roles in Materialize.
 
 ## Create a role
 
-To create a new role, use the `CREATE ROLE` statement:
+To create a new role, use the [`CREATE ROLE`](https://materialize.com/docs/sql/create-role/) statement:
 
 ```sql
 CREATE ROLE <role_name>;
@@ -21,7 +21,7 @@ CREATE ROLE <role_name>;
 
 ## Grant a role to a user
 
-To grant a role assignment to a user, use the `GRANT` statement:
+To grant a role assignment to a user, use the [`GRANT`](https://materialize.com/docs/sql/grant-role/) statement:
 
 ```sql
 GRANT <role_name> to <user_name>;
@@ -29,7 +29,7 @@ GRANT <role_name> to <user_name>;
 
 ## Alter a role's attributes
 
-To change a role's attributes, use the `ALTER ROLE` statement:
+To change a role's attributes, use the [`ALTER ROLE`](https://materialize.com/docs/sql/alter-role/) statement:
 
 ```sql
 ALTER ROLE <role_name> WITH <ATTRIBUTE>;
@@ -46,7 +46,7 @@ Materialize roles have the following available attributes:
 
 ## Remove a user from a role
 
-To remove a user from a role, use the `REVOKE` statement:
+To remove a user from a role, use the [`REVOKE`](https://materialize.com/docs/sql/revoke-role/) statement:
 
 ```sql
 REVOKE <role_name> FROM <user_name>;
@@ -55,7 +55,7 @@ REVOKE <role_name> FROM <user_name>;
 
 ## Drop a role
 
-To remove a role, use the `DROP ROLE` statement:
+To remove a role, use the [`DROP ROLE`](https://materialize.com/docs/sql/drop-role/) statement:
 
 ```sql
 DROP ROLE <role_name>;

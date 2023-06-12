@@ -1,6 +1,6 @@
 ---
 title: "Role based access control"
-description: "Manage roles, permissions, and other access control options in Materialize"
+description: "Manage roles, privileges, and other access control options in Materialize"
 disable_list: true
 menu:
   main:
@@ -19,15 +19,15 @@ unauthorized or improper access to sensitive objects.
 
 In Materialize, RBAC allows organization administrators to:
 
-* Determine which users have read or write permissions for specific objects
+* Determine which users have read or write privileges for specific objects
 
 * Control how users interact with clusters by giving them different levels of access to
 resources
 
-* Prevent accident operations from unauthorized users
+* Prevent accidental operations from unauthorized users
 
 * Isolate access to user-facing data from internal organization data
-T
+
 Materialize object access is also dependent on cluster privileges.
 Roles that need access to an object that use compute resources must also have
 the same level of access to the cluster. Materialize objects that use compute
@@ -39,7 +39,7 @@ resources are:
 * Indexes
 * Materialized views
 
-he next sections go over the concepts of authorization and authentication and
+The next sections go over the concepts of authorization and authentication and
 the objects within Materialize.
 
 ## Authentication vs. authorization
@@ -64,10 +64,10 @@ from other roles.
 
 ### Roles
 
-A role is a collection of permissions you can apply to users. Roles make it
+A role is a collection of privileges you can apply to users. Roles make it
 easier to assign or revoke privileges on Materialize objects. You can group
-users into specified roles with different levels of permissions and adjust those
-permissions to ensure they have the correct level of access to objects.
+users into specified roles with different levels of privileges and adjust those
+privileges to ensure they have the correct level of access to objects.
 
 ### Role attributes
 
@@ -75,13 +75,16 @@ Role attributes are actions available to any role you create. Attributes are
 independent of any other object in Materialize and apply to the entire
 organization. You can edit these actions when you create the role:
 
-| Name            | Description                                                                     |
-|-----------------|---------------------------------------------------------------------------------|
-| `CREATEDB`      | Can create a database.                                                          |
-| `CREATEROLE`    | Can create, alter, drop, grant membership to, and revoke membership from roles. |
-| `INHERIT`       | **Read-only.** Can inherit the privileges of roles that it is a member of. On by default.      |
-| `CREATECLUSTER` | Can create a cluster.                                                           |
 
+| Name              | Description                                                                 |
+|-------------------|-----------------------------------------------------------------------------|
+| `CREATEDB`        | Can create a database.                                                      |
+| `CREATEROLE`      | Can create, alter, delete roles and can grant and revoke role membership.   |
+| `INHERIT`         | **Read-only.** Can inherit privileges of other roles.                       |
+| `CREATECLUSTER`   | Can create a cluster.                                                       |
+| `NOCREATEDB`      | Denies the role the ability to create databases.                            |
+| `NOCREATEROLE`    | Denies the role the ability to create, alter, delete roles or grant/revoke. |
+| `NOCREATECLUSTER` | Denies the role the ability to create clusters.                             |
 
 ### Privileges
 
@@ -103,26 +106,25 @@ Note that the system catalog uses the abbreviation of the privilege name.
 Objects in Materialize have different levels of privileges available to them.
 Materialize supports the following object type privileges:
 
-| Object Type          | Privileges                          |
-|----------------------|-------------------------------------|
-| `DATABASE`           | `USAGE` `CREATE`                    |
-| `SCHEMA`             | `USAGE` `CREATE`                    |
-| `TABLE`              | `INSERT` `SELECT` `UPDATE` `DELETE` |
-| `VIEW`               | `SELECT`                            |
-| `MATERIALIZED  VIEW` | `SELECT`                            |
-| `TYPE`               | `USAGE`                             |
-| `SOURCE`             | `SELECT`                            |
-| `CONNECTION`         | `USAGE`                             |
-| `SECRET`             | `USAGE`                             |
-| `CLUSTER`            | `USAGE` `CREATE`                    |
+| Object Type          | Privileges                             |
+|----------------------|----------------------------------------|
+| `DATABASE`           | `USAGE`, `CREATE`                      |
+| `SCHEMA`             | `USAGE`, `CREATE`                      |
+| `TABLE`              | `INSERT`, `SELECT`, `UPDATE`, `DELETE` |
+| `VIEW`               | `SELECT`                               |
+| `MATERIALIZED  VIEW` | `SELECT`                               |
+| `TYPE`               | `USAGE`                                |
+| `SOURCE`             | `SELECT`                               |
+| `CONNECTION`         | `USAGE`                                |
+| `SECRET`             | `USAGE`                                |
+| `CLUSTER`            | `USAGE`, `CREATE`                      |
 
 
 ### Inheritance
 
-Inheritance in RBAC allows you to create roles that inherit permissions from
-other roles. Inheritance only applies to role permissions. Role attributes are
-not inherited. Inheriting permissions allows you to minimize the number of roles
-you have to manage.
+Inheritance in RBAC allows you to create roles that inherit privileges from
+other roles. Inheritance only applies to role privileges. Role attributes are
+not inherited. Inheriting privileges allows you to minimize the number of roles you have to manage.
 
 ## Next steps
 
