@@ -7207,12 +7207,12 @@ impl VariadicFunc {
             | VariadicFunc::Greatest
             | VariadicFunc::Least
             | VariadicFunc::Concat
-            | VariadicFunc::ConcatWs
             | VariadicFunc::And
             | VariadicFunc::Or => true,
 
             VariadicFunc::MakeTimestamp
             | VariadicFunc::PadLeading
+            | VariadicFunc::ConcatWs
             | VariadicFunc::Substr
             | VariadicFunc::Replace
             | VariadicFunc::Translate
