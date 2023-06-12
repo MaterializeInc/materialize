@@ -696,6 +696,19 @@ impl KafkaSinkState {
                         latest_ts = Some(ts);
                     }
                 }
+
+                // If the next possible offset for the client is past the high watermark, we've seen
+                // everything we expect to see.
+                let position = progress_client
+                    .position()?
+                    .find_partition(progress_topic, partition)
+                    .ok_or_else(|| anyhow!("No progress info for known partition"))?
+                    .offset();
+                if let Offset::Offset(i) = position {
+                    if i >= hi {
+                        break;
+                    }
+                }
             }
 
             // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
