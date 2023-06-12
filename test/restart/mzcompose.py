@@ -290,7 +290,11 @@ def workflow_drop_materialize_database(c: Composition) -> None:
     c.up("materialized")
 
     # Drop materialize database
-    c.sql("DROP DATABASE materialize")
+    c.sql(
+        "DROP DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
 
     # Restart mz.
     c.kill("materialized")
