@@ -131,24 +131,28 @@ All metrics in this list have an `instance_id` label identifying the compute ins
 * Compute protocol
   * [ ] `mz_compute_commands_total`
     * **Type**: counter
-    * **Labels**: `instance_id`, `replica_id`, `type`
+    * **Labels**: `instance_id`, `replica_id`, `command_type`
     * **Description**: The total number of compute commands sent, by replica and command type.
   * [ ] `mz_compute_responses_total`
     * **Type**: counter
-    * **Labels**: `instance_id`, `replica_id`, `type`
+    * **Labels**: `instance_id`, `replica_id`, `response_type`
     * **Description**: The total number of compute responses sent, by replica and response type.
-  * [ ] `mz_compute_command_message_size_bytes`
-    * **Type**: histogram
-    * **Labels**: `instance_id`, `replica_id`
-    * **Description**: A histogram of sizes of compute command messages, by replica.
-    * **Notes**: This metric exists already as `mz_compute_messages_sent_bytes`.
+  * [ ] `mz_compute_command_message_bytes_total`
+    * **Type**: counter
+    * **Labels**: `instance_id`, `replica_id`, `command_type`
+    * **Description**: The total number of bytes sent in compute command messages, by replica and command type.
+    * **Notes**: A similar metric exists already as a histogram: `mz_compute_messages_sent_bytes`.
                  Proposing to rename it because "messages sent" doesn't imply who the sender is.
-  * [ ] `mz_compute_response_message_size_bytes`
-    * **Type**: histogram
-    * **Labels**: `instance_id`, `replica_id`
-    * **Description**: A histogram of sizes of compute response messages, by replica.
-    * **Notes**: This metric exists already as `mz_compute_messages_received_bytes`.
+                 Also proposing to make it a counter to reduce its cardinality.
+                 Also proposing to add a `command_type` label.
+  * [ ] `mz_compute_response_message_bytes_total`
+    * **Type**: counter
+    * **Labels**: `instance_id`, `replica_id`, `response_type`
+    * **Description**: The total number of bytes sent in compute response messages, by replica and response type.
+    * **Notes**: A similar metric exists already as a histogram: `mz_compute_messages_received_bytes`.
                  Proposing to rename it because "messages received" doesn't imply who the receiver is.
+                 Also proposing to make it a counter to reduce its cardinality.
+                 Also proposing to add a `response_type` label.
 * Controller state
   * [ ] `mz_compute_controller_replica_count`
     * **Type**: gauge
