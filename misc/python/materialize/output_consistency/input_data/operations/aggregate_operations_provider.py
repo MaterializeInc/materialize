@@ -41,6 +41,16 @@ from materialize.output_consistency.operation.operation import (
 
 AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
+# array_agg without ordering (currently ignored)
+AGGREGATE_OPERATION_TYPES.append(
+    DbFunction(
+        "array_agg",
+        [AnyOperationParam()],
+        DynamicReturnTypeSpec(),
+        is_aggregation=True,
+    ),
+)
+# array_agg with ordering
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "array_agg",
@@ -152,6 +162,18 @@ AGGREGATE_OPERATION_TYPES.append(
     ),
 )
 
+# string_agg without ordering (currently ignored)
+AGGREGATE_OPERATION_TYPES.append(
+    DbFunction(
+        "string_agg",
+        [TextOperationParam(), TextOperationParam()],
+        TextReturnTypeSpec(),
+        is_aggregation=True,
+        relevance=OperationRelevance.LOW,
+    ),
+)
+
+# string_agg with ordering
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "string_agg",

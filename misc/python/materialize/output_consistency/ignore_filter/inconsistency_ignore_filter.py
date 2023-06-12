@@ -26,6 +26,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
 )
@@ -191,6 +192,13 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # This is a regexp_match function call with case-insensitive configuration.
                 # https://github.com/MaterializeInc/materialize/issues/18494
                 return YesIgnore("#18494")
+
+        if db_function.function_name in {"array_agg", "string_agg"} and not isinstance(
+            db_function, DbFunctionWithCustomPattern
+        ):
+            # The unordered variants are to be ignored.
+            # https://github.com/MaterializeInc/materialize/issues/19832
+            return YesIgnore("#19832")
 
         return NoIgnore()
 
