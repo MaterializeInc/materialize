@@ -32,8 +32,21 @@ class ConsistencyTestInputData:
         self.all_data_types_with_values: List[
             DataTypeWithValues
         ] = ALL_DATA_TYPES_WITH_VALUES
-        self.all_operation_types: List[DbOperationOrFunction] = ALL_OPERATION_TYPES
+        self.all_operation_types: List[
+            DbOperationOrFunction
+        ] = self._get_without_disabled_operations(ALL_OPERATION_TYPES)
         self.max_value_count = self._get_max_value_count_of_all_types()
+
+    def _get_without_disabled_operations(
+        self, operations: List[DbOperationOrFunction]
+    ) -> List[DbOperationOrFunction]:
+        filtered_operations = []
+
+        for operation in operations:
+            if operation.is_enabled:
+                filtered_operations.append(operation)
+
+        return filtered_operations
 
     def remove_postgres_incompatible_types(self) -> None:
         self.all_data_types_with_values = [

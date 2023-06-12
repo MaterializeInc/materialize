@@ -60,32 +60,22 @@ We will build a default privileges framework based off of PostgreSQL, but simpli
 
 The `mz_default_privileges` table will store default privileges and have the following columns:
 
-- `id text` (maybe `uint4`): The id of the default privilege.
-- `role_id text`: The id of the role this default privilege applies to. A special ID will be
-  reserved for all roles.
+- `role_id text`: The id of the role this default privilege applies to. The PUBLIC role ID will
+  indicate that it should apply to all roles.
 - `schema_id text`: The id of the schema this default privilege applies to or NULL.
 - `database_id text`: The id of the database this default privilege applies to or NULL.
-- `object_type char`: Type of object this default privilege applies to.
-- `privileges mz_aclitem[]`: The default privileges to apply.
+- `object_type text`: Type of object this default privilege applies to.
+- `grantee text`: The id of the role that will be granted the privileges.
+- `privileges text`: The privileges being granted to grantee.
 
 If both `schema_id` and `database_id` are NULL, then the default privilege applies to all objects of
 a certain type in all databases and schemas.
 
-`object_type` can be one of the following characters:
-
-- `n`: schema
-- `d`: database
-- `C`: cluster
-- `r`: relation
-- `T`: type
-- `s`: secret
-- `c`: connection
-
 `mz_default_privileges` will be pre-populated with certain system default privileges. Currently, the
 only one is:
 
-- `(<id>, <reserved-role-id-for-all-roles>, NULL, NULL, T, {=U/mz_system})`. i.e. `PUBLIC` is
-  granted `USAGE` on every type.
+- `(<public-role-id>, NULL, NULL, 'TYPE', <public-role-id>, 'U')`.
+  i.e. `PUBLIC` is granted `USAGE` on every type.
 
 Roles cannot be deleted while it is referenced in the `mz_default_privilges` table.
 
@@ -107,13 +97,13 @@ The grant variant will add rows to `mz_default_privileges`, such that:
 - `role_id` is filled in from `<role_specification>`.
 - `schema_id` is filled in from `<schema_name>`.
 - `oject_type` is filled in from `<object_type>`.
-- `privilege` is filled in from `<privilege>` and `<role_name>`.
+- `privilege` is filled in from `<grantee>`, `<privileges>`, and `<role_name>`.
 
-If a matching row already exists, then the `mz_aclitem` will be updated instead of having a new row
-added.
+If a matching row already exists, then the `<privileges>` will be updated instead of having a new
+row added.
 
 The revoke variant will update an existing row, if one exists. Otherwise, it will have no affect. If
-a row ends up with an empty `mz_aclitem` then it will be removed.
+a row ends up with empty `<privileges>` then it will be removed.
 
 Users must be a superuser to specify the `ALL ROLES` role specification. Users must be a member of
 both `<target_role>` and `<role_name>`.

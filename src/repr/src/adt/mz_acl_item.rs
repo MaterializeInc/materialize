@@ -333,6 +333,21 @@ impl Default for PrivilegeMap {
     }
 }
 
+/// Combines all [`MzAclItem`]s that have the same grantee and grantor.
+pub fn merge_mz_acl_items(
+    mz_acl_items: impl Iterator<Item = MzAclItem>,
+) -> impl Iterator<Item = MzAclItem> {
+    mz_acl_items
+        .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
+            let item = accum
+                .entry((mz_acl_item.grantee, mz_acl_item.grantor))
+                .or_insert(MzAclItem::empty(mz_acl_item.grantee, mz_acl_item.grantor));
+            item.acl_mode |= mz_acl_item.acl_mode;
+            accum
+        })
+        .into_values()
+}
+
 #[mz_ore::test]
 fn test_mz_acl_parsing() {
     let s = "u42=rw/s666";

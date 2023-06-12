@@ -479,11 +479,48 @@ pub struct PendingTxn {
     /// Transmitter used to send a response back to the client.
     client_transmitter: ClientTransmitter<ExecuteResponse>,
     /// Client response for transaction.
-    response: Result<ExecuteResponse, AdapterError>,
+    response: Result<PendingTxnResponse, AdapterError>,
     /// Session of the client who initiated the transaction.
     session: Session,
     /// The action to take at the end of the transaction.
     action: EndTransactionAction,
+}
+
+#[derive(Debug)]
+/// The response we'll send for a [`PendingTxn`].
+pub enum PendingTxnResponse {
+    /// The transaction will be committed.
+    Committed {
+        /// Parameters that will change, and their values, once this transaction is complete.
+        params: BTreeMap<&'static str, String>,
+    },
+    /// The transaction will be rolled back.
+    Rolledback {
+        /// Parameters that will change, and their values, once this transaction is complete.
+        params: BTreeMap<&'static str, String>,
+    },
+}
+
+impl PendingTxnResponse {
+    pub fn extend_params(&mut self, p: impl IntoIterator<Item = (&'static str, String)>) {
+        match self {
+            PendingTxnResponse::Committed { params }
+            | PendingTxnResponse::Rolledback { params } => params.extend(p),
+        }
+    }
+}
+
+impl From<PendingTxnResponse> for ExecuteResponse {
+    fn from(value: PendingTxnResponse) -> Self {
+        match value {
+            PendingTxnResponse::Committed { params } => {
+                ExecuteResponse::TransactionCommitted { params }
+            }
+            PendingTxnResponse::Rolledback { params } => {
+                ExecuteResponse::TransactionRolledBack { params }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -530,7 +567,13 @@ impl PendingReadTxn {
                     },
                 ..
             } => {
-                session.vars_mut().end_transaction(action);
+                let changed = session.vars_mut().end_transaction(action);
+                // Append any parameters that changed to the response.
+                let response = response.map(|mut r| {
+                    r.extend_params(changed);
+                    ExecuteResponse::from(r)
+                });
+
                 client_transmitter.send(response, session);
             }
             PendingReadTxn::ReadThenWrite { tx, .. } => {

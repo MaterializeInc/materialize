@@ -53,17 +53,9 @@ where
                         "op": op,
                     });
 
-                    if let Some(PushdownInfo {
-                        pushdown,
-                        potential_pushdown,
-                    }) = pushdown_info
-                    {
+                    if let Some(PushdownInfo { pushdown }) = pushdown_info {
                         let object = json.as_object_mut().unwrap();
                         object.insert("pushdown".to_owned(), serde_json::json!(pushdown));
-                        object.insert(
-                            "potential_pushdown".to_owned(),
-                            serde_json::json!(potential_pushdown),
-                        );
                     }
 
                     json

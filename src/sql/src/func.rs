@@ -550,7 +550,10 @@ impl From<ValueWindowFunc> for Operation<(HirScalarExpr, ValueWindowFunc)> {
 /// Note that this is not exhaustive and will likely require additions.
 pub enum ParamList {
     Exact(Vec<ParamType>),
-    Variadic(ParamType),
+    Variadic {
+        leading: Vec<ParamType>,
+        trailing: ParamType,
+    },
 }
 
 impl ParamList {
@@ -584,7 +587,7 @@ impl ParamList {
     fn validate_arg_len(&self, input_len: usize) -> bool {
         match self {
             Self::Exact(p) => p.len() == input_len,
-            Self::Variadic(_) => input_len > 0,
+            Self::Variadic { leading, .. } => input_len > leading.len(),
         }
     }
 
@@ -598,7 +601,11 @@ impl ParamList {
     fn arg_names(&self) -> Vec<&'static str> {
         match self {
             ParamList::Exact(p) => p.iter().map(|p| p.name()).collect::<Vec<_>>(),
-            ParamList::Variadic(p) => vec![p.name()],
+            ParamList::Variadic { leading, trailing } => leading
+                .iter()
+                .chain([trailing].into_iter())
+                .map(|p| p.name())
+                .collect::<Vec<_>>(),
         }
     }
 
@@ -606,7 +613,7 @@ impl ParamList {
     fn variadic_name(&self) -> Option<&'static str> {
         match self {
             ParamList::Exact(_) => None,
-            ParamList::Variadic(p) => Some(p.name()),
+            ParamList::Variadic { trailing, .. } => Some(trailing.name()),
         }
     }
 }
@@ -617,7 +624,7 @@ impl std::ops::Index<usize> for ParamList {
     fn index(&self, i: usize) -> &Self::Output {
         match self {
             Self::Exact(p) => &p[i],
-            Self::Variadic(p) => p,
+            Self::Variadic { leading, trailing } => leading.get(i).unwrap_or(trailing),
         }
     }
 }
@@ -1518,25 +1525,6 @@ fn coerce_args_to_types(
                 }
                 _ => cexpr.type_as_any(ecx)?,
             },
-            p @ (ArrayAny | ListAny | MapAny | RangeAny) => {
-                let target = polymorphic_solution
-                    .target_for_param_type(p)
-                    .ok_or_else(|| {
-                        // n.b. This errors here, rather than during building
-                        // the polymorphic solution, to make the error clearer.
-                        // If we errored while constructing the polymorphic
-                        // solution, an implementation would get discarded even
-                        // if it were the only one, and it would appear as if a
-                        // compatible solution did not exist. Instead, the
-                        // problem is simply that we couldn't resolve the
-                        // polymorphic type.
-                        PlanError::Unstructured(
-                            "could not determine polymorphic type because input has type unknown"
-                                .to_string(),
-                        )
-                    })?;
-                do_convert(cexpr, &target)?
-            }
             RecordAny => match cexpr {
                 CoercibleScalarExpr::LiteralString(_) => {
                     sql_bail!("input of anonymous composite types is not implemented");
@@ -1550,7 +1538,17 @@ fn coerce_args_to_types(
             p => {
                 let target = polymorphic_solution
                     .target_for_param_type(p)
-                    .expect("polymorphic key determined");
+                    .ok_or_else(|| {
+                        // n.b. This errors here, rather than during building
+                        // the polymorphic solution, to make the error clearer.
+                        // If we errored while constructing the polymorphic
+                        // solution, an implementation would get discarded even
+                        // if it were the only one, and it would appear as if a
+                        // compatible solution did not exist. Instead, the
+                        // problem is simply that we couldn't resolve the
+                        // polymorphic type.
+                        PlanError::UnsolvablePolymorphicFunctionInput
+                    })?;
                 do_convert(cexpr, &target)?
             }
         };
@@ -1562,7 +1560,8 @@ fn coerce_args_to_types(
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
-    ($p:ident...) => { ParamList::Variadic($p.into()) };
+    ([$($p:expr),*], $v:ident...) => { ParamList::Variadic { leading: vec![$($p.into(),)*], trailing: $v.into() } };
+    ($v:ident...) => { ParamList::Variadic { leading: vec![], trailing: $v.into() } };
     ($($p:expr),*) => { ParamList::Exact(vec![$($p.into(),)*]) };
 }
 
@@ -1723,6 +1722,36 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 Ok(lhs.call_binary(rhs, BinaryFunc::ArrayArrayConcat))
             }) => ArrayAnyCompatible, 383;
         },
+        "array_fill" => Scalar {
+            params!(AnyElement, ScalarType::Array(Box::new(ScalarType::Int32))) => Operation::binary(|ecx, elem, dims| {
+                let elem_type = ecx.scalar_type(&elem);
+
+                let elem_type = match elem_type.array_of_self_elem_type() {
+                    Ok(elem_type) => elem_type,
+                    Err(elem_type) => bail_unsupported!(
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                    ),
+                };
+
+                Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs: vec![elem, dims] })
+            }) => ArrayAnyCompatible, 1193;
+            params!(
+                AnyElement,
+                ScalarType::Array(Box::new(ScalarType::Int32)),
+                ScalarType::Array(Box::new(ScalarType::Int32))
+            ) => Operation::variadic(|ecx, exprs| {
+                let elem_type = ecx.scalar_type(&exprs[0]);
+
+                let elem_type = match elem_type.array_of_self_elem_type() {
+                    Ok(elem_type) => elem_type,
+                    Err(elem_type) => bail_unsupported!(
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                    ),
+                };
+
+                Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs })
+            }) => ArrayAny, 1286;
+        },
         "array_in" => Scalar {
             params!(String, Oid, Int32) =>
                 Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
@@ -1804,6 +1833,26 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 }
                 Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
             }) => String, 3058;
+        },
+        "concat_ws" => Scalar {
+            params!([String], Any...) => Operation::variadic(|ecx, cexprs| {
+                if cexprs.len() < 2 {
+                    sql_bail!("No function matches the given name and argument types. \
+                    You might need to add explicit type casts.")
+                }
+                let mut exprs = vec![];
+                for expr in cexprs {
+                    exprs.push(match ecx.scalar_type(&expr) {
+                        // concat uses nonstandard bool -> string casts
+                        // to match historical baggage in PostgreSQL.
+                        ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
+                        // TODO(#7572): remove call to PadChar
+                        ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                        _ => typeconv::to_string(ecx, expr)
+                    });
+                }
+                Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ConcatWs, exprs })
+            }) => String, 3059;
         },
         "convert_from" => Scalar {
             params!(Bytes, String) => BinaryFunc::ConvertFrom => String, 1714;
@@ -2649,13 +2698,18 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "array_agg" => Aggregate {
             params!(NonVecAny) => Operation::unary_ordered(|ecx, e, order_by| {
                 let elem_type = ecx.scalar_type(&e);
-                if let ScalarType::Char {.. } | ScalarType::Map { .. } = elem_type {
-                    bail_unsupported!(format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type)));
+
+                let elem_type = match elem_type.array_of_self_elem_type() {
+                    Ok(elem_type) => elem_type,
+                    Err(elem_type) => bail_unsupported!(
+                        format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type))
+                    ),
                 };
+
                 // ArrayConcat excepts all inputs to be arrays, so wrap all input datums into
                 // arrays.
                 let e_arr = HirScalarExpr::CallVariadic{
-                    func: VariadicFunc::ArrayCreate { elem_type: ecx.scalar_type(&e) },
+                    func: VariadicFunc::ArrayCreate { elem_type },
                     exprs: vec![e],
                 };
                 Ok((e_arr, AggregateFunc::ArrayConcat { order_by }))
@@ -3288,52 +3342,64 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         FROM
                         mz_internal.mz_object_dependencies AS d
                             JOIN
-                            mz_internal.mz_name_to_global_id($1) AS g (id)
+                            mz_internal.mz_resolve_object_name($1) AS g
                             ON d.object_id = g.id
                     ) AS d
                     ON s.id = d.subsource
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
         },
-        "mz_name_to_global_id" => Table {
-            // If the user wants to specify a database, we also require them to specify which
-            // schemas in that database they want us to search in that database.
-            params!(String, ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
-                SELECT o.id
+        "mz_resolve_object_name" => Table {
+            // This implementation is available primarily to drive the other, single-param
+            // implementation.
+            params!(
+                // Database
+                String,
+                // Schemas/search path
+                ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
+                // Item name
+                String
+            ) =>
+            // credit for using rank() to @def-
+            sql_impl_table_func("
+                SELECT id, oid, schema_id, name, type, owner_id, privileges
+                FROM (
+                    SELECT o.*, rank() OVER (ORDER BY pg_catalog.array_position($2, search_schema.name))
+                    FROM
+                        mz_catalog.mz_objects AS o
+                        JOIN mz_catalog.mz_schemas AS s
+                            ON o.schema_id = s.id
+                        JOIN unnest($2::text[]) AS search_schema (name)
+                            ON search_schema.name = s.name
+                        JOIN mz_catalog.mz_databases AS d
+                            -- Schemas without database IDs are present in every
+                            -- database that exists.
+                            ON d.id = COALESCE(s.database_id, d.id)
+                    WHERE
+                        o.name = $3::pg_catalog.text
+                        AND d.name = $1::pg_catalog.text
+                )
+                WHERE rank = 1;
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL;
+            params!(String) =>
+            // Normalize the input name, and for any NULL values (e.g. not database qualified), use
+            // the defaults used during name resolution.
+            sql_impl_table_func("
+                SELECT
+                    o.id, o.oid, o.schema_id, o.name, o.type, o.owner_id, o.privileges
                 FROM
-                    mz_catalog.mz_objects AS o
-                        JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
-                WHERE
-                    o.name = $3::pg_catalog.text AND s.name =ANY ($2::pg_catalog.text[])
-                        AND
-                    (
-                        s.database_id IS NULL
-                            OR
-                        s.database_id
-                        = (SELECT id FROM mz_catalog.mz_databases WHERE name = $1::pg_catalog.text)
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_FULL_QUAL;
-            params!(ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))), String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(), $1, $2
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ANY_SCHEMA;
-            params!(String, String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(),
-                        ARRAY[($1)::pg_catalog.text],
-                        $2
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ONE_SCHEMA;
-            params!(String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_name_to_global_id(
-                        pg_catalog.current_database(),
-                        pg_catalog.current_schemas(true),
-                        $1
-                    )
-            ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ITEM_NAME;
+                    (SELECT mz_internal.mz_normalize_object_name($1))
+                            AS normalized (n),
+                    mz_internal.mz_resolve_object_name(
+                        COALESCE(n[1], pg_catalog.current_database()),
+                        CASE
+                            WHEN n[2] IS NULL
+                                THEN pg_catalog.current_schemas(true)
+                            ELSE
+                                ARRAY[n[2]]
+                        END,
+                        n[3]
+                    ) AS o
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
         },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -3342,7 +3408,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 ELSE (
                     SELECT mz_internal.mz_error_if_null(
                         (
-                            SELECT concat(qual.d, qual.s, item.name)
+                            SELECT DISTINCT concat(qual.d, qual.s, item.name)
                             FROM
                                 mz_objects AS item
                             JOIN
@@ -3366,6 +3432,30 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 )
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
+        },
+        "mz_normalize_object_name" => Scalar {
+            params!(String) => sql_impl_func("
+            (
+                SELECT
+                    CASE
+                        WHEN $1 IS NULL THEN NULL
+                        WHEN pg_catalog.array_length(ident, 1) > 3
+                            THEN mz_internal.mz_error_if_null(
+                                NULL::pg_catalog.text[],
+                                'improper relation name (too many dotted names): ' || $1
+                            )
+                        ELSE pg_catalog.array_cat(
+                            pg_catalog.array_fill(
+                                CAST(NULL AS pg_catalog.text),
+                                ARRAY[3 - pg_catalog.array_length(ident, 1)]
+                            ),
+                            ident
+                        )
+                    END
+                FROM (
+                    SELECT pg_catalog.parse_ident($1) AS ident
+                ) AS i
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
         },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;

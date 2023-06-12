@@ -41,6 +41,24 @@ NESTING_LEVEL_OUTERMOST_ARG = 1
 FIRST_ARG_INDEX = 0
 
 
+class ArgContext:
+    def __init__(self) -> None:
+        self.args: List[Expression] = []
+        self.contains_aggregation = False
+
+    def append(self, arg: Expression) -> None:
+        self.args.append(arg)
+
+        if arg.is_aggregate:
+            self.contains_aggregation = True
+
+    def has_no_args(self) -> bool:
+        return len(self.args) == 0
+
+    def requires_aggregation(self) -> bool:
+        return self.contains_aggregation
+
+
 class ExpressionGenerator:
     """Generates expressions based on a random selection of operations"""
 
@@ -169,30 +187,24 @@ class ExpressionGenerator:
         if number_of_args == 0:
             return []
 
-        args = []
+        arg_context = ArgContext()
 
-        must_use_aggregation = False
         for arg_index in range(FIRST_ARG_INDEX, number_of_args):
             param = operation.params[arg_index]
             # nesting_level was already incremented before invoking this function
             arg = self._generate_arg_for_param(
                 operation,
                 param,
-                arg_index,
                 storage_layout,
-                must_use_aggregation,
+                arg_context,
                 nesting_level,
             )
-            args.append(arg)
-
-            if arg.is_aggregate:
-                # first argument is aggregated, therefore all must be aggregated (or constant, currently not supported)
-                must_use_aggregation = True
+            arg_context.append(arg)
 
         if (
             self.config.avoid_expressions_expecting_db_error
             and try_number <= 50
-            and operation.is_expected_to_cause_db_error(args)
+            and operation.is_expected_to_cause_db_error(arg_context.args)
         ):
             # retry
             return self._generate_args_for_operation(
@@ -202,43 +214,36 @@ class ExpressionGenerator:
                 try_number=try_number + 1,
             )
 
-        return args
+        return arg_context.args
 
     def _generate_arg_for_param(
         self,
         operation: DbOperationOrFunction,
         param: OperationParam,
-        arg_index: int,
         storage_layout: ValueStorageLayout,
-        must_use_aggregation: bool,
+        arg_context: ArgContext,
         nesting_level: int,
     ) -> Expression:
         if isinstance(param, EnumConstantOperationParam):
             return self._pick_enum_constant(param)
 
-        if must_use_aggregation or self.randomized_picker.random_boolean(0.2):
-            if must_use_aggregation:
-                allow_aggregation_in_arg = True
-            else:
-                # currently allow an aggregation function as argument if all applies:
-                # * the operation is not an aggregation (nested aggregations are impossible)
-                # * it is first param (all consecutive params with require aggregation)
-                # * we are not already nested (to avoid nested aggregations spread across several levels)
-                allow_aggregation_in_arg = (
-                    not operation.is_aggregation
-                    and arg_index == FIRST_ARG_INDEX
-                    and nesting_level == NESTING_LEVEL_OUTERMOST_ARG
-                )
+        create_complex_arg = (
+            arg_context.requires_aggregation()
+            or self.randomized_picker.random_boolean(0.2)
+        )
 
+        if create_complex_arg:
             return self._generate_complex_arg_for_param(
                 param,
                 storage_layout,
-                allow_aggregation_in_arg,
-                must_use_aggregation,
+                arg_context,
+                operation.is_aggregation,
                 nesting_level,
             )
         else:
-            return self._generate_simple_arg_for_param(param, storage_layout)
+            return self._generate_simple_arg_for_param(
+                param, arg_context, storage_layout
+            )
 
     def _pick_enum_constant(self, param: EnumConstantOperationParam) -> Expression:
         enum_constant_index = self.randomized_picker.random_number(
@@ -247,10 +252,15 @@ class ExpressionGenerator:
         return param.get_enum_constant(enum_constant_index)
 
     def _generate_simple_arg_for_param(
-        self, param: OperationParam, storage_layout: ValueStorageLayout
+        self,
+        param: OperationParam,
+        arg_context: ArgContext,
+        storage_layout: ValueStorageLayout,
     ) -> LeafExpression:
         # only consider the data type category, do not check incompatibilities and other validations at this point
-        suitable_types_with_values = self._get_data_type_values_of_category(param)
+        suitable_types_with_values = self._get_data_type_values_of_category(
+            param, arg_context
+        )
 
         if len(suitable_types_with_values) == 0:
             raise NoSuitableExpressionFound("No suitable type")
@@ -273,21 +283,26 @@ class ExpressionGenerator:
         self,
         param: OperationParam,
         storage_layout: ValueStorageLayout,
-        allow_aggregation: bool,
-        must_use_aggregation: bool,
+        arg_context: ArgContext,
+        is_aggregation_operation: bool,
         nesting_level: int,
         try_number: int = 1,
     ) -> ExpressionWithArgs:
-        suitable_operations = self._get_operations_of_category(param.type_category)
+        must_use_aggregation = arg_context.requires_aggregation()
 
-        if must_use_aggregation:
-            suitable_operations = self._get_only_aggregate_operations(
-                suitable_operations
-            )
-        elif not allow_aggregation:
-            suitable_operations = self._get_without_aggregate_operations(
-                suitable_operations
-            )
+        # currently allow an aggregation function as argument if all applies:
+        # * the operation is not an aggregation (nested aggregations are impossible)
+        # * it is first param (all consecutive params with require aggregation)
+        # * we are not already nested (to avoid nested aggregations spread across several levels)
+        allow_aggregation = must_use_aggregation or (
+            not is_aggregation_operation
+            and arg_context.has_no_args()
+            and nesting_level == NESTING_LEVEL_OUTERMOST_ARG
+        )
+
+        suitable_operations = self._get_operations_of_category(
+            param, arg_context, must_use_aggregation, allow_aggregation
+        )
 
         if len(suitable_operations) == 0:
             raise NoSuitableExpressionFound(
@@ -313,13 +328,23 @@ class ExpressionGenerator:
 
         data_type = nested_expression.try_resolve_exact_data_type()
 
-        if data_type is not None and not param.supports_type(data_type):
+        is_unsupported = data_type is not None and not param.supports_type(
+            data_type, arg_context.args
+        )
+        is_unsupported = (
+            is_unsupported
+            or not param.might_support_as_input_assuming_category_matches(
+                nested_expression.operation.return_type_spec
+            )
+        )
+
+        if is_unsupported:
             if try_number < 5:
                 return self._generate_complex_arg_for_param(
                     param,
                     storage_layout,
-                    allow_aggregation,
-                    must_use_aggregation,
+                    arg_context,
+                    is_aggregation_operation,
                     nesting_level,
                     try_number=try_number + 1,
                 )
@@ -329,34 +354,54 @@ class ExpressionGenerator:
         return nested_expression
 
     def _get_data_type_values_of_category(
-        self, param: OperationParam
+        self, param: OperationParam, arg_context: ArgContext
     ) -> List[DataTypeWithValues]:
-        category = param.type_category
+        category = param.resolve_type_category(arg_context.args)
         if category == DataTypeCategory.ANY:
             return self.input_data.all_data_types_with_values
 
-        assert (
-            category != DataTypeCategory.DYNAMIC
-        ), f"Type category {DataTypeCategory.DYNAMIC} not allowed for parameters"
+        self._assert_valid_type_category_for_param(param, category)
 
         preselected_types_with_values = self.types_with_values_by_category[category]
         suitable_types_with_values = []
 
         for type_with_values in preselected_types_with_values:
-            if param.supports_type(type_with_values.data_type):
+            if param.supports_type(type_with_values.data_type, arg_context.args):
                 suitable_types_with_values.append(type_with_values)
 
         return suitable_types_with_values
 
+    def _assert_valid_type_category_for_param(
+        self, param: OperationParam, category: DataTypeCategory
+    ) -> None:
+        assert category not in {
+            DataTypeCategory.DYNAMIC,
+            DataTypeCategory.DYNAMIC_ARRAY,
+        }, f"Type category {category} not allowed for parameters (param={param})"
+
     def _get_operations_of_category(
-        self, category: DataTypeCategory
+        self,
+        param: OperationParam,
+        arg_context: ArgContext,
+        must_use_aggregation: bool,
+        allow_aggregation: bool,
+    ) -> List[DbOperationOrFunction]:
+        category = param.resolve_type_category(arg_context.args)
+        suitable_operations = self._get_all_operations_of_category(param, category)
+        if must_use_aggregation:
+            return self._get_only_aggregate_operations(suitable_operations)
+        elif not allow_aggregation:
+            return self._get_without_aggregate_operations(suitable_operations)
+        else:
+            return suitable_operations
+
+    def _get_all_operations_of_category(
+        self, param: OperationParam, category: DataTypeCategory
     ) -> List[DbOperationOrFunction]:
         if category == DataTypeCategory.ANY:
             return self.input_data.all_operation_types
 
-        assert (
-            category != DataTypeCategory.DYNAMIC
-        ), f"Type category {DataTypeCategory.DYNAMIC} not allowed for parameters"
+        self._assert_valid_type_category_for_param(param, category)
 
         return self.operations_by_return_type_category[category]
 

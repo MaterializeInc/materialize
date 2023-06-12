@@ -97,4 +97,4 @@ class DataColumn(LeafExpression):
         return self.values[value_index]
 
     def __str__(self) -> str:
-        return self.to_sql()
+        return self.to_sql(False)

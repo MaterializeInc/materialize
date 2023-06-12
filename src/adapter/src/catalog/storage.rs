@@ -19,12 +19,12 @@ use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType};
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
-    CatalogSchema, RoleAttributes,
+    CatalogSchema, ObjectType, RoleAttributes,
 };
 use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
@@ -41,14 +41,16 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{
-    self, is_reserved_name, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
-    SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
+    self, is_reserved_name, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleMembership,
+    SerializedCatalogItem, SerializedReplicaConfig, SerializedReplicaLocation,
+    SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
 };
 use crate::coord::timeline;
 
 pub mod objects;
 pub mod stash;
 
+use crate::catalog::storage::stash::DEFAULT_PRIVILEGES_COLLECTION;
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
     CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION, ID_ALLOCATOR_COLLECTION,
@@ -202,7 +204,8 @@ impl Connection {
 
             Connection { stash, boot_ts }
         } else {
-            // Before we do anything with the Stash, we need to run any pending upgrades.
+            // Before we do anything with the Stash, we need to run any pending upgrades and
+            // initialize new collections.
             if !stash.is_readonly() {
                 stash.upgrade().await?;
             }
@@ -498,6 +501,30 @@ impl Connection {
         Ok(sources)
     }
 
+    /// Load the persisted default privileges.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_default_privileges(
+        &mut self,
+    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
+        Ok(DEFAULT_PRIVILEGES_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| {
+                (
+                    DefaultPrivilegeObject::new(
+                        k.role_id,
+                        k.database_id,
+                        k.schema_id,
+                        k.object_type,
+                    ),
+                    DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
+                )
+            })
+            .collect::<Result<_, _>>()?)
+    }
+
     /// Load the persisted server configurations.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
@@ -765,6 +792,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         timestamps,
         system_gid_mapping,
         system_configurations,
+        default_privileges,
     ) = stash
         .with_transaction(|tx| {
             Box::pin(async move {
@@ -787,8 +815,9 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
                     tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
                     tx.peek_one(
                         tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
-                            .await?,
-                    )
+                            .await?
+                    ),
+                    tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
                 )
             })
         })
@@ -815,6 +844,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
         system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
         system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
+        default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
         audit_log_updates: Vec::new(),
         storage_usage_updates: Vec::new(),
     })
@@ -836,6 +866,7 @@ pub struct Transaction<'a> {
     timestamps: TableTransaction<TimestampKey, TimestampValue>,
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
+    default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -1668,6 +1699,7 @@ impl<'a> Transaction<'a> {
         let timestamps = Arc::new(self.timestamps.pending());
         let system_gid_mapping = Arc::new(self.system_gid_mapping.pending());
         let system_configurations = Arc::new(self.system_configurations.pending());
+        let default_privileges = Arc::new(self.default_privileges.pending());
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
@@ -1713,6 +1745,13 @@ impl<'a> Transaction<'a> {
                         &system_configurations,
                     )
                     .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &DEFAULT_PRIVILEGES_COLLECTION,
+                        &default_privileges,
+                    )
+                    .await?;
                     add_batch(&tx, &mut batches, &AUDIT_LOG_COLLECTION, &audit_log_updates).await?;
                     add_batch(
                         &tx,
@@ -1742,92 +1781,6 @@ where
     V: mz_stash::Data,
 {
     Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
-}
-
-/// Inserts empty values into all new collections, so the collections are readable.
-#[tracing::instrument(level = "info", skip_all)]
-pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
-    async fn add_batch<'tx, K, V>(
-        tx: &'tx mz_stash::Transaction<'tx>,
-        typed: &TypedCollection<K, V>,
-    ) -> Result<Option<AppendBatch>, StashError>
-    where
-        K: mz_stash::Data,
-        V: mz_stash::Data,
-    {
-        let collection = tx.collection::<K, V>(typed.name()).await?;
-        let upper = tx.upper(collection.id).await?;
-        if upper.elements() == [mz_stash::Timestamp::MIN] {
-            Ok(Some(collection.make_batch_lower(upper)?))
-        } else {
-            Ok(None)
-        }
-    }
-
-    stash
-        .with_transaction(move |tx| {
-            Box::pin(async move {
-                // Query all collections in parallel. Makes for triplicated
-                // names, but runs quick.
-                let (
-                    config,
-                    setting,
-                    id_alloc,
-                    system_gid_mapping,
-                    clusters,
-                    cluster_introspection,
-                    cluster_replicas,
-                    database,
-                    schema,
-                    item,
-                    role,
-                    timestamp,
-                    system_configuration,
-                    audit_log,
-                    storage_usage,
-                ) = futures::try_join!(
-                    add_batch(&tx, &CONFIG_COLLECTION),
-                    add_batch(&tx, &SETTING_COLLECTION),
-                    add_batch(&tx, &ID_ALLOCATOR_COLLECTION),
-                    add_batch(&tx, &SYSTEM_GID_MAPPING_COLLECTION),
-                    add_batch(&tx, &CLUSTER_COLLECTION),
-                    add_batch(&tx, &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION),
-                    add_batch(&tx, &CLUSTER_REPLICA_COLLECTION),
-                    add_batch(&tx, &DATABASES_COLLECTION),
-                    add_batch(&tx, &SCHEMAS_COLLECTION),
-                    add_batch(&tx, &ITEM_COLLECTION),
-                    add_batch(&tx, &ROLES_COLLECTION),
-                    add_batch(&tx, &TIMESTAMP_COLLECTION),
-                    add_batch(&tx, &SYSTEM_CONFIGURATION_COLLECTION),
-                    add_batch(&tx, &AUDIT_LOG_COLLECTION),
-                    add_batch(&tx, &STORAGE_USAGE_COLLECTION),
-                )?;
-                let batches: Vec<AppendBatch> = [
-                    config,
-                    setting,
-                    id_alloc,
-                    system_gid_mapping,
-                    clusters,
-                    cluster_introspection,
-                    cluster_replicas,
-                    database,
-                    schema,
-                    item,
-                    role,
-                    timestamp,
-                    system_configuration,
-                    audit_log,
-                    storage_usage,
-                ]
-                .into_iter()
-                .filter_map(|b| b)
-                .collect();
-                tx.append(batches).await?;
-                Ok(())
-            })
-        })
-        .await
-        .map_err(|err| err.into())
 }
 
 // Structs used to pass information to outside modules.
@@ -2125,6 +2078,20 @@ pub struct ServerConfigurationValue {
     value: String,
 }
 
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct DefaultPrivilegesKey {
+    role_id: RoleId,
+    database_id: Option<DatabaseId>,
+    schema_id: Option<SchemaId>,
+    object_type: ObjectType,
+    grantee: RoleId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct DefaultPrivilegesValue {
+    privileges: AclMode,
+}
+
 pub const ALL_COLLECTIONS: &[&str] = &[
     AUDIT_LOG_COLLECTION.name(),
     CLUSTER_COLLECTION.name(),
@@ -2141,6 +2108,7 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     SYSTEM_CONFIGURATION_COLLECTION.name(),
     SYSTEM_GID_MAPPING_COLLECTION.name(),
     TIMESTAMP_COLLECTION.name(),
+    DEFAULT_PRIVILEGES_COLLECTION.name(),
 ];
 
 #[cfg(test)]

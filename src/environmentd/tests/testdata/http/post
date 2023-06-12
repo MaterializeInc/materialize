@@ -251,7 +251,7 @@ http
 {"query":"SET cluster = default"}
 ----
 200 OK
-{"results":[{"ok":"SET","notices":[]}]}
+{"results":[{"ok":"SET","notices":[],"parameters":[{"name":"cluster","value":"default"}]}]}
 
 # Parameterized queries work
 http

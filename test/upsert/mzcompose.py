@@ -65,6 +65,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "testdrive",
         "failpoint",
         "incident-49",
+        "rocksdb-cleanup",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -308,3 +309,65 @@ def workflow_incident_49(c: Composition) -> None:
             c.run("testdrive", "incident-49/02-after-rehydration.td")
 
         c.run("testdrive", "incident-49/03-reset.td")
+
+
+def workflow_rocksdb_cleanup(c: Composition) -> None:
+    """Testing rocksdb cleanup after dropping sources"""
+    c.down(destroy_volumes=True)
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+    ]
+    c.up(*dependencies)
+
+    # Returns rockdb's cluster level and source level paths for a given source name
+    def rocksdb_path(source_name: str) -> tuple[str, str]:
+        (source_id, cluster_id, replica_id) = c.sql_query(
+            f"""select s.id, s.cluster_id, c.id
+            from mz_sources s
+            join mz_cluster_replicas c
+            on s.cluster_id = c.cluster_id
+            where s.name ='{source_name}'"""
+        )[0]
+        prefix = "/mzdata/source_data"
+        cluster_prefix = f"{cluster_id}-replica-{replica_id[1:]}"
+        return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
+
+    # Returns the number of files recursive in a given directory
+    def num_files(dir: str) -> int:
+        num_files = c.exec(
+            "materialized", "bash", "-c", f"find {dir} -type f | wc -l", capture=True
+        ).stdout.strip()
+        return int(num_files)
+
+    scenarios = [
+        ("drop-source.td", "DROP SOURCE dropped_upsert", True),
+        ("drop-cluster-cascade.td", "DROP CLUSTER c1 CASCADE", True),
+        ("drop-source-in-cluster.td", "DROP SOURCE dropped_upsert", False),
+    ]
+
+    for (testdrive_file, drop_stmt, cluster_dropped) in scenarios:
+        with c.override(
+            Testdrive(no_reset=True),
+        ):
+            c.up("testdrive", persistent=True)
+            c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
+
+            (_, kept_source_path) = rocksdb_path("kept_upsert")
+            (dropped_cluster_path, dropped_source_path) = rocksdb_path("dropped_upsert")
+
+            assert num_files(kept_source_path) > 0
+            assert num_files(dropped_source_path) > 0
+
+            c.testdrive(f"> {drop_stmt}")
+
+            assert num_files(kept_source_path) > 0
+
+            if cluster_dropped:
+                assert num_files(dropped_cluster_path) == 0
+            else:
+                assert num_files(dropped_source_path) == 0
+
+        c.testdrive("#reset testdrive")

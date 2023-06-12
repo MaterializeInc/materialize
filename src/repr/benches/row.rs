@@ -79,7 +79,7 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{PartDecoder, PartEncoder, Schema};
+use mz_persist_types::columnar::{PartDecoder, PartEncoder};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
@@ -335,7 +335,7 @@ fn decode_legacy(part: &ColumnarRecords) -> Vec<Row> {
 fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
     let mut part = PartBuilder::new(schema, &UnitSchema);
     let mut part_mut = part.get_mut();
-    let mut encoder = schema.encoder(part_mut.key).unwrap();
+    let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
     for row in rows.iter() {
         encoder.encode(row);
     }
@@ -348,7 +348,7 @@ fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
 }
 
 fn decode_structured(schema: &RelationDesc, part: &Part, len: usize) -> Row {
-    let decoder = schema.decoder(part.key_ref()).unwrap();
+    let ((), decoder) = schema.decoder(part.key_ref()).unwrap();
     let mut row = Row::default();
     for idx in 0..len {
         decoder.decode(idx, &mut row);

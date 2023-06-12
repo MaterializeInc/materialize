@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.expression.expression import Expression
@@ -42,7 +42,12 @@ class DbOperationOrFunction:
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_enabled: bool = True,
     ):
+        """
+        :param is_enabled: an operation should only be disabled if its execution causes problems;
+                            if it just fails, it should be ignored
+        """
         if args_validators is None:
             args_validators = set()
 
@@ -53,6 +58,7 @@ class DbOperationOrFunction:
         self.args_validators: Set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
         self.relevance = relevance
+        self.is_enabled = is_enabled
 
     def to_pattern(self, args_count: int) -> str:
         raise NotImplementedError
@@ -109,6 +115,7 @@ class DbOperation(DbOperationOrFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_enabled: bool = True,
     ):
         param_count = len(params)
         super().__init__(
@@ -119,6 +126,7 @@ class DbOperation(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=False,
             relevance=relevance,
+            is_enabled=is_enabled,
         )
         self.pattern = pattern
 
@@ -146,6 +154,7 @@ class DbFunction(DbOperationOrFunction):
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_enabled: bool = True,
     ):
         self.validate_params(params)
 
@@ -157,6 +166,7 @@ class DbFunction(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=is_aggregation,
             relevance=relevance,
+            is_enabled=is_enabled,
         )
         self.function_name = function_name.lower()
 
@@ -184,3 +194,37 @@ class DbFunction(DbOperationOrFunction):
 
     def __str__(self) -> str:
         return f"DbFunction: {self.function_name}"
+
+
+class DbFunctionWithCustomPattern(DbFunction):
+    def __init__(
+        self,
+        function_name: str,
+        pattern_per_param_count: Dict[int, str],
+        params: List[OperationParam],
+        return_type_spec: ReturnTypeSpec,
+        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        is_aggregation: bool = False,
+        relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        is_enabled: bool = True,
+    ):
+        super().__init__(
+            function_name,
+            params,
+            return_type_spec,
+            args_validators,
+            is_aggregation,
+            relevance,
+            is_enabled,
+        )
+        self.pattern_per_param_count = pattern_per_param_count
+
+    def to_pattern(self, args_count: int) -> str:
+        self.validate_args_count_in_range(args_count)
+
+        if args_count not in self.pattern_per_param_count:
+            raise RuntimeError(
+                f"No pattern specified for {self.function_name} with {args_count} params"
+            )
+
+        return self.pattern_per_param_count[args_count]

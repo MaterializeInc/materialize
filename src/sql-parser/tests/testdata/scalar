@@ -111,6 +111,23 @@ name IS NOT UNKNOWN
 IsExpr { expr: Identifier([Ident("name")]), construct: Unknown, negated: true }
 
 parse-scalar
+1 + 1 IS DISTINCT FROM 1 + 2
+----
+IsExpr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: false }
+
+parse-scalar
+1 + 1 IS NOT DISTINCT FROM 1 + 2
+----
+IsExpr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: true }
+
+parse-scalar
+1 + 1 IS DISTINCT NOT FROM 1 + 2
+----
+error: Expected FROM, found NOT
+1 + 1 IS DISTINCT NOT FROM 1 + 2
+                  ^
+
+parse-scalar
 a ~ 'foo'
 ----
 Op { op: Op { namespace: [], op: "~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }

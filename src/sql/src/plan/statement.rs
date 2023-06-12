@@ -21,9 +21,10 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
-use crate::ast::{Ident, ObjectType, Statement, UnresolvedItemName};
+use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, ObjectType,
+    SessionCatalog,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -35,6 +36,7 @@ use crate::plan::error::PlanError;
 use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
 use crate::session::vars::FeatureFlag;
 
+mod acl;
 pub(crate) mod ddl;
 mod dml;
 mod raise;
@@ -113,7 +115,6 @@ pub fn describe(
         // DDL statements.
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
-        Statement::AlterOwner(stmt) => ddl::describe_alter_owner(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
@@ -141,11 +142,17 @@ pub fn describe(
         }
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
-        Statement::GrantRole(stmt) => ddl::describe_grant_role(&scx, stmt)?,
-        Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
-        Statement::GrantPrivileges(stmt) => ddl::describe_grant_privileges(&scx, stmt)?,
-        Statement::RevokePrivileges(stmt) => ddl::describe_revoke_privileges(&scx, stmt)?,
-        Statement::ReassignOwned(stmt) => ddl::describe_reassign_owned(&scx, stmt)?,
+
+        // `ACL` statements.
+        Statement::AlterOwner(stmt) => acl::describe_alter_owner(&scx, stmt)?,
+        Statement::GrantRole(stmt) => acl::describe_grant_role(&scx, stmt)?,
+        Statement::RevokeRole(stmt) => acl::describe_revoke_role(&scx, stmt)?,
+        Statement::GrantPrivileges(stmt) => acl::describe_grant_privileges(&scx, stmt)?,
+        Statement::RevokePrivileges(stmt) => acl::describe_revoke_privileges(&scx, stmt)?,
+        Statement::AlterDefaultPrivileges(stmt) => {
+            acl::describe_alter_default_privileges(&scx, stmt)?
+        }
+        Statement::ReassignOwned(stmt) => acl::describe_reassign_owned(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
@@ -250,7 +257,6 @@ pub fn plan(
         // DDL statements.
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
-        Statement::AlterOwner(stmt) => ddl::plan_alter_owner(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
@@ -278,11 +284,15 @@ pub fn plan(
         }
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
-        Statement::GrantRole(stmt) => ddl::plan_grant_role(scx, stmt),
-        Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
-        Statement::GrantPrivileges(stmt) => ddl::plan_grant_privileges(scx, stmt),
-        Statement::RevokePrivileges(stmt) => ddl::plan_revoke_privileges(scx, stmt),
-        Statement::ReassignOwned(stmt) => ddl::plan_reassign_owned(scx, stmt),
+
+        // `ACL` statements.
+        Statement::AlterOwner(stmt) => acl::plan_alter_owner(scx, stmt),
+        Statement::GrantRole(stmt) => acl::plan_grant_role(scx, stmt),
+        Statement::RevokeRole(stmt) => acl::plan_revoke_role(scx, stmt),
+        Statement::GrantPrivileges(stmt) => acl::plan_grant_privileges(scx, stmt),
+        Statement::RevokePrivileges(stmt) => acl::plan_revoke_privileges(scx, stmt),
+        Statement::AlterDefaultPrivileges(stmt) => acl::plan_alter_default_privileges(scx, stmt),
+        Statement::ReassignOwned(stmt) => acl::plan_reassign_owned(scx, stmt),
 
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),

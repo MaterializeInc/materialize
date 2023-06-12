@@ -81,6 +81,10 @@ mz_databases
 BASE TABLE
 materialize
 mz_catalog
+mz_default_privileges
+BASE TABLE
+materialize
+mz_catalog
 mz_egress_ips
 BASE TABLE
 materialize
@@ -399,6 +403,10 @@ materialize
 mz_internal
 mz_dataflows_per_worker
 VIEW
+materialize
+mz_internal
+mz_kafka_sources
+BASE TABLE
 materialize
 mz_internal
 mz_message_counts

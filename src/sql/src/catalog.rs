@@ -15,7 +15,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
@@ -29,7 +29,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::{Expr, ObjectType, QualifiedReplica, UnresolvedItemName};
+use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
@@ -1233,6 +1233,140 @@ impl<'a, T> ErsatzCatalog<'a, T> {
             UnresolvedItemName::qualified(&[database, schema, &name.item]),
             desc,
         ))
+    }
+}
+
+// Enum variant docs would be useless here.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+/// The types of objects stored in the catalog.
+pub enum ObjectType {
+    Table,
+    View,
+    MaterializedView,
+    Source,
+    Sink,
+    Index,
+    Type,
+    Role,
+    Cluster,
+    ClusterReplica,
+    Secret,
+    Connection,
+    Database,
+    Schema,
+    Func,
+}
+
+impl ObjectType {
+    /// Reports if the object type can be treated as a relation.
+    pub fn is_relation(&self) -> bool {
+        match self {
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source => true,
+            ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Func
+            | ObjectType::Database
+            | ObjectType::Schema
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Role => false,
+        }
+    }
+}
+
+impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
+    fn from(value: mz_sql_parser::ast::ObjectType) -> Self {
+        match value {
+            mz_sql_parser::ast::ObjectType::Table => ObjectType::Table,
+            mz_sql_parser::ast::ObjectType::View => ObjectType::View,
+            mz_sql_parser::ast::ObjectType::MaterializedView => ObjectType::MaterializedView,
+            mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
+            mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
+            mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
+            mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
+            mz_sql_parser::ast::ObjectType::Role => ObjectType::Role,
+            mz_sql_parser::ast::ObjectType::Cluster => ObjectType::Cluster,
+            mz_sql_parser::ast::ObjectType::ClusterReplica => ObjectType::ClusterReplica,
+            mz_sql_parser::ast::ObjectType::Secret => ObjectType::Secret,
+            mz_sql_parser::ast::ObjectType::Connection => ObjectType::Connection,
+            mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
+            mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
+            mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
+        }
+    }
+}
+
+impl Display for ObjectType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ObjectType::Table => "TABLE",
+            ObjectType::View => "VIEW",
+            ObjectType::MaterializedView => "MATERIALIZED VIEW",
+            ObjectType::Source => "SOURCE",
+            ObjectType::Sink => "SINK",
+            ObjectType::Index => "INDEX",
+            ObjectType::Type => "TYPE",
+            ObjectType::Role => "ROLE",
+            ObjectType::Cluster => "CLUSTER",
+            ObjectType::ClusterReplica => "CLUSTER REPLICA",
+            ObjectType::Secret => "SECRET",
+            ObjectType::Connection => "CONNECTION",
+            ObjectType::Database => "DATABASE",
+            ObjectType::Schema => "SCHEMA",
+            ObjectType::Func => "FUNCTION",
+        })
+    }
+}
+
+impl RustType<proto::ObjectType> for ObjectType {
+    fn into_proto(&self) -> proto::ObjectType {
+        match self {
+            ObjectType::Table => proto::ObjectType::Table,
+            ObjectType::View => proto::ObjectType::View,
+            ObjectType::MaterializedView => proto::ObjectType::MaterializedView,
+            ObjectType::Source => proto::ObjectType::Source,
+            ObjectType::Sink => proto::ObjectType::Sink,
+            ObjectType::Index => proto::ObjectType::Index,
+            ObjectType::Type => proto::ObjectType::Type,
+            ObjectType::Role => proto::ObjectType::Role,
+            ObjectType::Cluster => proto::ObjectType::Cluster,
+            ObjectType::ClusterReplica => proto::ObjectType::ClusterReplica,
+            ObjectType::Secret => proto::ObjectType::Secret,
+            ObjectType::Connection => proto::ObjectType::Connection,
+            ObjectType::Database => proto::ObjectType::Database,
+            ObjectType::Schema => proto::ObjectType::Schema,
+            ObjectType::Func => proto::ObjectType::Func,
+        }
+    }
+
+    fn from_proto(proto: proto::ObjectType) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::ObjectType::Table => Ok(ObjectType::Table),
+            proto::ObjectType::View => Ok(ObjectType::View),
+            proto::ObjectType::MaterializedView => Ok(ObjectType::MaterializedView),
+            proto::ObjectType::Source => Ok(ObjectType::Source),
+            proto::ObjectType::Sink => Ok(ObjectType::Sink),
+            proto::ObjectType::Index => Ok(ObjectType::Index),
+            proto::ObjectType::Type => Ok(ObjectType::Type),
+            proto::ObjectType::Role => Ok(ObjectType::Role),
+            proto::ObjectType::Cluster => Ok(ObjectType::Cluster),
+            proto::ObjectType::ClusterReplica => Ok(ObjectType::ClusterReplica),
+            proto::ObjectType::Secret => Ok(ObjectType::Secret),
+            proto::ObjectType::Connection => Ok(ObjectType::Connection),
+            proto::ObjectType::Database => Ok(ObjectType::Database),
+            proto::ObjectType::Schema => Ok(ObjectType::Schema),
+            proto::ObjectType::Func => Ok(ObjectType::Func),
+            proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
+                "ObjectType::Unknown",
+            )),
+        }
     }
 }
 

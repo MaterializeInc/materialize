@@ -23,38 +23,38 @@ weight= 5
 #
 
 [[menu.main]]
-identifier = "connect-sources"
-name = "Connect sources"
+identifier = "ingest-data"
+name = "Ingest data"
 weight= 11
 
 [[menu.main]]
 name = "PostgreSQL"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'postgresql'
 weight = 5
 
 [[menu.main]]
 name = "MySQL"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'mysql'
 weight = 10
 
 [[menu.main]]
 name = "Kafka"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'kafka'
 weight = 15
 
 [[menu.main]]
 name = "Redpanda"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'redpanda'
 weight = 20
 
 [[menu.main]]
 identifier = "network-security"
 name = "Network security"
-parent = 'connect-sources'
+parent = 'ingest-data'
 weight= 30
 
 #

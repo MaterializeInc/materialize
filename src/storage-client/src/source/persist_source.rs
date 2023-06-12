@@ -22,11 +22,13 @@ pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
+use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
-use mz_repr::adt::numeric::Numeric;
+
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{
-    ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationType,
-    Row, RowArena, ScalarType, Timestamp,
+    ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc,
+    RelationType, Row, RowArena, ScalarType, Timestamp,
 };
 use mz_timely_util::buffer::ConsolidateBuffer;
 use timely::communication::Push;
@@ -41,7 +43,7 @@ use tracing::error;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
-use crate::types::sources::{RelationDescHack, SourceData};
+use crate::types::sources::SourceData;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -129,7 +131,6 @@ where
 {
     let name = source_id.to_string();
     let desc = metadata.relation_desc.clone();
-    let fake_desc = RelationDescHack::new(&metadata.relation_desc);
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
     let time_range = if let Some(lower) = as_of.as_ref().and_then(|a| a.as_option().copied()) {
         // If we have a lower bound, we can provide a bound on mz_now to our filter pushdown.
@@ -154,10 +155,7 @@ where
         Arc::new(UnitSchema),
         move |stats| {
             if let Some(plan) = &filter_plan {
-                let stats = PersistSourceDataStats {
-                    desc: &fake_desc,
-                    stats,
-                };
+                let stats = PersistSourceDataStats { desc: &desc, stats };
                 filter_may_match(desc.typ(), time_range.clone(), stats, plan)
             } else {
                 true
@@ -378,7 +376,7 @@ impl PendingWork {
 
 #[derive(Debug)]
 pub(crate) struct PersistSourceDataStats<'a> {
-    pub(crate) desc: &'a RelationDescHack,
+    pub(crate) desc: &'a RelationDesc,
     pub(crate) stats: &'a PartStats,
 }
 
@@ -397,7 +395,7 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
 }
 
 impl PersistSourceDataStats<'_> {
-    fn json_spec(len: usize, stats: &JsonStats) -> ResultSpec {
+    fn json_spec<'a>(len: usize, stats: &'a JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
             JsonStats::Bools(bools) => {
@@ -407,21 +405,15 @@ impl PersistSourceDataStats<'_> {
                 strings.lower.as_str().into(),
                 strings.upper.as_str().into(),
             ),
-            JsonStats::Numerics(floats) => {
-                fn float_to_datum(float: f64) -> Datum<'static> {
-                    let numeric: Numeric = float.into();
-                    numeric.into()
-                }
-                ResultSpec::value_between(
-                    float_to_datum(floats.lower.floor()),
-                    float_to_datum(floats.upper.ceil()),
-                )
-            }
+            JsonStats::Numerics(numerics) => ResultSpec::value_between(
+                arena.make_datum(|r| Jsonb::decode(&numerics.lower, r)),
+                arena.make_datum(|r| Jsonb::decode(&numerics.upper, r)),
+            ),
             JsonStats::Maps(maps) => {
                 ResultSpec::map_spec(
                     maps.into_iter()
                         .map(|(k, v)| {
-                            let mut v_spec = Self::json_spec(v.len, &v.stats);
+                            let mut v_spec = Self::json_spec(v.len, &v.stats, arena);
                             if v.len != len {
                                 // This field is not always present, so assume
                                 // that accessing it might be null.
@@ -437,9 +429,9 @@ impl PersistSourceDataStats<'_> {
         }
     }
 
-    fn col_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> ResultSpec<'a> {
-        let name = self.desc.0.get_name(idx);
-        let typ = &self.desc.0.typ().column_types[idx];
+    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> ResultSpec<'a> {
+        let name = self.desc.get_name(idx);
+        let typ = &self.desc.typ().column_types[idx];
         match typ {
             ColumnType {
                 scalar_type: ScalarType::Jsonb,
@@ -453,7 +445,7 @@ impl PersistSourceDataStats<'_> {
                 if let Some(byte_stats) = stats {
                     let value_range = match byte_stats {
                         BytesStats::Json(json_stats) => {
-                            Self::json_spec(self.stats.key.len, json_stats)
+                            Self::json_spec(self.stats.key.len, json_stats, arena)
                         }
                         BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
                     };
@@ -478,7 +470,7 @@ impl PersistSourceDataStats<'_> {
                     };
                     let value_range = match &option_stats.some {
                         BytesStats::Json(json_stats) => {
-                            Self::json_spec(self.stats.key.len, json_stats)
+                            Self::json_spec(self.stats.key.len, json_stats, arena)
                         }
                         BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
                     };
@@ -504,8 +496,8 @@ impl PersistSourceDataStats<'_> {
         let num_oks = self
             .stats
             .key
-            .col::<Option<Vec<u8>>>(RelationDescHack::SOURCE_DATA_ERROR)
-            .expect("stats type should match column")
+            .col::<Option<Vec<u8>>>("err")
+            .expect("err column should be a Vec<u8>")
             .map(|x| x.none);
         num_oks.map(|num_oks| num_results - num_oks)
     }
@@ -524,10 +516,15 @@ impl PersistSourceDataStats<'_> {
         if self.len() <= self.col_null_count(idx) {
             return None;
         }
-        let name = self.desc.0.get_name(idx);
-        let typ = &self.desc.0.typ().column_types[idx];
-        let stats = self.stats.key.cols.get(name.as_str())?;
-        typ.to_persist(ColMin(stats.as_ref(), arena))
+        let name = self.desc.get_name(idx);
+        let typ = &self.desc.typ().column_types[idx];
+        let ok_stats = self
+            .stats
+            .key
+            .col::<Option<DynStruct>>("ok")
+            .expect("ok column should be a struct")?;
+        let stats = ok_stats.some.cols.get(name.as_str())?;
+        typ.to_persist(ColMin(stats.as_ref(), arena))?
     }
 
     fn col_max<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
@@ -544,10 +541,15 @@ impl PersistSourceDataStats<'_> {
         if self.len() <= self.col_null_count(idx) {
             return None;
         }
-        let name = self.desc.0.get_name(idx);
-        let typ = &self.desc.0.typ().column_types[idx];
-        let stats = self.stats.key.cols.get(name.as_str())?;
-        typ.to_persist(ColMax(stats.as_ref(), arena))
+        let name = self.desc.get_name(idx);
+        let typ = &self.desc.typ().column_types[idx];
+        let ok_stats = self
+            .stats
+            .key
+            .col::<Option<DynStruct>>("ok")
+            .expect("ok column should be a struct")?;
+        let stats = ok_stats.some.cols.get(name.as_str())?;
+        typ.to_persist(ColMax(stats.as_ref(), arena))?
     }
 
     fn col_null_count(&self, idx: usize) -> Option<usize> {
@@ -560,10 +562,15 @@ impl PersistSourceDataStats<'_> {
             }
         }
 
-        let name = self.desc.0.get_name(idx);
-        let typ = &self.desc.0.typ().column_types[idx];
-        let stats = self.stats.key.cols.get(name.as_str());
-        typ.to_persist(ColNullCount(stats?.as_ref()))
+        let name = self.desc.get_name(idx);
+        let typ = &self.desc.typ().column_types[idx];
+        let ok_stats = self
+            .stats
+            .key
+            .col::<Option<DynStruct>>("ok")
+            .expect("ok column should be a struct")?;
+        let stats = ok_stats.some.cols.get(name.as_str())?;
+        typ.to_persist(ColNullCount(stats.as_ref()))?
     }
 }
 
@@ -574,15 +581,20 @@ mod tests {
     use mz_persist_types::columnar::{PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
     use mz_repr::{
-        ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
-        ScalarType,
+        is_no_stats_type, ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row,
+        RowArena, ScalarType,
     };
     use proptest::prelude::*;
 
     use crate::source::persist_source::PersistSourceDataStats;
-    use crate::types::sources::{RelationDescHack, SourceData};
+    use crate::types::sources::SourceData;
 
     fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+        // Skip types that we don't keep stats for (yet).
+        if is_no_stats_type(&scalar_type) {
+            return;
+        }
+
         struct ValidateStatsSome<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
         impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
             fn call<T: DatumToPersist>(self) -> () {
@@ -619,12 +631,11 @@ mod tests {
                 part_mut.diff.push(1i64);
             }
             let part = part.finish()?;
-            let stats = part.key_stats::<SourceData, _>(&schema)?;
+            let stats = part.key_stats()?;
 
-            let schema_hack = RelationDescHack::new(&schema);
             let stats = PersistSourceDataStats {
                 stats: &PartStats { key: stats },
-                desc: &schema_hack,
+                desc: &schema,
             };
             let arena = RowArena::default();
             if datum.is_null() {

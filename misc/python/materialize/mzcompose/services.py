@@ -516,7 +516,8 @@ class Cockroach(Service):
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: Optional[ServiceHealthcheck] = None,
-        restart: str = "no",
+        # Workaround for #19809, should be "no" otherwise
+        restart: str = "on-failure:5",
     ):
         volumes = []
 

@@ -93,11 +93,13 @@ delegates to `ExpressionGenerator`, `QueryGenerator`, `SqlExecutor`, and `Result
 
 #### Horizontal storage
 
-The table or view contains a single row; a data type has a column for each value.
+The table or view contains a single row; a data type has a column for each value. The `row_index` is not really needed
+but avoids that aggregation functions with ordering (e.g., `array_agg(x order by row_index)`) need to be specified in a
+different way for this storage layout.
 
-| bool_null | bool_true | bool_false | int2_null | int2_zero | int2_one | int2_max | int2_neg_max | int4_null |
-|----------:|----------:|-----------:|----------:|----------:|---------:|---------:|-------------:|----------:|
-|      NULL |      true |      false |      NULL |         0 |        1 |    32767 |       -32768 |      NULL |
+| row_index | bool_null | bool_true | bool_false | int2_null | int2_zero | int2_one | int2_max | int2_neg_max | int4_null |
+|----------:|----------:|----------:|-----------:|----------:|----------:|---------:|---------:|-------------:|----------:|
+|        0  |      NULL |      true |      false |      NULL |         0 |        1 |    32767 |       -32768 |      NULL |
 
 #### Vertical storage
 
@@ -105,11 +107,11 @@ The table or view contains multiple rows; one column per data type exists.
 
 | row_index | bool_val | int2_val |    int4_val |             int8_val | uint2_val | ... |
 |----------:|---------:|---------:|------------:|---------------------:|----------:|-----|
-|         1 |     true |        0 |           0 |                    0 |         0 | ... |
-|         2 |    false |        1 |           1 |                    1 |         1 | ... |
-|         3 |     true |    32767 |  2147483647 |  9223372036854775807 |     65535 | ... |
-|         4 |    false |   -32768 | -2147483648 | -9223372036854775808 |         0 | ... |
-|         5 |     true |        0 |           0 |                    0 |         0 | ... |
+|         0 |     true |        0 |           0 |                    0 |         0 | ... |
+|         1 |    false |        1 |           1 |                    1 |         1 | ... |
+|         2 |     true |    32767 |  2147483647 |  9223372036854775807 |     65535 | ... |
+|         3 |    false |   -32768 | -2147483648 | -9223372036854775808 |         0 | ... |
+|         4 |     true |        0 |           0 |                    0 |         0 | ... |
 |       ... |      ... |      ... |         ... |                  ... |       ... | ... |
 
 ### Package Structure

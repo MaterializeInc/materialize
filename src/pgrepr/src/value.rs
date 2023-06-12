@@ -399,7 +399,12 @@ impl Value {
                 buf.put_u32(elem_type.oid());
                 for dim in dims {
                     buf.put_i32(pg_len("array dimension length", dim.length)?);
-                    buf.put_i32(pg_len("array dimension lower bound", dim.lower_bound)?);
+                    buf.put_i32(dim.lower_bound.try_into().map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            "array dimension lower bound does not fit into an i32",
+                        )
+                    })?);
                 }
                 for elem in elements {
                     encode_element(buf, elem.as_ref(), elem_type)?;
@@ -731,7 +736,7 @@ mod tests {
 
         assert_eq!(
             decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
-            "invalid input syntax for type array: invalid input syntax for type integer: invalid digit found in string: \"t\": \"{t}\"".to_string()
+            "invalid input syntax for type array: specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
         );
     }
 }

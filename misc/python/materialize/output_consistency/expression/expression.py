@@ -38,7 +38,7 @@ class Expression:
         self.is_aggregate = is_aggregate
         self.is_expect_error = is_expect_error
 
-    def to_sql(self) -> str:
+    def to_sql(self, is_root_level: bool) -> str:
         raise NotImplementedError
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
@@ -108,7 +108,7 @@ class LeafExpression(Expression):
     def try_resolve_exact_data_type(self) -> Optional[DataType]:
         return self.data_type
 
-    def to_sql(self) -> str:
+    def to_sql(self, is_root_level: bool) -> str:
         return self.to_sql_as_column()
 
     def to_sql_as_column(self) -> str:

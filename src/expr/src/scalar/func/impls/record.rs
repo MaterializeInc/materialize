@@ -61,6 +61,10 @@ impl LazyUnaryFunc for CastRecordToString {
         // TODO? if we moved typeconv into expr, we could evaluate this
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastRecordToString {
@@ -117,6 +121,13 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         // TODO: we could determine Record1's type from `cast_exprs`
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        // In theory this could be marked as monotone if we knew that all the expressions were
+        // monotone in the same direction. (ie. all increasing or all decreasing.) We don't yet
+        // track enough information to make that call, though!
+        false
+    }
 }
 
 impl fmt::Display for CastRecord1ToRecord2 {
@@ -170,6 +181,10 @@ impl LazyUnaryFunc for RecordGet {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

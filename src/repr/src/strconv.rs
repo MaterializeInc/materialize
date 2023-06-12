@@ -765,6 +765,10 @@ where
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
 
+    if buf.consume('[') {
+        bail!("specifying array lower bounds is not supported");
+    }
+
     if !buf.consume('{') {
         bail!("malformed array literal: missing opening left brace");
     }
@@ -1352,6 +1356,14 @@ pub fn format_array<F, T, E>(
 where
     F: FormatBuffer,
 {
+    if dims.iter().any(|dim| dim.lower_bound != 1) {
+        for d in dims.iter() {
+            let (lower, upper) = d.dimension_bounds();
+            write!(buf, "[{}:{}]", lower, upper);
+        }
+        buf.write_char('=');
+    }
+
     format_array_inner(buf, dims, &mut elems.into_iter(), &mut format_elem)?;
     Ok(Nestable::Yes)
 }

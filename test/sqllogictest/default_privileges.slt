@@ -1,0 +1,26 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+query TTTTTT
+SELECT * FROM mz_default_privileges
+----
+p  NULL  NULL  TYPE  p  U
+
+statement ok
+CREATE TYPE ty AS LIST (ELEMENT TYPE = int4);
+
+query T
+SELECT unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+=U/materialize
+materialize=U/materialize

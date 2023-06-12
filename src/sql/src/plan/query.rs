@@ -59,7 +59,7 @@ use mz_sql_parser::ast::{
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select,
     SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator, ShowStatement,
-    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedItemName,
+    SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
     UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use uuid::Uuid;
@@ -2100,7 +2100,7 @@ fn plan_view_select(
 
 fn plan_scalar_table_funcs(
     qcx: &QueryContext,
-    table_funcs: BTreeMap<TableFunction<Aug>, String>,
+    table_funcs: BTreeMap<Function<Aug>, String>,
     table_func_names: &mut BTreeMap<String, Ident>,
     relation_expr: &HirRelationExpr,
     from_scope: &Scope,
@@ -2412,7 +2412,7 @@ fn plan_table_factor(
 /// single coalesced ordinality column at the end of the entire expression.
 fn plan_rows_from(
     qcx: &QueryContext,
-    functions: &[TableFunction<Aug>],
+    functions: &[Function<Aug>],
     alias: Option<&TableAlias>,
     with_ordinality: bool,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
@@ -2484,7 +2484,7 @@ fn plan_rows_from(
 /// And a `Vec<usize>` of `[1, 2]`.
 fn plan_rows_from_internal<'a>(
     qcx: &QueryContext,
-    functions: impl IntoIterator<Item = &'a TableFunction<Aug>>,
+    functions: impl IntoIterator<Item = &'a Function<Aug>>,
     table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope, Vec<usize>), PlanError> {
     let mut functions = functions.into_iter();
@@ -2546,7 +2546,7 @@ fn plan_rows_from_internal<'a>(
 /// apply.
 fn plan_solitary_table_function(
     qcx: &QueryContext,
-    function: &TableFunction<Aug>,
+    function: &Function<Aug>,
     alias: Option<&TableAlias>,
     with_ordinality: bool,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
@@ -2598,10 +2598,20 @@ fn plan_solitary_table_function(
 /// instead to get the appropriate aliasing behavior.
 fn plan_table_function_internal(
     qcx: &QueryContext,
-    TableFunction { name, args }: &TableFunction<Aug>,
+    Function {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &Function<Aug>,
     with_ordinality: bool,
     table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
+    assert!(filter.is_none(), "cannot parse table function with FILTER");
+    assert!(over.is_none(), "cannot parse table function with OVER");
+    assert!(!*distinct, "cannot parse table function with DISTINCT");
+
     let ecx = &ExprContext {
         qcx,
         name: "table function arguments",
@@ -3289,7 +3299,7 @@ fn plan_expr_inner<'a>(
             expr,
             construct,
             negated,
-        } => Ok(plan_is_expr(ecx, expr, *construct, *negated)?.into()),
+        } => Ok(plan_is_expr(ecx, expr, construct, *negated)?.into()),
         Expr::Case {
             operand,
             conditions,
@@ -3521,11 +3531,10 @@ fn plan_subscript(
             ecx,
             expr,
             positions,
-            if matches!(ty, ScalarType::Array(..)) {
-                1
-            } else {
-                0
-            },
+            // Int2Vector uses 0-based indexing, while arrays use 1-based indexing, so we need to
+            // adjust all Int2Vector subscript operations by 1 (both w/r/t input and the values we
+            // track in its backing data).
+            if ty == ScalarType::Int2Vector { 1 } else { 0 },
         ),
         ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
         ScalarType::List { element_type, .. } => {
@@ -3562,7 +3571,7 @@ fn plan_subscript_array(
     ecx: &ExprContext,
     expr: HirScalarExpr,
     positions: &[SubscriptPosition<Aug>],
-    offset: usize,
+    offset: i64,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let mut exprs = Vec::with_capacity(positions.len() + 1);
     exprs.push(expr);
@@ -4579,38 +4588,52 @@ pub fn resolve_func(
 
 fn plan_is_expr<'a>(
     ecx: &ExprContext,
-    inner: &'a Expr<Aug>,
-    construct: IsExprConstruct,
+    expr: &'a Expr<Aug>,
+    construct: &IsExprConstruct<Aug>,
     not: bool,
 ) -> Result<HirScalarExpr, PlanError> {
-    let planned_expr = plan_expr(ecx, inner)?;
-    let expr = if construct.requires_boolean_expr() {
-        planned_expr.type_as(ecx, &ScalarType::Bool)?
-    } else {
-        // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
-        // with our type coercion rules, which treat `NULL` literals and
-        // unconstrained parameters identically. Providing a type hint of string
-        // means we wind up supporting both.
-        planned_expr.type_as_any(ecx)?
+    let expr = plan_expr(ecx, expr)?;
+    let mut expr = match construct {
+        IsExprConstruct::Null => {
+            // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is
+            // at odds with our type coercion rules, which treat `NULL` literals
+            // and unconstrained parameters identically. Providing a type hint
+            // of string means we wind up supporting both.
+            let expr = expr.type_as_any(ecx)?;
+            expr.call_is_null()
+        }
+        IsExprConstruct::Unknown => {
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
+            expr.call_is_null()
+        }
+        IsExprConstruct::True => {
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
+            expr.call_unary(UnaryFunc::IsTrue(expr_func::IsTrue))
+        }
+        IsExprConstruct::False => {
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
+            expr.call_unary(UnaryFunc::IsFalse(expr_func::IsFalse))
+        }
+        IsExprConstruct::DistinctFrom(expr2) => {
+            let expr1 = expr.type_as_any(ecx)?;
+            let expr2 = plan_expr(ecx, expr2)?.type_as_any(ecx)?;
+            let expr1_is_null = expr1.clone().call_is_null();
+            let expr2_is_null = expr2.clone().call_is_null();
+            HirScalarExpr::If {
+                cond: Box::new(expr1_is_null.clone()),
+                then: Box::new(expr2_is_null.clone().not()),
+                els: Box::new(HirScalarExpr::If {
+                    cond: Box::new(expr2_is_null),
+                    then: Box::new(expr1_is_null.not()),
+                    els: Box::new(expr1.call_binary(expr2, BinaryFunc::NotEq)),
+                }),
+            }
+        }
     };
-    let func = match construct {
-        IsExprConstruct::Null | IsExprConstruct::Unknown => UnaryFunc::IsNull(expr_func::IsNull),
-        IsExprConstruct::True => UnaryFunc::IsTrue(expr_func::IsTrue),
-        IsExprConstruct::False => UnaryFunc::IsFalse(expr_func::IsFalse),
-    };
-    let expr = HirScalarExpr::CallUnary {
-        func,
-        expr: Box::new(expr),
-    };
-
     if not {
-        Ok(HirScalarExpr::CallUnary {
-            func: UnaryFunc::Not(expr_func::Not),
-            expr: Box::new(expr),
-        })
-    } else {
-        Ok(expr)
+        expr = expr.not();
     }
+    Ok(expr)
 }
 
 fn plan_case<'a>(
@@ -5072,7 +5095,7 @@ struct AggregateTableFuncVisitor<'a> {
     scx: &'a StatementContext<'a>,
     aggs: Vec<Function<Aug>>,
     within_aggregate: bool,
-    tables: BTreeMap<TableFunction<Aug>, String>,
+    tables: BTreeMap<Function<Aug>, String>,
     table_disallowed_context: Vec<&'static str>,
     in_select_item: bool,
     err: Option<PlanError>,
@@ -5093,7 +5116,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
 
     fn into_result(
         self,
-    ) -> Result<(Vec<Function<Aug>>, BTreeMap<TableFunction<Aug>, String>), PlanError> {
+    ) -> Result<(Vec<Function<Aug>>, BTreeMap<Function<Aug>, String>), PlanError> {
         match self.err {
             Some(err) => Err(err),
             None => {
@@ -5194,14 +5217,13 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
             visit_mut::visit_expr_mut(self, expr);
             // Don't attempt to replace table functions with unsupported syntax.
             if let Function {
-                name,
-                args,
+                name: _,
+                args: _,
                 filter: None,
                 over: None,
                 distinct: false,
-            } = func
+            } = &func
             {
-                let func = TableFunction { name, args };
                 // Identical table functions can be de-duplicated.
                 let id = self
                     .tables

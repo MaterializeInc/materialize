@@ -19,4 +19,4 @@ class ValueStorageLayout(Enum):
     """Constant that is not stored in a database object"""
 
 
-VERTICAL_LAYOUT_ROW_INDEX_COL_NAME = "row_index"
+ROW_INDEX_COL_NAME = "row_index"

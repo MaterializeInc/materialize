@@ -55,7 +55,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         if len(self.global_warnings) == 0:
             return []
 
-        warning_rows = [f"{len(self.global_warnings)} warnings occurred."]
+        warning_rows = [
+            f"{len(self.global_warnings)} non-query specific warnings occurred."
+        ]
 
         for warning in self.global_warnings:
             warning_rows.append(f"* {warning}")

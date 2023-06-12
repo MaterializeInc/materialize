@@ -397,8 +397,8 @@ impl<'a> Parser<'a> {
         let expr = match tok {
             Token::LBracket => {
                 self.prev_token();
-                let name = self.parse_raw_name()?;
-                self.parse_function(name)
+                let function = self.parse_named_function()?;
+                Ok(Expr::Function(function))
             }
             Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
                 self.prev_token();
@@ -605,7 +605,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: RawItemName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: RawItemName) -> Result<Function<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let distinct = matches!(
             self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
@@ -660,13 +660,13 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(Expr::Function(Function {
+        Ok(Function {
             name,
             args,
             filter,
             over,
             distinct,
-        }))
+        })
     }
 
     fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
@@ -1044,7 +1044,7 @@ impl<'a> Parser<'a> {
                 IS => {
                     let negated = self.parse_keyword(NOT);
                     if let Some(construct) =
-                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN])
+                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN, DISTINCT])
                     {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
@@ -1054,6 +1054,11 @@ impl<'a> Parser<'a> {
                                 TRUE => IsExprConstruct::True,
                                 FALSE => IsExprConstruct::False,
                                 UNKNOWN => IsExprConstruct::Unknown,
+                                DISTINCT => {
+                                    self.expect_keyword(FROM)?;
+                                    let expr = self.parse_expr()?;
+                                    IsExprConstruct::DistinctFrom(Box::new(expr))
+                                }
                                 _ => unreachable!(),
                             },
                         })
@@ -3649,9 +3654,15 @@ impl<'a> Parser<'a> {
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
         if self.parse_keyword(SYSTEM) {
-            return self.parse_alter_system();
+            self.parse_alter_system()
+        } else if self.parse_keywords(&[DEFAULT, PRIVILEGES]) {
+            self.parse_alter_default_privileges()
+        } else {
+            self.parse_alter_object()
         }
+    }
 
+    fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = self.expect_object_type()?;
 
         match object_type {
@@ -4062,6 +4073,68 @@ impl<'a> Parser<'a> {
         let _ = self.parse_keyword(WITH);
         let options = self.parse_role_attributes();
         Ok(Statement::AlterRole(AlterRoleStatement { name, options }))
+    }
+
+    fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let target_roles = if self.parse_keyword(FOR) {
+            let _ = self.parse_one_of_keywords(&[ROLE, USER]);
+            Some(self.parse_comma_separated(Parser::parse_identifier)?)
+        } else {
+            None
+        };
+        let target_objects = if self.parse_keyword(IN) {
+            match self.expect_one_of_keywords(&[SCHEMA, DATABASE])? {
+                SCHEMA => GrantTargetAllSpecification::AllSchemas {
+                    schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
+                },
+                DATABASE => GrantTargetAllSpecification::AllDatabases {
+                    databases: self.parse_comma_separated(Parser::parse_database_name)?,
+                },
+                _ => unreachable!(),
+            }
+        } else {
+            GrantTargetAllSpecification::All
+        };
+        let is_grant = self.expect_one_of_keywords(&[GRANT, REVOKE])? == GRANT;
+        let privileges = self.parse_privilege_specification().ok_or_else(|| {
+            self.expected::<_, PrivilegeSpecification>(
+                self.peek_pos(),
+                "ALL or INSERT or SELECT or UPDATE or DELETE or USAGE or CREATE",
+                self.peek_token(),
+            )
+            .expect_err("only returns errors")
+        })?;
+        self.expect_keyword(ON)?;
+        let object_type =
+            self.expect_grant_revoke_plural_object_type(if is_grant { "GRANT" } else { "REVOKE" })?;
+        if is_grant {
+            self.expect_keyword(TO)?;
+        } else {
+            self.expect_keyword(FROM)?;
+        }
+        let grantees = self.parse_comma_separated(Parser::expect_role_specification)?;
+
+        let grant_or_revoke = if is_grant {
+            AbbreviatedGrantOrRevokeStatement::Grant(AbbreviatedGrantStatement {
+                privileges,
+                object_type,
+                grantees,
+            })
+        } else {
+            AbbreviatedGrantOrRevokeStatement::Revoke(AbbreviatedRevokeStatement {
+                privileges,
+                object_type,
+                revokees: grantees,
+            })
+        };
+
+        Ok(Statement::AlterDefaultPrivileges(
+            AlterDefaultPrivilegesStatement {
+                target_roles,
+                target_objects,
+                grant_or_revoke,
+            },
+        ))
     }
 
     /// Parse a copy statement
@@ -4596,9 +4669,10 @@ impl<'a> Parser<'a> {
                 }
                 if ends_with_wildcard {
                     Ok(Expr::QualifiedWildcard(id_parts))
-                } else if self.consume_token(&Token::LParen) {
-                    self.prev_token();
-                    self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))
+                } else if self.peek_token() == Some(Token::LParen) {
+                    let function =
+                        self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))?;
+                    Ok(Expr::Function(function))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -5395,7 +5469,13 @@ impl<'a> Parser<'a> {
                 let alias = self.parse_optional_table_alias()?;
                 let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 return Ok(TableFactor::Function {
-                    function: TableFunction { name, args },
+                    function: Function {
+                        name,
+                        args,
+                        filter: None,
+                        over: None,
+                        distinct: false,
+                    },
                     alias,
                     with_ordinality,
                 });
@@ -5461,7 +5541,13 @@ impl<'a> Parser<'a> {
                 let alias = self.parse_optional_table_alias()?;
                 let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 Ok(TableFactor::Function {
-                    function: TableFunction { name, args },
+                    function: Function {
+                        name,
+                        args,
+                        filter: None,
+                        over: None,
+                        distinct: false,
+                    },
                     alias,
                     with_ordinality,
                 })
@@ -5476,7 +5562,7 @@ impl<'a> Parser<'a> {
 
     fn parse_rows_from(&mut self) -> Result<TableFactor<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let functions = self.parse_comma_separated(Parser::parse_table_function)?;
+        let functions = self.parse_comma_separated(Parser::parse_named_function)?;
         self.expect_token(&Token::RParen)?;
         let alias = self.parse_optional_table_alias()?;
         let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
@@ -5487,13 +5573,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
+    fn parse_named_function(&mut self) -> Result<Function<Raw>, ParserError> {
         let name = self.parse_raw_name()?;
-        self.expect_token(&Token::LParen)?;
-        Ok(TableFunction {
-            name,
-            args: self.parse_optional_args(false)?,
-        })
+        self.parse_function(name)
     }
 
     fn parse_derived_table_factor(
@@ -6073,28 +6155,12 @@ impl<'a> Parser<'a> {
         privileges: PrivilegeSpecification,
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(ON)?;
-        let objects = if self.parse_keyword(ALL) {
-            let object_type = self.expect_grant_revoke_plural_object_type_in_schema("GRANT")?;
-            self.expect_keywords(&[IN, SCHEMA])?;
-            let schemas = self.parse_comma_separated(Parser::parse_schema_name)?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::All { schemas },
-            }
-        } else {
-            let object_type = self.expect_grant_revoke_object_type("GRANT")?;
-            let names =
-                self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::Objects { names },
-            }
-        };
+        let target = self.expect_grant_target_specification("GRANT")?;
         self.expect_keyword(TO)?;
         let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
             privileges,
-            objects,
+            target,
             roles,
         }))
     }
@@ -6127,28 +6193,12 @@ impl<'a> Parser<'a> {
         privileges: PrivilegeSpecification,
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(ON)?;
-        let objects = if self.parse_keyword(ALL) {
-            let object_type = self.expect_grant_revoke_plural_object_type_in_schema("REVOKE")?;
-            self.expect_keywords(&[IN, SCHEMA])?;
-            let schemas = self.parse_comma_separated(Parser::parse_schema_name)?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::All { schemas },
-            }
-        } else {
-            let object_type = self.expect_grant_revoke_object_type("REVOKE")?;
-            let names =
-                self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
-            GrantObjectSpecification {
-                object_type,
-                object_spec_inner: GrantObjectSpecificationInner::Objects { names },
-            }
-        };
+        let target = self.expect_grant_target_specification("REVOKE")?;
         self.expect_keyword(FROM)?;
         let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
             privileges,
-            objects,
+            target,
             roles,
         }))
     }
@@ -6165,6 +6215,58 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn expect_grant_target_specification(
+        &mut self,
+        statement_type: &str,
+    ) -> Result<GrantTargetSpecification<Raw>, ParserError> {
+        let (object_type, object_spec_inner) = if self.parse_keyword(ALL) {
+            let object_type = self.expect_grant_revoke_plural_object_type(statement_type)?;
+            let object_spec_inner = if self.parse_keyword(IN) {
+                if !object_type.lives_in_schema() && object_type != ObjectType::Schema {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        format!("IN invalid for {object_type}S")
+                    );
+                }
+                match self.expect_one_of_keywords(&[DATABASE, SCHEMA])? {
+                    DATABASE => GrantTargetSpecificationInner::All(
+                        GrantTargetAllSpecification::AllDatabases {
+                            databases: self.parse_comma_separated(Parser::parse_database_name)?,
+                        },
+                    ),
+                    SCHEMA => {
+                        if object_type == ObjectType::Schema {
+                            self.prev_token();
+                            self.expected(self.peek_pos(), DATABASE, self.peek_token())?;
+                        }
+                        GrantTargetSpecificationInner::All(
+                            GrantTargetAllSpecification::AllSchemas {
+                                schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
+                            },
+                        )
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                GrantTargetSpecificationInner::All(GrantTargetAllSpecification::All)
+            };
+            (object_type, object_spec_inner)
+        } else {
+            let object_type = self.expect_grant_revoke_object_type(statement_type)?;
+            let object_spec_inner = GrantTargetSpecificationInner::Objects {
+                names: self
+                    .parse_comma_separated(|parser| parser.parse_object_name(object_type))?,
+            };
+            (object_type, object_spec_inner)
+        };
+
+        Ok(GrantTargetSpecification {
+            object_type,
+            object_spec_inner,
+        })
+    }
+
     /// Bail out if the current token is not an object type suitable for a GRANT/REVOKE, or consume
     /// and return it if it is.
     fn expect_grant_revoke_object_type(
@@ -6178,7 +6280,7 @@ impl<'a> Parser<'a> {
 
     /// Bail out if the current token is not a plural object type suitable for a GRANT/REVOKE, or consume
     /// and return it if it is.
-    fn expect_grant_revoke_plural_object_type_in_schema(
+    fn expect_grant_revoke_plural_object_type(
         &mut self,
         statement_type: &str,
     ) -> Result<ObjectType, ParserError> {
@@ -6186,20 +6288,12 @@ impl<'a> Parser<'a> {
             // Limit the error message to allowed object types.
             self.expected::<_, ObjectType>(
                 self.peek_pos(),
-                "one of TABLES or TYPES or SECRETS or CONNECTIONS",
+                "one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS",
                 self.peek_token(),
             )
             .unwrap_err()
         })?;
         self.expect_grant_revoke_object_type_inner(statement_type, object_type)?;
-        // Further restrict to object types in schemas.
-        if !object_type.lives_in_schema() {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Unsupported object type: ALL {object_type}S")
-            );
-        }
         Ok(object_type)
     }
 
@@ -6260,7 +6354,10 @@ impl<'a> Parser<'a> {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
                 MATERIALIZED => {
-                    self.expect_keyword(VIEW)?;
+                    if let Err(e) = self.expect_keyword(VIEW) {
+                        self.prev_token();
+                        return Err(e);
+                    }
                     ObjectType::MaterializedView
                 }
                 SOURCE => ObjectType::Source,
@@ -6360,7 +6457,10 @@ impl<'a> Parser<'a> {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
                 MATERIALIZED => {
-                    self.expect_keyword(VIEWS)?;
+                    if let Err(e) = self.expect_keyword(VIEWS) {
+                        self.prev_token();
+                        return Err(e);
+                    }
                     ObjectType::MaterializedView
                 }
                 SOURCES => ObjectType::Source,
@@ -6369,7 +6469,10 @@ impl<'a> Parser<'a> {
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,
                 CLUSTER => {
-                    self.expect_keyword(REPLICAS)?;
+                    if let Err(e) = self.expect_keyword(REPLICAS) {
+                        self.prev_token();
+                        return Err(e);
+                    }
                     ObjectType::ClusterReplica
                 }
                 CLUSTERS => ObjectType::Cluster,

@@ -22,12 +22,12 @@ use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_lowertest::MzReflect;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{self, CastFrom, ReinterpretCast};
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
-use mz_ore::{cast, soft_assert};
+use mz_ore::soft_assert;
 use mz_pgrepr::Type;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
@@ -290,21 +290,21 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_add(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
 fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_add(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
 fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_add(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
@@ -497,9 +497,10 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
         }
     };
 
-    match i32::try_from(decoded_string.chars().count()) {
+    let count = decoded_string.chars().count();
+    match i32::try_from(count) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
     }
 }
 
@@ -568,7 +569,7 @@ fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_add(&b.unwrap_interval())
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} + {b}")))
         .map(Datum::from)
 }
 
@@ -768,21 +769,21 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn sub_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_sub(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
 fn sub_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_sub(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
 fn sub_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_sub(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
@@ -855,7 +856,7 @@ fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     b.unwrap_interval()
         .checked_neg()
         .and_then(|b| b.checked_add(&a.unwrap_interval()))
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} - {b}")))
         .map(Datum::from)
 }
 
@@ -867,7 +868,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let dt = interval
         .months
         .checked_neg()
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(interval.months.to_string()))
         .and_then(|months| add_timestamp_months(&dt, months))?;
     let dt = dt
         .checked_sub_signed(interval.duration_as_chrono())
@@ -906,21 +907,21 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_mul(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
 fn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_mul(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange)
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
 fn mul_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_mul(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange)
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
@@ -968,7 +969,7 @@ fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_mul(b.unwrap_float64())
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} * {b}")))
         .map(Datum::from)
 }
 
@@ -980,7 +981,7 @@ fn div_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int16()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int16OutOfRange)
+            .ok_or(EvalError::Int16OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -992,7 +993,7 @@ fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int32()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int32OutOfRange)
+            .ok_or(EvalError::Int32OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -1004,7 +1005,7 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int64()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int64OutOfRange)
+            .ok_or(EvalError::Int64OutOfRange(format!("{a} / {b}")))
     }
 }
 
@@ -1098,7 +1099,7 @@ fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     } else {
         a.unwrap_interval()
             .checked_div(b)
-            .ok_or(EvalError::IntervalOutOfRange)
+            .ok_or(EvalError::IntervalOutOfRange(format!("{a} / {b}")))
             .map(Datum::from)
     }
 }
@@ -1195,7 +1196,7 @@ pub fn neg_interval(a: Datum) -> Result<Datum, EvalError> {
 fn neg_interval_inner(a: Datum) -> Result<Interval, EvalError> {
     a.unwrap_interval()
         .checked_neg()
-        .ok_or(EvalError::IntervalOutOfRange)
+        .ok_or(EvalError::IntervalOutOfRange(a.to_string()))
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
@@ -1571,7 +1572,11 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn map_get_values<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn map_get_values<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
     let map = a.unwrap_map();
     let values: Vec<Datum> = b
         .unwrap_array()
@@ -1585,17 +1590,15 @@ fn map_get_values<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) ->
         )
         .collect();
 
-    temp_storage.make_datum(|packer| {
-        packer
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: values.len(),
-                }],
-                values,
-            )
-            .unwrap()
-    })
+    Ok(temp_storage.try_make_datum(|packer| {
+        packer.push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: values.len(),
+            }],
+            values,
+        )
+    })?)
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
@@ -1948,17 +1951,15 @@ fn parse_ident<'a>(
         }
     }
 
-    Ok(temp_storage.make_datum(|packer| {
-        packer
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: elems.len(),
-                }],
-                elems,
-            )
-            .unwrap()
-    }))
+    Ok(temp_storage.try_make_datum(|packer| {
+        packer.push_array(
+            &[ArrayDimension {
+                lower_bound: 1,
+                length: elems.len(),
+            }],
+            elems,
+        )
+    })?)
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -2350,7 +2351,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
             BinaryFunc::MapContainsKey => Ok(map_contains_key(a, b)),
             BinaryFunc::MapGetValue => Ok(map_get_value(a, b)),
-            BinaryFunc::MapGetValues => Ok(map_get_values(a, b, temp_storage)),
+            BinaryFunc::MapGetValues => map_get_values(a, b, temp_storage),
             BinaryFunc::MapContainsAllKeys => Ok(map_contains_all_keys(a, b)),
             BinaryFunc::MapContainsAnyKeys => Ok(map_contains_any_keys(a, b)),
             BinaryFunc::MapContainsMap => Ok(map_contains_map(a, b)),
@@ -4101,6 +4102,14 @@ trait LazyUnaryFunc {
     ///
     /// [inverse]: https://en.wikipedia.org/wiki/Inverse_function
     fn inverse(&self) -> Option<crate::UnaryFunc>;
+
+    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
+    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
+    /// determine the range of possible outputs just by mapping the endpoints.
+    ///
+    /// This property describes the behaviour of the function over ranges where the function is defined:
+    /// ie. the argument and the result are non-null (and non-error) datums.
+    fn is_monotone(&self) -> bool;
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -4132,6 +4141,10 @@ trait EagerUnaryFunc<'a> {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -4172,6 +4185,10 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         self.inverse()
+    }
+
+    fn is_monotone(&self) -> bool {
+        self.is_monotone()
     }
 }
 
@@ -5734,6 +5751,23 @@ fn text_concat_variadic<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) ->
     Datum::String(temp_storage.push_string(buf))
 }
 
+fn text_concat_ws<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    let ws = match datums[0] {
+        Datum::Null => return Datum::Null,
+        d => d.unwrap_str(),
+    };
+
+    let buf = Itertools::join(
+        &mut datums[1..].iter().filter_map(|d| match d {
+            Datum::Null => None,
+            d => Some(d.unwrap_str()),
+        }),
+        ws,
+    );
+
+    Datum::String(temp_storage.push_string(buf))
+}
+
 fn pad_leading<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -6271,9 +6305,9 @@ where
     }
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
-fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
+fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
+    mz_ore::soft_assert!(offset == 0 || offset == 1, "offset must be either 0 or 1");
+
     let array = datums[0].unwrap_array();
     let dims = array.dims();
     if dims.len() != datums.len() - 1 {
@@ -6283,22 +6317,26 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
 
     let mut final_idx = 0;
 
-    for (
-        ArrayDimension {
-            lower_bound,
-            length,
-        },
-        idx,
-    ) in dims.into_iter().zip_eq(datums[1..].iter())
-    {
-        let idx = idx.unwrap_int64();
-        if idx < lower_bound as i64 {
-            // TODO: How does/should this affect the offset? If this isn't 1,
-            // what is the physical representation of the array?
+    for (d, idx) in dims.into_iter().zip_eq(datums[1..].iter()) {
+        // Lower bound is written in terms of 1-based indexing, which offset accounts for.
+        let idx = isize::cast_from(idx.unwrap_int64() + offset);
+
+        let (lower, upper) = d.dimension_bounds();
+
+        // This index missed all of the data at this layer. The dimension bounds are inclusive,
+        // while range checks are exclusive, so adjust.
+        if !(lower..upper + 1).contains(&idx) {
             return Datum::Null;
         }
 
-        final_idx = final_idx * length + (idx as usize - offset);
+        // We discover how many indices our last index represents physically.
+        final_idx *= d.length;
+
+        // Because both index and lower bound are handled in 1-based indexing, taking their
+        // difference moves us back into 0-based indexing. Similarly, if the lower bound is
+        // negative, subtracting a negative value >= to itself ensures its non-negativity.
+        final_idx += usize::try_from(idx - d.lower_bound)
+            .expect("previous bounds check ensures phsical index is at least 0");
     }
 
     array
@@ -6491,8 +6529,8 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         let string_prefix = &string[0..char_index];
 
         let num_prefix_chars = string_prefix.chars().count();
-        let num_prefix_chars =
-            i32::try_from(num_prefix_chars).map_err(|_| EvalError::Int32OutOfRange)?;
+        let num_prefix_chars = i32::try_from(num_prefix_chars)
+            .map_err(|_| EvalError::Int32OutOfRange(num_prefix_chars.to_string()))?;
 
         Ok(Datum::Int32(num_prefix_chars + 1))
     } else {
@@ -6585,7 +6623,7 @@ fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
         Some(dim) => Datum::Int32(
             dim.length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange)?,
+                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
         ),
     })
 }
@@ -6647,7 +6685,7 @@ fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
             Some(dim) => Datum::Int32(
                 dim.length
                     .try_into()
-                    .map_err(|_| EvalError::Int32OutOfRange)?,
+                    .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
             ),
             None => Datum::Null,
         },
@@ -6689,7 +6727,7 @@ fn list_length_max<'a>(
         match max_len_on_layer(a, b) {
             Some(l) => match l.try_into() {
                 Ok(c) => Ok(Datum::Int32(c)),
-                Err(_) => Err(EvalError::Int32OutOfRange),
+                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string())),
             },
             None => Ok(Datum::Null),
         }
@@ -6761,7 +6799,7 @@ fn array_array_concat<'a>(
                 return Err(EvalError::IncompatibleArrayDimensions { dims: None });
             }
             dims = vec![ArrayDimension {
-                lower_bound: 1,
+                lower_bound: a_dims[0].lower_bound,
                 length: a_dims[0].length + b_dims[0].length,
             }];
             dims.extend(&a_dims[1..]);
@@ -6774,7 +6812,7 @@ fn array_array_concat<'a>(
                 return Err(EvalError::IncompatibleArrayDimensions { dims: None });
             }
             dims = vec![ArrayDimension {
-                lower_bound: 1,
+                lower_bound: b_dims[0].lower_bound,
                 // Since `a` is treated as an element of `b`, the length of
                 // the first dimension of `b` is incremented by one, as `a` is
                 // non-empty.
@@ -6790,7 +6828,7 @@ fn array_array_concat<'a>(
                 return Err(EvalError::IncompatibleArrayDimensions { dims: None });
             }
             dims = vec![ArrayDimension {
-                lower_bound: 1,
+                lower_bound: a_dims[0].lower_bound,
                 // Since `b` is treated as an element of `a`, the length of
                 // the first dimension of `a` is incremented by one, as `b`
                 // is non-empty.
@@ -6937,12 +6975,105 @@ fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     }))
 }
 
+fn array_fill<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    const MAX_SIZE: usize = 1 << 28 - 1;
+    const NULL_ARR_ERR: &str = "dimension array or low bound array";
+    const NULL_ELEM_ERR: &str = "dimension values";
+
+    let fill = datums[0];
+    if matches!(fill, Datum::Array(_)) {
+        return Err(EvalError::Unsupported {
+            feature: "array_fill with arrays".to_string(),
+            issue_no: None,
+        });
+    }
+
+    let arr = match datums[1] {
+        Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.to_string())),
+        o => o.unwrap_array(),
+    };
+
+    let dimensions = arr
+        .elements()
+        .iter()
+        .map(|d| match d {
+            Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.to_string())),
+            d => Ok(usize::cast_from(u32::reinterpret_cast(d.unwrap_int32()))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let lower_bounds = match datums.get(2) {
+        Some(d) => {
+            let arr = match d {
+                Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.to_string())),
+                o => o.unwrap_array(),
+            };
+
+            arr.elements()
+                .iter()
+                .map(|l| match l {
+                    Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.to_string())),
+                    l => Ok(isize::cast_from(l.unwrap_int32())),
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        None => {
+            vec![1isize; dimensions.len()]
+        }
+    };
+
+    if lower_bounds.len() != dimensions.len() {
+        return Err(EvalError::ArrayFillWrongArraySubscripts);
+    }
+
+    let fill_count: usize = dimensions
+        .iter()
+        .cloned()
+        .map(Some)
+        .reduce(|a, b| match (a, b) {
+            (Some(a), Some(b)) => a.checked_mul(b),
+            _ => None,
+        })
+        .flatten()
+        .ok_or(EvalError::MaxArraySizeExceeded(MAX_SIZE))?;
+
+    if matches!(
+        mz_repr::datum_size(&fill).checked_mul(fill_count),
+        None | Some(MAX_SIZE..)
+    ) {
+        return Err(EvalError::MaxArraySizeExceeded(MAX_SIZE));
+    }
+
+    let array_dimensions = if fill_count == 0 {
+        vec![ArrayDimension {
+            lower_bound: 1,
+            length: 0,
+        }]
+    } else {
+        dimensions
+            .into_iter()
+            .zip_eq(lower_bounds.into_iter())
+            .map(|(length, lower_bound)| ArrayDimension {
+                lower_bound,
+                length,
+            })
+            .collect()
+    };
+
+    Ok(temp_storage
+        .try_make_datum(|packer| packer.push_array(&array_dimensions, vec![fill; fill_count]))?)
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum VariadicFunc {
     Coalesce,
     Greatest,
     Least,
     Concat,
+    ConcatWs,
     MakeTimestamp,
     PadLeading,
     Substr,
@@ -6957,9 +7088,9 @@ pub enum VariadicFunc {
         elem_type: ScalarType,
     },
     ArrayIndex {
-        // Subtract `offset` from users' input to use 0-indexed arrays, i.e. is
-        // `1` in the case of `ScalarType::Array`.
-        offset: usize,
+        // Adjusts the index by offset depending on whether being called on an array or an
+        // Int2Vector.
+        offset: i64,
     },
     ListCreate {
         // We need to know the element type to type empty lists.
@@ -6985,6 +7116,9 @@ pub enum VariadicFunc {
     MakeMzAclItem,
     Translate,
     ArrayPosition,
+    ArrayFill {
+        elem_type: ScalarType,
+    },
 }
 
 impl VariadicFunc {
@@ -7024,6 +7158,7 @@ impl VariadicFunc {
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::Least => unreachable!(),
             VariadicFunc::Concat => Ok(text_concat_variadic(&ds, temp_storage)),
+            VariadicFunc::ConcatWs => Ok(text_concat_ws(&ds, temp_storage)),
             VariadicFunc::MakeTimestamp => make_timestamp(&ds),
             VariadicFunc::PadLeading => pad_leading(&ds, temp_storage),
             VariadicFunc::Substr => substr(&ds),
@@ -7062,6 +7197,7 @@ impl VariadicFunc {
             VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
+            VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
         }
     }
 
@@ -7071,6 +7207,7 @@ impl VariadicFunc {
             | VariadicFunc::Greatest
             | VariadicFunc::Least
             | VariadicFunc::Concat
+            | VariadicFunc::ConcatWs
             | VariadicFunc::And
             | VariadicFunc::Or => true,
 
@@ -7097,7 +7234,8 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestampTz
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
-            | VariadicFunc::ArrayPosition => false,
+            | VariadicFunc::ArrayPosition
+            | VariadicFunc::ArrayFill { .. } => false,
         }
     }
 
@@ -7109,7 +7247,7 @@ impl VariadicFunc {
                 .into_iter()
                 .reduce(|l, r| l.union(&r).unwrap())
                 .unwrap(),
-            Concat => ScalarType::String.nullable(in_nullable),
+            Concat | ConcatWs => ScalarType::String.nullable(in_nullable),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
             PadLeading => ScalarType::String.nullable(in_nullable),
             Substr => ScalarType::String.nullable(in_nullable),
@@ -7173,6 +7311,9 @@ impl VariadicFunc {
             .nullable(false),
             MakeMzAclItem => ScalarType::MzAclItem.nullable(true),
             ArrayPosition => ScalarType::Int32.nullable(true),
+            ArrayFill { elem_type } => {
+                ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
+            }
         }
     }
 
@@ -7188,6 +7329,7 @@ impl VariadicFunc {
                 | VariadicFunc::Greatest
                 | VariadicFunc::Least
                 | VariadicFunc::Concat
+                | VariadicFunc::ConcatWs
                 | VariadicFunc::JsonbBuildArray
                 | VariadicFunc::JsonbBuildObject
                 | VariadicFunc::ListCreate { .. }
@@ -7197,6 +7339,7 @@ impl VariadicFunc {
                 | VariadicFunc::ErrorIfNull
                 | VariadicFunc::RangeCreate { .. }
                 | VariadicFunc::ArrayPosition
+                | VariadicFunc::ArrayFill { .. }
         )
     }
 
@@ -7209,6 +7352,7 @@ impl VariadicFunc {
         use VariadicFunc::*;
         match self {
             Concat
+            | ConcatWs
             | PadLeading
             | Substr
             | Replace
@@ -7230,7 +7374,8 @@ impl VariadicFunc {
             | And
             | Or
             | MakeMzAclItem
-            | ArrayPosition => false,
+            | ArrayPosition
+            | ArrayFill { .. } => false,
             Coalesce
             | Greatest
             | Least
@@ -7282,7 +7427,7 @@ impl VariadicFunc {
         }
     }
 
-    /// Returns true if the function is monotone. (Non-strict; eithern increasing or decreasing.)
+    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
     /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
     /// determine the range of possible outputs just by mapping the endpoints.
     ///
@@ -7291,9 +7436,6 @@ impl VariadicFunc {
     /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
     /// monotone in `a` because for any particular non-null value of `b`, increasing `a` will never
     /// cause the result to decrease.)
-    ///
-    /// For monotone functions, this will return true whether the function is *non-decreasing*
-    /// or *non-increasing*.
     ///
     /// This property describes the behaviour of the function over ranges where the function is defined:
     /// ie. the arguments and the result are non-null (and non-error) datums.
@@ -7305,6 +7447,7 @@ impl VariadicFunc {
             | VariadicFunc::And
             | VariadicFunc::Or => true,
             VariadicFunc::Concat
+            | VariadicFunc::ConcatWs
             | VariadicFunc::MakeTimestamp
             | VariadicFunc::PadLeading
             | VariadicFunc::Substr
@@ -7328,7 +7471,8 @@ impl VariadicFunc {
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::Translate
-            | VariadicFunc::ArrayPosition => false,
+            | VariadicFunc::ArrayPosition
+            | VariadicFunc::ArrayFill { .. } => false,
         }
     }
 }
@@ -7340,6 +7484,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Greatest => f.write_str("greatest"),
             VariadicFunc::Least => f.write_str("least"),
             VariadicFunc::Concat => f.write_str("concat"),
+            VariadicFunc::ConcatWs => f.write_str("concat_ws"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::PadLeading => f.write_str("lpad"),
             VariadicFunc::Substr => f.write_str("substr"),
@@ -7375,6 +7520,7 @@ impl fmt::Display for VariadicFunc {
             }),
             VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
+            VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
         }
     }
 }
@@ -7396,6 +7542,7 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::Greatest).boxed(),
             Just(VariadicFunc::Least).boxed(),
             Just(VariadicFunc::Concat).boxed(),
+            Just(VariadicFunc::ConcatWs).boxed(),
             Just(VariadicFunc::MakeTimestamp).boxed(),
             Just(VariadicFunc::PadLeading).boxed(),
             Just(VariadicFunc::Substr).boxed(),
@@ -7409,7 +7556,7 @@ impl Arbitrary for VariadicFunc {
             ScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ArrayToString { elem_type })
                 .boxed(),
-            usize::arbitrary()
+            i64::arbitrary()
                 .prop_map(|offset| VariadicFunc::ArrayIndex { offset })
                 .boxed(),
             ScalarType::arbitrary()
@@ -7433,6 +7580,9 @@ impl Arbitrary for VariadicFunc {
                 .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
                 .boxed(),
             Just(VariadicFunc::ArrayPosition).boxed(),
+            ScalarType::arbitrary()
+                .prop_map(|elem_type| VariadicFunc::ArrayFill { elem_type })
+                .boxed(),
         ])
     }
 }
@@ -7446,6 +7596,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::Greatest => Greatest(()),
             VariadicFunc::Least => Least(()),
             VariadicFunc::Concat => Concat(()),
+            VariadicFunc::ConcatWs => ConcatWs(()),
             VariadicFunc::MakeTimestamp => MakeTimestamp(()),
             VariadicFunc::PadLeading => PadLeading(()),
             VariadicFunc::Substr => Substr(()),
@@ -7474,6 +7625,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
             VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
             VariadicFunc::ArrayPosition => ArrayPosition(()),
+            VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7487,6 +7639,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 Greatest(()) => Ok(VariadicFunc::Greatest),
                 Least(()) => Ok(VariadicFunc::Least),
                 Concat(()) => Ok(VariadicFunc::Concat),
+                ConcatWs(()) => Ok(VariadicFunc::ConcatWs),
                 MakeTimestamp(()) => Ok(VariadicFunc::MakeTimestamp),
                 PadLeading(()) => Ok(VariadicFunc::PadLeading),
                 Substr(()) => Ok(VariadicFunc::Substr),
@@ -7525,6 +7678,9 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 }),
                 MakeMzAclItem(()) => Ok(VariadicFunc::MakeMzAclItem),
                 ArrayPosition(()) => Ok(VariadicFunc::ArrayPosition),
+                ArrayFill(elem_type) => Ok(VariadicFunc::ArrayFill {
+                    elem_type: elem_type.into_rust()?,
+                }),
             }
         } else {
             Err(TryFromProtoError::missing_field(

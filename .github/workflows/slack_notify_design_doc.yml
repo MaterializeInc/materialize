@@ -1,0 +1,85 @@
+# Copyright 2020 The Actions Ecosystem Authors
+# Modifications Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Portions of this file are derived from the README examples in the Action
+# Slack Notifier project. The original source code was retrieved on
+# January 5, 2022 from:
+#
+#     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
+
+# Send a notification to the #eng-design-docs Slack channel when a new
+# design doc is added.
+#
+# A notification is sent when all of these conditions are true:
+#   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
+#     to ready-to-review.
+#   * The PR adds an '.md' document under 'doc/developer/design/'.
+
+name: Slack Design Doc Notifications
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+    paths:
+      - "doc/developer/design/*.md"
+
+jobs:
+  notify:
+    name: "Notify about new design docs"
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - name: "Path filter"
+        id: filter
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            new-design:
+              - added: "doc/developer/design/*.md"
+      - name: "Push to Slack"
+        if: steps.filter.outputs.new-design == 'true'
+        uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
+        with:
+          slack_token: ${{ secrets.SLACK_TOKEN }}
+          channel: eng-design-docs
+          custom_payload: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "A new design doc is ready for review!"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *PR:* [${{ github.event.pull_request.title }}](${{ github.event.pull_request.url }})"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *Author:* ${{ github.event.pull_request.user.name }} (${{ github.event.pull_request.user.login }})"
+                  }
+                }
+              ]
+            }

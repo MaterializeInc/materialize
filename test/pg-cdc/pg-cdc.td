@@ -148,6 +148,10 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 materialize.public.test_slot_source materialize.public.pk_table subsource
 materialize.public.test_slot_source materialize.public.test_slot_source_progress progress
 
+> SELECT source, subsource, type FROM mz_internal.mz_get_subsources('materialize.public.test_slot_source');
+materialize.public.test_slot_source materialize.public.pk_table subsource
+materialize.public.test_slot_source materialize.public.test_slot_source_progress progress
+
 > DROP SOURCE test_slot_source
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
@@ -671,7 +675,7 @@ INSERT INTO pk_table VALUES (99999);
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
 ! SELECT COUNT(*) = 0 FROM pk_table;
-regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
+regex:publication "mz_source" does not exist
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;

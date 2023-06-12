@@ -94,6 +94,7 @@ pub enum Statement<T: AstInfo> {
     RevokeRole(RevokeRoleStatement<T>),
     GrantPrivileges(GrantPrivilegesStatement<T>),
     RevokePrivileges(RevokePrivilegesStatement<T>),
+    AlterDefaultPrivileges(AlterDefaultPrivilegesStatement<T>),
     ReassignOwned(ReassignOwnedStatement<T>),
 }
 
@@ -154,6 +155,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::RevokeRole(stmt) => f.write_node(stmt),
             Statement::GrantPrivileges(stmt) => f.write_node(stmt),
             Statement::RevokePrivileges(stmt) => f.write_node(stmt),
+            Statement::AlterDefaultPrivileges(stmt) => f.write_node(stmt),
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
         }
     }
@@ -2253,26 +2255,6 @@ impl ObjectType {
             | ObjectType::Role => false,
         }
     }
-
-    pub fn is_relation(&self) -> bool {
-        match self {
-            ObjectType::Table
-            | ObjectType::View
-            | ObjectType::MaterializedView
-            | ObjectType::Source => true,
-            ObjectType::Sink
-            | ObjectType::Index
-            | ObjectType::Type
-            | ObjectType::Secret
-            | ObjectType::Connection
-            | ObjectType::Func
-            | ObjectType::Database
-            | ObjectType::Schema
-            | ObjectType::Cluster
-            | ObjectType::ClusterReplica
-            | ObjectType::Role => false,
-        }
-    }
 }
 
 impl AstDisplay for ObjectType {
@@ -2956,31 +2938,51 @@ impl AstDisplay for PrivilegeSpecification {
 impl_display!(PrivilegeSpecification);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GrantObjectSpecification<T: AstInfo> {
+pub struct GrantTargetSpecification<T: AstInfo> {
     /// The type of object.
     ///
     /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
     pub object_type: ObjectType,
     /// Specification of each object affected.
-    pub object_spec_inner: GrantObjectSpecificationInner<T>,
+    pub object_spec_inner: GrantTargetSpecificationInner<T>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum GrantObjectSpecificationInner<T: AstInfo> {
-    All { schemas: Vec<T::SchemaName> },
+pub enum GrantTargetSpecificationInner<T: AstInfo> {
+    All(GrantTargetAllSpecification<T>),
     Objects { names: Vec<T::ObjectName> },
 }
 
-impl<T: AstInfo> AstDisplay for GrantObjectSpecification<T> {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GrantTargetAllSpecification<T: AstInfo> {
+    All,
+    AllDatabases { databases: Vec<T::DatabaseName> },
+    AllSchemas { schemas: Vec<T::SchemaName> },
+}
+
+impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match &self.object_spec_inner {
-            GrantObjectSpecificationInner::All { schemas } => {
-                f.write_str("ALL ");
-                f.write_node(&self.object_type);
-                f.write_str("S IN SCHEMA ");
-                f.write_node(&display::comma_separated(schemas));
-            }
-            GrantObjectSpecificationInner::Objects { names } => {
+            GrantTargetSpecificationInner::All(all_spec) => match all_spec {
+                GrantTargetAllSpecification::All => {
+                    f.write_str("ALL ");
+                    f.write_node(&self.object_type);
+                    f.write_str("S");
+                }
+                GrantTargetAllSpecification::AllDatabases { databases } => {
+                    f.write_str("ALL ");
+                    f.write_node(&self.object_type);
+                    f.write_str("S IN DATABASE ");
+                    f.write_node(&display::comma_separated(databases));
+                }
+                GrantTargetAllSpecification::AllSchemas { schemas } => {
+                    f.write_str("ALL ");
+                    f.write_node(&self.object_type);
+                    f.write_str("S IN SCHEMA ");
+                    f.write_node(&display::comma_separated(schemas));
+                }
+            },
+            GrantTargetSpecificationInner::Objects { names } => {
                 f.write_node(&self.object_type);
                 f.write_str(" ");
                 f.write_node(&display::comma_separated(names));
@@ -2988,7 +2990,7 @@ impl<T: AstInfo> AstDisplay for GrantObjectSpecification<T> {
         }
     }
 }
-impl_display_t!(GrantObjectSpecification);
+impl_display_t!(GrantTargetSpecification);
 
 /// `GRANT ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2996,7 +2998,7 @@ pub struct GrantPrivilegesStatement<T: AstInfo> {
     /// The privileges being granted on an object.
     pub privileges: PrivilegeSpecification,
     /// The objects that are affected by the GRANT.
-    pub objects: GrantObjectSpecification<T>,
+    pub target: GrantTargetSpecification<T>,
     /// The roles that will granted the privileges.
     pub roles: Vec<T::RoleName>,
 }
@@ -3006,7 +3008,7 @@ impl<T: AstInfo> AstDisplay for GrantPrivilegesStatement<T> {
         f.write_str("GRANT ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.objects);
+        f.write_node(&self.target);
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.roles));
     }
@@ -3019,7 +3021,7 @@ pub struct RevokePrivilegesStatement<T: AstInfo> {
     /// The privileges being revoked.
     pub privileges: PrivilegeSpecification,
     /// The objects that are affected by the REVOKE.
-    pub objects: GrantObjectSpecification<T>,
+    pub target: GrantTargetSpecification<T>,
     /// The roles that will have privileges revoked.
     pub roles: Vec<T::RoleName>,
 }
@@ -3029,12 +3031,111 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegesStatement<T> {
         f.write_str("REVOKE ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.objects);
+        f.write_node(&self.target);
         f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.roles));
     }
 }
 impl_display_t!(RevokePrivilegesStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AbbreviatedGrantStatement<T: AstInfo> {
+    /// The privileges being granted.
+    pub privileges: PrivilegeSpecification,
+    /// The type of object.
+    ///
+    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
+    pub object_type: ObjectType,
+    /// The roles that will granted the privileges.
+    pub grantees: Vec<T::RoleName>,
+}
+
+impl<T: AstInfo> AstDisplay for AbbreviatedGrantStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("GRANT ");
+        f.write_node(&self.privileges);
+        f.write_str(" ON ");
+        f.write_node(&self.object_type);
+        f.write_str("S TO ");
+        f.write_node(&display::comma_separated(&self.grantees));
+    }
+}
+impl_display_t!(AbbreviatedGrantStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AbbreviatedRevokeStatement<T: AstInfo> {
+    /// The privileges being revoked.
+    pub privileges: PrivilegeSpecification,
+    /// The type of object.
+    ///
+    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
+    pub object_type: ObjectType,
+    /// The roles that the privilege will be revoked from.
+    pub revokees: Vec<T::RoleName>,
+}
+
+impl<T: AstInfo> AstDisplay for AbbreviatedRevokeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REVOKE ");
+        f.write_node(&self.privileges);
+        f.write_str(" ON ");
+        f.write_node(&self.object_type);
+        f.write_str("S FROM ");
+        f.write_node(&display::comma_separated(&self.revokees));
+    }
+}
+impl_display_t!(AbbreviatedRevokeStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AbbreviatedGrantOrRevokeStatement<T: AstInfo> {
+    Grant(AbbreviatedGrantStatement<T>),
+    Revoke(AbbreviatedRevokeStatement<T>),
+}
+
+impl<T: AstInfo> AstDisplay for AbbreviatedGrantOrRevokeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => f.write_node(grant),
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => f.write_node(revoke),
+        }
+    }
+}
+impl_display_t!(AbbreviatedGrantOrRevokeStatement);
+
+/// `ALTER DEFAULT PRIVILEGES ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterDefaultPrivilegesStatement<T: AstInfo> {
+    /// The roles for which created objects are affected.
+    pub target_roles: Option<Vec<T::RoleName>>,
+    /// The objects that are affected by the default privilege.
+    pub target_objects: GrantTargetAllSpecification<T>,
+    /// The privilege to grant or revoke.
+    pub grant_or_revoke: AbbreviatedGrantOrRevokeStatement<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterDefaultPrivilegesStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER DEFAULT PRIVILEGES");
+        if let Some(target_roles) = &self.target_roles {
+            f.write_str(" FOR ");
+            f.write_node(&display::comma_separated(target_roles));
+        }
+        match &self.target_objects {
+            GrantTargetAllSpecification::All => {}
+            GrantTargetAllSpecification::AllDatabases { databases } => {
+                f.write_str(" IN DATABASE ");
+                f.write_node(&display::comma_separated(databases));
+            }
+            GrantTargetAllSpecification::AllSchemas { schemas } => {
+                f.write_str(" IN SCHEMA ");
+                f.write_node(&display::comma_separated(schemas));
+            }
+        }
+        f.write_str(" ");
+        f.write_node(&self.grant_or_revoke);
+    }
+}
+impl_display_t!(AlterDefaultPrivilegesStatement);
 
 /// `REASSIGN OWNED ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

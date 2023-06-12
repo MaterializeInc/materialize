@@ -22,7 +22,8 @@ use enum_kinds::EnumKind;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
-use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
+use mz_sql::ast::{FetchDirection, Raw, Statement};
+use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, PlanKind};
 use mz_sql::session::vars::Var;
 use tokio::sync::{oneshot, watch};
@@ -406,9 +407,15 @@ pub enum ExecuteResponse {
     /// contained receiver.
     Subscribing { rx: RowBatchStream },
     /// The active transaction committed.
-    TransactionCommitted,
+    TransactionCommitted {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The active transaction rolled back.
-    TransactionRolledBack,
+    TransactionRolledBack {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
 }
@@ -472,8 +479,8 @@ impl ExecuteResponse {
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
             Subscribing { .. } => None,
-            TransactionCommitted => Some("COMMIT".into()),
-            TransactionRolledBack => Some("ROLLBACK".into()),
+            TransactionCommitted { .. } => Some("COMMIT".into()),
+            TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
         }
     }

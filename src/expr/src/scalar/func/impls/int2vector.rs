@@ -57,6 +57,10 @@ impl LazyUnaryFunc for CastInt2VectorToArray {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        true // A noop is trivially monotone.
+    }
 }
 
 impl fmt::Display for CastInt2VectorToArray {
@@ -104,6 +108,10 @@ impl LazyUnaryFunc for CastInt2VectorToString {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToInt2Vector)
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

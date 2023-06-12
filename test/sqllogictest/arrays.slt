@@ -36,6 +36,9 @@ SELECT '{1, 2, 3} 4'::int[]
 query error parsing multi-dimensional arrays is not supported
 SELECT '{{1}, {2}}'::int[]
 
+query error specifying array lower bounds is not supported
+SELECT '[1:2]={1,2}'::int[]
+
 # Test coercion behavior of multidimensional arrays.
 
 query error ARRAY could not convert type text\[\] to integer\[\]

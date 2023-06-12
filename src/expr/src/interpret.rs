@@ -7,86 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc,
 };
-
-/// Tracks whether a function is monotonic, either increasing or decreasing.
-/// This property is useful for static analysis because a monotonic function maps ranges to ranges:
-/// ie. if `a` is between `b` and `c` inclusive, then `f(a)` is between `f(b)` and `f(c)` inclusive.
-/// (However, if either `f(b)` and `f(c)` error or return null, we don't assume anything about `f(a)`.
-///
-/// This should likely be moved to a function annotation in the future.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum Monotonic {
-    /// Monotonic in this argument. (Either increasing or decreasing, non-strict.)
-    Yes,
-    /// We haven't classified this one yet. (Conservatively treated as "no", but a distinct
-    /// enum so it's easy to tell whether someone's thought about a particular function yet.)
-    /// This should likely be removed when this becomes a function annotation.
-    Maybe,
-    /// We don't know any useful properties of this function.
-    No,
-}
-
-impl From<bool> for Monotonic {
-    fn from(value: bool) -> Self {
-        if value {
-            Monotonic::Yes
-        } else {
-            Monotonic::No
-        }
-    }
-}
-
-fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
-    use Monotonic::*;
-    use UnaryFunc::*;
-
-    use crate::func::impls as funcs;
-    match func {
-        // Casts are generally monotonic.
-        CastUint64ToNumeric(_)
-        | CastNumericToUint64(_)
-        | CastNumericToMzTimestamp(_)
-        | CastUint64ToMzTimestamp(_)
-        | CastInt64ToMzTimestamp(_)
-        | CastTimestampToMzTimestamp(_)
-        | CastTimestampTzToMzTimestamp(_) => Yes,
-        // Including JSON casts.
-        CastJsonbToNumeric(_)
-        | CastJsonbToBool(_)
-        | CastJsonbToString(_)
-        | CastJsonbToInt64(_)
-        | CastJsonbToFloat64(_) => Yes,
-
-        // Extracting the "most significant bits" of the a timestamp is monotonic.
-        ExtractTimestamp(funcs::ExtractTimestamp(units))
-        | ExtractTimestampTz(funcs::ExtractTimestampTz(units)) => match units {
-            DateTimeUnits::Epoch
-            | DateTimeUnits::Millennium
-            | DateTimeUnits::Century
-            | DateTimeUnits::Decade
-            | DateTimeUnits::Year => Yes,
-            _ => No,
-        },
-        DateTruncTimestamp(_) | DateTruncTimestampTz(_) => Yes,
-        // Negation is monotonically decreasing, but that's fine.
-        NegInt64(_) | NegNumeric(_) | Not(_) => Yes,
-        // Trivially monotonic, since all non-null values map to `false`.
-        IsNull(_) => Yes,
-        AbsInt64(_) => No,
-        _ => Maybe,
-    }
-}
 
 /// An inclusive range of non-null datum values.
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -329,12 +258,12 @@ impl<'a> ResultSpec<'a> {
     /// each result to the function one-by-one and unioning the resulting sets. This is possible
     /// when our values set is empty or contains a single datum, but when it contains a range,
     /// we can't enumerate all possible values of the set. We handle this by:
-    /// - tracking whether the function is monotonic, in which case we can map the range by just
+    /// - tracking whether the function is monotone, in which case we can map the range by just
     ///   mapping the endpoints;
     /// - using a safe default when we can't infer a tighter bound on the set, eg. [Self::anything].
     fn flat_map(
         &self,
-        is_monotonic: bool,
+        is_monotone: bool,
         mut result_map: impl FnMut(Result<Datum<'a>, EvalError>) -> ResultSpec<'a>,
     ) -> ResultSpec<'a> {
         let null_spec = if self.nullable {
@@ -368,7 +297,7 @@ impl<'a> ResultSpec<'a> {
             }
             // Otherwise, if our function is monotonic, we can try mapping the input
             // range to an output range.
-            Values::Within(min, max) if is_monotonic => {
+            Values::Within(min, max) if is_monotone => {
                 let min_column = result_map(Ok(min));
                 let max_column = result_map(Ok(max));
                 if min_column.nullable
@@ -557,107 +486,109 @@ impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
     }
 }
 
-/// For a given column and expression, does the range of the column influence the range of the
-/// expression? (ie. if the expression is a filter, could we tell that the filter
-/// will never return True?)
-#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug)]
-pub enum Pushdownable {
-    /// We don't have any information to push down filters on this column:
-    /// either it's not referenced at all, or we've applied some non-monotonic function that we can't
-    /// push filters through. (This is the default.)
-    No,
-    /// We may or may not be able to push down filters on the given column. (The expression
-    /// includes a function we haven't classified yet.)
-    Maybe,
-    /// We can definitely push down a filter on this column. (The expression references the column
-    /// in such a way that the range of possible values of the column affects the range of output
-    /// values of the expression in a particular way.)
-    Yes,
+/// A binary function we've added special-case handling for; including:
+/// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
+///   default function-handling logic entirely.
+/// - Metadata on whether / not this function is pushdownable. See [Trace].
+struct SpecialBinary {
+    map_fn: for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>,
+    pushdownable: (bool, bool),
 }
 
-impl From<Monotonic> for Pushdownable {
-    fn from(value: Monotonic) -> Self {
-        match value {
-            Monotonic::Yes => Pushdownable::Yes,
-            Monotonic::Maybe => Pushdownable::Maybe,
-            Monotonic::No => Pushdownable::No,
-        }
-    }
-}
-
-impl From<bool> for Pushdownable {
-    fn from(value: bool) -> Self {
-        match value {
-            true => Pushdownable::Yes,
-            false => Pushdownable::No,
-        }
-    }
-}
-
-/// An interpreter that traces how information about the source columns flows through the expression.
-///
-/// Consider some arbitrary variadic function call f(a, ...). We say that this expression is "pushdownable" if both:
-/// - Any of the arguments are pushdownable. (eg. a column reference, or another pushdownable expression.)
-///   If the first argument is pushdownable but not the second we consider the whole thing pushdownable.
-/// - The function itself is monotonic / similar. This is the meet; the #0 in 5 / #0 is pushdownable,
-///   but the overall expression is not, because division is not pushdownable in its righ-hand side.
-#[derive(Debug)]
-pub struct Trace;
-
-impl Interpreter for Trace {
-    /// For every column in the data, we track whether or not that column is "pusdownable".
-    /// (If the column is not present in the summary, we default to `false`.
-    type Summary = Pushdownable;
-
-    fn column(&self, _id: usize) -> Self::Summary {
-        Pushdownable::Yes
-    }
-
-    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
-        Pushdownable::No
-    }
-
-    fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
-        Pushdownable::No
-    }
-
-    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        expr.min(unary_monotonic(func).into())
-    }
-
-    fn binary(
-        &self,
-        func: &BinaryFunc,
-        left: Self::Summary,
-        right: Self::Summary,
-    ) -> Self::Summary {
-        // TODO: this is duplicative! If we have more than one or two special-cased functions
-        // we should find some way to share the list between `Trace` and `ColumnSpecs`.
-        let (left_pushdownable, right_pushdownable) = match func {
-            BinaryFunc::JsonbGetString { stringify: false } => (true, false),
-            _ => func.is_monotone(),
-        };
-        max(
-            min(left, left_pushdownable.into()),
-            min(right, right_pushdownable.into()),
-        )
-    }
-
-    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
-        if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
-            // We can't efficiently evaluate functions with very large argument lists;
-            // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
-            return Pushdownable::No;
+impl SpecialBinary {
+    /// Returns the special-case handling for a particular function, if it exists.
+    fn for_func(func: &BinaryFunc) -> Option<SpecialBinary> {
+        /// Eager in the same sense as `func.rs` uses the term; this assumes that
+        /// nulls and errors propagate up, and we only need to define the behaviour
+        /// on values.
+        fn eagerly<'b>(
+            left: ResultSpec<'b>,
+            right: ResultSpec<'b>,
+            value_fn: impl FnOnce(Values<'b>, Values<'b>) -> ResultSpec<'b>,
+        ) -> ResultSpec<'b> {
+            let result = match (left.values, right.values) {
+                (Values::Empty, _) | (_, Values::Empty) => ResultSpec::nothing(),
+                (l, r) => value_fn(l, r),
+            };
+            ResultSpec {
+                fallible: left.fallible || right.fallible || result.fallible,
+                nullable: left.nullable || right.nullable || result.nullable,
+                values: result.values,
+            }
         }
 
-        let pushdownable_fn: Pushdownable = func.is_monotone().into();
-        exprs.into_iter().fold(Pushdownable::No, |acc, arg| {
-            max(acc, min(arg, pushdownable_fn))
-        })
-    }
+        fn jsonb_get_string<'b>(
+            left: ResultSpec<'b>,
+            right: ResultSpec<'b>,
+            stringify: bool,
+        ) -> ResultSpec<'b> {
+            eagerly(left, right, |left, right| {
+                let nested_spec = match (left, right) {
+                    (Values::Nested(mut map_spec), Values::Within(key, key2)) if key == key2 => {
+                        map_spec.remove(&key)
+                    }
+                    _ => None,
+                };
 
-    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        cond.max(then.max(els))
+                if let Some(field_spec) = nested_spec {
+                    if stringify {
+                        // We only preserve value-range information when stringification
+                        // is a noop. (Common in real queries.)
+                        let values = match field_spec.values {
+                            Values::Empty => Values::Empty,
+                            Values::Within(min @ Datum::String(_), max @ Datum::String(_)) => {
+                                Values::Within(min, max)
+                            }
+                            Values::Within(_, _) | Values::Nested(_) | Values::All => Values::All,
+                        };
+                        ResultSpec {
+                            values,
+                            ..field_spec
+                        }
+                    } else {
+                        field_spec
+                    }
+                } else {
+                    // TODO: it should be possible to narrow this further...
+                    ResultSpec::anything()
+                }
+            })
+        }
+
+        fn eq<'b>(left: ResultSpec<'b>, right: ResultSpec<'b>) -> ResultSpec<'b> {
+            eagerly(left, right, |left, right| {
+                // `eq` might return true if there's any overlap between the range of its two arguments...
+                let maybe_true = match left.clone().intersect(right.clone()) {
+                    Values::Empty => ResultSpec::nothing(),
+                    _ => ResultSpec::value(Datum::True),
+                };
+
+                // ...and may return false if the union contains at least two distinct values.
+                // Note that the `Empty` case is handled by `eagerly` above.
+                let maybe_false = match left.union(right) {
+                    Values::Within(a, b) if a == b => ResultSpec::nothing(),
+                    _ => ResultSpec::value(Datum::False),
+                };
+
+                maybe_true.union(maybe_false)
+            })
+        }
+
+        match func {
+            BinaryFunc::JsonbGetString { stringify } => Some(SpecialBinary {
+                map_fn: if *stringify {
+                    |l, r| jsonb_get_string(l, r, true)
+                } else {
+                    |l, r| jsonb_get_string(l, r, false)
+                },
+                pushdownable: (true, false),
+            }),
+            BinaryFunc::Eq => Some(SpecialBinary {
+                map_fn: eq,
+                pushdownable: (true, true),
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -808,12 +739,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
-        let is_monotonic = unary_monotonic(func) == Monotonic::Yes;
+        let is_monotone = func.is_monotone();
         let mut expr = MirScalarExpr::CallUnary {
             func: func.clone(),
             expr: Box::new(Self::placeholder(summary.col_type.clone())),
         };
-        let mapped_spec = summary.range.flat_map(is_monotonic, |datum| {
+        let mapped_spec = summary.range.flat_map(is_monotone, |datum| {
             Self::set_argument(&mut expr, 0, datum);
             self.eval_result(expr.eval(&[], self.arena))
         });
@@ -832,65 +763,26 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     ) -> Self::Summary {
         let (left_monotonic, right_monotonic) = func.is_monotone();
 
-        let special_spec = match func {
-            BinaryFunc::JsonbGetString { stringify } => {
-                let values_spec = match (&left.range.values, &right.range.values) {
-                    (Values::Nested(map_spec), Values::Within(key, key2)) if key == key2 => {
-                        map_spec
-                            .get(key)
-                            .cloned()
-                            .map_or_else(ResultSpec::anything, |field_spec| {
-                                if *stringify {
-                                    // We only preserve value-range information when stringification
-                                    // is a noop. (Common in real queries.)
-                                    let values = match field_spec.values {
-                                        Values::Empty => Values::Empty,
-                                        Values::Within(
-                                            min @ Datum::String(_),
-                                            max @ Datum::String(_),
-                                        ) => Values::Within(min, max),
-                                        Values::Within(_, _) | Values::Nested(_) | Values::All => {
-                                            Values::All
-                                        }
-                                    };
-                                    ResultSpec {
-                                        values,
-                                        ..field_spec
-                                    }
-                                } else {
-                                    field_spec
-                                }
-                            })
-                    }
-                    _ => ResultSpec::anything(),
-                };
-                ResultSpec {
-                    nullable: left.range.nullable || right.range.nullable || values_spec.nullable,
-                    fallible: left.range.fallible || right.range.fallible || values_spec.fallible,
-                    values: values_spec.values,
-                }
-            }
-            _ => ResultSpec::anything(),
-        };
-
-        let mut expr = MirScalarExpr::CallBinary {
-            func: func.clone(),
-            expr1: Box::new(Self::placeholder(left.col_type.clone())),
-            expr2: Box::new(Self::placeholder(right.col_type.clone())),
-        };
-        let mapped_spec = left.range.flat_map(left_monotonic, |left_result| {
-            Self::set_argument(&mut expr, 0, left_result);
-            right.range.flat_map(right_monotonic, |right_result| {
-                Self::set_argument(&mut expr, 1, right_result);
-                self.eval_result(expr.eval(&[], self.arena))
+        let mapped_spec = if let Some(special) = SpecialBinary::for_func(func) {
+            (special.map_fn)(left.range, right.range)
+        } else {
+            let mut expr = MirScalarExpr::CallBinary {
+                func: func.clone(),
+                expr1: Box::new(Self::placeholder(left.col_type.clone())),
+                expr2: Box::new(Self::placeholder(right.col_type.clone())),
+            };
+            left.range.flat_map(left_monotonic, |left_result| {
+                Self::set_argument(&mut expr, 0, left_result);
+                right.range.flat_map(right_monotonic, |right_result| {
+                    Self::set_argument(&mut expr, 1, right_result);
+                    self.eval_result(expr.eval(&[], self.arena))
+                })
             })
-        });
+        };
 
         let col_type = func.output_type(left.col_type, right.col_type);
 
-        let range = mapped_spec
-            .intersect(ResultSpec::has_type(&col_type, true))
-            .intersect(special_spec);
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
         ColumnSpec { col_type, range }
     }
 
@@ -976,8 +868,78 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 }
 
+/// An interpreter that returns whether or not a particular expression is "pushdownable".
+/// Broadly speaking, an expression is pushdownable if the result of evaluating the expression
+/// depends on the range of possible column values in a way that `ColumnSpecs` is able to reason about.
+/// `Column` is trivially pushdownable; `Literal` and `CallUnmaterializable`
+/// are not, since their results don't depend on the range of possible values in any column.
+///
+/// Functions are the most complex case. We say that a function is pushdownable for a particular
+/// argument if `ColumnSpecs` can determine the spec of the function's output given the input spec for
+/// that argument. (In practice, this is true when either the function is monotone in that argument
+/// or it's been special-cased in the interpreter.) And we say a function-call expression is
+/// pushdownable overall if at least one of its arguments is pushdownable, and the function is
+/// is pushdownable in that argument. For example, `3 + #0` is pushdownable (because the second
+/// argument to `+` is pushdownable and `+` is monotone) but `3 / #0` is not (because while the
+/// second argument is pushdownable, `/` is not monotone on the right-hand side).
+#[derive(Debug)]
+pub struct Trace;
+
+impl Interpreter for Trace {
+    type Summary = bool;
+
+    fn column(&self, _id: usize) -> Self::Summary {
+        true
+    }
+
+    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
+        false
+    }
+
+    fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
+        false
+    }
+
+    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
+        expr && func.is_monotone()
+    }
+
+    fn binary(
+        &self,
+        func: &BinaryFunc,
+        left: Self::Summary,
+        right: Self::Summary,
+    ) -> Self::Summary {
+        // TODO: this is duplicative! If we have more than one or two special-cased functions
+        // we should find some way to share the list between `Trace` and `ColumnSpecs`.
+        let (left_pushdownable, right_pushdownable) = match SpecialBinary::for_func(func) {
+            None => func.is_monotone(),
+            Some(special) => special.pushdownable,
+        };
+        (left && left_pushdownable) || (right && right_pushdownable)
+    }
+
+    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
+        if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
+            // We can't efficiently evaluate functions with very large argument lists;
+            // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
+            return false;
+        }
+
+        let pushdownable_fn = func.is_monotone();
+        exprs
+            .into_iter()
+            .any(|pushdownable_arg| pushdownable_arg && pushdownable_fn)
+    }
+
+    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
+        cond || (then || els)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
     use proptest::prelude::*;
     use proptest::sample::{select, Index};
@@ -1003,6 +965,7 @@ mod tests {
         ScalarType::Bool,
         ScalarType::Jsonb,
         NUM_TYPE,
+        ScalarType::Date,
         ScalarType::Timestamp,
         ScalarType::MzTimestamp,
         ScalarType::String,
@@ -1017,6 +980,7 @@ mod tests {
             UnaryFunc::CastJsonbToString(CastJsonbToString),
             UnaryFunc::DateTruncTimestamp(DateTruncTimestamp(DateTimeUnits::Epoch)),
             UnaryFunc::ExtractTimestamp(ExtractTimestamp(DateTimeUnits::Epoch)),
+            UnaryFunc::ExtractDate(ExtractDate(DateTimeUnits::Epoch)),
             UnaryFunc::Not(Not),
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::IsFalse(IsFalse),
@@ -1033,6 +997,7 @@ mod tests {
             ExtractTimestamp(_) | DateTruncTimestamp(_) => {
                 arg.scalar_type.base_eq(&ScalarType::Timestamp)
             }
+            ExtractDate(_) => arg.scalar_type.base_eq(&ScalarType::Date),
             Not(_) => arg.scalar_type.base_eq(&ScalarType::Bool),
             IsNull(_) => true,
             _ => false,
@@ -1460,7 +1425,7 @@ mod tests {
                 }),
             }),
         };
-        let trace = Trace.expr(&expr);
-        assert_eq!(trace, Pushdownable::Yes);
+        let pushdownable = Trace.expr(&expr);
+        assert!(pushdownable);
     }
 }

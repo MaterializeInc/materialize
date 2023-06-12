@@ -34,7 +34,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "COS",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 # only for numbers [-1, +1]
@@ -48,14 +48,14 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "COSH",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
         {SingleParamValueGrowsArgsValidator()},
     )
 )
@@ -77,14 +77,22 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 ],
             )
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
-    DbFunction("COT", [NumericOperationParam()], NumericReturnTypeSpec())
+    DbFunction(
+        "COT",
+        [NumericOperationParam()],
+        NumericReturnTypeSpec(always_floating_type=True),
+    )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
-    DbFunction("SIN", [NumericOperationParam()], NumericReturnTypeSpec())
+    DbFunction(
+        "SIN",
+        [NumericOperationParam()],
+        NumericReturnTypeSpec(always_floating_type=True),
+    )
 )
 # only for numbers [-1, +1]
 TRIGONOMETRIC_OPERATION_TYPES.append(
@@ -97,14 +105,14 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "SINH",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
         {SingleParamValueGrowsArgsValidator()},
     )
 )
@@ -112,24 +120,28 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "ASINH",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
-    DbFunction("TAN", [NumericOperationParam()], NumericReturnTypeSpec())
+    DbFunction(
+        "TAN",
+        [NumericOperationParam()],
+        NumericReturnTypeSpec(always_floating_type=True),
+    )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "ATAN",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "TANH",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 # only for numbers [-1, +1]
@@ -143,21 +155,21 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "RADIANS",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "DEGREES",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 

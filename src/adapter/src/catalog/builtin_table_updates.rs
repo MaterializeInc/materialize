@@ -33,23 +33,26 @@ use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::types::connections::KafkaConnection;
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
-use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
+};
 
 use crate::catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
     MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
-    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS,
-    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
-    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES,
+    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
+    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
+    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::{
-    AwsPrincipalContext, CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error,
-    ErrorKind, Func, Index, MaterializedView, Sink, StorageSinkConnectionState, Type, View,
-    SYSTEM_CONN_ID,
+    AwsPrincipalContext, CatalogItem, CatalogState, Connection, DataSourceDesc, Database,
+    DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
+    StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::session::Session;
 use crate::subscribe::ActiveSubscribe;
@@ -332,6 +335,9 @@ impl CatalogState {
                         GenericSourceConnection::Postgres(postgres) => {
                             self.pack_postgres_source_update(id, postgres, diff)
                         }
+                        GenericSourceConnection::Kafka(kafka) => {
+                            self.pack_kafka_source_update(id, kafka, diff)
+                        }
                         _ => vec![],
                     },
                     _ => vec![],
@@ -470,6 +476,22 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(&postgres.publication_details.slot),
+            ]),
+            diff,
+        }]
+    }
+
+    fn pack_kafka_source_update(
+        &self,
+        id: GlobalId,
+        kafka: &KafkaSourceConnection,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_KAFKA_SOURCES),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(&kafka.group_id(id)),
             ]),
             diff,
         }]
@@ -1242,6 +1264,41 @@ impl CatalogState {
                 Datum::UInt32(session.conn_id().unhandled()),
                 Datum::String(&session.session_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
+            ]),
+            diff,
+        }
+    }
+
+    pub fn pack_default_privileges_update(
+        &self,
+        default_privilege_object: &DefaultPrivilegeObject,
+        grantee: &RoleId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let privileges = self
+            .default_privileges
+            .get_privileges_for_grantee(default_privilege_object, grantee)
+            .expect("catalog out of sync");
+        let database_id = default_privilege_object
+            .database_id
+            .map(|database_id| database_id.to_string());
+        let schema_id = default_privilege_object
+            .schema_id
+            .map(|schema_id| schema_id.to_string());
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_DEFAULT_PRIVILEGES),
+            row: Row::pack_slice(&[
+                default_privilege_object.role_id.to_string().as_str().into(),
+                database_id.as_deref().into(),
+                schema_id.as_deref().into(),
+                default_privilege_object
+                    .object_type
+                    .to_string()
+                    .as_str()
+                    .into(),
+                grantee.to_string().as_str().into(),
+                privileges.to_string().as_str().into(),
             ]),
             diff,
         }

@@ -1477,7 +1477,7 @@ SELECT 14::oid = 14::smallint;
 ----
 true
 
-query error OID out of range
+query error "120129019392" OID out of range
 SELECT 120129019392::bigint::oid;
 
 # Check that our non-linear type promotion structure works as intended.

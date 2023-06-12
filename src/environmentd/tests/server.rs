@@ -1065,7 +1065,8 @@ fn test_max_statement_batch_size() {
             | msg @ WebSocketResponse::Notice(_)
             | msg @ WebSocketResponse::Rows(_)
             | msg @ WebSocketResponse::Row(_)
-            | msg @ WebSocketResponse::CommandComplete(_) => {
+            | msg @ WebSocketResponse::CommandComplete(_)
+            | msg @ WebSocketResponse::ParameterStatus(_) => {
                 panic!("response should be error: {msg:?}")
             }
         }

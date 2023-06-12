@@ -30,7 +30,7 @@ use tokio::sync::oneshot;
 
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, Response};
-use crate::coord::Message;
+use crate::coord::{Message, PendingTxnResponse};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::{ExecuteResponse, PeekResponseUnary};
@@ -134,16 +134,16 @@ impl Transmittable for () {
 #[derive(Debug)]
 pub struct CompletedClientTransmitter<T: Transmittable> {
     client_transmitter: ClientTransmitter<T>,
-    response: Result<T, AdapterError>,
+    response: Result<PendingTxnResponse, AdapterError>,
     session: Session,
     action: EndTransactionAction,
 }
 
-impl<T: Transmittable> CompletedClientTransmitter<T> {
+impl CompletedClientTransmitter<ExecuteResponse> {
     /// Creates a new completed client transmitter.
     pub fn new(
-        client_transmitter: ClientTransmitter<T>,
-        response: Result<T, AdapterError>,
+        client_transmitter: ClientTransmitter<ExecuteResponse>,
+        response: Result<PendingTxnResponse, AdapterError>,
         session: Session,
         action: EndTransactionAction,
     ) -> Self {
@@ -158,8 +158,15 @@ impl<T: Transmittable> CompletedClientTransmitter<T> {
     /// Transmits `result` to the client, returning ownership of the session
     /// `session` as well.
     pub fn send(mut self) {
-        self.session.vars_mut().end_transaction(self.action);
-        self.client_transmitter.send(self.response, self.session);
+        let changed = self.session.vars_mut().end_transaction(self.action);
+
+        // Append any parameters that changed to the response.
+        let response = self.response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+
+        self.client_transmitter.send(response, self.session);
     }
 }
 

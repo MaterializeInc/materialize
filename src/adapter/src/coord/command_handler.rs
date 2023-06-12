@@ -480,6 +480,7 @@ impl Coordinator {
                     | Statement::GrantRole(_)
                     | Statement::Insert(_)
                     | Statement::RevokePrivileges(_)
+                    | Statement::AlterDefaultPrivileges(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ReassignOwned(_) => {

@@ -134,6 +134,29 @@ case "$cmd" in
         docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
+        docker_command=()
+
+        detach_container=false
+        container_name_param=""
+
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --detach)
+                    detach_container=true
+                    shift # past argument
+                    ;;
+                --name)
+                    container_name_param="$2"
+                    shift # past argument
+                    shift # past value
+                    ;;
+                *)
+                    docker_command+=("$1")
+                    shift # past argument
+                    ;;
+            esac
+        done
+
         mkdir -p target-xcompile ~/.kube
         args=(
             --cidfile "$cid_file"
@@ -157,6 +180,15 @@ case "$cmd" in
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
             --env PYPI_TOKEN
         )
+
+        if [[ $detach_container == "true" ]]; then
+            args+=("--detach")
+        fi
+
+        if [[ -n "$container_name_param" ]]; then
+            args+=("--name=$container_name_param")
+        fi
+
         for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
             args+=(--env "$env")
         done
@@ -232,7 +264,7 @@ case "$cmd" in
             )
         fi
         rm -f "$cid_file"
-        docker run "${args[@]}" "materialize/ci-builder:$tag" "$@"
+        docker run "${args[@]}" "materialize/ci-builder:$tag" "${docker_command[@]}"
         ;;
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
