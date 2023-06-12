@@ -5,7 +5,7 @@ menu:
   main:
     parent: "manage"
     weight: 11
-    name: "Terraform"
+    name: "Use Terraform to manage Materialize"
 ---
 
 [Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that allows you to manage your
