@@ -782,6 +782,12 @@ impl Stash {
             &'a BTreeMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
+        // Use a function so we can instrument.
+        #[tracing::instrument(name = "stash::batch_execute", level = "debug", skip(client))]
+        async fn batch_execute(client: &Client, stmt: &str) -> Result<(), tokio_postgres::Error> {
+            client.batch_execute(stmt).await
+        }
+
         let reconnect = match &self.client {
             Some(client) => client.is_closed(),
             None => true,
@@ -799,8 +805,7 @@ impl Stash {
             TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
-        client
-            .batch_execute(tx_start)
+        batch_execute(client, tx_start)
             .await
             .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
@@ -851,7 +856,7 @@ impl Stash {
             });
         }
 
-        if let Err(_) = client.batch_execute(tx_end).await {
+        if let Err(_) = batch_execute(client, tx_end).await {
             return Err(TransactionError::Commit {
                 committed_if_version,
                 result: res,
