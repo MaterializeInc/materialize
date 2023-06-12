@@ -122,7 +122,7 @@ impl Client {
         /// A struct that deserializes nothing.
         ///
         /// Useful for deserializing empty response bodies.
-        pub struct Empty;
+        struct Empty;
 
         impl<'de> Deserialize<'de> for Empty {
             fn deserialize<D>(_: D) -> Result<Empty, D::Error>
