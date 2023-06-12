@@ -690,21 +690,6 @@ impl Typecheck {
                         // TODO(mgree) this imprecision should be resolved, but we need to fix the optimizer
                         ::tracing::debug!("{err}");
                     }
-
-                    // if a single column in the equivalence class is non-nullable, then we can consider all columns non-nullable
-                    let col_inds = eq_class
-                        .iter()
-                        .filter_map(|expr| match expr {
-                            MirScalarExpr::Column(col) => Some(*col),
-                            _ => None,
-                        })
-                        .collect_vec();
-
-                    if col_inds.iter().any(|i| !t_in_global.get(*i).unwrap().nullable) {
-                        for i in col_inds {
-                            t_in_global.get_mut(i).unwrap().nullable = false;
-                        }
-                    }
                 }
 
                 // check that the join implementation is consistent
