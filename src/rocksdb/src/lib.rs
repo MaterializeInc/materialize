@@ -257,7 +257,7 @@ pub struct RocksDBInstance<K, V> {
 
 impl<K, V> RocksDBInstance<K, V>
 where
-    K: AsRef<[u8]> + Send + Sync + 'static,
+    K: AsRef<[u8]> + Send + Sync + Clone + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     /// Start a new RocksDB instance at the path, using
@@ -486,7 +486,6 @@ where
     }
 }
 
-// TODO(guswynn): retry retryable rocksdb errors.
 fn rocksdb_core_loop<K, V, M, O>(
     options: InstanceOptions,
     tuning_config: RocksDBConfig,
@@ -496,7 +495,7 @@ fn rocksdb_core_loop<K, V, M, O>(
     creation_error_tx: oneshot::Sender<Error>,
     enc_opts: O,
 ) where
-    K: AsRef<[u8]> + Send + Sync + 'static,
+    K: AsRef<[u8]> + Send + Sync + Clone + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
@@ -525,7 +524,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 return;
             }
             Command::MultiGet {
-                mut batch,
+                batch,
                 mut results_scratch,
                 response_sender,
             } => {
@@ -533,27 +532,43 @@ fn rocksdb_core_loop<K, V, M, O>(
 
                 // Perform the multi_get and record metrics, if there wasn't an error.
                 let now = Instant::now();
-                let gets = db.multi_get(batch.drain(..));
-                let latency = now.elapsed();
+                let result = Retry::default().max_tries(3).retry(|_| {
+                    let mut cloned_batch = batch.clone();
+                    let gets = db.multi_get(cloned_batch.drain(..));
+                    let latency = now.elapsed();
 
-                let gets: Result<Vec<_>, _> = gets.into_iter().collect();
-                let result = Retry::default().max_tries(3).retry(|_| match &gets {
-                    Ok(gets) => {
-                        results_scratch.clear();
-                        let result = MultiGetResult {
-                            processed_gets: gets.len().try_into().unwrap(),
-                        };
+                    let gets: Result<Vec<_>, _> = gets.into_iter().collect();
+                    match gets {
+                        Ok(gets) => {
+                            metrics.multi_get_latency.observe(latency.as_secs_f64());
+                            metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
+                            let result = MultiGetResult {
+                                processed_gets: gets.len().try_into().unwrap(),
+                            };
 
+                            RetryResult::Ok((result, cloned_batch, gets))
+                        }
+                        Err(e) => match e.kind() {
+                            ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                            _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                        },
+                    }
+                });
+
+                let _ = match result {
+                    Ok((result, batch, gets)) => {
                         for previous_value in gets {
                             let get_result = match previous_value {
                                 Some(previous_value) => {
-                                    match enc_opts.deserialize(previous_value) {
+                                    match enc_opts.deserialize(&previous_value) {
                                         Ok(value) => Some(GetResult {
                                             value,
                                             size: u64::cast_from(previous_value.len()),
                                         }),
                                         Err(e) => {
-                                            return RetryResult::FatalErr(Error::DecodeError(e));
+                                            let _ =
+                                                response_sender.send(Err(Error::DecodeError(e)));
+                                            return;
                                         }
                                     }
                                 }
@@ -561,21 +576,6 @@ fn rocksdb_core_loop<K, V, M, O>(
                             };
                             results_scratch.push(get_result);
                         }
-
-                        RetryResult::Ok(result)
-                    }
-                    Err(e) => match e.kind() {
-                        ErrorKind::TryAgain => {
-                            RetryResult::RetryableErr(Error::RocksDB(e.to_owned()))
-                        }
-                        _ => RetryResult::FatalErr(Error::RocksDB(e.to_owned())),
-                    },
-                });
-
-                let _ = match result {
-                    Ok(result) => {
-                        metrics.multi_get_latency.observe(latency.as_secs_f64());
-                        metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
                         response_sender.send(Ok((result, batch, results_scratch)))
                     }
                     Err(e) => response_sender.send(Err(e)),
@@ -616,6 +616,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 }
                 // Perform the multi_get and record metrics, if there wasn't an error.
                 let now = Instant::now();
+
                 match db.write_opt(writes, &wo) {
                     Ok(()) => {
                         let latency = now.elapsed();
