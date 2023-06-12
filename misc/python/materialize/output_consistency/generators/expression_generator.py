@@ -362,7 +362,9 @@ class ExpressionGenerator:
 
         self._assert_valid_type_category_for_param(param, category)
 
-        preselected_types_with_values = self.types_with_values_by_category[category]
+        preselected_types_with_values = self.types_with_values_by_category.get(
+            category, []
+        )
         suitable_types_with_values = []
 
         for type_with_values in preselected_types_with_values:
@@ -402,7 +404,7 @@ class ExpressionGenerator:
 
         self._assert_valid_type_category_for_param(param, category)
 
-        return self.operations_by_return_type_category[category]
+        return self.operations_by_return_type_category.get(category, [])
 
     def _get_without_aggregate_operations(
         self, operations: List[DbOperationOrFunction]
