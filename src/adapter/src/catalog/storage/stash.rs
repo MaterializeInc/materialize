@@ -30,10 +30,10 @@ use crate::catalog::storage::{
 use crate::rbac;
 
 /// The key used within the "config" collection where we store the Stash version.
-const USER_VERSION: &str = "user_version";
+pub(crate) const USER_VERSION: &str = "user_version";
 
 /// The key used within the "config" collection where we store the deploy generation.
-const DEPLOY_GENERATION: &str = "deploy_generation";
+pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 
 pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
     TypedCollection::new("setting");

@@ -214,14 +214,15 @@ pub enum LeaderStatus {
 #[derive(Debug)]
 pub enum LeaderState {
     IsLeader,
-    // Invariant: these options are always Some. The reason for the extra layer is to
-    // allow us to take a &mut LeaderState and access a oneshot::Sender by value.
     Initializing {
+        // Invariant: promote_leader is Some in Initializing and ReadyToPromote: we need
+        // to be able to move them from one state to the other and to access it by value
+        // without the fiddly work of moving the state in and out of LeaderState mutex.
         promote_leader: Option<oneshot::Sender<()>>,
-        ready_to_promote: Option<oneshot::Receiver<()>>,
+        ready_to_promote: oneshot::Receiver<()>,
     },
-    // Same invariant as above
     ReadyToPromote {
+        // Same invariant as Initializing
         promote_leader: Option<oneshot::Sender<()>>,
     },
 }
@@ -244,8 +245,9 @@ pub async fn handle_leader_status(
             promote_leader,
             ready_to_promote,
         } => {
-            match ready_to_promote.as_mut().expect("invariant").try_recv() {
+            match ready_to_promote.try_recv() {
                 Ok(_) => {
+                    assert!(promote_leader.is_some(), "invariant");
                     *leader_state = LeaderState::ReadyToPromote {
                         promote_leader: promote_leader.take(),
                     };
@@ -378,7 +380,7 @@ impl InternalHttpServer {
             .route("/api/leader/promote", routing::post(handle_leader_promote))
             .with_state(Arc::new(Mutex::new(LeaderState::Initializing {
                 promote_leader: Some(promote_leader),
-                ready_to_promote: Some(ready_to_promote),
+                ready_to_promote: ready_to_promote,
             })));
 
         InternalHttpServer {

@@ -40,6 +40,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
 };
 use crate::catalog::error::{Error, ErrorKind};
+use crate::catalog::storage::stash::{DEPLOY_GENERATION, USER_VERSION};
 use crate::catalog::{
     self, is_reserved_name, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
     SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
@@ -56,9 +57,6 @@ pub use stash::{
     STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION,
     TIMESTAMP_COLLECTION,
 };
-
-const USER_VERSION: &str = "user_version";
-const DEPLOY_GENERATION: &str = "deploy_generation";
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
 pub const MZ_INTROSPECTION_ROLE_ID: RoleId = RoleId::System(2);
