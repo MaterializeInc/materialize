@@ -39,7 +39,7 @@ use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::subscriber::Interest;
-use tracing::{info, warn, Callsite, Event, Level, Metadata, Subscriber};
+use tracing::{warn, Callsite, Event, Level, Metadata, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
