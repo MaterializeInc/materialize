@@ -15,7 +15,10 @@ reqwest = { version = "0.11.13", features = ["blocking", "native-tls-vendored"] 
 sha2 = "0.10.6"
 tar = "0.4.38"
 walkdir = "2.3.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional=true }
+
+[features]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

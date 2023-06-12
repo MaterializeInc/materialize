@@ -9,10 +9,10 @@ publish = false
 [dependencies]
 compile-time-run = "0.2.12"
 semver = { version = "1.0.16", optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional=true }
 
 [features]
-default = ["semver"]
+default = ["semver", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
