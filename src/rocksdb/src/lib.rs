@@ -536,7 +536,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 return;
             }
             Command::MultiGet {
-                batch,
+                mut batch,
                 mut results_scratch,
                 response_sender,
             } => {
@@ -545,8 +545,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 // Perform the multi_get and record metrics, if there wasn't an error.
                 let now = Instant::now();
                 let retry_result = Retry::default().max_tries(3).retry(|_| {
-                    let mut cloned_batch = batch.clone();
-                    let gets = db.multi_get(cloned_batch.drain(..));
+                    let gets = db.multi_get(batch.iter());
                     let latency = now.elapsed();
 
                     let gets: Result<Vec<_>, _> = gets.into_iter().collect();
@@ -558,7 +557,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                                 processed_gets: gets.len().try_into().unwrap(),
                             };
 
-                            RetryResult::Ok((result, cloned_batch, gets))
+                            RetryResult::Ok((result, gets))
                         }
                         Err(e) => match e.kind() {
                             ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
@@ -568,7 +567,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 });
 
                 let _ = match retry_result {
-                    Ok((result, batch, gets)) => {
+                    Ok((result, gets)) => {
                         for previous_value in gets {
                             let get_result = match previous_value {
                                 Some(previous_value) => {
@@ -588,6 +587,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                             };
                             results_scratch.push(get_result);
                         }
+                        batch.clear();
                         response_sender.send(Ok((result, batch, results_scratch)))
                     }
                     Err(e) => response_sender.send(Err(e)),
