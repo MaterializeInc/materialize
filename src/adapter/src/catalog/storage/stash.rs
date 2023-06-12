@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use itertools::max;
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT};
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
@@ -612,7 +612,9 @@ pub fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
             log_logging: false,
             interval: Some(proto::Duration::from_secs(1)),
         }),
-        idle_arrangement_merge_effort: None,
+        idle_arrangement_merge_effort: Some(proto::replica_config::MergeEffort {
+            effort: DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT,
+        }),
     }
 }
 

@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
+use mz_controller::clusters::{
+    ClusterId, ReplicaConfig, ReplicaId, DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType};
@@ -156,7 +158,7 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
             az_user_specified: false,
         },
         logging: default_logging_config(),
-        idle_arrangement_merge_effort: None,
+        idle_arrangement_merge_effort: Some(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT),
     }
 }
 
