@@ -1,6 +1,6 @@
 ---
 title: "Use Terraform to manage Materialize"
-description: "Create and manage Materialize objects with Terraform"
+description: "Create and manage Materialize resources with Terraform"
 menu:
   main:
     parent: "manage"
@@ -13,7 +13,7 @@ resources in a declarative configuration language. Materialize maintains a
 [Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you safely and predictably provision and manage
 connections, sources, and other database objects.
 
-Materialize also maintains several modules that make it easier to manage your
+Materialize also maintains several modules that make it easier to manage
 other cloud resources that Materialize depends on. Modules allow you to bypass
 manually configuring cloud resources and are an efficient way of deploying
 infrastructure with a single `terraform apply` command.
