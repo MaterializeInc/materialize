@@ -35,7 +35,7 @@ You must be an Admin in your organization to invite new users.
    verify their email and create a password for their account. The user will
    then be able to login to the Materialize console.
 
-{{ <note>}}
+{{< note >}}
 The **Invite with link** option invites the user as an Organization Admin by
 default.
 {{</ note >}}
