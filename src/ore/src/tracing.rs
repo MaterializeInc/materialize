@@ -21,6 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,15 +38,16 @@ use opentelemetry::{global, KeyValue};
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{Event, Level, Subscriber};
+use tracing::subscriber::Interest;
+use tracing::{warn, Callsite, Event, Level, Metadata, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{reload, Registry};
+use tracing_subscriber::{reload, EnvFilter, Registry};
 
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
@@ -53,7 +55,7 @@ use crate::netio::SocketAddr;
 /// Application tracing configuration.
 ///
 /// See the [`configure`] function for details.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TracingConfig<F> {
     /// The name of the service.
     pub service_name: &'static str,
@@ -94,12 +96,12 @@ pub struct SentryConfig<F> {
 }
 
 /// Configures the stderr log.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StderrLogConfig {
     /// The format in which to emit messages.
     pub format: StderrLogFormat,
     /// A filter which determines which events are emitted to the log.
-    pub filter: Targets,
+    pub filter: EnvFilter,
 }
 
 /// Specifies the format of a stderr log message.
@@ -119,7 +121,7 @@ pub enum StderrLogFormat {
 }
 
 /// Configuration for the [`opentelemetry`] library.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpenTelemetryConfig {
     /// The [OTLP/HTTP] endpoint to export OpenTelemetry data to.
     ///
@@ -128,7 +130,7 @@ pub struct OpenTelemetryConfig {
     /// Additional headers to send with every request to the endpoint.
     pub headers: HeaderMap,
     /// A filter which determines which events are exported.
-    pub filter: Targets,
+    pub filter: EnvFilter,
     /// `opentelemetry::sdk::resource::Resource` to include with all
     /// traces.
     pub resource: Resource,
@@ -157,7 +159,7 @@ pub struct TokioConsoleConfig {
     pub retention: Duration,
 }
 
-type Reloader = Arc<dyn Fn(Targets) -> Result<(), anyhow::Error> + Send + Sync>;
+type Reloader = Arc<dyn Fn(EnvFilter) -> Result<(), anyhow::Error> + Send + Sync>;
 
 /// A handle to the tracing infrastructure configured with [`configure`].
 #[derive(Clone)]
@@ -178,12 +180,12 @@ impl TracingHandle {
     }
 
     /// Dynamically reloads the stderr log filter.
-    pub fn reload_stderr_log_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
+    pub fn reload_stderr_log_filter(&self, targets: EnvFilter) -> Result<(), anyhow::Error> {
         (self.stderr_log)(targets)
     }
 
     /// Dynamically reloads the OpenTelemetry log filter.
-    pub fn reload_opentelemetry_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
+    pub fn reload_opentelemetry_filter(&self, targets: EnvFilter) -> Result<(), anyhow::Error> {
         (self.opentelemetry)(targets)
     }
 }
@@ -266,7 +268,7 @@ where
         reload::Layer::new(config.stderr_log.filter);
     let stderr_log_layer = stderr_log_layer.with_filter(stderr_log_filter);
     let stderr_log_reloader =
-        Arc::new(move |targets| Ok(stderr_log_filter_reloader.reload(targets)?));
+        Arc::new(move |filter| Ok(stderr_log_filter_reloader.reload(filter)?));
 
     let (otel_layer, otel_reloader): (_, Reloader) = if let Some(otel_config) = config.opentelemetry
     {
@@ -321,21 +323,17 @@ where
         //
         // Note: folks should feel free to add more crates here if we find more
         // with long lived Spans.
-        let default_targets = [("h2", LevelFilter::OFF), ("hyper", LevelFilter::OFF)];
+        fn default_filter() -> EnvFilter {
+            EnvFilter::default()
+                .add_directive(Directive::from_str("h2=off").expect("valid directive"))
+                .add_directive(Directive::from_str("hyper=off").expect("valid directive"))
+        }
 
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            let new_targets = Targets::default()
-                .with_targets(default_targets)
-                .with_targets(&otel_config.filter);
-
-            if let Some(default_level) = otel_config.filter.default_level() {
-                new_targets.with_default(default_level)
-            } else {
-                new_targets
-            }
+            default_filter().with_filter(otel_config.filter).boxed()
         } else {
-            // The default `Targets` has everything disabled.
-            Targets::default()
+            // The default `EnvFilter` has everything disabled.
+            EnvFilter::default().boxed()
         });
         let layer = tracing_opentelemetry::layer()
             // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
@@ -345,20 +343,11 @@ where
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
             .max_events_per_span(2048)
             .with_tracer(tracer)
-            .with_filter(filter);
-        let reloader = Arc::new(move |targets: Targets| {
-            // Re-apply our default targets on reload.
-            let new_targets = Targets::default()
-                .with_targets(default_targets)
-                .with_targets(&targets);
-
-            let new_targets = if let Some(default_level) = targets.default_level() {
-                new_targets.with_default(default_level)
-            } else {
-                new_targets
-            };
-
-            Ok(filter_handle.reload(new_targets)?)
+            .and_then(filter);
+        let reloader = Arc::new(move |filter: EnvFilter| {
+            // Re-apply our defaults on reload.
+            let filter = default_filter().with_filter(filter).boxed();
+            Ok(filter_handle.reload(filter)?)
         });
         (Some(layer), reloader)
     } else {
@@ -465,19 +454,38 @@ where
     Ok((handle, guard))
 }
 
-/// Returns the level of a specific target from a [`Targets`].
-pub fn target_level(targets: &Targets, target: &str) -> Level {
-    if targets.would_enable(target, &Level::TRACE) {
-        Level::TRACE
-    } else if targets.would_enable(target, &Level::DEBUG) {
-        Level::DEBUG
-    } else if targets.would_enable(target, &Level::INFO) {
-        Level::INFO
-    } else if targets.would_enable(target, &Level::WARN) {
-        Level::WARN
-    } else {
-        Level::ERROR
+struct EmptyCallsite;
+impl Callsite for EmptyCallsite {
+    fn set_interest(&self, _: Interest) {
+        unreachable!("EmptyCallsite should never be accessed")
     }
+
+    fn metadata(&self) -> &Metadata<'_> {
+        unreachable!("EmptyCallsite should never be accessed")
+    }
+}
+
+/// Returns the level of a target from an [`EnvFilter`] by performing
+/// an exact match between `target` and the original `EnvFilter` directive
+/// (which may contain information like field names, span IDs, etc.)
+pub fn target_level(filter: &EnvFilter, target: &'static str) -> Level {
+    // EnvFilter roundtrips through its Display fmt, so it
+    // is safe to split out its individual directives here
+    for directive in format!("{}", filter).split(',') {
+        match directive.split('=').collect::<Vec<_>>().as_slice() {
+            [directive_target, "=", level] => {
+                if *directive_target == target {
+                    match Level::from_str(*level) {
+                        Ok(level) => return level,
+                        Err(err) => warn!("invalid level for {}: {}", target, err),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Level::ERROR
 }
 
 /// A wrapper around a [`FormatEvent`] that adds an optional prefix to each
