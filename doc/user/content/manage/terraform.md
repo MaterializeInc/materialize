@@ -134,9 +134,6 @@ truth for your Materialize object.
 
 ## Terraform modules
 
-Materialize objects can be created through standard SQL queries, but managing
-more than a few components can be difficult to maintain.  Using Terraform can be
-helpful when you manage other cloud resources in collaboration with Materialize.
 The Terraform modules below provide the cloud infrastructure foundation
 Materialize needs to communicate with components outside of Materialize itself.
 The Materialize provider allows users to manage Materialize resources in the
