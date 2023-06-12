@@ -61,7 +61,7 @@ use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
+use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{CreateIndexStatement, RawItemName, Statement as AstStatement};
@@ -1175,17 +1175,6 @@ impl RunnerInner {
             [statement] => statement,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
-        match statement {
-            Statement::CreateView { .. }
-            | Statement::Select { .. }
-            | Statement::Show(ShowStatement::ShowObjects(..)) => (),
-            _ => {
-                if output.is_err() {
-                    // We're not interested in testing our hacky handling of INSERT etc
-                    return Ok(Outcome::Success);
-                }
-            }
-        }
 
         match output {
             Ok(_) => {
