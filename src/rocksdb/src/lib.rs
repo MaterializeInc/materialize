@@ -612,6 +612,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 for _ in buf_size..batch_size {
                     encoded_batch_buffers.push(Some(Vec::new()));
                 }
+                assert!(batch_size <= encoded_batch_buffers.len());
 
                 // TODO(guswynn): sort by key before writing.
                 for ((key, value), encode_buf) in
