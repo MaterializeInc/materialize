@@ -1093,6 +1093,32 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             c.run("testdrive", "pg-snapshot-resumption/05-verify-data.td")
 
 
+def workflow_sink_failure(c: Composition) -> None:
+    """Test specific sink failure scenarios"""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="storage",
+            environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
+        ),
+    ):
+        c.up("materialized", "zookeeper", "kafka", "schema-registry", "storage")
+
+        c.run("testdrive", "sink-failure/01-configure-sinks.td")
+        c.run("testdrive", "sink-failure/02-ensure-sink-down.td")
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="storage")
+        ):
+            c.up("storage")
+            c.run("testdrive", "sink-failure/03-verify-data.td")
+
+
 def workflow_test_bootstrap_vars(c: Composition) -> None:
     """Test default system vars values passed with a CLI option."""
 
