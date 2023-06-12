@@ -1044,7 +1044,7 @@ impl<'a> Parser<'a> {
                 IS => {
                     let negated = self.parse_keyword(NOT);
                     if let Some(construct) =
-                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN])
+                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN, DISTINCT])
                     {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
@@ -1054,6 +1054,11 @@ impl<'a> Parser<'a> {
                                 TRUE => IsExprConstruct::True,
                                 FALSE => IsExprConstruct::False,
                                 UNKNOWN => IsExprConstruct::Unknown,
+                                DISTINCT => {
+                                    self.expect_keyword(FROM)?;
+                                    let expr = self.parse_expr()?;
+                                    IsExprConstruct::DistinctFrom(Box::new(expr))
+                                }
                                 _ => unreachable!(),
                             },
                         })
