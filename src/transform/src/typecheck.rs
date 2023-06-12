@@ -1506,11 +1506,14 @@ impl<'a> TypeError<'a> {
                 input_type,
             } => {
                 let col = order.column;
+                let num_cols = input_type.len();
+                let are = if num_cols == 1 { "is" } else { "are" };
+                let s = if num_cols == 1 { "" } else { "s" };
                 let input_type = columns_pretty(input_type, humanizer);
 
                 writeln!(
                     f,
-                    "TopK ordering {order} references invalid column {col} orderings\ncolumns: {input_type}")?
+                    "TopK ordering {order} references invalid column {col}\nthere {are} {num_cols} column{s}: {input_type}")?
             }
             BadLetRecBindings { source: _ } => {
                 writeln!(f, "LetRec ids and definitions don't line up")?

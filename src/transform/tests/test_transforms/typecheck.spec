@@ -42,8 +42,33 @@ DefSource name=t1
 ----
 Source defined as t1
 
-# TODO: Join, Reduce, TopK
-# Negate and Threshold are boring
+############################################################################
+# Case: Constant
+############################################################################
+
+typecheck
+Constant // { types: "(bigint, bigint)" }
+  - (1, 3)
+----
+(Int64, Int64)
+
+typecheck
+Constant // { types: "(bigint, bigint)" }
+  - (1, 3)
+  - ("oh", "no")
+----
+----
+In the MIR term:
+Constant
+  - (1, 3)
+  - ("oh", "no")
+
+
+bad constant row
+      got ("oh", "no")
+expected row of type (Int64, Int64)
+----
+----
 
 ############################################################################
 # Case: Get
@@ -111,9 +136,8 @@ id l0 is shadowed
 ----
 ----
 
-
 ############################################################################
-# Case: Project
+# Case: LetRec
 ############################################################################
 
 # no shadowing
@@ -335,6 +359,7 @@ Join on=(eq(#0, #3))
 ----
 (Int64, Int64?, String, Int64, Int64?, String)
 
+# TODO(mgree): should narrow to non-null with typechecker improvements
 typecheck
 Join on=(eq(#0, #1, #3, #4))
   Get t0
@@ -342,10 +367,144 @@ Join on=(eq(#0, #1, #3, #4))
 ----
 (Int64, Int64?, String, Int64, Int64?, String)
 
+# TODO(mgree): should narrow to non-null with typechecker improvements
+typecheck
+Join on=(#0 = #4 AND #2 = #5 AND #1 = #3)
+  Get t0
+  Get t0
+----
+(Int64, Int64?, String, Int64, Int64?, String)
+
+# TODO(mgree): panics in `col_with_input_cols` src/expr/src/relation/mod.rs:448:63
+#typecheck
+#Join on=(#1 = #6)
+#  Get t0
+#  Get t0
+#----
+#----
+#----
+#----
+
+# TODO(mgree): panics in join_input_mapper.rs:236:22
+#typecheck
+#Join on=(#1 = (1 + #6))
+#  Get t0
+#  Get t0
+#----
+#----
+#----
+#----
+
+############################################################################
+# Case: Reduce
+############################################################################
+
+typecheck
+Reduce aggregates=[max(#1), min(#1), count(*)] monotonic
+  Constant // { types: "(text, bigint)" }
+    - ("a", 2)
+    - ("a", 4)
+----
+(Int64, Int64, Int64)
+
+typecheck
+Reduce group_by=[#0] aggregates=[max(#1), min(#1), sum(distinct #1)] monotonic exp_group_size=4
+  Constant // { types: "(text, bigint)" }
+    - ("a", 2)
+    - ("a", 4)
+----
+(String, Int64, Int64, Numeric { max_scale: Some(NumericMaxScale(0)) })
+
+# empty output type (no keys!)
+typecheck
+Distinct monotonic
+  Constant // { types: "(text, bigint)" }
+    - ("a", 2)
+    - ("a", 4)
+----
+()
+
+typecheck
+Distinct group_by=[#0, #1] exp_group_size=4
+  Constant // { types: "(text, bigint)" }
+    - ("a", 2)
+    - ("a", 4)
+----
+(String, Int64)
+
+############################################################################
+# Case: TopK
+############################################################################
+
+typecheck
+TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
+  Constant // { types: "(bigint, bigint)" }
+    - (1, 2)
+    - (3, 4)
+----
+(Int64, Int64)
+
+typecheck
+TopK group_by=[#1] limit=5 offset=2 monotonic
+  Get t0
+----
+(Int64, Int64?, String)
+
+typecheck
+TopK group_by=[#1] limit=5 offset=2 monotonic exp_group_size=4
+  Get t0
+----
+(Int64, Int64?, String)
+
+typecheck
+TopK group_by=[#3] limit=5 offset=2 monotonic
+  Get t0
+----
+----
+In the MIR term:
+TopK group_by=[#3] limit=5 offset=2 monotonic
+  Get t0
+
+
+TopK group key component references invalid column 3 in columns: (Int64, Int64?, String)
+----
+----
+
+typecheck
+TopK group_by=[#0] order_by=[#3 asc nulls_first]
+  Get t0
+----
+----
+In the MIR term:
+TopK group_by=[#0] order_by=[#3 asc nulls_first]
+  Get t0
+
+
+TopK ordering #3 asc nulls_first references invalid column 3
+there are 3 columns: (Int64, Int64?, String)
+----
+----
+
+typecheck
+TopK group_by=[#0] order_by=[#1 asc nulls_first]
+  Project (#0)
+    Get t0
+----
+----
+In the MIR term:
+TopK group_by=[#0] order_by=[#1 asc nulls_first]
+  Project (#0)
+    Get t0
+
+
+TopK ordering #1 asc nulls_first references invalid column 1
+there is 1 column: (Int64)
+----
+----
+
 ############################################################################
 # Case: Union
 ############################################################################
-
 
 typecheck
 Union
@@ -367,7 +526,6 @@ Union
     Get t1
 ----
 (Int64)
-
 
 # appropriate union types (widening nullability)
 typecheck
