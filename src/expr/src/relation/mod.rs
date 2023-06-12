@@ -2738,6 +2738,8 @@ pub struct JoinInputCharacteristics {
     pub key_length: usize,
     /// Indicates that there will be no additional in-memory footprint.
     pub arranged: bool,
+    /// Estimated cardinality
+    pub cardinality: Option<usize>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
     /// We want to prefer input earlier in the input list, for stability of ordering.
@@ -2757,6 +2759,7 @@ impl JoinInputCharacteristics {
             unique_key,
             key_length,
             arranged,
+            cardinality: None,
             filters,
             input: std::cmp::Reverse(input),
         }
@@ -2773,6 +2776,9 @@ impl JoinInputCharacteristics {
         }
         if self.arranged {
             e.push_str("A");
+        }
+        if let Some(cardinality) = self.cardinality {
+            e.push_str(&format!("|{cardinality}|"));
         }
         e.push_str(&self.filters.explain());
         e

@@ -26,6 +26,8 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
+use crate::attribute::cardinality::SymExp;
+use crate::attribute::{Cardinality, RequiredAttributes};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformArgs, TransformError};
@@ -148,6 +150,25 @@ impl JoinImplementation {
 
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+
+            // Cardinality information for each input relation
+            let mut cardinalities: Vec<SymExp> = Vec::with_capacity(inputs.len());
+            for input in inputs.iter() {
+                let mut builder = RequiredAttributes::default();
+                builder.require::<Cardinality>();
+                let mut attributes = builder.finish();
+
+                input.visit(&mut attributes)?;
+
+                cardinalities.push(
+                    attributes
+                        .get_results_mut::<Cardinality>()
+                        .pop()
+                        .expect("cardinality"),
+                );
+            }
+
+            let cardinalities = cardinalities.into_iter().map(|c| c.order()).collect::<Vec<_>>();
 
             // The first fundamental question is whether we should employ a delta query or not.
             //
@@ -302,6 +323,8 @@ impl JoinImplementation {
                 });
             }
 
+            // TODO(mgree): should we factor these `FilterCharacteristics` into the cardinality estimates?
+
             let old_implementation = implementation.clone();
 
             let delta_query_plan = || {
@@ -310,6 +333,7 @@ impl JoinImplementation {
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
+                    &cardinalities,
                     &filters,
                 )
             };
@@ -319,6 +343,7 @@ impl JoinImplementation {
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
+                    &cardinalities,
                     &filters,
                 )
             };
@@ -409,6 +434,7 @@ mod delta_queries {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
+        cardinalities: &[usize],
         filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
@@ -443,8 +469,14 @@ mod delta_queries {
             }
 
             // Determine a viable order for each relation, or return `Err` if none found.
-            let orders =
-                super::optimize_orders(equivalences, available, unique_keys, filters, input_mapper);
+            let orders = super::optimize_orders(
+                equivalences,
+                available,
+                unique_keys,
+                cardinalities,
+                filters,
+                input_mapper,
+            );
 
             // A viable delta query requires that, for every order,
             // there is an arrangement for every input except for
@@ -506,6 +538,7 @@ mod differential {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
+        cardinalities: &[usize],
         filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
@@ -523,7 +556,7 @@ mod differential {
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
             let mut orders =
-                super::optimize_orders(equivalences, available, unique_keys, filters, input_mapper);
+                super::optimize_orders(equivalences, available, unique_keys, cardinalities, filters, input_mapper);
 
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
@@ -782,10 +815,18 @@ fn optimize_orders(
     equivalences: &[Vec<MirScalarExpr>], // join equivalences: inside a Vec, the exprs are equivalent
     available: &[Vec<Vec<MirScalarExpr>>], // available arrangements per input
     unique_keys: &[Vec<Vec<usize>>],     // unique keys per input
+    cardinalities: &[usize],             // cardinalities of input relations
     filters: &[FilterCharacteristics],   // filter characteristics per input
     input_mapper: &JoinInputMapper,      // join helper
 ) -> Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>> {
-    let mut orderer = Orderer::new(equivalences, available, unique_keys, filters, input_mapper);
+    let mut orderer = Orderer::new(
+        equivalences,
+        available,
+        unique_keys,
+        cardinalities,
+        filters,
+        input_mapper,
+    );
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Vec<_>>()
@@ -796,6 +837,7 @@ struct Orderer<'a> {
     equivalences: &'a [Vec<MirScalarExpr>],
     arrangements: &'a [Vec<Vec<MirScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
+    cardinalities: &'a [usize],
     filters: &'a [FilterCharacteristics],
     input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
@@ -815,6 +857,7 @@ impl<'a> Orderer<'a> {
         equivalences: &'a [Vec<MirScalarExpr>],
         arrangements: &'a [Vec<Vec<MirScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
+        cardinalities: &'a [usize],
         filters: &'a [FilterCharacteristics],
         input_mapper: &'a JoinInputMapper,
     ) -> Self {
@@ -850,6 +893,7 @@ impl<'a> Orderer<'a> {
             equivalences,
             arrangements,
             unique_keys,
+            cardinalities,
             filters,
             input_mapper,
             reverse_equivalences,

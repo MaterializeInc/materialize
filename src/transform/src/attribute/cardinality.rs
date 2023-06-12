@@ -74,6 +74,7 @@ pub trait Factorizer {
     ///
     /// The result should be in the range (0, 1.0]
     fn predicate(&self, expr: &MirScalarExpr, indexed_columns: &BTreeSet<usize>) -> SymExp;
+    /// Computes selectivity for a filter
     fn filter(
         &self,
         predicates: &Vec<MirScalarExpr>,
@@ -109,7 +110,10 @@ pub trait Factorizer {
     fn threshold(&self, input: &SymExp) -> SymExp;
 }
 
+/// The simplest possible `Factorizer` that aims to generate worst-case, upper-bound cardinalities
+#[derive(Debug)]
 pub struct WorstCaseFactorizer {
+    /// cardinalities for each `GlobalId` and its unique values
     pub cardinalities: BTreeMap<FactorizerVariable, usize>,
 }
 
@@ -613,12 +617,14 @@ impl std::fmt::Display for SymExp {
 }
 
 /// Wrapping struct for pretty printing of symbolic expressions
+#[allow(missing_debug_implementations)]
 pub struct HumanizedSymbolicExpression<'a, 'b> {
     expr: &'a SymExp,
     humanizer: &'b dyn ExprHumanizer,
 }
 
 impl<'a, 'b> HumanizedSymbolicExpression<'a, 'b> {
+    /// Pairs a symbolic expression with a way to render GlobalIds
     pub fn new(expr: &'a SymExp, humanizer: &'b dyn ExprHumanizer) -> Self {
         Self { expr, humanizer }
     }
