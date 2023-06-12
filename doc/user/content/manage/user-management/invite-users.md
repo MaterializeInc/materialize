@@ -14,21 +14,21 @@ to your Materialize organization and assign **Admin** or **Member** privileges.
 You must be an Admin in your organization to invite new users.
 {{</ note >}}
 
-## Step 1. Create a new user
+1. [Login to the Materialize console](https://console.materialize.com/).
 
-1. [Login to the Materialize console](https://console.materialize.com/) and navigate to Account > Account
-Settings > Users.
+1. Navigate to Account > Account Settings > Users.
 
 1. Click **Invite User** and fill in the user information.
 
-## Step 2. Determine user Organization privileges
+1. Select *Organization Admin* or *Organization Member* depending on what level of console access the user needs:
 
-1. Select *Organization Admin* or *Organization Member* depending on what level of organization access the user needs:
-
-    - **Organization Admin**: Can invite new users, edit account
-    information, and edit account security information.
+    - **Organization Admin**: Can invite new users, edit account information,
+    and edit account security information.
     - **Organization Member**: Can login to the console.
-      
+     
+    These roles do not refer to RBAC roles and privileges and refer to
+    actions users can take in the Materialize Console.
+     
 2. Click the **Invite** button at the bottom right section of the screen.
 
    Materialize will email the user with a verification link. The user will

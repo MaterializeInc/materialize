@@ -27,6 +27,19 @@ To grant a role assignment to a user, use the [`GRANT`](https://materialize.com/
 GRANT <role_name> to <user_name>;
 ```
 
+Materialize roles have the following available attributes:
+
+| Name              | Description                                                                 |
+|-------------------|-----------------------------------------------------------------------------|
+| `CREATEDB`        | Can create a database.                                                      |
+| `CREATEROLE`      | Can create, alter, delete roles and can grant and revoke role membership.   |
+| `INHERIT`         | **Read-only.** Can inherit privileges of other roles.                       |
+| `CREATECLUSTER`   | Can create a cluster.                                                       |
+| `NOCREATEDB`      | Denies the role the ability to create databases.                            |
+| `NOCREATEROLE`    | Denies the role the ability to create, alter, delete roles or grant/revoke. |
+| `NOCREATECLUSTER` | Denies the role the ability to create clusters.                             |
+
+
 ## Alter a role's attributes
 
 To change a role's attributes, use the [`ALTER ROLE`](https://materialize.com/docs/sql/alter-role/) statement:
@@ -34,15 +47,6 @@ To change a role's attributes, use the [`ALTER ROLE`](https://materialize.com/do
 ```sql
 ALTER ROLE <role_name> WITH <ATTRIBUTE>;
 ```
-
-Materialize roles have the following available attributes:
-
-| Name            | Description                                                                     |
-|-----------------|---------------------------------------------------------------------------------|
-| `CREATEDB`      | Can create a database.                                                          |
-| `CREATEROLE`    | Can create, alter, drop, grant membership to, and revoke membership from roles. |
-| `INHERIT`       | **Read-only.** Can inherit the privileges of roles that it is a member of. On by default.      |
-| `CREATECLUSTER` | Can create a cluster.                                                           |
 
 ## Remove a user from a role
 

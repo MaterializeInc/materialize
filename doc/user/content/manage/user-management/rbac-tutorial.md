@@ -20,7 +20,7 @@ the end of this tutorial you will:
 
 In this scenario, you are an administrator on your Materialize account. You
 recently hired a new developer who needs privileges in a non-production cluster.
-You will create specific permissions for the new role that align with your
+You will create specific privileges for the new role that align with your
 business needs and restrict the developer role from having access to your
 production cluster.
 
@@ -87,7 +87,7 @@ other external tools.
 
   The `inherit`, `create_role`, `create_db`, and `create_cluster` are the
   role attributes assigned to a role when it is created. These attributes
-  determine the system-level permissions of a role and do not impact object-level privileges.
+  determine the system-level privileges of a role and do not impact object-level privileges.
 
   * `INHERIT` is set to true by default and allows roles to inherit the
     privileges of roles it is a member of.
