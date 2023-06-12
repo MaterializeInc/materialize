@@ -376,7 +376,6 @@ class ExpressionGenerator:
     ) -> None:
         assert category not in {
             DataTypeCategory.DYNAMIC,
-            DataTypeCategory.DYNAMIC_ARRAY,
         }, f"Type category {category} not allowed for parameters (param={param})"
 
     def _get_operations_of_category(

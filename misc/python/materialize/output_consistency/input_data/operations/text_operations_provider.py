@@ -27,6 +27,9 @@ from materialize.output_consistency.input_data.params.number_operation_param imp
 from materialize.output_consistency.input_data.params.text_operation_param import (
     TextOperationParam,
 )
+from materialize.output_consistency.input_data.return_specs.array_return_spec import (
+    ArrayReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
 )
@@ -42,7 +45,6 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
     OperationRelevance,
 )
-from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 TEXT_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
@@ -198,7 +200,7 @@ TEXT_OPERATION_TYPES.append(
     DbFunction(
         "parse_ident",
         [TextOperationParam(), BooleanOperationParam(optional=True)],
-        ReturnTypeSpec(DataTypeCategory.DYNAMIC_ARRAY),
+        ArrayReturnTypeSpec(DataTypeCategory.TEXT),
         relevance=OperationRelevance.LOW,
     )
 )
@@ -215,7 +217,7 @@ TEXT_OPERATION_TYPES.append(
     DbFunction(
         "regexp_match",
         [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
-        ReturnTypeSpec(DataTypeCategory.DYNAMIC_ARRAY),
+        ArrayReturnTypeSpec(DataTypeCategory.TEXT),
     )
 )
 
