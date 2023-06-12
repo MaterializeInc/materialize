@@ -16,7 +16,7 @@
 #  union of incompatible types (parser panics)
 #  strict join equivalence checking (typechecker is imprecise, we only log debug messages)
 #
-# missing scalar/tablefunc/aggregate type errors: 
+# missing scalar/tablefunc/aggregate type errors:
 #   bad column (parser rules out)
 #   mismatched then/else branches in an if (parser doesn't support as of 2023-06-09)
 #   bad input type (not checkable---we don't know input types as of 2023-06-09)
@@ -68,8 +68,8 @@ Get t1
 typecheck
 Return
   Get l0
-With 
-  cte l0 = 
+With
+  cte l0 =
     Get t0
 ----
 (Int64, Int64?, String)
@@ -78,8 +78,8 @@ With
 typecheck
 Return
   Get l0
-With 
-  cte l0 = 
+With
+  cte l0 =
     Return
       Get l0
     With
@@ -92,10 +92,10 @@ With
 typecheck
 Return
   Get l0
-With 
-  cte l0 = 
+With
+  cte l0 =
     Get t0
-  cte l0 = 
+  cte l0 =
     Get t1
 ----
 ----
