@@ -382,7 +382,7 @@ struct KafkaSinkState {
     progress_key: String,
     progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>>,
 
-    healthchecker: Arc<Mutex<Option<Healthchecker>>>,
+    healthchecker: Option<Mutex<Healthchecker>>,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 
@@ -411,6 +411,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
+        healthchecker: Option<Healthchecker>,
     ) -> Self {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -426,64 +427,82 @@ impl KafkaSinkState {
             retry_manager: Arc::clone(&retry_manager),
         };
 
-        let healthchecker: Arc<Mutex<Option<Healthchecker>>> = Arc::new(Mutex::new(None));
+        let healthchecker = healthchecker.map(Mutex::new);
 
-        let producer = connection
-            .connection
-            .create_with_context(
-                connection_context,
-                producer_context,
-                &btreemap! {
-                    // Ensure that messages are sinked in order and without
-                    // duplicates. Note that this only applies to a single
-                    // instance of a producer - in the case of restarts, all
-                    // bets are off and full exactly once support is required.
-                    "enable.idempotence" => "true".into(),
-                    // Increase limits for the Kafka producer's internal
-                    // buffering of messages Currently we don't have a great
-                    // backpressure mechanism to tell indexes or views to slow
-                    // down, so the only thing we can do with a message that we
-                    // can't immediately send is to put it in a buffer and
-                    // there's no point having buffers within the dataflow layer
-                    // and Kafka If the sink starts falling behind and the
-                    // buffers start consuming too much memory the best thing to
-                    // do is to drop the sink Sets the buffer size to be 16 GB
-                    // (note that this setting is in KB)
-                    "queue.buffering.max.kbytes" => format!("{}", 16 << 20),
-                    // Set the max messages buffered by the producer at any time
-                    // to 10MM which is the maximum allowed value.
-                    "queue.buffering.max.messages" => format!("{}", 10_000_000),
-                    // Make the Kafka producer wait at least 10 ms before
-                    // sending out MessageSets TODO(rkhaitan): experiment with
-                    // different settings for this value to see if it makes a
-                    // big difference.
-                    "queue.buffering.max.ms" => format!("{}", 10),
-                    "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
-                },
-            )
-            .await
-            .expect("creating Kafka producer for sink failed");
+        let producer = halt_on_err(
+            &healthchecker,
+            *sink_id,
+            &internal_cmd_tx,
+            (|| async {
+                fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
+                    "synthetic error"
+                )));
+
+                connection
+                    .connection
+                    .create_with_context(
+                        connection_context,
+                        producer_context,
+                        &btreemap! {
+                            // Ensure that messages are sinked in order and without
+                            // duplicates. Note that this only applies to a single
+                            // instance of a producer - in the case of restarts, all
+                            // bets are off and full exactly once support is required.
+                            "enable.idempotence" => "true".into(),
+                            // Increase limits for the Kafka producer's internal
+                            // buffering of messages Currently we don't have a great
+                            // backpressure mechanism to tell indexes or views to slow
+                            // down, so the only thing we can do with a message that we
+                            // can't immediately send is to put it in a buffer and
+                            // there's no point having buffers within the dataflow layer
+                            // and Kafka If the sink starts falling behind and the
+                            // buffers start consuming too much memory the best thing to
+                            // do is to drop the sink Sets the buffer size to be 16 GB
+                            // (note that this setting is in KB)
+                            "queue.buffering.max.kbytes" => format!("{}", 16 << 20),
+                            // Set the max messages buffered by the producer at any time
+                            // to 10MM which is the maximum allowed value.
+                            "queue.buffering.max.messages" => format!("{}", 10_000_000),
+                            // Make the Kafka producer wait at least 10 ms before
+                            // sending out MessageSets TODO(rkhaitan): experiment with
+                            // different settings for this value to see if it makes a
+                            // big difference.
+                            "queue.buffering.max.ms" => format!("{}", 10),
+                            "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                        },
+                    )
+                    .await
+            })()
+            .await,
+        )
+        .await;
+
         let producer = KafkaTxProducer {
             name: sink_name.clone(),
             inner: Arc::new(producer),
             timeout: Duration::from_secs(5),
         };
 
-        let progress_client = connection
-            .connection
-            .create_with_context(
-                connection_context,
-                MzClientContext,
-                &btreemap! {
-                    "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
-                    "isolation.level" => "read_committed".into(),
-                    "enable.auto.commit" => "false".into(),
-                    "auto.offset.reset" => "earliest".into(),
-                    "enable.partition.eof" => "true".into(),
-                },
-            )
-            .await
-            .expect("creating Kafka progress client for sink failed");
+        let progress_client = halt_on_err(
+            &healthchecker,
+            *sink_id,
+            &internal_cmd_tx,
+            connection
+                .connection
+                .create_with_context(
+                    connection_context,
+                    MzClientContext,
+                    &btreemap! {
+                        "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
+                        "isolation.level" => "read_committed".into(),
+                        "enable.auto.commit" => "false".into(),
+                        "auto.offset.reset" => "earliest".into(),
+                        "enable.partition.eof" => "true".into(),
+                    },
+                )
+                .await,
+        )
+        .await;
 
         KafkaSinkState {
             sink_id: sink_id.clone(),
@@ -884,52 +903,73 @@ impl KafkaSinkState {
     }
 
     async fn update_status(&self, status: SinkStatus) {
-        let mut locked = self.healthchecker.lock().await;
-        if let Some(hc) = &mut *locked {
-            hc.update_status(status).await;
-        }
+        update_status(&self.healthchecker, status).await;
     }
 
     /// Report a SinkStatus::Stalled and then halt with the same message.
     pub async fn halt_on_err<T>(&self, result: Result<T, anyhow::Error>) -> T {
-        match result {
-            Ok(t) => t,
-            Err(error) => {
-                let hint: Option<String> =
-                    error
-                        .downcast_ref::<RDKafkaError>()
-                        .and_then(|kafka_error| {
-                            if kafka_error.is_retriable()
-                                && kafka_error.code() == RDKafkaErrorCode::OperationTimedOut
-                            {
-                                Some(
-                                    "If you're running a single Kafka broker, ensure \
+        halt_on_err(
+            &self.healthchecker,
+            self.sink_id,
+            &self.internal_cmd_tx,
+            result,
+        )
+        .await
+    }
+}
+
+async fn update_status(healthchecker: &Option<Mutex<Healthchecker>>, status: SinkStatus) {
+    if let Some(hc) = healthchecker {
+        hc.lock().await.update_status(status).await;
+    }
+}
+
+async fn halt_on_err<T>(
+    healthchecker: &Option<Mutex<Healthchecker>>,
+    sink_id: GlobalId,
+    internal_cmd_tx: &RefCell<dyn InternalCommandSender>,
+    result: Result<T, anyhow::Error>,
+) -> T {
+    match result {
+        Ok(t) => t,
+        Err(error) => {
+            let hint: Option<String> =
+                error
+                    .downcast_ref::<RDKafkaError>()
+                    .and_then(|kafka_error| {
+                        if kafka_error.is_retriable()
+                            && kafka_error.code() == RDKafkaErrorCode::OperationTimedOut
+                        {
+                            Some(
+                                "If you're running a single Kafka broker, ensure \
                                     that the configs transaction.state.log.replication.factor, \
                                     transaction.state.log.min.isr, and \
                                     offsets.topic.replication.factor are set to 1 on the broker"
-                                        .to_string(),
-                                )
-                            } else {
-                                None
-                            }
-                        });
+                                    .to_string(),
+                            )
+                        } else {
+                            None
+                        }
+                    });
 
-                self.update_status(SinkStatus::Stalled {
+            update_status(
+                healthchecker,
+                SinkStatus::Stalled {
                     error: format!("{}", error.display_with_causes()),
                     hint,
-                })
-                .await;
-                self.internal_cmd_tx.borrow_mut().broadcast(
-                    InternalStorageCommand::SuspendAndRestart {
-                        id: self.sink_id.clone(),
-                        reason: error.to_string(),
-                    },
-                );
+                },
+            )
+            .await;
+            internal_cmd_tx
+                .borrow_mut()
+                .broadcast(InternalStorageCommand::SuspendAndRestart {
+                    id: sink_id.clone(),
+                    reason: error.to_string(),
+                });
 
-                // Make sure to never return, preventing the sink from writing
-                // out anything it might regret in the future.
-                future::pending().await
-            }
+            // Make sure to never return, preventing the sink from writing
+            // out anything it might regret in the future.
+            future::pending().await
         }
     }
 }
@@ -1071,6 +1111,20 @@ where
             return;
         }
 
+        let healthchecker = if let Some(status_shard_id) = healthchecker_args.status_shard_id {
+            let hc = Healthchecker::new(
+                id,
+                &healthchecker_args.persist_clients,
+                healthchecker_args.persist_location.clone(),
+                status_shard_id,
+                healthchecker_args.now_fn.clone(),
+            )
+            .await
+            .expect("error initializing healthchecker");
+            Some(hc)
+        } else {
+            None
+        };
         let mut s = KafkaSinkState::new(
             connection,
             name,
@@ -1081,22 +1135,9 @@ where
             &connection_context,
             Rc::clone(&shared_gate_ts),
             internal_cmd_tx,
+            healthchecker,
         )
         .await;
-
-        if let Some(status_shard_id) = healthchecker_args.status_shard_id {
-            let hc = Healthchecker::new(
-                id,
-                &healthchecker_args.persist_clients,
-                healthchecker_args.persist_location.clone(),
-                status_shard_id,
-                healthchecker_args.now_fn.clone(),
-            )
-            .await
-            .expect("error initializing healthchecker");
-            let mut locked = s.healthchecker.lock().await;
-            *locked = Some(hc);
-        };
 
         s.update_status(SinkStatus::Starting).await;
 
