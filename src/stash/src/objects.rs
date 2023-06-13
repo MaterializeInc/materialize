@@ -187,12 +187,11 @@ mod test {
     // Note: Feel free to update this path if the protos move.
     const PROTO_DIRECTORY: &str = "protos";
 
-    #[test]
+    #[mz_ore::test]
     fn test_assert_snapshots_exist() {
         // Get all of the files in the snapshot directory, with the `.proto` extension.
-        let mut filenames: BTreeSet<_> = fs::read_dir(&PROTO_DIRECTORY)
+        let mut filenames: BTreeSet<_> = fs::read_dir(PROTO_DIRECTORY)
             .expect("failed to read protos dir")
-            .into_iter()
             .map(|entry| entry.expect("failed to read dir entry").file_name())
             .map(|filename| filename.to_str().expect("utf8").to_string())
             .filter(|filename| filename.ends_with("proto"))
@@ -230,14 +229,14 @@ mod test {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_assert_current_snapshot() {
         // Read the content from both files.
         let current = fs::File::open(format!("{PROTO_DIRECTORY}/objects.proto"))
-            .map(|f| BufReader::new(f))
+            .map(BufReader::new)
             .expect("read current");
         let snapshot = fs::File::open(format!("{PROTO_DIRECTORY}/objects_v{STASH_VERSION}.proto"))
-            .map(|f| BufReader::new(f))
+            .map(BufReader::new)
             .expect("read snapshot");
 
         // Read in all of the lines so we can compare the content of †he files.
