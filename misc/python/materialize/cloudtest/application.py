@@ -11,7 +11,7 @@ import subprocess
 from textwrap import dedent
 from typing import List, Optional
 
-from materialize import ROOT, mzbuild, ui
+from materialize import ui
 from materialize.cloudtest.k8s import K8sResource
 
 
@@ -33,22 +33,7 @@ class Application:
         return ui.env_is_truthy("CI_COVERAGE_ENABLED")
 
     def acquire_images(self) -> None:
-        repo = mzbuild.Repository(
-            ROOT, release_mode=self.release_mode, coverage=self.coverage_mode()
-        )
-        for image in self.images:
-            deps = repo.resolve_dependencies([repo.images[image]])
-            deps.acquire()
-            for dep in deps:
-                subprocess.check_call(
-                    [
-                        "kind",
-                        "load",
-                        "docker-image",
-                        "--name=cloudtest",
-                        dep.spec(),
-                    ]
-                )
+        raise NotImplementedError
 
     def kubectl(self, *args: str) -> str:
         try:

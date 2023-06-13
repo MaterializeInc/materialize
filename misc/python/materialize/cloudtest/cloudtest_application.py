@@ -25,6 +25,9 @@ class CloudtestApplication(Application):
     def create(self) -> None:
         pass
 
+    def acquire_images(self) -> None:
+        pass
+
     def wait_replicas(self) -> None:
         pass
 

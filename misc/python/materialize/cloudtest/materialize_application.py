@@ -8,13 +8,14 @@
 # by the Apache License, Version 2.0.
 
 import os
+import subprocess
 import time
 from datetime import datetime, timedelta
 from typing import Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import ROOT
+from materialize import ROOT, mzbuild
 from materialize.cloudtest.application import Application
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
@@ -119,6 +120,24 @@ class MaterializeApplication(Application):
     def create(self) -> None:
         super().create()
         wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
+
+    def acquire_images(self) -> None:
+        repo = mzbuild.Repository(
+            ROOT, release_mode=self.release_mode, coverage=self.coverage_mode()
+        )
+        for image in self.images:
+            deps = repo.resolve_dependencies([repo.images[image]])
+            deps.acquire()
+            for dep in deps:
+                subprocess.check_call(
+                    [
+                        "kind",
+                        "load",
+                        "docker-image",
+                        "--name=cloudtest",
+                        dep.spec(),
+                    ]
+                )
 
     def wait_replicas(self) -> None:
         # NOTE[btv] - This will need to change if the order of
