@@ -27,7 +27,6 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.57.1"),
     MzVersion.parse_mz("v0.57.2"),
     MzVersion.parse_mz("v0.57.5"),
-    MzVersion.parse_mz("v0.57.6"),
 }
 
 
