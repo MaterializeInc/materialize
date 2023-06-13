@@ -2757,7 +2757,7 @@ impl JoinInputCharacteristics {
         input: usize,
     ) -> Self {
         Self {
-            cardinality: cardinality.map(|n| std::cmp::Reverse(n)),
+            cardinality: cardinality.map(std::cmp::Reverse),
             unique_key,
             key_length,
             arranged,

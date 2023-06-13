@@ -61,6 +61,8 @@ pub enum FactorizerVariable {
     ///
     /// TODO(mgree): need to correlate this back to a given global table, to feed in statistics (or have a sub-attribute for collecting this)
     Index(usize),
+    /// An unbound local or other unknown quantity
+    Unknown,
 }
 
 /// SymbolicExpressions specialized to factorizer variables
@@ -383,7 +385,8 @@ impl Attribute for Cardinality {
                     Some(value) => self.results.push(value.clone()),
                     None => {
                         // TODO(mgree) when will we meet an unbound local?
-                        unimplemented!()
+                        self.results
+                            .push(SymExp::symbolic(FactorizerVariable::Unknown));
                     }
                 },
                 Id::Global(id) => self
@@ -586,6 +589,9 @@ impl SymExp {
             }
             Symbolic(FactorizerVariable::Index(col), n) => {
                 write!(f, "icard(#{col})^{n}")
+            }
+            Symbolic(FactorizerVariable::Unknown, n) => {
+                write!(f, "unknown^{n}")
             }
             Max(e1, e2) => {
                 write!(f, "max(")?;
