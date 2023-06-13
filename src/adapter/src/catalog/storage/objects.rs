@@ -17,11 +17,11 @@ use crate::catalog::{RoleMembership, SerializedCatalogItem, SerializedRole};
 use super::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, ConfigKey, ConfigValue,
-    DatabaseKey, DatabaseNamespace, DatabaseValue, GidMappingKey, GidMappingValue, IdAllocKey,
-    IdAllocValue, ItemKey, ItemValue, RoleKey, RoleValue, SchemaKey, SchemaNamespace, SchemaValue,
-    SerializedReplicaConfig, SerializedReplicaLocation, SerializedReplicaLogging,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey,
-    TimestampKey, TimestampValue,
+    DatabaseKey, DatabaseValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
+    ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, SerializedReplicaConfig,
+    SerializedReplicaLocation, SerializedReplicaLogging, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, TimestampKey,
+    TimestampValue,
 };
 
 impl RustType<proto::ConfigKey> for ConfigKey {
@@ -152,12 +152,7 @@ impl RustType<proto::ClusterValue> for ClusterValue {
             name: self.name.to_string(),
             linked_object_id: self.linked_object_id.into_proto(),
             owner_id: Some(self.owner_id.into_proto()),
-            privileges: self
-                .privileges
-                .as_ref()
-                .cloned()
-                .unwrap_or_default()
-                .into_proto(),
+            privileges: self.privileges.into_proto(),
         }
     }
 
@@ -166,7 +161,7 @@ impl RustType<proto::ClusterValue> for ClusterValue {
             name: proto.name,
             linked_object_id: proto.linked_object_id.into_rust()?,
             owner_id: proto.owner_id.into_rust_if_some("ClusterValue::owner_id")?,
-            privileges: Some(proto.privileges.into_rust()?),
+            privileges: proto.privileges.into_rust()?,
         })
     }
 }
@@ -344,31 +339,15 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
 
 impl RustType<proto::DatabaseKey> for DatabaseKey {
     fn into_proto(&self) -> proto::DatabaseKey {
-        let value = match self.ns {
-            None | Some(DatabaseNamespace::User) => proto::database_id::Value::User(self.id),
-            Some(DatabaseNamespace::System) => proto::database_id::Value::System(self.id),
-        };
-
         proto::DatabaseKey {
-            id: Some(proto::DatabaseId { value: Some(value) }),
+            id: Some(self.id.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::DatabaseKey) -> Result<Self, TryFromProtoError> {
-        let id = proto
-            .id
-            .ok_or_else(|| TryFromProtoError::missing_field("DatabaseKey::id"))?;
-        match id.value {
-            Some(proto::database_id::Value::User(id)) => Ok(DatabaseKey {
-                id,
-                ns: Some(DatabaseNamespace::User),
-            }),
-            Some(proto::database_id::Value::System(id)) => Ok(DatabaseKey {
-                id,
-                ns: Some(DatabaseNamespace::System),
-            }),
-            None => Err(TryFromProtoError::missing_field("DatabaseId::value")),
-        }
+        Ok(DatabaseKey {
+            id: proto.id.into_rust_if_some("DatabaseKey::value")?,
+        })
     }
 }
 
@@ -377,12 +356,7 @@ impl RustType<proto::DatabaseValue> for DatabaseValue {
         proto::DatabaseValue {
             name: self.name.clone(),
             owner_id: Some(self.owner_id.into_proto()),
-            privileges: self
-                .privileges
-                .as_ref()
-                .cloned()
-                .unwrap_or_default()
-                .into_proto(),
+            privileges: self.privileges.into_proto(),
         }
     }
 
@@ -392,95 +366,43 @@ impl RustType<proto::DatabaseValue> for DatabaseValue {
             owner_id: (proto
                 .owner_id
                 .into_rust_if_some("DatabaseValue::owner_id")?),
-            privileges: Some(proto.privileges.into_rust()?),
+            privileges: proto.privileges.into_rust()?,
         })
     }
 }
 
 impl RustType<proto::SchemaKey> for SchemaKey {
     fn into_proto(&self) -> proto::SchemaKey {
-        let value = match self.ns {
-            None | Some(SchemaNamespace::User) => proto::schema_id::Value::User(self.id),
-            Some(SchemaNamespace::System) => proto::schema_id::Value::System(self.id),
-        };
-
         proto::SchemaKey {
-            id: Some(proto::SchemaId { value: Some(value) }),
+            id: Some(self.id.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::SchemaKey) -> Result<Self, TryFromProtoError> {
-        let id = proto
-            .id
-            .ok_or_else(|| TryFromProtoError::missing_field("SchemaKey::id"))?;
-        match id.value {
-            Some(proto::schema_id::Value::User(id)) => Ok(SchemaKey {
-                id,
-                ns: Some(SchemaNamespace::User),
-            }),
-            Some(proto::schema_id::Value::System(id)) => Ok(SchemaKey {
-                id,
-                ns: Some(SchemaNamespace::System),
-            }),
-            None => Err(TryFromProtoError::missing_field("SchemaKey::value")),
-        }
+        Ok(SchemaKey {
+            id: proto.id.into_rust_if_some("SchemaKey::id")?,
+        })
     }
 }
 
 impl RustType<proto::SchemaValue> for SchemaValue {
     fn into_proto(&self) -> proto::SchemaValue {
-        let database_id = match (self.database_id, self.database_ns) {
-            (Some(id), Some(DatabaseNamespace::User)) | (Some(id), None) => {
-                Some(proto::DatabaseId {
-                    value: Some(proto::database_id::Value::User(id)),
-                })
-            }
-            (Some(id), Some(DatabaseNamespace::System)) => Some(proto::DatabaseId {
-                value: Some(proto::database_id::Value::System(id)),
-            }),
-            // Note: it's valid for a schema to not be associated with a database.
-            (None, _) => None,
-        };
-
         proto::SchemaValue {
             name: self.name.clone(),
-            database_id,
+            database_id: self.database_id.map(|id| id.into_proto()),
             owner_id: Some(self.owner_id.into_proto()),
-            privileges: self
-                .privileges
-                .as_ref()
-                .cloned()
-                .unwrap_or_default()
-                .into_proto(),
+            privileges: self.privileges.into_proto(),
         }
     }
 
     fn from_proto(proto: proto::SchemaValue) -> Result<Self, TryFromProtoError> {
-        let (database_id, database_ns) = match proto.database_id {
-            // Note: it's valid for a schema to not be associated with a database.
-            None => (None, None),
-            Some(proto::DatabaseId { value }) => {
-                let value =
-                    value.ok_or_else(|| TryFromProtoError::missing_field("DatabaseId::value"))?;
-                match value {
-                    proto::database_id::Value::User(id) => {
-                        (Some(id), Some(DatabaseNamespace::User))
-                    }
-                    proto::database_id::Value::System(id) => {
-                        (Some(id), Some(DatabaseNamespace::System))
-                    }
-                }
-            }
-        };
-
         Ok(SchemaValue {
             name: proto.name,
-            database_id,
-            database_ns,
+            database_id: proto.database_id.into_rust()?,
             owner_id: (proto
                 .owner_id
                 .into_rust_if_some("DatabaseValue::owner_id")?),
-            privileges: Some(proto.privileges.into_rust()?),
+            privileges: proto.privileges.into_rust()?,
         })
     }
 }
@@ -524,48 +446,24 @@ impl RustType<proto::CatalogItem> for SerializedCatalogItem {
 
 impl RustType<proto::ItemValue> for ItemValue {
     fn into_proto(&self) -> proto::ItemValue {
-        let schema_id = match self.schema_ns {
-            None | Some(SchemaNamespace::User) => proto::SchemaId {
-                value: Some(proto::schema_id::Value::User(self.schema_id)),
-            },
-            Some(SchemaNamespace::System) => proto::SchemaId {
-                value: Some(proto::schema_id::Value::System(self.schema_id)),
-            },
-        };
-
         proto::ItemValue {
-            schema_id: Some(schema_id),
+            schema_id: Some(self.schema_id.into_proto()),
             name: self.name.to_string(),
             definition: Some(self.definition.into_proto()),
             owner_id: Some(self.owner_id.into_proto()),
-            privileges: self
-                .privileges
-                .as_ref()
-                .cloned()
-                .unwrap_or_default()
-                .into_proto(),
+            privileges: self.privileges.into_proto(),
         }
     }
 
     fn from_proto(proto: proto::ItemValue) -> Result<Self, TryFromProtoError> {
-        let schema_id = proto
-            .schema_id
-            .ok_or_else(|| TryFromProtoError::missing_field("ItemValue::schema_id"))?;
-        let (schema_id, schema_ns) = match schema_id.value {
-            Some(proto::schema_id::Value::User(id)) => (id, SchemaNamespace::User),
-            Some(proto::schema_id::Value::System(id)) => (id, SchemaNamespace::System),
-            None => return Err(TryFromProtoError::missing_field("SchemaId::value")),
-        };
-
         Ok(ItemValue {
-            schema_id,
-            schema_ns: Some(schema_ns),
+            schema_id: proto.schema_id.into_rust_if_some("ItemValue::schema_id")?,
             name: proto.name,
             definition: proto
                 .definition
                 .into_rust_if_some("ItemValue::definition")?,
             owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
-            privileges: Some(proto.privileges.into_rust()?),
+            privileges: proto.privileges.into_rust()?,
         })
     }
 }
