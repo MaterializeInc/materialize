@@ -105,7 +105,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Update storage instance configuration.
     UpdateConfiguration(StorageParameters),
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<CreateSourceCommand<T>>),
+    CreateSources(Vec<CreateSourceCommand>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -116,17 +116,15 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
 
 /// A command that starts ingesting the given ingestion description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CreateSourceCommand<T> {
+pub struct CreateSourceCommand {
     /// The id of the storage collection being ingested.
     pub id: GlobalId,
     /// The description of what source type should be ingested and what post-processing steps must
     /// be applied to the data before writing them down into the storage collection
     pub description: IngestionDescription<CollectionMetadata>,
-    /// The upper frontier that this ingestion should resume at
-    pub resume_upper: Antichain<T>,
 }
 
-impl Arbitrary for CreateSourceCommand<mz_repr::Timestamp> {
+impl Arbitrary for CreateSourceCommand {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -134,23 +132,17 @@ impl Arbitrary for CreateSourceCommand<mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<IngestionDescription<CollectionMetadata>>(),
-            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4).prop_map(Antichain::from),
         )
-            .prop_map(|(id, description, resume_upper)| Self {
-                id,
-                description,
-                resume_upper,
-            })
+            .prop_map(|(id, description)| Self { id, description })
             .boxed()
     }
 }
 
-impl RustType<ProtoCreateSourceCommand> for CreateSourceCommand<mz_repr::Timestamp> {
+impl RustType<ProtoCreateSourceCommand> for CreateSourceCommand {
     fn into_proto(&self) -> ProtoCreateSourceCommand {
         ProtoCreateSourceCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            resume_upper: Some(self.resume_upper.into_proto()),
         }
     }
 
@@ -160,9 +152,6 @@ impl RustType<ProtoCreateSourceCommand> for CreateSourceCommand<mz_repr::Timesta
             description: proto
                 .description
                 .into_rust_if_some("ProtoCreateSourceCommand::description")?,
-            resume_upper: proto
-                .resume_upper
-                .into_rust_if_some("ProtoCreateSourceCommand::resume_upper")?,
         })
     }
 }
@@ -272,7 +261,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
             // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
-            proptest::collection::vec(any::<CreateSourceCommand<mz_repr::Timestamp>>(), 1..4)
+            proptest::collection::vec(any::<CreateSourceCommand>(), 1..4)
                 .prop_map(StorageCommand::CreateSources)
                 .boxed(),
             proptest::collection::vec(any::<CreateSinkCommand<mz_repr::Timestamp>>(), 1..4)

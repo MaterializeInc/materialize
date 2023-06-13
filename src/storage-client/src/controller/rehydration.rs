@@ -142,7 +142,7 @@ struct RehydrationTask<T> {
     /// A channel upon which responses from the storage replica are delivered.
     response_tx: UnboundedSender<StorageResponse<T>>,
     /// The sources that have been observed.
-    sources: BTreeMap<GlobalId, CreateSourceCommand<T>>,
+    sources: BTreeMap<GlobalId, CreateSourceCommand>,
     /// The exports that have been observed.
     sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.

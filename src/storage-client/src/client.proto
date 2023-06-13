@@ -35,9 +35,11 @@ message ProtoAllowCompaction {
 }
 
 message ProtoCreateSourceCommand {
+    reserved 3;
+    reserved "resume_upper";
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage_client.types.sources.ProtoIngestionDescription description = 2;
-    mz_repr.antichain.ProtoU64Antichain resume_upper = 3;
+    // mz_repr.antichain.ProtoU64Antichain resume_upper = 3;
 }
 
 message ProtoCreateSources {
