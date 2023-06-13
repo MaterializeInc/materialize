@@ -1,0 +1,481 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// This protobuf file defines the types we store in the Stash.
+//
+// Before and after modifying this file, make sure you have a snapshot of the before version,
+// e.g. a copy of this file named 'objects_v{STASH_VERSION}.proto', and a snapshot of the file
+// after your modifications, e.g. 'objects_v{STASH_VERSION + 1}.proto'. Then you can write a
+// migration using these two files, and no matter how they types change in the future, we'll always
+// have these snapshots to facilitate the migration.
+
+
+syntax = "proto3";
+
+package objects_v19;
+
+message ConfigKey {
+    string key = 1;
+}
+
+message ConfigValue {
+    uint64 value = 1;
+}
+
+message SettingKey {
+    string name = 1;
+}
+
+message SettingValue {
+    string value = 1;
+}
+
+message IdAllocKey {
+    string name = 1;
+}
+
+message IdAllocValue {
+    uint64 next_id = 1;
+}
+
+message GidMappingKey {
+    string schema_name = 1;
+    CatalogItemType object_type = 2;
+    string object_name = 3;
+}
+
+message GidMappingValue {
+    uint64 id = 1;
+    string fingerprint = 2;
+}
+
+message ClusterKey {
+    ClusterId id = 1;
+}
+
+message ClusterValue {
+    string name = 1;
+    GlobalId linked_object_id = 2;
+    RoleId owner_id = 3;
+    repeated MzAclItem privileges = 4;
+}
+
+message ClusterIntrospectionSourceIndexKey {
+    ClusterId cluster_id = 1;
+    string name = 2;
+}
+
+message ClusterIntrospectionSourceIndexValue {
+    uint64 index_id = 1;
+}
+
+message ClusterReplicaKey {
+    ReplicaId id = 1;
+}
+
+message ClusterReplicaValue {
+    ClusterId cluster_id = 1;
+    string name = 2;
+    ReplicaConfig config = 3;
+    RoleId owner_id = 4;
+}
+
+message DatabaseKey {
+    DatabaseId id = 1;
+}
+
+message DatabaseValue {
+    string name = 1;
+    RoleId owner_id = 2;
+    repeated MzAclItem privileges = 3;
+}
+
+message SchemaKey {
+    SchemaId id = 1;
+}
+
+message SchemaValue {
+    DatabaseId database_id = 1;
+    string name = 2;
+    RoleId owner_id = 3;
+    repeated MzAclItem privileges = 4;
+}
+
+message ItemKey {
+    GlobalId gid = 1;
+}
+
+message ItemValue {
+    SchemaId schema_id = 1;
+    string name = 2;
+    CatalogItem definition = 3;
+    RoleId owner_id = 4;
+    repeated MzAclItem privileges = 5;
+}
+
+message RoleKey {
+    RoleId id = 1;
+}
+
+message RoleValue {
+    string name = 1;
+    RoleAttributes attributes = 2;
+    RoleMembership membership = 3;
+}
+
+message TimestampKey {
+    string id = 1;
+}
+
+message TimestampValue {
+    Timestamp ts = 1;
+}
+
+message ServerConfigurationKey {
+    string name = 1;
+}
+
+message ServerConfigurationValue {
+    string value = 1;
+}
+
+message AuditLogKey {
+    oneof event {
+        AuditLogEventV1 v1 = 1;
+    }
+}
+
+message StorageUsageKey {
+    message StorageUsageV1 {
+        uint64 id = 1;
+        StringWrapper shard_id = 2;
+        uint64 size_bytes = 3;
+        EpochMillis collection_timestamp = 4;
+    }
+
+    oneof usage {
+        StorageUsageV1 v1 = 1;
+    }
+}
+
+message SinkAsOf {
+    TimestampAntichain frontier = 1;
+    bool strict = 2;
+}
+
+message DurableCollectionMetadata {
+    StringWrapper remap_shard = 1;
+    string data_shard = 2;
+}
+
+message DurableExportMetadata {
+    SinkAsOf initial_as_of = 1;
+}
+
+// ---- Common Types
+//
+// Note: Normally types like this would go in some sort of `common.proto` file, but we want to keep
+// our proto definitions in a single file to make snapshotting easier, hence them living here.
+
+message Empty { /* purposefully empty */ }
+
+// In protobuf a "None" string is the same thing as an empty string. To get the same semantics of
+// an `Option<String>` from Rust, we need to wrap a string in a message.
+message StringWrapper {
+    string inner = 1;
+}
+
+message Duration {
+    uint64 secs = 1;
+    uint32 nanos = 2;
+}
+
+message EpochMillis {
+    uint64 millis = 1;
+}
+
+// Opaque timestamp type that is specific to Materialize.
+message Timestamp {
+    uint64 internal = 1;
+}
+
+enum CatalogItemType {
+    CATALOG_ITEM_TYPE_UNKNOWN = 0;
+    CATALOG_ITEM_TYPE_TABLE = 1;
+    CATALOG_ITEM_TYPE_SOURCE = 2;
+    CATALOG_ITEM_TYPE_SINK = 3;
+    CATALOG_ITEM_TYPE_VIEW = 4;
+    CATALOG_ITEM_TYPE_MATERIALIZED_VIEW = 5;
+    CATALOG_ITEM_TYPE_INDEX = 6;
+    CATALOG_ITEM_TYPE_TYPE = 7;
+    CATALOG_ITEM_TYPE_FUNC = 8;
+    CATALOG_ITEM_TYPE_SECRET = 9;
+    CATALOG_ITEM_TYPE_CONNECTION = 10;
+}
+
+message CatalogItem {
+    message V1 {
+        string create_sql = 1;
+    }
+
+    oneof value {
+        V1 v1 = 1;
+    }
+}
+
+message GlobalId {
+    oneof value {
+        uint64 system = 1;
+        uint64 user = 2;
+        uint64 transient = 3;
+        Empty explain = 4;
+    }
+}
+
+message ClusterId {
+    oneof value {
+        uint64 system = 1;
+        uint64 user = 2;
+    }
+}
+
+message DatabaseId {
+    oneof value {
+        uint64 system = 1;
+        uint64 user = 2;
+    }
+}
+
+message SchemaId {
+    oneof value {
+        uint64 system = 1;
+        uint64 user = 2;
+    }
+}
+
+message ReplicaId {
+    uint64 value = 1;
+}
+
+message ReplicaConfig {
+    message UnmanagedLocation {
+        repeated string storagectl_addrs = 1;
+        repeated string storage_addrs = 2;
+        repeated string computectl_addrs = 3;
+        repeated string compute_addrs = 4;
+        uint64 workers = 5;
+    }
+
+    message ManagedLocation {
+        string size = 1;
+        string availability_zone = 2;
+        bool az_user_specified = 3;
+    }
+
+    message Logging {
+        bool log_logging = 1;
+        Duration interval = 2;
+    }
+
+    message MergeEffort {
+        uint32 effort = 1;
+    }
+
+    oneof location {
+        UnmanagedLocation unmanaged = 1;
+        ManagedLocation managed = 2;
+    }
+    Logging logging = 3;
+    MergeEffort idle_arrangement_merge_effort = 4;
+}
+
+message RoleId {
+    oneof value {
+        uint64 system = 1;
+        uint64 user = 2;
+        Empty public = 3;
+    }
+}
+
+message RoleAttributes {
+    bool inherit = 1;
+    bool create_role = 2;
+    bool create_db = 3;
+    bool create_cluster = 4;
+}
+
+message RoleMembership {
+    message Entry {
+        RoleId key = 1;
+        RoleId value = 2;
+    }
+
+    repeated Entry map = 1;
+}
+
+message AclMode {
+    // A bit flag representing all the privileges that can be granted to a role.
+    uint64 bitflags = 1;
+}
+
+message MzAclItem {
+    RoleId grantee = 1;
+    RoleId grantor = 2;
+    AclMode acl_mode = 3;
+}
+
+message TimestampAntichain {
+    repeated Timestamp elements = 1;
+}
+
+message AuditLogEventV1 {
+    enum EventType {
+        EVENT_TYPE_UNKNOWN = 0;
+        EVENT_TYPE_CREATE = 1;
+        EVENT_TYPE_DROP = 2;
+        EVENT_TYPE_ALTER = 3;
+        EVENT_TYPE_GRANT = 4;
+        EVENT_TYPE_REVOKE = 5;
+    }
+
+    enum ObjectType {
+        OBJECT_TYPE_UNKNOWN = 0;
+        OBJECT_TYPE_CLUSTER = 1;
+        OBJECT_TYPE_CLUSTER_REPLICA = 2;
+        OBJECT_TYPE_CONNECTION = 3;
+        OBJECT_TYPE_DATABASE = 4;
+        OBJECT_TYPE_FUNC = 5;
+        OBJECT_TYPE_INDEX = 6;
+        OBJECT_TYPE_MATERIALIZED_VIEW = 7;
+        OBJECT_TYPE_ROLE = 8;
+        OBJECT_TYPE_SECRET = 9;
+        OBJECT_TYPE_SCHEMA = 10;
+        OBJECT_TYPE_SINK = 11;
+        OBJECT_TYPE_SOURCE = 12;
+        OBJECT_TYPE_TABLE = 13;
+        OBJECT_TYPE_TYPE = 14;
+        OBJECT_TYPE_VIEW = 15;
+    }
+
+    message IdFullNameV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+    }
+
+    message FullNameV1 {
+        string database = 1;
+        string schema = 2;
+        string item = 3;
+    }
+
+    message IdNameV1 {
+        string id = 1;
+        string name = 2;
+    }
+
+    message RenameItemV1 {
+        string id = 1;
+        FullNameV1 old_name = 2;
+        FullNameV1 new_name = 3;
+    }
+
+    message CreateClusterReplicaV1 {
+        string cluster_id = 1;
+        string cluser_name = 2;
+        StringWrapper replica_id = 3;
+        string replica_name = 4;
+        string logical_size = 5;
+    }
+
+    message DropClusterReplicaV1 {
+        string cluster_id = 1;
+        string cluster_name = 2;
+        StringWrapper replica_id = 3;
+        string replica_name = 4;
+    }
+
+    message CreateSourceSinkV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+        StringWrapper size = 3;
+    }
+
+    message CreateSourceSinkV2 {
+        string id = 1;
+        FullNameV1 name = 2;
+        StringWrapper size = 3;
+        string external_type = 4;
+    }
+
+    message AlterSourceSinkV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+        StringWrapper old_size = 3;
+        StringWrapper new_size = 4;
+    }
+
+    message GrantRoleV1 {
+        string role_id = 1;
+        string member_id = 2;
+        string grantor_id = 3;
+    }
+
+    message GrantRoleV2 {
+        string role_id = 1;
+        string member_id = 2;
+        string grantor_id = 3;
+        string executed_by = 4;
+    }
+
+    message RevokeRoleV1 {
+        string role_id = 1;
+        string member_id = 2;
+    }
+
+    message RevokeRoleV2 {
+        string role_id = 1;
+        string member_id = 2;
+        string grantor_id = 3;
+        string executed_by = 4;
+    }
+
+    message SchemaV1 {
+        string id = 1;
+        string name = 2;
+        string database_name = 3;
+    }
+
+    message SchemaV2 {
+        string id = 1;
+        string name = 2;
+        StringWrapper database_name = 3;
+    }
+
+    uint64 id = 1;
+    EventType event_type = 2;
+    ObjectType object_type = 3;
+    StringWrapper user = 4;
+    EpochMillis occurred_at = 5;
+    oneof details {
+        CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
+        DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
+        CreateSourceSinkV1 create_source_sink_v1 = 8;
+        CreateSourceSinkV2 create_source_sink_v2 = 9;
+        AlterSourceSinkV1 alter_source_sink_v1 = 10;
+        GrantRoleV1 grant_role_v1 = 11;
+        GrantRoleV2 grant_role_v2 = 12;
+        RevokeRoleV1 revoke_role_v1 = 13;
+        RevokeRoleV2 revoke_role_v2 = 14;
+        IdFullNameV1 id_full_name_v1 = 15;
+        RenameItemV1 rename_item_v1 = 16;
+        IdNameV1 id_name_v1 = 17;
+        SchemaV1 schema_v1 = 18;
+        SchemaV2 schema_v2 = 19;
+    }
+}
