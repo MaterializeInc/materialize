@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 mz-ore = { path = "../ore", default-features = false }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional=true }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 # Disable jemalloc on macOS, as it is not well supported [0][1][2]. The issues
 # present as runaway latency on load test workloads that are comfortably handled

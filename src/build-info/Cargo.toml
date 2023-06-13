@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 compile-time-run = "0.2.12"
 semver = { version = "1.0.16", optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional=true }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
 default = ["semver", "workspace-hack"]
