@@ -823,14 +823,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
             }
             InternalStorageCommand::DropDataflow(id) => {
-                let ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.get(&id) {
-                    // Without the source dataflow running, all source exports
-                    // should also be considered dropped. n.b. `source_exports`
-                    // includes `id`
+                let ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.remove(&id) {
                     Some(IngestionDescription { source_exports, .. }) => {
+                        // Without the source dataflow running, all source exports
+                        // should also be considered dropped. n.b. `source_exports`
+                        // includes `id`
                         source_exports.keys().cloned().collect()
                     }
                     None => {
+                        self.storage_state.exports.remove(&id).unwrap_or_else(|| {
+                            panic!(
+                                "{} is neither a current ingestion nor an export but we tried \
+                                to remove it",
+                                id
+                            )
+                        });
+
                         let mut ids = BTreeSet::new();
                         ids.insert(id);
                         ids
