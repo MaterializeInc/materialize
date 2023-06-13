@@ -543,6 +543,11 @@ where
 
     /// Processes the work queued by [`ComputeController::ready`].
     pub fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
+        // Update controller state metrics.
+        for instance in self.compute.instances.values_mut() {
+            instance.refresh_state_metrics();
+        }
+
         // Rehydrate any failed replicas.
         for instance in self.compute.instances.values_mut() {
             instance.activate(self.storage).rehydrate_failed_replicas();

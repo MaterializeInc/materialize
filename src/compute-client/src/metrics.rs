@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, IntCounterVec, MetricsRegistry};
+use mz_ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec,
+    MetricsRegistry, UIntGaugeVec,
+};
 use mz_service::codec::StatsCollector;
 use prometheus::core::AtomicU64;
 
@@ -21,13 +24,23 @@ use crate::controller::{ComputeInstanceId, ReplicaId};
 use crate::protocol::command::ProtoComputeCommand;
 use crate::protocol::response::ProtoComputeResponse;
 
+type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
+type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
+
 /// Compute controller metrics
 #[derive(Debug, Clone)]
 pub struct ComputeControllerMetrics {
+    // compute protocol
     commands_total: IntCounterVec,
     command_message_bytes_total: IntCounterVec,
     responses_total: IntCounterVec,
     response_message_bytes_total: IntCounterVec,
+
+    // controller state
+    replica_count: UIntGaugeVec,
+    collection_count: UIntGaugeVec,
+    peek_count: UIntGaugeVec,
+    subscribe_count: UIntGaugeVec,
 }
 
 impl ComputeControllerMetrics {
@@ -53,22 +66,59 @@ impl ComputeControllerMetrics {
                 help: "The total number of bytes sent in compute response messages.",
                 var_labels: ["instance_id", "replica_id", "response_type"],
             )),
+            replica_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_replica_count",
+                help: "The number of replicas.",
+                var_labels: ["instance_id"],
+            )),
+            collection_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_collection_count",
+                help: "The number of installed compute collections.",
+                var_labels: ["instance_id"],
+            )),
+            peek_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_peek_count",
+                help: "The number of pending peeks.",
+                var_labels: ["instance_id"],
+            )),
+            subscribe_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_subscribe_count",
+                help: "The number of active subscribes.",
+                var_labels: ["instance_id"],
+            )),
         }
     }
 
     pub fn for_instance(&self, instance_id: ComputeInstanceId) -> InstanceMetrics {
+        let labels = vec![instance_id.to_string()];
+        let replica_count = self.replica_count.get_delete_on_drop_gauge(labels.clone());
+        let collection_count = self
+            .collection_count
+            .get_delete_on_drop_gauge(labels.clone());
+        let peek_count = self.peek_count.get_delete_on_drop_gauge(labels.clone());
+        let subscribe_count = self.subscribe_count.get_delete_on_drop_gauge(labels);
+
         InstanceMetrics {
             instance_id,
             metrics: self.clone(),
+            replica_count,
+            collection_count,
+            peek_count,
+            subscribe_count,
         }
     }
 }
 
 /// Per-instance metrics
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct InstanceMetrics {
     instance_id: ComputeInstanceId,
     metrics: ComputeControllerMetrics,
+
+    pub replica_count: UIntGauge,
+    pub collection_count: UIntGauge,
+    pub peek_count: UIntGauge,
+    pub subscribe_count: UIntGauge,
 }
 
 impl InstanceMetrics {
@@ -116,8 +166,6 @@ impl InstanceMetrics {
 pub struct ReplicaMetrics {
     inner: Arc<ReplicaMetricsInner>,
 }
-
-type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 
 #[derive(Debug)]
 struct ReplicaMetricsInner {
