@@ -186,7 +186,9 @@ impl Arbitrary for AclMode {
 /// because we don't use OID as persistent identifiers for roles.
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+)]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
     pub grantee: RoleId,

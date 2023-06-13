@@ -2013,50 +2013,50 @@ mod test {
     use super::{DatabaseKey, DatabaseValue, ItemKey, ItemValue, SchemaKey, SchemaValue};
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn proptest_database_key_roundtrip(key: DatabaseKey) {
             let proto = key.into_proto();
-            let round = proto.into_rust().unwrap();
+            let round = proto.into_rust().expect("to roundtrip");
 
             prop_assert_eq!(key, round);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn proptest_database_value_roundtrip(value: DatabaseValue) {
             let proto = value.into_proto();
-            let round = proto.into_rust().unwrap();
+            let round = proto.into_rust().expect("to roundtrip");
 
             prop_assert_eq!(value, round);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn proptest_schema_key_roundtrip(key: SchemaKey) {
             let proto = key.into_proto();
-            let round = proto.into_rust().unwrap();
+            let round = proto.into_rust().expect("to roundtrip");
 
             prop_assert_eq!(key, round);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn proptest_schema_value_roundtrip(value: SchemaValue) {
             let proto = value.into_proto();
-            let round = proto.into_rust().unwrap();
+            let round = proto.into_rust().expect("to roundtrip");
 
             prop_assert_eq!(value, round);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn proptest_item_key_roundtrip(key: ItemKey) {
             let proto = key.into_proto();
-            let round = proto.into_rust().unwrap();
+            let round = proto.into_rust().expect("to roundtrip");
 
             prop_assert_eq!(key, round);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn proptest_item_value_roundtrip(value: ItemValue) {
             let proto = value.into_proto();
-            let round = proto.into_rust().unwrap();
+            let round = proto.into_rust().expect("to roundtrip");
 
             prop_assert_eq!(value, round);
         }
