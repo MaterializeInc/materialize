@@ -1653,7 +1653,7 @@ where
                         );
                     }
 
-                    let desc = IngestionDescription {
+                    let description = IngestionDescription {
                         source_imports,
                         source_exports,
                         ingestion_metadata,
@@ -1662,8 +1662,6 @@ where
                         instance_id: ingestion.instance_id,
                         remap_collection_id: ingestion.remap_collection_id,
                     };
-                    let mut calc = desc.create_calc(&self.persist).await;
-                    let resume_upper = calc.calculate_resumption_frontier().await;
 
                     // Fetch the client for this ingestion's instance.
                     let client = self
@@ -1674,11 +1672,7 @@ where
                             storage_instance_id: ingestion.instance_id,
                             ingestion_id: id,
                         })?;
-                    let augmented_ingestion = CreateSourceCommand {
-                        id,
-                        description: desc,
-                        resume_upper,
-                    };
+                    let augmented_ingestion = CreateSourceCommand { id, description };
 
                     client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
                 }
