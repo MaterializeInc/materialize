@@ -548,11 +548,12 @@ impl Stash {
                 .get(0);
             if !fence_exists {
                 if !matches!(self.txn_mode, TransactionMode::Writeable) {
-                    return Err(format!(
-                        "stash tables do not exist; will not create in {:?} mode",
-                        self.txn_mode
-                    )
-                    .into());
+                    return Err(StashError {
+                        inner: InternalStashError::StashNotWritable(format!(
+                            "stash tables do not exist; will not create in {:?} mode",
+                            self.txn_mode
+                        )),
+                    });
                 }
                 tx.batch_execute(SCHEMA).await?;
             }

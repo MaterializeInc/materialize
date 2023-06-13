@@ -548,6 +548,9 @@ pub struct Args {
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
 
+    #[clap(long, env = "DEPLOY_GENERATION")]
+    deploy_generation: Option<u64>,
+
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
@@ -872,6 +875,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .collect(),
         config_sync_loop_interval: args.config_sync_loop_interval,
         bootstrap_role: args.bootstrap_role,
+        deploy_generation: args.deploy_generation,
+        waiting_on_leader_promotion: None,
     }))?;
 
     metrics.start_time_environmentd.set(

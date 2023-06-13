@@ -111,6 +111,7 @@ use regex::Regex;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -138,6 +139,8 @@ pub struct Config {
     propagate_crashes: bool,
     enable_tracing: bool,
     bootstrap_role: Option<String>,
+    deploy_generation: Option<u64>,
+    waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
 }
 
 impl Default for Config {
@@ -157,6 +160,8 @@ impl Default for Config {
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
+            deploy_generation: None,
+            waiting_on_leader_promotion: None,
         }
     }
 }
@@ -239,6 +244,19 @@ impl Config {
 
     pub fn with_bootstrap_role(mut self, bootstrap_role: Option<String>) -> Self {
         self.bootstrap_role = bootstrap_role;
+        self
+    }
+
+    pub fn with_deploy_generation(mut self, deploy_generation: Option<u64>) -> Self {
+        self.deploy_generation = deploy_generation;
+        self
+    }
+
+    pub fn with_waiting_on_leader_promotion(
+        mut self,
+        waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
+    ) -> Self {
+        self.waiting_on_leader_promotion = waiting_on_leader_promotion;
         self
     }
 }
@@ -411,6 +429,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         launchdarkly_key_map: Default::default(),
         config_sync_loop_interval: None,
         bootstrap_role: config.bootstrap_role,
+        deploy_generation: config.deploy_generation,
+        waiting_on_leader_promotion: config.waiting_on_leader_promotion,
     }))?;
     let server = Server {
         inner,

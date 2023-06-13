@@ -88,6 +88,9 @@ use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use http::StatusCode;
 use itertools::Itertools;
+use mz_environmentd::http::{
+    BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
+};
 use mz_environmentd::WebSocketResponse;
 use mz_ore::cast::CastLossy;
 use mz_ore::now::NowFn;
@@ -98,6 +101,8 @@ use mz_sql::session::user::SYSTEM_USER;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tempfile::TempDir;
+use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
@@ -1427,4 +1432,175 @@ fn test_concurrent_id_reuse() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("SELECT 1").unwrap();
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_leader_promotion() {
+    let tmpdir = TempDir::new().unwrap();
+    let config = util::Config::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path());
+    {
+        // start with a stash with no deploy generation to match current production
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+    }
+    {
+        // propose a deploy generation for the first time
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+
+        // make sure asking about the leader and promoting don't panic
+        let res = Client::new()
+            .get(
+                Url::parse(&format!(
+                    "http://{}/api/leader/status",
+                    server.inner.internal_http_local_addr()
+                ))
+                .unwrap(),
+            )
+            .send()
+            .unwrap();
+        tracing::info!("response: {res:?}");
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "{:?}",
+            res.json::<serde_json::Value>()
+        );
+
+        let res = Client::new()
+            .post(
+                Url::parse(&format!(
+                    "http://{}/api/leader/promote",
+                    server.inner.internal_http_local_addr()
+                ))
+                .unwrap(),
+            )
+            .send()
+            .unwrap();
+        tracing::info!("response: {res:?}");
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "{:?}",
+            res.json::<serde_json::Value>()
+        );
+    }
+    let config = config.with_deploy_generation(Some(2));
+    {
+        // start with different deploy generation, we need acknowledgement before starting sql port
+        let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
+        let config = config
+            .with_deploy_generation(Some(3))
+            .with_waiting_on_leader_promotion(Some(internal_http_addr_tx));
+        thread::scope(|s| {
+            let server_handle = s.spawn(|| util::start_server(config).unwrap());
+
+            let internal_http_addr = internal_http_addr_rx.blocking_recv().unwrap();
+            let status_http_url =
+                Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
+
+            Retry::default()
+                .max_tries(10)
+                .retry(|_state| {
+                    let res = Client::new().get(status_http_url.clone()).send().unwrap();
+                    assert_eq!(res.status(), StatusCode::OK);
+                    let response: LeaderStatusResponse = res.json().unwrap();
+                    assert_ne!(response.status, LeaderStatus::IsLeader);
+                    if response.status == LeaderStatus::ReadyToPromote {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                })
+                .unwrap();
+
+            let promote_http_url =
+                Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
+
+            let res = Client::new().post(promote_http_url.clone()).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: BecomeLeaderResponse = res.json().unwrap();
+            assert_eq!(
+                response,
+                BecomeLeaderResponse {
+                    result: BecomeLeaderResult::Success
+                }
+            );
+
+            let server = server_handle.join().unwrap();
+            let mut client = server.connect(postgres::NoTls).unwrap();
+            client.simple_query("SELECT 1").unwrap();
+
+            // check that we're the leader and promotion doesn't do anything
+            let res = Client::new().get(status_http_url).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: LeaderStatusResponse = res.json().unwrap();
+            assert_eq!(response.status, LeaderStatus::IsLeader);
+
+            let res = Client::new().post(promote_http_url).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: BecomeLeaderResponse = res.json().unwrap();
+            assert_eq!(
+                response,
+                BecomeLeaderResponse {
+                    result: BecomeLeaderResult::Success
+                }
+            );
+        });
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_leader_promotion_always_using_deploy_generation() {
+    let tmpdir = TempDir::new().unwrap();
+    let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
+    let config = util::Config::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path())
+        .with_deploy_generation(Some(2));
+    {
+        // propose a deploy generation for the first time
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+    }
+    {
+        // keep it the same, no need to promote the leader
+        let server = util::start_server(
+            config.with_waiting_on_leader_promotion(Some(internal_http_addr_tx)),
+        )
+        .unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+
+        let internal_http_addr = internal_http_addr_rx
+            .blocking_recv()
+            .expect("should be populated");
+
+        // check that we're the leader and promotion doesn't do anything
+        let status_http_url =
+            Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
+        let res = Client::new().get(status_http_url).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: LeaderStatusResponse = res.json().unwrap();
+        assert_eq!(response.status, LeaderStatus::IsLeader);
+
+        let promote_http_url =
+            Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
+        let res = Client::new().post(promote_http_url).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: BecomeLeaderResponse = res.json().unwrap();
+        assert_eq!(
+            response,
+            BecomeLeaderResponse {
+                result: BecomeLeaderResult::Success
+            }
+        );
+    }
 }

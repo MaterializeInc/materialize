@@ -4406,6 +4406,7 @@ impl Catalog {
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
                 bootstrap_role: None,
             },
+            None,
         )
         .await?;
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
