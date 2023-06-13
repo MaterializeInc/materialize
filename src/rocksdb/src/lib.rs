@@ -612,7 +612,7 @@ fn rocksdb_core_loop<K, V, M, O>(
                 for _ in buf_size..batch_size {
                     encoded_batch_buffers.push(Some(Vec::new()));
                 }
-                assert!(batch_size <= encoded_batch_buffers.len());
+                assert!(encoded_batch_buffers.len() >= batch_size);
 
                 // TODO(guswynn): sort by key before writing.
                 for ((key, value), encode_buf) in
@@ -622,7 +622,8 @@ fn rocksdb_core_loop<K, V, M, O>(
 
                     match value {
                         Some(update) => {
-                            let mut encode_buf = encode_buf.take().unwrap();
+                            let mut encode_buf =
+                                encode_buf.take().expect("encode_buf should not be empty");
                             encode_buf.clear();
                             match enc_opts
                                 .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, &update)
@@ -664,10 +665,10 @@ fn rocksdb_core_loop<K, V, M, O>(
                     }
                 });
 
-                // put back the vaules in the buffer so we don't lose allocation
+                // put back the values in the buffer so we don't lose allocation
                 for (i, (_, encoded_buffer)) in encoded_batch.drain(..).enumerate() {
                     if let Some(encoded_buffer) = encoded_buffer {
-                        encoded_batch_buffers.insert(i, Some(encoded_buffer));
+                        encoded_batch_buffers[i] = Some(encoded_buffer);
                     }
                 }
 
