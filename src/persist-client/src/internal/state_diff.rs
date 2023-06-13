@@ -178,10 +178,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     f(HollowBlobRef::Batch(&spine_diff.key));
                 }
                 StateFieldValDiff::Update((), ()) => {
-                    // No-op. Logically, we've removed and reinserted the same
-                    // key. We don't see this in practice, so this suggests an
-                    // invalid diff.
-                    panic!("")
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    panic!("cannot update spine field")
                 }
                 StateFieldValDiff::Delete(()) => {} // No-op
             }
@@ -199,8 +198,12 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
         for spine_diff in self.spine.iter() {
             match &spine_diff.val {
-                StateFieldValDiff::Insert(()) => {}     // No-op
-                StateFieldValDiff::Update((), ()) => {} // No-op. Should never occur
+                StateFieldValDiff::Insert(()) => {} // No-op
+                StateFieldValDiff::Update((), ()) => {
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    panic!("cannot update spine field")
+                }
                 StateFieldValDiff::Delete(()) => {
                     f(HollowBlobRef::Batch(&spine_diff.key));
                 }
