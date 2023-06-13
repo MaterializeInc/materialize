@@ -207,6 +207,23 @@ where
             })
     }
 
+    /// Returns all rollups that are <= the given `seqno`.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state.
+    pub fn rollups_lte_seqno(&self, seqno: SeqNo) -> Vec<(SeqNo, PartialRollupKey)> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state
+                    .collections
+                    .rollups
+                    .range(..=seqno)
+                    .map(|(seqno, rollup)| (*seqno, rollup.key.clone()))
+                    .collect::<Vec<(SeqNo, PartialRollupKey)>>()
+            })
+    }
+
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
@@ -333,6 +350,7 @@ where
             state,
             expiry_metrics,
             garbage_collection,
+            write_rollup,
             work_ret,
         } = next_state;
 
@@ -365,7 +383,7 @@ where
 
                 let maintenance = RoutineMaintenance {
                     garbage_collection,
-                    write_rollup: state.need_rollup(cfg.dynamic.rollup_threshold()),
+                    write_rollup,
                 };
 
                 ApplyCmdResult::Committed((diff, state, work_ret, maintenance))
@@ -389,7 +407,7 @@ where
         cfg: &PersistConfig,
     ) -> Result<NextState<K, V, T, D, R>, (SeqNo, E)> {
         let is_write = cmd.name == metrics.cmds.compare_and_append.name;
-        let is_rollup = cmd.name == metrics.cmds.add_and_remove_rollups.name;
+        let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
 
         let expected = state.seqno;
         let was_tombstone_before = state.collections.is_tombstone();
@@ -417,6 +435,8 @@ where
                 cmd.name, state
             );
         }
+
+        let write_rollup = new_state.need_rollup(cfg.dynamic.rollup_threshold());
 
         // Find out if this command has been selected to perform gc, so
         // that it will fire off a background request to the
@@ -450,6 +470,7 @@ where
             state: new_state,
             expiry_metrics,
             garbage_collection,
+            write_rollup,
             work_ret,
         })
     }
@@ -565,6 +586,7 @@ struct NextState<K, V, T, D, R> {
     diff: StateDiff<T>,
     state: TypedState<K, V, T, D>,
     expiry_metrics: ExpiryMetrics,
+    write_rollup: Option<SeqNo>,
     garbage_collection: Option<GcReq>,
     work_ret: R,
 }

@@ -358,10 +358,9 @@ impl<T> StateCollections<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub fn add_and_remove_rollups(
+    pub fn add_rollup(
         &mut self,
         add_rollup: (SeqNo, &HollowRollup),
-        remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
         let (rollup_seqno, rollup) = add_rollup;
         let applied = match self.rollups.get(&rollup_seqno) {
@@ -371,6 +370,21 @@ where
                 true
             }
         };
+        // This state transition is a no-op if applied is false but we
+        // still commit the state change so that this gets linearized
+        // (maybe we're looking at old state).
+        Continue(applied)
+    }
+
+    pub fn remove_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
+        if remove_rollups.is_empty() || self.is_tombstone() {
+            return Break(NoOpStateTransition(vec![]));
+        }
+
+        let mut removed = vec![];
         for (seqno, key) in remove_rollups {
             let removed_key = self.rollups.remove(seqno);
             debug_assert!(
@@ -379,11 +393,13 @@ where
                 key,
                 removed_key
             );
+
+            if removed_key.is_some() {
+                removed.push(*seqno);
+            }
         }
-        // This state transition is a no-op if applied is false and none of
-        // remove_rollups existed, but we still commit the state change so that
-        // this gets linearized (maybe we're looking at old state).
-        Continue(applied)
+
+        Continue(removed)
     }
 
     pub fn register_leased_reader(
@@ -963,7 +979,7 @@ where
 
 // TODO: Document invariants.
 #[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct State<T> {
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
@@ -1205,20 +1221,12 @@ where
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
-        // The whole point of a tombstone is that we forever keep exactly one
-        // cheap, unchanging version in consensus. Force GC to run on tombstone
-        // shards to make sure we clean up the final few versions before the
-        // tombstone.
-        //
-        // However, because we write a rollup as of SeqNo X and then link it in
-        // using a state transition (in this case from X to X+1), the minimum
-        // number of live diffs is actually two. Detect when we're in this
-        // minimal two diff state and stop the (otherwise) infinite iteration.
-        let tombstone_needs_rollup = self.collections.is_tombstone() && {
-            let (latest_rollup_seqno, _) = self.latest_rollup();
-            latest_rollup_seqno.next() < self.seqno
-        };
-        let should_gc = should_gc || tombstone_needs_rollup;
+        // Always assign GC work to a tombstoned shard to have the chance to
+        // clean up any residual blobs. This is safe (won't cause excess gc)
+        // as the only allowed command after becoming a tombstone is to write
+        // the final rollup.
+        let tombstone_needs_gc = self.collections.is_tombstone();
+        let should_gc = should_gc || tombstone_needs_gc;
         if should_gc {
             self.collections.last_gc_req = new_seqno_since;
             Some(GcReq {
@@ -1317,8 +1325,17 @@ where
 
     pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
-        let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
 
+        // Tombstoned shards require one final rollup. However, because we
+        // write a rollup as of SeqNo X and then link it in using a state
+        // transition (in this case from X to X+1), the minimum number of
+        // live diffs is actually two. Detect when we're in this minimal
+        // two diff state and stop the (otherwise) infinite iteration.
+        if self.collections.is_tombstone() && latest_rollup_seqno.next() < self.seqno {
+            return Some(self.seqno);
+        }
+
+        let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
         // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
         // we avoid assigning rollups to every seqno past the threshold to avoid handles
         // racing / performing redundant work.
@@ -2236,7 +2253,7 @@ pub(crate) mod tests {
 
         assert!(state
             .collections
-            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .add_rollup((rollup_seqno, &rollup))
             .is_continue());
 
         // shouldn't need a rollup at the seqno of the rollup
@@ -2275,7 +2292,7 @@ pub(crate) mod tests {
         };
         assert!(state
             .collections
-            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .add_rollup((rollup_seqno, &rollup))
             .is_continue());
 
         state.seqno = SeqNo(8);

@@ -205,6 +205,9 @@ mod tests {
                                 machine_dd::compare_and_downgrade_since(&mut state, args).await
                             }
                             "consensus-scan" => machine_dd::consensus_scan(&mut state, args).await,
+                            "consensus-truncate" => {
+                                machine_dd::consensus_truncate(&mut state, args).await
+                            }
                             "downgrade-since" => {
                                 machine_dd::downgrade_since(&mut state, args).await
                             }
@@ -248,6 +251,7 @@ mod tests {
                                 machine_dd::truncate_batch_desc(&mut state, args).await
                             }
                             "write-batch" => machine_dd::write_batch(&mut state, args).await,
+                            "write-rollup" => machine_dd::write_rollup(&mut state, args).await,
                             _ => panic!("unknown directive {:?}", tc),
                         };
                         match res {

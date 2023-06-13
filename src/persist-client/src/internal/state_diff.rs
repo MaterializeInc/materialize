@@ -178,9 +178,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     f(HollowBlobRef::Batch(&spine_diff.key));
                 }
                 StateFieldValDiff::Update((), ()) => {
-                    // No-op. Logically, we've removed and reinserted the same
-                    // key. We don't see this in practice, so it could also
-                    // easily be a panic, if necessary.
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    panic!("cannot update spine field")
                 }
                 StateFieldValDiff::Delete(()) => {} // No-op
             }
@@ -191,6 +191,31 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     f(HollowBlobRef::Rollup(x));
                 }
                 StateFieldValDiff::Delete(_) => {} // No-op
+            }
+        }
+    }
+
+    pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        for spine_diff in self.spine.iter() {
+            match &spine_diff.val {
+                StateFieldValDiff::Insert(()) => {} // No-op
+                StateFieldValDiff::Update((), ()) => {
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    panic!("cannot update spine field")
+                }
+                StateFieldValDiff::Delete(()) => {
+                    f(HollowBlobRef::Batch(&spine_diff.key));
+                }
+            }
+        }
+        for rollups_diff in self.rollups.iter() {
+            match &rollups_diff.val {
+                StateFieldValDiff::Insert(_) => {}    // No-op
+                StateFieldValDiff::Update(_, _) => {} // No-op. Should never occur
+                StateFieldValDiff::Delete(x) => {
+                    f(HollowBlobRef::Rollup(x));
+                }
             }
         }
     }

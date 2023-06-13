@@ -104,9 +104,7 @@ where
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
         let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
-        let (applied, maintenance) = self
-            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
-            .await;
+        let (applied, maintenance) = self.add_rollup((rollup.seqno, &rollup.to_hollow())).await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
             // get added. Delete it.
@@ -118,18 +116,17 @@ where
         maintenance
     }
 
-    pub async fn add_and_remove_rollups(
+    pub async fn add_rollup(
         &mut self,
         add_rollup: (SeqNo, &HollowRollup),
-        remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> (bool, RoutineMaintenance) {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
         // here.
         let mut applied_ever_true = false;
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, _applied, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
-                let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_rollup, |_, _, state| {
+                let ret = state.add_rollup(add_rollup);
                 if let Continue(applied) = ret {
                     applied_ever_true = applied_ever_true || applied;
                 }
@@ -137,6 +134,19 @@ where
             })
             .await;
         (applied_ever_true, maintenance)
+    }
+
+    pub async fn remove_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> (Vec<SeqNo>, RoutineMaintenance) {
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, removed_rollup_seqnos, maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.remove_rollups, |_, _, state| {
+                state.remove_rollups(remove_rollups)
+            })
+            .await;
+        (removed_rollup_seqnos, maintenance)
     }
 
     pub async fn register_leased_reader(
@@ -1054,6 +1064,7 @@ where
 #[cfg(test)]
 pub mod datadriven {
     use std::collections::BTreeMap;
+    use std::marker::PhantomData;
     use std::sync::Arc;
 
     use anyhow::anyhow;
@@ -1070,6 +1081,7 @@ pub mod datadriven {
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
+    use crate::internal::state::TypedState;
     use crate::read::{Listen, ListenEvent};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
@@ -1151,6 +1163,12 @@ pub mod datadriven {
                 continue;
             }
             let mut batches = vec![];
+            let rollups: Vec<_> = x
+                .collections
+                .rollups
+                .keys()
+                .map(|seqno| seqno.to_string())
+                .collect();
             x.collections.trace.map_batches(|b| {
                 if b.parts.is_empty() {
                     return;
@@ -1162,9 +1180,29 @@ pub mod datadriven {
                     }
                 }
             });
-            write!(s, "seqno={} batches={}\n", x.seqno, batches.join(","));
+            write!(
+                s,
+                "seqno={} batches={} rollups={}\n",
+                x.seqno,
+                batches.join(","),
+                rollups.join(","),
+            );
         }
         Ok(s)
+    }
+
+    pub async fn consensus_truncate(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let to = args.expect("to_seqno");
+        let removed = datadriven
+            .client
+            .consensus
+            .truncate(&datadriven.shard_id.to_string(), to)
+            .await
+            .expect("valid truncation");
+        Ok(format!("{}\n", removed))
     }
 
     pub async fn blob_scan_batches(
@@ -1204,12 +1242,13 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let since = args.expect_antichain("since");
+        let seqno = args.optional("seqno");
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
             .downgrade_since(
                 &reader_id,
-                None,
+                seqno,
                 &since,
                 (datadriven.machine.applier.cfg.now)(),
             )
@@ -1244,6 +1283,59 @@ pub mod datadriven {
             new_opaque,
             since.0.elements()
         ))
+    }
+
+    pub async fn write_rollup(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let seqno: SeqNo = args.expect("seqno");
+
+        let mut all_live_states = datadriven
+            .machine
+            .applier
+            .state_versions
+            .fetch_all_live_states::<u64>(datadriven.shard_id)
+            .await
+            .expect("shard initialized")
+            .check_ts_codec()
+            .expect("codec matches");
+
+        while let Some(state) = all_live_states.next(|_| {}) {
+            if state.seqno == seqno {
+                break;
+            }
+        }
+
+        let state = all_live_states.state();
+        if state.seqno != seqno {
+            return Err(anyhow!(
+                "seqno {} cannot be reached while writing rollup",
+                seqno
+            ));
+        }
+
+        let typed_state = TypedState::<String, (), u64, i64> {
+            state: state.clone(),
+            _phantom: PhantomData::default(),
+        };
+        let rollup = datadriven.state_versions.encode_rollup_blob(
+            datadriven.machine.applier.shard_metrics.as_ref(),
+            &typed_state,
+            PartialRollupKey::new(state.seqno, &RollupId::new()),
+        );
+        let () = datadriven.state_versions.write_rollup_blob(&rollup).await;
+        let (applied, maintenance) = datadriven
+            .machine
+            .add_rollup((rollup.seqno, &rollup.to_hollow()))
+            .await;
+
+        if !applied {
+            return Err(anyhow!("failed to apply rollup for: {}", rollup.seqno));
+        }
+
+        datadriven.routine.push(maintenance);
+        Ok(format!("{}\n", datadriven.machine.seqno()))
     }
 
     pub async fn write_batch(
@@ -1469,10 +1561,28 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             new_seqno_since,
         };
-        let maintenance = GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        let (maintenance, stats) =
+            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
         datadriven.routine.push(maintenance);
 
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+        Ok(format!(
+            "{} batch_parts={} rollups={} truncated={} state_rollups={}\n",
+            datadriven.machine.seqno(),
+            stats.batch_parts_deleted_from_blob,
+            stats.rollups_deleted_from_blob,
+            stats
+                .truncated_consensus_to
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            stats
+                .rollups_removed_from_state
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        ))
     }
 
     pub async fn snapshot(
@@ -1775,8 +1885,10 @@ pub mod tests {
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
-        let (mut write, _) = new_test_client()
-            .await
+        let client = new_test_client().await;
+        // set a low rollup threshold so GC/truncation is more aggressive
+        client.cfg.dynamic.set_rollup_threshold(5);
+        let (mut write, _) = client
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
 
