@@ -34,6 +34,7 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
+use proptest_derive::Arbitrary;
 
 use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
@@ -314,7 +315,7 @@ impl Connection {
             .into_iter()
             .map(RustType::from_proto)
             .map_ok(|(k, v): (DatabaseKey, DatabaseValue)| Database {
-                id: DatabaseId::from(k),
+                id: k.id,
                 name: v.name,
                 owner_id: v.owner_id,
                 privileges: v.privileges,
@@ -331,11 +332,11 @@ impl Connection {
             .into_iter()
             .map(RustType::from_proto)
             .map_ok(|(k, v): (SchemaKey, SchemaValue)| Schema {
-                id: SchemaId::from(k),
+                id: k.id,
                 name: v.name,
-                database_id: v.database_id.map(DatabaseId::User),
+                database_id: v.database_id,
                 owner_id: v.owner_id,
-                privileges: v.privileges.expect("privileges not migrated"),
+                privileges: v.privileges,
             })
             .collect::<Result<_, _>>()?;
 
@@ -878,10 +879,7 @@ impl<'a> Transaction<'a> {
         let schemas = self.schemas.items();
         let mut items = Vec::new();
         self.items.for_values(|k, v| {
-            let schema_key = SchemaKey {
-                id: v.schema_id,
-                ns: v.schema_ns,
-            };
+            let schema_key = SchemaKey { id: v.schema_id };
             let schema = match schemas.get(&schema_key) {
                 Some(schema) => schema,
                 None => panic!(
@@ -892,33 +890,29 @@ impl<'a> Transaction<'a> {
             };
             let database_spec = match schema.database_id {
                 Some(id) => {
-                    let key = DatabaseKey {
-                        id,
-                        ns: schema.database_ns,
-                    };
+                    let key = DatabaseKey { id };
                     if databases.get(&key).is_none() {
                         panic!(
                             "corrupt stash! unknown database id {key:?}, for item with key \
                         {k:?} and value {v:?}"
                         );
                     }
-                    ResolvedDatabaseSpecifier::from(DatabaseId::from(key))
+                    ResolvedDatabaseSpecifier::from(id)
                 }
                 None => ResolvedDatabaseSpecifier::Ambient,
             };
-            let schema_id = SchemaId::from(schema_key);
             items.push(Item {
                 id: k.gid,
                 name: QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec,
-                        schema_spec: SchemaSpecifier::from(schema_id),
+                        schema_spec: SchemaSpecifier::from(v.schema_id),
                     },
                     item: v.name.clone(),
                 },
                 definition: v.definition.clone(),
                 owner_id: v.owner_id,
-                privileges: v.privileges.clone().expect("privileges not migrated"),
+                privileges: v.privileges.clone(),
             });
         });
         items.sort_by_key(|Item { id, .. }| *id);
@@ -944,9 +938,8 @@ impl<'a> Transaction<'a> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
         match self.databases.insert(
             DatabaseKey {
-                id,
                 // TODO(parkertimmerman): Support creating databases in the System namespace.
-                ns: Some(DatabaseNamespace::User),
+                id: DatabaseId::User(id),
             },
             DatabaseValue {
                 name: database_name.to_string(),
@@ -970,19 +963,16 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<SchemaId, Error> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
-        let db = DatabaseKey::from(database_id);
         match self.schemas.insert(
             SchemaKey {
-                id,
                 // TODO(parkertimmerman): Support creating schemas in the System namespace.
-                ns: Some(SchemaNamespace::User),
+                id: SchemaId::User(id),
             },
             SchemaValue {
-                database_id: Some(db.id),
-                database_ns: db.ns,
+                database_id: Some(database_id),
                 name: schema_name.to_string(),
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
             },
         ) {
             // TODO(parkertimmerman): Support creating schemas in the System namespace.
@@ -1201,16 +1191,14 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
     ) -> Result<(), Error> {
-        let schema_key = SchemaKey::from(schema_id);
         match self.items.insert(
             ItemKey { gid: id },
             ItemValue {
-                schema_id: schema_key.id,
-                schema_ns: schema_key.ns,
+                schema_id,
                 name: item_name.to_string(),
                 definition: item,
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
             },
         ) {
             Ok(_) => Ok(()),
@@ -1239,7 +1227,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
-        let prev = self.databases.set(DatabaseKey::from(*id), None)?;
+        let prev = self.databases.set(DatabaseKey { id: *id }, None)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -1252,7 +1240,7 @@ impl<'a> Transaction<'a> {
         database_id: &Option<DatabaseId>,
         schema_id: &SchemaId,
     ) -> Result<(), Error> {
-        let prev = self.schemas.set(SchemaKey::from(*schema_id), None)?;
+        let prev = self.schemas.set(SchemaKey { id: *schema_id }, None)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -1355,7 +1343,6 @@ impl<'a> Transaction<'a> {
             if k.gid == id {
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    schema_ns: v.schema_ns,
                     name: item_name.to_string(),
                     definition: item.clone(),
                     owner_id: v.owner_id,
@@ -1388,7 +1375,6 @@ impl<'a> Transaction<'a> {
             if let Some((item_name, item)) = items.get(&k.gid) {
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    schema_ns: v.schema_ns,
                     name: item_name.clone(),
                     definition: item.clone(),
                     owner_id: v.owner_id,
@@ -1552,7 +1538,7 @@ impl<'a> Transaction<'a> {
         database: &catalog::Database,
     ) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
-            if id == DatabaseId::from(*k) {
+            if id == k.id {
                 Some(DatabaseValue {
                     name: database.name().to_string(),
                     owner_id: database.owner_id,
@@ -1583,18 +1569,12 @@ impl<'a> Transaction<'a> {
         schema: &catalog::Schema,
     ) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
-            let (db_id, db_ns) = match database_id {
-                None => (None, None),
-                Some(DatabaseId::System(id)) => (Some(id), Some(DatabaseNamespace::System)),
-                Some(DatabaseId::User(id)) => (Some(id), Some(DatabaseNamespace::User)),
-            };
-            if schema_id == SchemaId::from(*k) {
+            if schema_id == k.id {
                 Some(SchemaValue {
-                    database_id: db_id,
-                    database_ns: db_ns,
+                    database_id,
                     name: schema.name().schema.clone(),
                     owner_id: schema.owner_id,
-                    privileges: Some(MzAclItem::flatten(schema.privileges())),
+                    privileges: MzAclItem::flatten(schema.privileges()),
                 })
             } else {
                 None
@@ -1889,46 +1869,6 @@ pub struct ClusterIntrospectionSourceIndexValue {
     index_id: u64,
 }
 
-#[derive(
-    Default, Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Ord, Hash,
-)]
-pub enum DatabaseNamespace {
-    #[default]
-    User,
-    System,
-}
-
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct DatabaseKey {
-    id: u64,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    ns: Option<DatabaseNamespace>,
-}
-
-impl From<DatabaseKey> for DatabaseId {
-    fn from(value: DatabaseKey) -> Self {
-        match value.ns {
-            None | Some(DatabaseNamespace::User) => DatabaseId::User(value.id),
-            Some(DatabaseNamespace::System) => DatabaseId::System(value.id),
-        }
-    }
-}
-
-impl From<DatabaseId> for DatabaseKey {
-    fn from(value: DatabaseId) -> Self {
-        match value {
-            DatabaseId::User(id) => DatabaseKey {
-                id,
-                ns: Some(DatabaseNamespace::User),
-            },
-            DatabaseId::System(id) => DatabaseKey {
-                id,
-                ns: Some(DatabaseNamespace::System),
-            },
-        }
-    }
-}
-
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterReplicaKey {
     id: ReplicaId,
@@ -1936,86 +1876,49 @@ pub struct ClusterReplicaKey {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterReplicaValue {
-
     cluster_id: ClusterId,
     name: String,
     config: SerializedReplicaConfig,
     owner_id: RoleId,
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct DatabaseKey {
+    id: DatabaseId,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
 pub struct DatabaseValue {
     name: String,
     owner_id: RoleId,
     privileges: Vec<MzAclItem>,
 }
 
-#[derive(
-    Default, Debug, Copy, Clone, PartialOrd, PartialEq, Eq, Ord, Hash,
-)]
-pub enum SchemaNamespace {
-    #[default]
-    User,
-    System,
-}
-
-#[derive(Clone, Copy, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SchemaKey {
-    id: u64,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    ns: Option<SchemaNamespace>,
+    id: SchemaId,
 }
 
-impl From<SchemaKey> for SchemaId {
-    fn from(value: SchemaKey) -> Self {
-        match value.ns {
-            None | Some(SchemaNamespace::User) => SchemaId::User(value.id),
-            Some(SchemaNamespace::System) => SchemaId::System(value.id),
-        }
-    }
-}
-
-impl From<SchemaId> for SchemaKey {
-    fn from(value: SchemaId) -> Self {
-        match value {
-            SchemaId::User(id) => SchemaKey {
-                id,
-                ns: Some(SchemaNamespace::User),
-            },
-            SchemaId::System(id) => SchemaKey {
-                id,
-                ns: Some(SchemaNamespace::System),
-            },
-        }
-    }
-}
-
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
 pub struct SchemaValue {
-    database_id: Option<u64>,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    database_ns: Option<DatabaseNamespace>,
+    database_id: Option<DatabaseId>,
     name: String,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
 pub struct ItemKey {
     gid: GlobalId,
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
 pub struct ItemValue {
-    schema_id: u64,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    schema_ns: Option<SchemaNamespace>,
+    schema_id: SchemaId,
     name: String,
     definition: SerializedCatalogItem,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
@@ -2101,3 +2004,61 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     TIMESTAMP_COLLECTION.name(),
     DEFAULT_PRIVILEGES_COLLECTION.name(),
 ];
+
+#[cfg(test)]
+mod test {
+    use mz_proto::{ProtoType, RustType};
+    use proptest::prelude::*;
+
+    use super::{DatabaseKey, DatabaseValue, ItemKey, ItemValue, SchemaKey, SchemaValue};
+
+    proptest! {
+        #[test]
+        fn proptest_database_key_roundtrip(key: DatabaseKey) {
+            let proto = key.into_proto();
+            let round = proto.into_rust().unwrap();
+
+            prop_assert_eq!(key, round);
+        }
+
+        #[test]
+        fn proptest_database_value_roundtrip(value: DatabaseValue) {
+            let proto = value.into_proto();
+            let round = proto.into_rust().unwrap();
+
+            prop_assert_eq!(value, round);
+        }
+
+        #[test]
+        fn proptest_schema_key_roundtrip(key: SchemaKey) {
+            let proto = key.into_proto();
+            let round = proto.into_rust().unwrap();
+
+            prop_assert_eq!(key, round);
+        }
+
+        #[test]
+        fn proptest_schema_value_roundtrip(value: SchemaValue) {
+            let proto = value.into_proto();
+            let round = proto.into_rust().unwrap();
+
+            prop_assert_eq!(value, round);
+        }
+
+        #[test]
+        fn proptest_item_key_roundtrip(key: ItemKey) {
+            let proto = key.into_proto();
+            let round = proto.into_rust().unwrap();
+
+            prop_assert_eq!(key, round);
+        }
+
+        #[test]
+        fn proptest_item_value_roundtrip(value: ItemValue) {
+            let proto = value.into_proto();
+            let round = proto.into_rust().unwrap();
+
+            prop_assert_eq!(value, round);
+        }
+    }
+}

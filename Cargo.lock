@@ -3431,6 +3431,7 @@ dependencies = [
  "opentelemetry",
  "prometheus",
  "proptest",
+ "proptest-derive",
  "prost",
  "rand",
  "rdkafka",

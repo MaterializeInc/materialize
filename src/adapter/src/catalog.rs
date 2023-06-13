@@ -88,6 +88,7 @@ use mz_storage_client::types::sinks::{
 use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::MutexGuard;
@@ -7494,7 +7495,7 @@ pub enum Op {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
 pub enum SerializedCatalogItem {
     V1 { create_sql: String },
 }
