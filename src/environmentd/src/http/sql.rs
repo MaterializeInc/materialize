@@ -36,7 +36,7 @@ use mz_sql::plan::Plan;
 use serde::{Deserialize, Serialize};
 use tokio::time;
 use tokio_postgres::error::SqlState;
-use tracing::warn;
+use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
@@ -90,7 +90,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
             // We omit most detail from the error message we send to the client, to
             // avoid giving attackers unnecessary information during auth. AdapterErrors
             // are safe to return because they're generated after authentication.
-            warn!("WS request failed init: {}", e);
+            debug!("WS request failed init: {}", e);
             let reason = match e.downcast_ref::<AdapterError>() {
                 Some(error) => Cow::Owned(error.to_string()),
                 None => "unauthorized".into(),
@@ -118,7 +118,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
     // Send any notices that might have been generated on startup.
     let notices = client.client.session().drain_notices();
     if let Err(err) = forward_notices(&mut ws, notices).await {
-        tracing::error!("failed to forward notices to WebSocket, {err:?}");
+        debug!("failed to forward notices to WebSocket, {err:?}");
         return;
     }
 
@@ -177,7 +177,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         };
 
         if let Err(err) = ws_response().await {
-            tracing::error!("failed to send respond over WebSocket, {err:?}");
+            debug!("failed to send response over WebSocket, {err:?}");
             return;
         }
     }
@@ -297,6 +297,11 @@ pub enum SqlResult {
         ok: String,
         /// Any notices generated during execution of the query.
         notices: Vec<Notice>,
+        /// Any parameters that may have changed.
+        ///
+        /// Note: skip serializing this field in a response if the list of parameters is empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        parameters: Vec<ParameterStatus>,
     },
     /// The query returned an error.
     Err {
@@ -328,9 +333,10 @@ impl SqlResult {
         }
     }
 
-    fn ok(client: &mut SessionClient, tag: String) -> SqlResult {
+    fn ok(client: &mut SessionClient, tag: String, params: Vec<ParameterStatus>) -> SqlResult {
         SqlResult::Ok {
             ok: tag,
+            parameters: params,
             notices: make_notices(client),
         }
     }
@@ -388,8 +394,10 @@ pub enum WebSocketResponse {
     Notice(Notice),
     Rows(Vec<String>),
     Row(Vec<serde_json::Value>),
+    CommandStarting(CommandStarting),
     CommandComplete(String),
     Error(SqlError),
+    ParameterStatus(ParameterStatus),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -406,6 +414,18 @@ impl Notice {
     pub fn message(&self) -> &str {
         &self.message
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ParameterStatus {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandStarting {
+    has_rows: bool,
+    is_streaming: bool,
 }
 
 /// Trait describing how to transmit a response to a client. HTTP clients
@@ -471,6 +491,21 @@ impl ResultSender for WebSocket {
             Ok(ws.send(Message::Text(msg)).await?)
         }
 
+        let (has_rows, is_streaming) = match res {
+            StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Ok { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Rows { .. }) => (true, false),
+            StatementResult::Subscribe { .. } => (true, true),
+        };
+        send(
+            self,
+            WebSocketResponse::CommandStarting(CommandStarting {
+                has_rows,
+                is_streaming,
+            }),
+        )
+        .await?;
+
         let (is_err, msgs) = match res {
             StatementResult::SqlResult(SqlResult::Rows {
                 tag,
@@ -484,9 +519,18 @@ impl ResultSender for WebSocket {
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (false, msgs)
             }
-            StatementResult::SqlResult(SqlResult::Ok { ok, notices }) => {
+            StatementResult::SqlResult(SqlResult::Ok {
+                ok,
+                parameters,
+                notices,
+            }) => {
                 let mut msgs = vec![WebSocketResponse::CommandComplete(ok)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
+                msgs.extend(
+                    parameters
+                        .into_iter()
+                        .map(WebSocketResponse::ParameterStatus),
+                );
                 (false, msgs)
             }
             StatementResult::SqlResult(SqlResult::Err { error, notices }) => {
@@ -736,7 +780,7 @@ async fn execute_stmt<S: ResultSender>(
 ) -> Result<StatementResult, anyhow::Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
-        .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
         .await
     {
         return Ok(SqlResult::err(client, e).into());
@@ -796,7 +840,7 @@ async fn execute_stmt<S: ResultSender>(
 
     let desc = prep_stmt.desc().clone();
     let revision = prep_stmt.catalog_revision;
-    let stmt = prep_stmt.sql().cloned();
+    let stmt = prep_stmt.stmt().cloned();
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
@@ -863,17 +907,35 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege
         | ExecuteResponse::RevokedRole
-        | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::StartedTransaction { .. }
-        | ExecuteResponse::TransactionCommitted
-        | ExecuteResponse::TransactionRolledBack
         | ExecuteResponse::Updated(_)
         | ExecuteResponse::AlteredObject(_)
         | ExecuteResponse::AlteredIndexLogicalCompaction
         | ExecuteResponse::AlteredRole
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
-        | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results")).into(),
+        | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), Vec::default()).into(),
+        ExecuteResponse::TransactionCommitted { params } | ExecuteResponse::TransactionRolledBack { params }=> {
+            let notify_set: mz_ore::collections::HashSet<String> = client
+                .session()
+                .vars()
+                .notify_set()
+                .map(|v| v.name().to_string())
+                .collect();
+            let params = params
+                .into_iter()
+                .filter(|(name, _value)| notify_set.contains(*name))
+                .map(|(name, value)| ParameterStatus { name: name.to_string(), value })
+                .collect();
+            SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), params).into()
+        },
+        ExecuteResponse::SetVariable { name, .. } => {
+            let mut params = Vec::with_capacity(1);
+            if let Some(var) = client.session().vars().notify_set().find(|v| v.name() == &name) {
+                params.push(ParameterStatus { name, value: var.value() });
+            };
+            SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), params).into()
+        }
         ExecuteResponse::SendingRows {
             future: rows,
             span: _,
@@ -946,7 +1008,7 @@ mod tests {
 
     use super::WebSocketAuth;
 
-    #[test]
+    #[mz_ore::test]
     fn smoke_test_websocket_auth_parse() {
         struct TestCase {
             json: &'static str,

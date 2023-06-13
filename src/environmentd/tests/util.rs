@@ -696,7 +696,6 @@ pub fn wait_for_view_population(
         .get::<_, String>(0);
     mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
     Retry::default()
-        .max_duration(Duration::from_secs(10))
         .retry(|_| {
             let rows = mz_client
                 .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])

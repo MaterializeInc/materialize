@@ -89,7 +89,7 @@ use scopeguard::defer;
 // removes panic hooks and can interfere with any concurrently running test.
 // Therefore, it needs to be run in isolation.
 
-#[tokio::test]
+#[tokio::test] // allow(test-attribute)
 async fn catch_panic_async() {
     let old_hook = panic::take_hook();
     defer! {

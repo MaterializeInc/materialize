@@ -62,6 +62,34 @@ true
         )
 
 
+class MFPPushdown(Scenario):
+    """Test MFP pushdown -- WHERE clause with a suitable condition and no index defined."""
+
+    SCALE = 7
+
+    def init(self) -> List[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            """
+> /* A */ SELECT 1;
+1
+> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+"""
+        )
+
+
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 

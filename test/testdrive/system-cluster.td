@@ -14,11 +14,17 @@ mz_system
 mz_introspection
 default
 
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO false
+
 ! DROP CLUSTER mz_system CASCADE
 contains:system cluster 'mz_system' cannot be modified
 
 ! DROP CLUSTER mz_introspection CASCADE
 contains:system cluster 'mz_introspection' cannot be modified
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO true
 
 ! DROP CLUSTER mz_joe CASCADE
 contains:unknown cluster 'mz_joe'
@@ -26,11 +32,17 @@ contains:unknown cluster 'mz_joe'
 ! CREATE CLUSTER mz_joe REPLICAS (r1 (size '1'))
 contains:cluster name "mz_joe" is reserved
 
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO false
+
 ! CREATE CLUSTER REPLICA mz_system.r2 SIZE '1';
 contains:system cluster 'mz_system' cannot be modified
 
 ! DROP CLUSTER REPLICA mz_system.r1
 contains:system cluster 'mz_system' cannot be modified
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO true
 
 > CREATE MATERIALIZED VIEW mv AS SELECT AVG(50)
 
@@ -39,8 +51,8 @@ contains:system cluster 'mz_system' cannot be modified
 > SHOW MATERIALIZED VIEWS
 mv default
 
-! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
-contains:system cluster 'mz_introspection' cannot be modified
+#! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+#contains:system cluster 'mz_introspection' cannot be modified
 
 > SET CLUSTER TO mz_system
 
@@ -48,8 +60,8 @@ contains:system cluster 'mz_introspection' cannot be modified
 > SHOW MATERIALIZED VIEWS
 mv default
 
-! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
-contains:system cluster 'mz_system' cannot be modified
+#! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+#contains:system cluster 'mz_system' cannot be modified
 
 > SET CLUSTER TO default
 

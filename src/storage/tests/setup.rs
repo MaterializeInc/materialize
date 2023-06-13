@@ -270,12 +270,16 @@ where
                 let async_storage_worker = Rc::clone(&worker.storage_state.async_worker);
                 let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
-                let source_resumption_frontier = match &desc.connection {
-                    GenericSourceConnection::Kafka(c) => minimum_frontier(c),
-                    GenericSourceConnection::Postgres(c) => minimum_frontier(c),
-                    GenericSourceConnection::TestScript(c) => minimum_frontier(c),
-                    GenericSourceConnection::LoadGenerator(c) => minimum_frontier(c),
-                };
+                let source_resumption_frontier = std::iter::once((
+                    id,
+                    match &desc.connection {
+                        GenericSourceConnection::Kafka(c) => minimum_frontier(c),
+                        GenericSourceConnection::Postgres(c) => minimum_frontier(c),
+                        GenericSourceConnection::TestScript(c) => minimum_frontier(c),
+                        GenericSourceConnection::LoadGenerator(c) => minimum_frontier(c),
+                    },
+                ))
+                .collect();
 
                 // NOTE: We only feed internal commands into the worker,
                 // bypassing "external" StorageCommand and the async worker that

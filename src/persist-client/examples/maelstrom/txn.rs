@@ -719,9 +719,8 @@ impl Service for TransactorService {
 
 mod codec_impls {
     use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
-    use mz_persist_types::columnar::{ColumnPush, DataType, Schema};
-    use mz_persist_types::part::{ColumnsMut, ColumnsRef};
-    use mz_persist_types::stats::StatsFn;
+    use mz_persist_types::columnar::{ColumnPush, Schema};
+    use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
     use mz_persist_types::Codec;
 
     use crate::maelstrom::txn::{MaelstromKey, MaelstromVal};
@@ -756,8 +755,8 @@ mod codec_impls {
 
         type Decoder<'a> = SimpleDecoder<'a, MaelstromKey, u64>;
 
-        fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-            SimpleSchema::<MaelstromKey, u64>::columns()
+        fn columns(&self) -> DynStructCfg {
+            SimpleSchema::<MaelstromKey, u64>::columns(&())
         }
 
         fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
@@ -799,8 +798,8 @@ mod codec_impls {
 
         type Decoder<'a> = SimpleDecoder<'a, MaelstromVal, Vec<u8>>;
 
-        fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::columns()
+        fn columns(&self) -> DynStructCfg {
+            SimpleSchema::<MaelstromVal, Vec<u8>>::columns(&())
         }
 
         fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {

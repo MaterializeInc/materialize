@@ -38,7 +38,7 @@ GRANT CREATE ON SCHEMA materialize.public TO materialize;
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:permission denied for SCHEMA materialize.public
+contains:permission denied for TABLE materialize.public.t
 
 $ postgres-execute connection=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO materialize;

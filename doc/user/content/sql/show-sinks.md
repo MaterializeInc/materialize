@@ -1,6 +1,6 @@
 ---
 title: "SHOW SINKS"
-description: "`SHOW SINKS` returns a list of all sinks available to your Materialize instances."
+description: "`SHOW SINKS` returns a list of all sinks available in Materialize."
 menu:
   main:
     parent: commands
@@ -8,7 +8,7 @@ aliases:
     - /sql/show-sink
 ---
 
-`SHOW SINKS` returns a list of all sinks available to your Materialize instances.
+`SHOW SINKS` returns a list of all sinks available in Materialize.
 
 ## Syntax
 

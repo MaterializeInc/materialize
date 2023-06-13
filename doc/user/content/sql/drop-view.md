@@ -1,12 +1,12 @@
 ---
 title: "DROP VIEW"
-description: "`DROP VIEW` removes a view from your Materialize instances."
+description: "`DROP VIEW` removes a view from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP VIEW` removes a view from your Materialize instances.
+`DROP VIEW` removes a view from Materialize.
 
 ## Conceptual framework
 

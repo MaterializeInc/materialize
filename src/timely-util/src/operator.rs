@@ -14,8 +14,7 @@ use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection};
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -23,7 +22,7 @@ use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandle};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
-use timely::Data;
+use timely::{Data, ExchangeData};
 
 use crate::buffer::ConsolidateBuffer;
 use crate::builder_async::{
@@ -148,6 +147,11 @@ where
     /// provided token can be upgraded. Once the token cannot be upgraded anymore, all data flowing
     /// into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
+
+    /// Distributes the data of the stream to all workers in a round-robin fashion.
+    fn distribute(&self) -> Stream<G, D1>
+    where
+        D1: ExchangeData;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -217,16 +221,6 @@ where
     /// the provided token can be upgraded. Once the token cannot be upgraded anymore, all data
     /// flowing into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
-
-    /// Consolidates the collection if `must_consolidate` is `true` and leaves it
-    /// untouched otherwise.
-    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
-    where
-        D1: differential_dataflow::ExchangeData + Hashable,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
-        Tr::Batch: Batch;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -424,6 +418,21 @@ where
             }
         })
     }
+
+    fn distribute(&self) -> Stream<G, D1>
+    where
+        D1: ExchangeData,
+    {
+        let mut vector = Vec::new();
+        self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
+            move |input, output| {
+                input.for_each(|time, data| {
+                    data.swap(&mut vector);
+                    output.session(&time).give_vec(&mut vector);
+                });
+            }
+        })
+    }
 }
 
 impl<G, D1, R> CollectionExt<G, D1, R> for Collection<G, D1, R>
@@ -516,21 +525,6 @@ where
 
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R> {
         self.inner.with_token(token).as_collection()
-    }
-
-    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
-    where
-        D1: differential_dataflow::ExchangeData + Hashable,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
-        Tr::Batch: Batch,
-    {
-        if must_consolidate {
-            self.consolidate_named::<Tr>(name)
-        } else {
-            self
-        }
     }
 }
 

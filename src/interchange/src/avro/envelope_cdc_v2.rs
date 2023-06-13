@@ -308,7 +308,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_roundtrip() {
         let desc = RelationDesc::empty()
             .with_column("id", ScalarType::Int64.nullable(false))

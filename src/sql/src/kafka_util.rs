@@ -220,14 +220,19 @@ pub async fn create_consumer(
     let consumer = Arc::new(consumer);
 
     let owned_topic = String::from(topic);
-    // Wait for a metadata request for up to two seconds. This greatly
-    // increases the probability that we'll see a connection error if
-    // e.g. the hostname was mistyped. librdkafka doesn't expose a
-    // better API for asking whether a connection succeeded or failed,
-    // unfortunately.
+    // librdkafka doesn't expose an API for determining whether a connection to
+    // the Kafka cluster has been successfully established. So we make a
+    // metadata request, though we don't care about the results, so that we can
+    // report any errors making that request. If the request succeeds, we know
+    // we were able to contact at least one broker, and that's a good proxy for
+    // being able to contact all the brokers in the cluster.
     //
-    // TODO(guswynn): this is temporary, and we should instead
-    // ensure that at least one metadata request succeeds.
+    // The downside of this approach is it produces a generic error message like
+    // "metadata fetch error" with no additional details. The real networking
+    // error is buried in the librdkafka logs, which are not visible to users.
+    //
+    // TODO(benesch): pull out more error details from the librdkafka logs and
+    // include them in the error message.
     task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
         let consumer = Arc::clone(&consumer);
         move || consumer.fetch_metadata(Some(&owned_topic), DEFAULT_FETCH_METADATA_TIMEOUT)

@@ -10,6 +10,7 @@
 use std::fmt;
 
 use mz_ore::str::StrExt;
+use mz_proto::TryFromProtoError;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 
@@ -136,6 +137,12 @@ impl From<SqlCatalogError> for Error {
 impl From<mz_stash::StashError> for Error {
     fn from(e: mz_stash::StashError) -> Error {
         Error::new(ErrorKind::from(e))
+    }
+}
+
+impl From<TryFromProtoError> for Error {
+    fn from(e: TryFromProtoError) -> Error {
+        Error::new(ErrorKind::from(mz_stash::StashError::from(e)))
     }
 }
 

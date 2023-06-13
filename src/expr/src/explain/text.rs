@@ -300,20 +300,20 @@ impl MirRelationExpr {
             LetRec {
                 ids,
                 values,
-                max_iters,
+                limits,
                 body,
             } => {
                 assert_eq!(ids.len(), values.len());
-                assert_eq!(ids.len(), max_iters.len());
-                let bindings = itertools::izip!(ids.iter(), values.iter(), max_iters.iter())
-                    .collect::<Vec<_>>(); // CLion needs these explicit types
+                assert_eq!(ids.len(), limits.len());
+                let bindings =
+                    itertools::izip!(ids.iter(), values.iter(), limits.iter()).collect::<Vec<_>>();
                 let head = body.as_ref();
 
-                // Determine whether all `max_iters` are the same number.
+                // Determine whether all `limits` are the same.
                 // If all of them are the same, then we print it on top of the block (or not print
                 // it at all if it's None). If there are differences, then we print them on the
                 // ctes.
-                let all_max_iters_same = max_iters
+                let all_limits_same = limits
                     .iter()
                     .reduce(|first, i| if i == first { first } else { &None })
                     .unwrap_or(&None);
@@ -325,16 +325,16 @@ impl MirRelationExpr {
                     self.fmt_attributes(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     write!(f, "{}With Mutually Recursive", ctx.indent)?;
-                    if let Some(max_iter) = all_max_iters_same {
-                        write!(f, " [iteration_limit={}]", max_iter)?;
+                    if let Some(limit) = all_limits_same {
+                        write!(f, " {}", limit)?;
                     }
                     writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value, max_iter) in bindings.iter().rev() {
+                        for (id, value, limit) in bindings.iter().rev() {
                             write!(f, "{}cte", ctx.indent)?;
-                            if all_max_iters_same.is_none() {
-                                if let Some(max_iter) = max_iter {
-                                    write!(f, " [iteration_limit={}]", max_iter)?;
+                            if all_limits_same.is_none() {
+                                if let Some(limit) = limit {
+                                    write!(f, " {}", limit)?;
                                 }
                             }
                             writeln!(f, " {} =", id)?;
@@ -395,8 +395,12 @@ impl MirRelationExpr {
             Filter { predicates, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let predicates = separated(" AND ", predicates);
-                        write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        if predicates.is_empty() {
+                            write!(f, "{}Filter", ctx.indent)?;
+                        } else {
+                            let predicates = separated(" AND ", predicates);
+                            write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        }
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
@@ -572,7 +576,7 @@ impl MirRelationExpr {
                 group_key,
                 aggregates,
                 expected_group_size,
-                monotonic: _, // TODO: monotonic should be an attribute
+                monotonic,
                 input,
             } => {
                 FmtNode {
@@ -589,6 +593,9 @@ impl MirRelationExpr {
                         if aggregates.len() > 0 {
                             let aggregates = separated(", ", aggregates);
                             write!(f, " aggregates=[{}]", aggregates)?;
+                        }
+                        if *monotonic {
+                            write!(f, " monotonic")?;
                         }
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
@@ -625,7 +632,9 @@ impl MirRelationExpr {
                         if offset > &0 {
                             write!(f, " offset={}", offset)?
                         }
-                        write!(f, " monotonic={}", monotonic)?;
+                        if *monotonic {
+                            write!(f, " monotonic")?;
+                        }
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }

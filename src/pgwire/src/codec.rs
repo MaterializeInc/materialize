@@ -23,6 +23,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
 use futures::{sink, SinkExt, TryStreamExt};
+use mz_adapter::client::ConnectionId;
 use mz_ore::cast::{u64_to_usize, CastFrom};
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::{self, AsyncReady};
@@ -60,7 +61,7 @@ impl fmt::Display for CodecError {
 
 /// A connection that manages the encoding and decoding of pgwire frames.
 pub struct FramedConn<A> {
-    conn_id: u32,
+    conn_id: ConnectionId,
     inner: sink::Buffer<Framed<Conn<A>, Codec>, BackendMessage>,
 }
 
@@ -76,7 +77,7 @@ where
     ///
     /// The supplied `conn_id` is used to identify the connection in logging
     /// messages.
-    pub fn new(conn_id: u32, inner: Conn<A>) -> FramedConn<A> {
+    pub fn new(conn_id: ConnectionId, inner: Conn<A>) -> FramedConn<A> {
         FramedConn {
             conn_id,
             inner: Framed::new(inner, Codec::new()).buffer(32),
@@ -185,6 +186,11 @@ where
                 Err(err) => return err,
             }
         }
+    }
+
+    /// Returns the ID associated with this connection.
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
     }
 }
 

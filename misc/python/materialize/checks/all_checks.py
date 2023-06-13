@@ -10,6 +10,7 @@
 
 from materialize.checks.aggregation import *  # noqa: F401 F403
 from materialize.checks.alter_index import *  # noqa: F401 F403
+from materialize.checks.array_type import *  # noqa: F401 F403
 from materialize.checks.boolean_type import *  # noqa: F401 F403
 from materialize.checks.cast import *  # noqa: F401 F403
 from materialize.checks.cluster import *  # noqa: F401 F403
@@ -44,7 +45,9 @@ from materialize.checks.peek_cancellation import *  # noqa: F401 F403
 from materialize.checks.pg_cdc import *  # noqa: F401 F403
 from materialize.checks.range import *  # noqa: F401 F403
 from materialize.checks.regex import *  # noqa: F401 F403
+from materialize.checks.rename_cluster import *  # noqa: F401 F403
 from materialize.checks.rename_index import *  # noqa: F401 F403
+from materialize.checks.rename_replica import *  # noqa: F401 F403
 from materialize.checks.rename_source import *  # noqa: F401 F403
 from materialize.checks.rename_table import *  # noqa: F401 F403
 from materialize.checks.rename_view import *  # noqa: F401 F403
@@ -60,5 +63,6 @@ from materialize.checks.threshold import *  # noqa: F401 F403
 from materialize.checks.top_k import *  # noqa: F401 F403
 from materialize.checks.update import *  # noqa: F401 F403
 from materialize.checks.upsert import *  # noqa: F401 F403
+from materialize.checks.upsert_shrink_grow import *  # noqa: F401 F403
 from materialize.checks.uuid import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403

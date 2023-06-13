@@ -83,7 +83,7 @@ use std::error::Error;
 
 use mz_pid_file::PidFile;
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_pid_file_basics() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;

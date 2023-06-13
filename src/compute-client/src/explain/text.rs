@@ -131,23 +131,19 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
             LetRec {
                 ids,
                 values,
-                max_iters,
+                limits,
                 body,
             } => {
-                let bindings = izip!(ids.iter(), values, max_iters).collect_vec();
+                let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value, max_iter) in bindings.iter().rev() {
-                        if let Some(max_iter) = max_iter {
-                            writeln!(
-                                f,
-                                "{}cte [iteration_limit={}] {} =",
-                                ctx.indent, max_iter, *id
-                            )?;
+                    for (id, value, limit) in bindings.iter().rev() {
+                        if let Some(limit) = limit {
+                            writeln!(f, "{}cte {} {} =", ctx.indent, limit, *id)?;
                         } else {
                             writeln!(f, "{}cte {} =", ctx.indent, *id)?;
                         }
@@ -223,9 +219,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 match plan {
                     ReducePlan::Distinct => {
                         writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
-                    }
-                    ReducePlan::DistinctNegated => {
-                        writeln!(f, "{}Reduce::DistinctNegated", ctx.indent)?;
                     }
                     ReducePlan::Accumulable(plan) => {
                         writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
@@ -332,11 +325,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     ThresholdPlan::Basic(plan) => {
                         let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
                         write!(f, "{}Threshold::Basic", ctx.indent)?;
-                        writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
-                    }
-                    ThresholdPlan::Retractions(plan) => {
-                        let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
-                        write!(f, "{}Threshold::Retractions", ctx.indent)?;
                         writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
                     }
                 };
@@ -611,6 +599,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
                 let skips = separated(", ", &plan.skips);
                 writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
+                writeln!(f, "{}monotonic", ctx.indent)?;
                 if plan.must_consolidate {
                     writeln!(f, "{}must_consolidate", ctx.indent)?;
                 }

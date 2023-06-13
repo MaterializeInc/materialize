@@ -113,6 +113,7 @@ message ProtoAggregateFunc {
         ProtoColumnOrders list_concat  = 35;
         ProtoColumnOrders string_agg  = 36;
         ProtoColumnOrders row_number  = 37;
+        ProtoColumnOrders rank  = 54;
         ProtoColumnOrders dense_rank  = 38;
         ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;

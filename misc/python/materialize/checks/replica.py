@@ -10,11 +10,10 @@ from textwrap import dedent
 from typing import List
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import CheckDisabled
+from materialize.checks.checks import Check
 
 
-# https://github.com/MaterializeInc/materialize/issues/13235
-class CreateReplica(CheckDisabled):
+class CreateReplica(Check):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -52,8 +51,7 @@ class CreateReplica(CheckDisabled):
         )
 
 
-# https://github.com/MaterializeInc/materialize/issues/13235
-class DropReplica(CheckDisabled):
+class DropReplica(Check):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -73,10 +71,12 @@ class DropReplica(CheckDisabled):
                 > INSERT INTO drop_replica_table VALUES (3);
                 > CREATE CLUSTER REPLICA drop_replica.replica2 SIZE '2-2';
                 > INSERT INTO drop_replica_table VALUES (4);
+                > DROP CLUSTER REPLICA drop_replica.replica1;
                 """,
                 """
                 > INSERT INTO drop_replica_table VALUES (5);
                 > DROP CLUSTER REPLICA drop_replica.replica2;
+                > CREATE CLUSTER REPLICA drop_replica.replica1 SIZE '2-2';
                 > INSERT INTO drop_replica_table VALUES (6);
                 """,
             ]

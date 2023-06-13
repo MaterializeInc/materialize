@@ -14,6 +14,11 @@ ALTER SYSTEM SET enable_table_keys = true
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
 statement ok
 DROP TABLE IF EXISTS band_members;
 
@@ -180,7 +185,7 @@ Explained Query:
     Union // { non_negative: false }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
+        TopK group_by=[#0] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
   With
     cte l0 =
@@ -219,7 +224,7 @@ Explained Query:
     Union // { non_negative: false }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
+        TopK group_by=[#0] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
   With
     cte l0 =

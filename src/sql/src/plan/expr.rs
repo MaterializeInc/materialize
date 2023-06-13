@@ -13,13 +13,12 @@
 //! representation via a call to lower().
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU64;
 use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_expr::func;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
+use mz_expr::{func, LetRecLimit};
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
@@ -100,9 +99,8 @@ pub enum HirRelationExpr {
     },
     /// Mutually recursive CTE
     LetRec {
-        /// Maximum number of iterations to evaluate. We don't throw an error when reaching this
-        /// limit. Instead, we simply use the current contents of each Id as the final result.
-        max_iter: Option<NonZeroU64>,
+        /// Maximum number of iterations to evaluate. If None, then there is no limit.
+        limit: Option<LetRecLimit>,
         /// List of bindings all of which are in scope of each other.
         bindings: Vec<(String, mz_expr::LocalId, HirRelationExpr, RelationType)>,
         /// Result of the AST node.
@@ -440,6 +438,7 @@ impl ScalarWindowExpr {
     {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
+            ScalarWindowFunc::Rank => {}
             ScalarWindowFunc::DenseRank => {}
         }
         Ok(())
@@ -452,6 +451,7 @@ impl ScalarWindowExpr {
     {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
+            ScalarWindowFunc::Rank => {}
             ScalarWindowFunc::DenseRank => {}
         }
         Ok(())
@@ -471,6 +471,9 @@ impl ScalarWindowExpr {
             ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber {
                 order_by: self.order_by,
             },
+            ScalarWindowFunc::Rank => mz_expr::AggregateFunc::Rank {
+                order_by: self.order_by,
+            },
             ScalarWindowFunc::DenseRank => mz_expr::AggregateFunc::DenseRank {
                 order_by: self.order_by,
             },
@@ -482,6 +485,7 @@ impl ScalarWindowExpr {
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
+    Rank,
     DenseRank,
 }
 
@@ -489,6 +493,7 @@ impl ScalarWindowFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
             ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
+            ScalarWindowFunc::Rank => ScalarType::Int64.nullable(false),
             ScalarWindowFunc::DenseRank => ScalarType::Int64.nullable(false),
         }
     }
@@ -1338,7 +1343,7 @@ impl HirRelationExpr {
                 f(body, depth)?;
             }
             HirRelationExpr::LetRec {
-                max_iter: _,
+                limit: _,
                 bindings,
                 body,
             } => {
@@ -1425,7 +1430,7 @@ impl HirRelationExpr {
                 f(body, depth)?;
             }
             HirRelationExpr::LetRec {
-                max_iter: _,
+                limit: _,
                 bindings,
                 body,
             } => {
@@ -1689,7 +1694,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(body);
             }
             LetRec {
-                max_iter: _,
+                limit: _,
                 bindings,
                 body,
             } => {
@@ -1776,7 +1781,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(body);
             }
             LetRec {
-                max_iter: _,
+                limit: _,
                 bindings,
                 body,
             } => {
@@ -1863,7 +1868,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(body)?;
             }
             LetRec {
-                max_iter: _,
+                limit: _,
                 bindings,
                 body,
             } => {
@@ -1951,7 +1956,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(body)?;
             }
             LetRec {
-                max_iter: _,
+                limit: _,
                 bindings,
                 body,
             } => {
@@ -2028,7 +2033,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
-                max_iter: _,
+                limit: _,
                 bindings: _,
                 body: _,
             }
@@ -2100,7 +2105,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
-                max_iter: _,
+                limit: _,
                 bindings: _,
                 body: _,
             }
@@ -2173,7 +2178,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
-                max_iter: _,
+                limit: _,
                 bindings: _,
                 body: _,
             }
@@ -2247,7 +2252,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
-                max_iter: _,
+                limit: _,
                 bindings: _,
                 body: _,
             }

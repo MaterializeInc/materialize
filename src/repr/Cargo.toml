@@ -18,11 +18,11 @@ harness = false
 anyhow = "1.0.66"
 bitflags = "1.3.2"
 bytes = "1.3.0"
-columnation = { git = "https://github.com/frankmcsherry/columnation" }
+columnation = "0.1.0"
 chrono = { version = "0.4.23", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 dec = "0.4.8"
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = "0.12.0"
 enum_dispatch = "0.3.11"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
@@ -36,7 +36,7 @@ mz-proto = { path = "../proto" }
 num-traits = "0.2.15"
 num_enum = "0.5.7"
 ordered-float = { version = "3.4.0", features = ["serde"] }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 ryu = "1.0.12"
@@ -44,12 +44,12 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+tokio-postgres = { version = "0.7.8" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde"] }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
 thiserror = "1.0.37"
 
 # for the tracing_ feature

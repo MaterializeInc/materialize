@@ -30,7 +30,6 @@ pub struct StorageParameters {
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
     pub keep_n_source_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
-    /// `None` means the defaults.
     pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBTuningParameters,
 }
 

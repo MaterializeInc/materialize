@@ -294,6 +294,10 @@ impl LazyUnaryFunc for CastStringToArray {
             ty: self.return_ty.clone(),
         })
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToArray {
@@ -366,6 +370,10 @@ impl LazyUnaryFunc for CastStringToList {
         to_unary!(super::CastListToString {
             ty: self.return_ty.clone(),
         })
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -447,6 +455,10 @@ impl LazyUnaryFunc for CastStringToMap {
         to_unary!(super::CastMapToString {
             ty: self.return_ty.clone(),
         })
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -561,6 +573,10 @@ impl LazyUnaryFunc for CastStringToRange {
             ty: self.return_ty.clone(),
         })
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToRange {
@@ -673,6 +689,10 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastInt2VectorToString)
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToInt2Vector {
@@ -729,21 +749,24 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "char_length"]
     fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
-        i32::try_from(a.chars().count()).or(Err(EvalError::Int32OutOfRange))
+        let length = a.chars().count();
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
     }
 );
 
 sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
-        i32::try_from(a.as_bytes().len() * 8).or(Err(EvalError::Int32OutOfRange))
+        let length = a.as_bytes().len() * 8;
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
     }
 );
 
 sqlfunc!(
     #[sqlname = "octet_length"]
     fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
-        i32::try_from(a.as_bytes().len()).or(Err(EvalError::Int32OutOfRange))
+        let length = a.as_bytes().len();
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
     }
 );
 
@@ -878,6 +901,10 @@ impl LazyUnaryFunc for RegexpMatch {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

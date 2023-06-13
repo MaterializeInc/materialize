@@ -11,13 +11,14 @@
 
 #![warn(missing_debug_implementations)]
 
+use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
-    MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
+    permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LetRecLimit,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::Indent;
@@ -37,10 +38,12 @@ use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
+pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
+pub mod transform;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
 
@@ -212,7 +215,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The collection that should be bound to `id`.
         values: Vec<Plan<T>>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
-        max_iters: Vec<Option<NonZeroU64>>,
+        limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
         body: Box<Plan<T>>,
@@ -595,12 +598,32 @@ impl RustType<ProtoPlan> for Plan {
                 Plan::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body,
                 } => LetRec(
                     ProtoPlanLetRec {
                         ids: ids.into_proto(),
-                        max_iters: max_iters.into_proto(),
+                        limits: limits
+                            .clone()
+                            .into_iter()
+                            .map(|limit| match limit {
+                                Some(limit) => limit,
+                                None => LetRecLimit {
+                                    // The actual value doesn't matter here, because the limit_is_some
+                                    // field will be false, so we won't read this value when converting
+                                    // back.
+                                    max_iters: NonZeroU64::new(1).unwrap(),
+                                    return_at_limit: false,
+                                },
+                            })
+                            .collect_vec()
+                            .into_proto(),
+                        limit_is_some: limits
+                            .clone()
+                            .into_iter()
+                            .map(|limit| limit.is_some())
+                            .collect_vec()
+                            .into_proto(),
                         values: values.into_proto(),
                         body: Some(body.into_proto()),
                     }
@@ -740,13 +763,29 @@ impl RustType<ProtoPlan> for Plan {
             LetRec(proto) => {
                 let ids: Vec<LocalId> = proto.ids.into_rust()?;
                 let values: Vec<Plan> = proto.values.into_rust()?;
-                let max_iters: Vec<Option<NonZeroU64>> = proto.max_iters.into_rust()?;
+                let limits_raw: Vec<LetRecLimit> = proto.limits.into_rust()?;
+                let limit_is_some: Vec<bool> = proto.limit_is_some.into_rust()?;
                 assert_eq!(ids.len(), values.len());
-                assert_eq!(ids.len(), max_iters.len());
+                assert_eq!(ids.len(), limits_raw.len());
+                assert_eq!(ids.len(), limit_is_some.len());
+                let limits = limits_raw
+                    .into_iter()
+                    .zip_eq(limit_is_some.into_iter())
+                    .map(
+                        |(limit_raw, is_some)| {
+                            if is_some {
+                                Some(limit_raw)
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                    .collect_vec();
+                assert_eq!(ids.len(), limits.len());
                 Plan::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
                 }
             }
@@ -887,6 +926,22 @@ impl RustType<ProtoGetPlan> for GetPlan {
     }
 }
 
+impl RustType<ProtoLetRecLimit> for LetRecLimit {
+    fn into_proto(&self) -> ProtoLetRecLimit {
+        ProtoLetRecLimit {
+            max_iters: self.max_iters.get(),
+            return_at_limit: self.return_at_limit,
+        }
+    }
+
+    fn from_proto(proto: ProtoLetRecLimit) -> Result<Self, TryFromProtoError> {
+        Ok(LetRecLimit {
+            max_iters: NonZeroU64::new(proto.max_iters).expect("max_iters > 0"),
+            return_at_limit: proto.return_at_limit,
+        })
+    }
+}
+
 /// Various bits of state to print along with error messages during LIR planning,
 /// to aid debugging.
 #[derive(Copy, Clone, Debug)]
@@ -960,20 +1015,10 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     /// are certain to be produced, which can be relied on by the next steps in the plan.
     /// Each of the arrangement keys is associated with an MFP that must be applied if that arrangement is used,
     /// to back out the permutation associated with that arrangement.
-
+    ///
     /// An empty list of arrangement keys indicates that only a `Collection` stream can
     /// be assumed to exist.
-    pub fn from_mir(
-        expr: &MirRelationExpr,
-        arrangements: &mut BTreeMap<Id, AvailableCollections>,
-        debug_info: LirDebugInfo<'_>,
-    ) -> Result<(Self, AvailableCollections), String> {
-        // We don't want to trace recursive calls, which is why the public `from_mir`
-        // is annotated and delegates the work to a private (recursive) from_mir_inner.
-        Plan::from_mir_inner(expr, arrangements, debug_info)
-    }
-
-    fn from_mir_inner(
+    fn from_mir(
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
@@ -1094,12 +1139,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Plan the value using only the initial arrangements, but
                 // introduce any resulting arrangements bound to `id`.
-                let (value, v_keys) = Plan::from_mir_inner(value, arrangements, debug_info)?;
+                let (value, v_keys) = Plan::from_mir(value, arrangements, debug_info)?;
                 let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                 assert!(pre_existing.is_none());
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
                 arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
                 (
@@ -1114,11 +1159,11 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             MirRelationExpr::LetRec {
                 ids,
                 values,
-                max_iters,
+                limits,
                 body,
             } => {
                 assert_eq!(ids.len(), values.len());
-                assert_eq!(ids.len(), max_iters.len());
+                assert_eq!(ids.len(), limits.len());
                 // Plan the values using only the available arrangements, but
                 // introduce any resulting arrangements bound to each `id`.
                 // Arrangements made available cannot be used by prior bindings,
@@ -1126,7 +1171,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip(values) {
                     let (mut lir_value, mut v_keys) =
-                        Plan::from_mir_inner(value, arrangements, debug_info)?;
+                        Plan::from_mir(value, arrangements, debug_info)?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
                         // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
@@ -1148,12 +1193,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             Plan::LetRec {
                                 ids,
                                 values,
-                                max_iters,
+                                limits,
                                 body,
                             } => Plan::LetRec {
                                 ids,
                                 values,
-                                max_iters,
+                                limits,
                                 body: Box::new(Plan::ArrangeBy {
                                     input: body,
                                     forms,
@@ -1181,7 +1226,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
                 for id in ids.iter() {
                     arrangements.remove(&Id::Local(*id));
                 }
@@ -1190,14 +1235,14 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     Plan::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
-                        max_iters: max_iters.clone(),
+                        limits: limits.clone(),
                         body: Box::new(body),
                     },
                     b_keys,
                 )
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let (input, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Plan::from_mir(input, arrangements, debug_info)?;
                 // This stage can absorb arbitrary MFP instances.
                 let mfp = mfp.take();
                 let mut exprs = exprs.clone();
@@ -1242,7 +1287,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
                 for input in inputs.iter() {
-                    let (plan, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
+                    let (plan, keys) = Plan::from_mir(input, arrangements, debug_info)?;
                     input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys);
@@ -1358,7 +1403,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } => {
                 let input_arity = input.arity();
                 let output_arity = group_key.len() + aggregates.len();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
                 let (input_key, permutation_and_new_arity) = if let Some((
                     input_key,
                     permutation,
@@ -1402,7 +1447,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
 
                 let top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
@@ -1432,7 +1477,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Negate { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
 
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -1451,7 +1496,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
@@ -1459,8 +1504,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } else {
                     input
                 };
-                let (threshold_plan, required_arrangement) =
-                    ThresholdPlan::create_from(arity, false);
+                let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let input = if !keys
                     .arranged
                     .iter()
@@ -1488,10 +1532,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::Union { base, inputs } => {
                 let arity = base.arity();
                 let mut plans_keys = Vec::with_capacity(1 + inputs.len());
-                let (plan, keys) = Self::from_mir_inner(base, arrangements, debug_info)?;
+                let (plan, keys) = Self::from_mir(base, arrangements, debug_info)?;
                 plans_keys.push((plan, keys));
                 for input in inputs.iter() {
-                    let (plan, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                    let (plan, keys) = Self::from_mir(input, arrangements, debug_info)?;
                     plans_keys.push((plan, keys));
                 }
                 let plans = plans_keys
@@ -1512,8 +1556,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
-                let (input, mut input_keys) =
-                    Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, mut input_keys) = Self::from_mir(input, arrangements, debug_info)?;
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
                     .iter()
@@ -1898,7 +1941,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 Plan::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body,
                 } => {
                     let mut values_parts: Vec<Vec<Self>> = vec![Vec::new(); parts];
@@ -1914,7 +1957,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .map(|(values, body)| Plan::LetRec {
                             values,
                             body: Box::new(body),
-                            max_iters: max_iters.clone(),
+                            limits: limits.clone(),
                             ids: ids.clone(),
                         })
                         .collect()
@@ -2062,7 +2105,7 @@ impl<T> CollectionPlan for Plan<T> {
             Plan::LetRec {
                 ids: _,
                 values,
-                max_iters: _,
+                limits: _,
                 body,
             } => {
                 for value in values.iter() {
@@ -2142,7 +2185,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
@@ -2153,7 +2196,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]
-        #[test]
+        #[mz_ore::test]
         fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
             assert!(actual.is_ok());
@@ -2163,7 +2206,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
-        #[test]
+        #[mz_ore::test]
         fn plan_protobuf_roundtrip(expect in any::<Plan>()) {
             let actual = protobuf_roundtrip::<_, ProtoPlan>(&expect);
             assert!(actual.is_ok());

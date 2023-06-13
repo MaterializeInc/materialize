@@ -43,7 +43,7 @@ use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_ore::cast::ReinterpretCast;
+use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -61,7 +61,7 @@ use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
+use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{CreateIndexStatement, RawItemName, Statement as AstStatement};
@@ -351,6 +351,7 @@ pub struct RunnerInner {
     clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
     auto_transactions: bool,
+    enable_table_keys: bool,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
@@ -435,15 +436,15 @@ impl<'a> FromSql<'a> for Slt {
                         // Map a Vec<Option<Slt>> to Vec<Option<Value>>.
                         .map(|v| v.map(|v| v.0))
                         .collect();
-                    // TODO(benesch): rewrite to avoid `as`.
-                    #[allow(clippy::as_conversions)]
+
                     Self(Value::Array {
                         dims: arr
                             .dimensions()
                             .map(|d| {
                                 Ok(mz_repr::adt::array::ArrayDimension {
-                                    lower_bound: d.lower_bound as usize,
-                                    length: d.len as usize,
+                                    lower_bound: isize::cast_from(d.lower_bound),
+                                    length: usize::try_from(d.len)
+                                        .expect("cannot have negative length"),
                                 })
                             })
                             .collect()?,
@@ -715,6 +716,11 @@ impl<'a> Runner<'a> {
             )
             .await?;
 
+        inner
+            .system_client
+            .batch_execute("ALTER SYSTEM RESET ALL")
+            .await?;
+
         // Drop all databases, then recreate the `materialize` database.
         for row in inner
             .system_client
@@ -805,6 +811,20 @@ impl<'a> Runner<'a> {
             .system_client
             .batch_execute("GRANT CREATE ON CLUSTER default TO materialize")
             .await?;
+
+        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // limit for all tests.
+        inner
+            .system_client
+            .simple_query("ALTER SYSTEM SET max_tables = 100")
+            .await?;
+
+        if inner.enable_table_keys {
+            inner
+                .system_client
+                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
+                .await?;
+        }
 
         inner.client = connect(inner.server_addr, None).await;
         inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
@@ -971,22 +991,8 @@ impl RunnerInner {
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
 
-        let client = connect(server_addr, None).await;
-
-        // Some sqllogic tests require more than the default amount of tables, so we increase the
-        // limit for all tests.
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
-        system_client
-            .simple_query("ALTER SYSTEM SET max_tables = 100")
-            .await
-            .unwrap();
-
-        if config.enable_table_keys {
-            system_client
-                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
-                .await
-                .unwrap();
-        }
+        let client = connect(server_addr, None).await;
 
         Ok(RunnerInner {
             server_addr,
@@ -999,6 +1005,7 @@ impl RunnerInner {
             clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
             auto_transactions: config.auto_transactions,
+            enable_table_keys: config.enable_table_keys,
         })
     }
 
@@ -1168,17 +1175,6 @@ impl RunnerInner {
             [statement] => statement,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
-        match statement {
-            Statement::CreateView { .. }
-            | Statement::Select { .. }
-            | Statement::Show(ShowStatement::ShowObjects(..)) => (),
-            _ => {
-                if output.is_err() {
-                    // We're not interested in testing our hacky handling of INSERT etc
-                    return Ok(Outcome::Success);
-                }
-            }
-        }
 
         match output {
             Ok(_) => {
@@ -1767,7 +1763,7 @@ fn mutate(sql: &str) -> Vec<String> {
     additional
 }
 
-#[test]
+#[mz_ore::test]
 fn test_mutate() {
     let cases = vec![
         ("CREATE TABLE t ()", vec![r#"CREATE INDEX ON "t" ()"#]),

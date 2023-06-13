@@ -85,12 +85,14 @@ use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use futures::FutureExt;
 use http::StatusCode;
 use itertools::Itertools;
 use mz_environmentd::WebSocketResponse;
 use mz_ore::cast::CastLossy;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
+use mz_ore::task;
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
 use reqwest::blocking::Client;
@@ -105,7 +107,7 @@ use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
-#[test]
+#[mz_ore::test]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
     let config = util::Config::default()
@@ -185,7 +187,7 @@ fn test_persistence() {
 
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
 // unsafe mode.
-#[test]
+#[mz_ore::test]
 fn test_source_sink_size_required() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -235,7 +237,7 @@ fn test_source_sink_size_required() {
 }
 
 // Test the POST and WS server endpoints.
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
@@ -325,7 +327,7 @@ fn test_http_sql() {
 }
 
 // Test that the server properly handles cancellation requests.
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_running_query() {
     let config = util::Config::default().unsafe_mode();
@@ -437,19 +439,19 @@ fn test_cancellation_cancels_dataflows(query: &str) {
 }
 
 // Test that dataflow uninstalls cancelled peeks.
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_dataflow_removal() {
     test_cancellation_cancels_dataflows("SELECT * FROM t AS OF 9223372036854775807");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_select() {
     test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_insert_select() {
     test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
@@ -544,21 +546,19 @@ fn test_closing_connection_cancels_dataflows(query: String) {
     );
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_long_select() {
-    mz_ore::test::init_logging();
     test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_insert_select() {
-    mz_ore::test::init_logging();
     test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
     /// timestamp at which the collection occurred. The timestamp of the last
@@ -623,8 +623,6 @@ fn test_storage_usage_collection_interval() {
         row.get::<_, UInt8>("size").0
     }
 
-    mz_ore::test::init_logging();
-
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
     let server = util::start_server(config).unwrap();
@@ -681,7 +679,7 @@ fn test_storage_usage_collection_interval() {
     assert_eq!(after_drop_storage_usage, 0);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_updates_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(3);
@@ -730,7 +728,7 @@ fn test_storage_usage_updates_between_restarts() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18896
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
@@ -789,7 +787,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(5));
@@ -812,10 +810,8 @@ fn test_storage_usage_collection_interval_timestamps() {
     }).unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_old_storage_usage_records_are_reaped_on_restart() {
-    mz_ore::test::init_logging();
-
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
         let timestamp = Arc::clone(&now);
@@ -904,7 +900,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     };
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
@@ -936,7 +932,7 @@ fn test_default_cluster_sizes() {
     assert_eq!(builtin_size, "2");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
@@ -994,7 +990,7 @@ fn test_max_request_size() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
@@ -1065,18 +1061,14 @@ fn test_max_statement_batch_size() {
                 "error should indicate that the statement was too large: {}",
                 err.message,
             ),
-            msg @ WebSocketResponse::ReadyForQuery(_)
-            | msg @ WebSocketResponse::Notice(_)
-            | msg @ WebSocketResponse::Rows(_)
-            | msg @ WebSocketResponse::Row(_)
-            | msg @ WebSocketResponse::CommandComplete(_) => {
+            msg => {
                 panic!("response should be error: {msg:?}")
             }
         }
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_mz_system_user_admin() {
     let config = util::Config::default();
@@ -1095,7 +1087,7 @@ fn test_mz_system_user_admin() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_passes_options() {
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1124,8 +1116,13 @@ fn test_ws_passes_options() {
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
+    let starting = read_msg();
     let col_name = read_msg();
     let row_val = read_msg();
+
+    if !matches!(starting, WebSocketResponse::CommandStarting(_)) {
+        panic!("wrong message!, {starting:?}");
+    };
 
     if let WebSocketResponse::Rows(rows) = col_name {
         assert_eq!(rows, ["application_name"]);
@@ -1141,7 +1138,7 @@ fn test_ws_passes_options() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_notifies_for_bad_options() {
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1191,7 +1188,7 @@ struct Notice {
     _severity: String,
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_http_options_param() {
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1263,10 +1260,9 @@ fn test_http_options_param() {
         .contains(r#"startup setting not_a_session_var not set"#));
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_connections_on_all_interfaces() {
-    mz_ore::test::init_logging();
     let query = "SELECT 1";
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
 
@@ -1344,7 +1340,14 @@ fn test_max_connections_on_all_interfaces() {
     // The specific error isn't forwarded to the client, the connection is just closed.
     match ws.read_message() {
         Ok(Message::Text(msg)) => {
-            assert_eq!(msg, "{\"type\":\"Rows\",\"payload\":[\"?column?\"]}");
+            assert_eq!(
+                msg,
+                r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#
+            );
+            assert_eq!(
+                ws.read_message().unwrap(),
+                Message::Text("{\"type\":\"Rows\",\"payload\":[\"?column?\"]}".to_string())
+            );
             assert_eq!(
                 ws.read_message().unwrap(),
                 Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
@@ -1362,4 +1365,66 @@ fn test_max_connections_on_all_interfaces() {
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_concurrent_id_reuse() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    server.runtime.block_on(async {
+        {
+            let (client, conn) = server.connect_async(postgres::NoTls).await.unwrap();
+            task::spawn(|| "conn await", async {
+                conn.await.unwrap();
+            });
+            client
+                .batch_execute("CREATE TABLE t (a INT);")
+                .await
+                .unwrap();
+        }
+
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
+        let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
+
+        let insert_json = "{\"queries\":[{\"query\":\"INSERT INTO t VALUES (1);\",\"params\":[]}]}";
+        let insert_json: serde_json::Value = serde_json::from_str(insert_json).unwrap();
+
+        // The goal here is to start some connection `B`, after another connection `A` has
+        // terminated, but while connection `A` still has some asynchronous work in flight. Then
+        // connection `A` will terminate it's session after connection `B` has started it's own
+        // session. If they use the same connection ID, then `A` will accidentally tear down `B`'s
+        // state and `B` will panic at any point it tries to access it's state. If they don't use
+        // the same connection ID, then everything will be fine.
+        fail::cfg("async_prepare", "return(true)").unwrap();
+        for i in 0..100 {
+            let http_url = http_url.clone();
+            if i % 2 == 0 {
+                let fut = reqwest::Client::new()
+                    .post(http_url)
+                    .json(&select_json)
+                    .send();
+                let time = tokio::time::sleep(Duration::from_millis(500));
+                futures::select! {
+                    _ = fut.fuse() => {},
+                    _ = time.fuse() => {},
+                }
+            } else {
+                reqwest::Client::new()
+                    .post(http_url)
+                    .json(&insert_json)
+                    .send()
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("SELECT 1").unwrap();
 }

@@ -39,10 +39,6 @@ use crate::{IndexOracle, TransformArgs};
 pub struct LiteralConstraints;
 
 impl crate::Transform for LiteralConstraints {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
     target = "optimizer"
     level = "trace",

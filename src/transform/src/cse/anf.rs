@@ -30,10 +30,6 @@ pub struct ANF;
 use crate::TransformArgs;
 
 impl crate::Transform for ANF {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -127,7 +123,7 @@ impl Bindings {
                     ids,
                     values,
                     body,
-                    max_iters: _,
+                    limits: _,
                 } => {
                     // Extend this.rebindings with (id, id) pairs for each
                     // recursive ID before descending into values and body.

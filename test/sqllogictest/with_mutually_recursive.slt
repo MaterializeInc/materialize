@@ -39,9 +39,9 @@ SELECT sum(n) FROM t;
 ----
 5050
 
-## Same as above, but with ITERATION LIMIT
+## Same as above, but with a non-erroring RECURSION LIMIT
 query I
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT 100)
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
     t (n int) AS (
         VALUES (1)
         UNION ALL
@@ -411,11 +411,11 @@ SELECT i FROM cnt;
 502
 503
 
-## Tests for ITERATION LIMIT
+## Tests for RECURSION LIMIT
 ## (See plans in `normalize_lets.slt`)
 
 query I
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 3)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -427,7 +427,7 @@ SELECT * FROM cnt;
 3
 
 query I
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 3)
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -438,15 +438,23 @@ SELECT * FROM cnt;
 2
 3
 
+query error db error: ERROR: Evaluation error: Recursive query exceeded the recursion limit 3\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
+WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
 query II
-(WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+(WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 3)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
     SELECT i+1 FROM cnt)
 SELECT -10, i FROM cnt)
 UNION
-(WITH MUTUALLY RECURSIVE (ITERATION LIMIT 5)
+(WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 5)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -463,7 +471,7 @@ SELECT -20, i FROM cnt)
 -10  3
 
 query I
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT 100)
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
     t0 (n int) AS (
         VALUES (1)
         UNION ALL
@@ -479,9 +487,9 @@ SELECT (SELECT sum(n) FROM t0) - (SELECT sum(n) FROM t1);
 200
 
 query I
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT 6)
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 6)
   cnt (i int) AS (
-    (WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+    (WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 3)
        cnt (i int) AS (
          SELECT 1 AS i
          UNION
@@ -511,11 +519,33 @@ SELECT i FROM cnt;
 502
 503
 
+query error db error: ERROR: Evaluation error: Recursive query exceeded the recursion limit 100\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
+(WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
+    t (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t
+    )
+SELECT sum(n) FROM t)
+UNION ALL
+(WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 100)
+    t (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t
+    )
+SELECT sum(n) FROM t);
+
 statement ok
 CREATE TABLE t1 (f1 INTEGER);
 
 statement ok
-CREATE MATERIALIZED VIEW v1 AS WITH MUTUALLY RECURSIVE (ITERATION LIMIT 2) cnt (f1 INTEGER) AS (SELECT f1 FROM t1 UNION ALL SELECT f1+1 AS f1 FROM cnt) SELECT * FROM cnt;
+CREATE MATERIALIZED VIEW v1 AS
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 2)
+  cnt (f1 INTEGER) AS (
+    SELECT f1 FROM t1 UNION ALL SELECT f1+1 AS f1 FROM cnt
+  )
+SELECT * FROM cnt;
 
 statement ok
 INSERT INTO t1 VALUES (1);
@@ -535,33 +565,48 @@ SELECT * FROM v1;
 2
 3
 
-statement error db error: ERROR: invalid ITERATION LIMIT: must provide an unsigned integer value
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT)
+statement error db error: ERROR: invalid RECURSION LIMIT: must provide an unsigned integer value
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: Expected ITERATION, found right parenthesis
+statement error db error: ERROR: Expected one of RECURSION or RETURN or ERROR, found right parenthesis
 WITH MUTUALLY RECURSIVE ()
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: invalid ITERATION LIMIT: cannot use value as number
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT aaaaaaa)
+statement error db error: ERROR: invalid RECURSION LIMIT: cannot use value as number
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT aaaaaaa)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: invalid ITERATION LIMIT: invalid unsigned numeric value: invalid digit found in string
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT -3)
+statement error db error: ERROR: invalid RECURSION LIMIT: invalid unsigned numeric value: invalid digit found in string
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT -3)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: ITERATION LIMIT specified more than once
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3, ITERATION LIMIT 5)
+statement error db error: ERROR: RECURSION LIMIT specified more than once
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, RECURSION LIMIT 5)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-# It's important that we error out for ITERATION LIMIT 0, because we are NOT handling this case in some optimizer transforms.
-statement error db error: ERROR: ITERATION LIMIT has to be greater than 0
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT 0)
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, ERROR AT RECURSION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, RETURN AT RECURSION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 3, RETURN AT RECURSION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+# It's important that we error out for RECURSION LIMIT 0, because we are NOT handling this case in some optimizer transforms.
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. Recursion limit has to be greater than 0\.
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 0)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;

@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -44,16 +44,16 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
-    Statement, StatementKind, TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
+    StatementKind, TransactionAccessMode,
 };
-use crate::catalog::{CatalogType, IdReference, RoleAttributes};
+use crate::catalog::{CatalogType, IdReference, ObjectType, RoleAttributes};
 use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 
 pub(crate) mod error;
@@ -107,6 +107,7 @@ pub enum Plan {
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
+    SetTransaction(SetTransactionPlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction(CommitTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
@@ -121,6 +122,8 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
+    AlterClusterRename(AlterClusterRenamePlan),
+    AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
@@ -139,8 +142,8 @@ pub enum Plan {
     RotateKeys(RotateKeysPlan),
     GrantRole(GrantRolePlan),
     RevokeRole(RevokeRolePlan),
-    GrantPrivilege(GrantPrivilegePlan),
-    RevokePrivilege(RevokePrivilegePlan),
+    GrantPrivileges(GrantPrivilegesPlan),
+    RevokePrivileges(RevokePrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
 }
 
@@ -150,13 +153,19 @@ impl Plan {
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
+            StatementKind::AlterDefaultPrivileges => vec![],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
                 PlanKind::AlterIndexSetOptions,
                 PlanKind::AlterNoop,
             ],
             StatementKind::AlterObjectRename => {
-                vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
+                vec![
+                    PlanKind::AlterClusterRename,
+                    PlanKind::AlterClusterReplicaRename,
+                    PlanKind::AlterItemRename,
+                    PlanKind::AlterNoop,
+                ]
             }
             StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
@@ -198,18 +207,18 @@ impl Plan {
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
-            StatementKind::GrantPrivilege => vec![PlanKind::GrantPrivilege],
+            StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
             StatementKind::ReassignOwned => vec![PlanKind::ReassignOwned],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
-            StatementKind::RevokePrivilege => vec![PlanKind::RevokePrivilege],
+            StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
             StatementKind::Select => vec![PlanKind::Peek],
-            StatementKind::SetTransaction => vec![],
+            StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
                 PlanKind::Peek,
@@ -267,6 +276,7 @@ impl Plan {
             Plan::ShowVariable(_) => "show variable",
             Plan::SetVariable(_) => "set variable",
             Plan::ResetVariable(_) => "reset variable",
+            Plan::SetTransaction(_) => "set transaction",
             Plan::StartTransaction(_) => "start transaction",
             Plan::CommitTransaction(_) => "commit",
             Plan::AbortTransaction(_) => "abort",
@@ -293,6 +303,8 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
             },
+            Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
@@ -335,8 +347,8 @@ impl Plan {
             Plan::RotateKeys(_) => "rotate keys",
             Plan::GrantRole(_) => "grant role",
             Plan::RevokeRole(_) => "revoke role",
-            Plan::GrantPrivilege(_) => "grant privilege",
-            Plan::RevokePrivilege(_) => "revoke privilege",
+            Plan::GrantPrivileges(_) => "grant privilege",
+            Plan::RevokePrivileges(_) => "revoke privilege",
             Plan::ReassignOwned(_) => "reassign owned",
         }
     }
@@ -617,6 +629,12 @@ pub struct ResetVariablePlan {
     pub name: String,
 }
 
+#[derive(Debug)]
+pub struct SetTransactionPlan {
+    pub local: bool,
+    pub modes: Vec<TransactionMode>,
+}
+
 #[derive(Clone, Debug)]
 pub struct PeekPlan {
     pub source: MirRelationExpr,
@@ -767,6 +785,21 @@ pub struct AlterSourcePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterClusterRenamePlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub to_name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterReplicaRenamePlan {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub name: QualifiedReplica,
+    pub to_name: String,
+}
+
+#[derive(Debug)]
 pub struct AlterItemRenamePlan {
     pub id: GlobalId,
     pub current_full_name: FullItemName,
@@ -875,27 +908,29 @@ pub struct RevokeRolePlan {
 }
 
 #[derive(Debug)]
-pub struct GrantPrivilegePlan {
-    /// /// The privileges being granted on an object.
+pub struct UpdatePrivilege {
+    /// The privileges being granted/revoked on an object.
     pub acl_mode: AclMode,
     /// The ID of the object.
     pub object_id: ObjectId,
-    /// The roles that will granted the privileges.
-    pub grantees: Vec<RoleId>,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }
 
 #[derive(Debug)]
-pub struct RevokePrivilegePlan {
-    /// The privileges being revoked.
-    pub acl_mode: AclMode,
-    /// The ID of the object.
-    pub object_id: ObjectId,
+pub struct GrantPrivilegesPlan {
+    /// Description of each privilege being granted.
+    pub update_privileges: Vec<UpdatePrivilege>,
+    /// The roles that will granted the privileges.
+    pub grantees: Vec<RoleId>,
+}
+
+#[derive(Debug)]
+pub struct RevokePrivilegesPlan {
+    /// Description of each privilege being revoked.
+    pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will have privileges revoked.
     pub revokees: Vec<RoleId>,
-    /// The role that will revoke the privileges.
-    pub grantor: RoleId,
 }
 
 #[derive(Debug)]

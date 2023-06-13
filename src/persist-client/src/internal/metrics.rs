@@ -77,6 +77,10 @@ pub struct Metrics {
     pub watch: WatchMetrics,
     /// Metrics for PubSub client.
     pub pubsub_client: PubSubClientMetrics,
+    /// Metrics for mfp/filter pushdown.
+    pub pushdown: PushdownMetrics,
+    /// Metrics for blob caching.
+    pub blob_cache_mem: BlobMemCache,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -120,6 +124,8 @@ impl Metrics {
             locks: vecs.locks_metrics(),
             watch: WatchMetrics::new(registry),
             pubsub_client: PubSubClientMetrics::new(registry),
+            pushdown: PushdownMetrics::new(registry),
+            blob_cache_mem: BlobMemCache::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -1104,8 +1110,10 @@ pub struct ShardsMetrics {
     spine_batch_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_count: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
+    rollup_count: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    seqnos_since_last_rollup: mz_ore::metrics::UIntGaugeVec,
     gc_seqno_held_parts: mz_ore::metrics::UIntGaugeVec,
     gc_live_diffs: mz_ore::metrics::UIntGaugeVec,
     gc_finished: mz_ore::metrics::IntCounterVec,
@@ -1116,12 +1124,9 @@ pub struct ShardsMetrics {
     usage_referenced_not_current_state_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_not_leaked_not_referenced_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_leaked_bytes: mz_ore::metrics::UIntGaugeVec,
-    pushdown_parts_filtered_count: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_filtered_bytes: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_fetched_count: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_fetched_bytes: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
-    pubsub_push_diff_not_applied: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
@@ -1186,6 +1191,11 @@ impl ShardsMetrics {
                 help: "count of updates by shard",
                 var_labels: ["shard"],
             )),
+            rollup_count: registry.register(metric!(
+                name: "mz_persist_shard_rollup_count",
+                help: "count of rollups by shard",
+                var_labels: ["shard"],
+            )),
             largest_batch_size: registry.register(metric!(
                 name: "mz_persist_shard_largest_batch_size",
                 help: "largest encoded batch size by shard",
@@ -1194,6 +1204,11 @@ impl ShardsMetrics {
             seqnos_held: registry.register(metric!(
                 name: "mz_persist_shard_seqnos_held",
                 help: "maximum count of gc-ineligible states by shard",
+                var_labels: ["shard"],
+            )),
+            seqnos_since_last_rollup: registry.register(metric!(
+                name: "mz_persist_shard_seqnos_since_last_rollup",
+                help: "count of seqnos since last rollup",
                 var_labels: ["shard"],
             )),
             gc_seqno_held_parts: registry.register(metric!(
@@ -1246,34 +1261,19 @@ impl ShardsMetrics {
                 help: "data reclaimable by a leaked blob detector",
                 var_labels: ["shard"],
             )),
-            pushdown_parts_filtered_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_filtered_count",
-                help: "count of parts filtered by pushdown",
-                var_labels: ["shard"],
-            )),
-            pushdown_parts_filtered_bytes: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_filtered_bytes",
-                help: "total size of parts filtered by pushdown in bytes",
-                var_labels: ["shard"],
-            )),
-            pushdown_parts_fetched_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_fetched_count",
-                help: "count of parts not filtered by pushdown",
-                var_labels: ["shard"],
-            )),
-            pushdown_parts_fetched_bytes: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_fetched_bytes",
-                help: "total size of parts not filtered by pushdown in bytes",
-                var_labels: ["shard"],
-            )),
             pubsub_push_diff_applied: registry.register(metric!(
                 name: "mz_persist_shard_pubsub_diff_applied",
                 help: "number of diffs received via pubsub that applied",
                 var_labels: ["shard"],
             )),
-            pubsub_push_diff_not_applied: registry.register(metric!(
-                name: "mz_persist_shard_pubsub_diff_not_applied",
-                help: "number of diffs received via pubsub that did not apply",
+            pubsub_push_diff_not_applied_stale: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_not_applied_stale",
+                help: "number of diffs received via pubsub that did not apply due to staleness",
+                var_labels: ["shard"],
+            )),
+            pubsub_push_diff_not_applied_out_of_order: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_not_applied_out_of_order",
+                help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
                 var_labels: ["shard"],
             )),
             blob_gets: registry.register(metric!(
@@ -1337,7 +1337,9 @@ pub struct ShardMetrics {
     pub spine_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub seqnos_since_last_rollup: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1349,9 +1351,10 @@ pub struct ShardMetrics {
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pushdown: PushdownMetrics,
     pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_out_of_order:
+        DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
@@ -1385,11 +1388,17 @@ impl ShardMetrics {
             update_count: shards_metrics
                 .update_count
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
+            rollup_count: shards_metrics
+                .rollup_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
             largest_batch_size: shards_metrics
                 .largest_batch_size
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            seqnos_since_last_rollup: shards_metrics
+                .seqnos_since_last_rollup
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             gc_seqno_held_parts: shards_metrics
                 .gc_seqno_held_parts
@@ -1421,12 +1430,14 @@ impl ShardMetrics {
             usage_leaked_bytes: shards_metrics
                 .usage_leaked_bytes
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
-            pushdown: PushdownMetrics::for_shard(&shard, shards_metrics),
             pubsub_push_diff_applied: shards_metrics
                 .pubsub_push_diff_applied
                 .get_delete_on_drop_counter(vec![shard.clone()]),
-            pubsub_push_diff_not_applied: shards_metrics
-                .pubsub_push_diff_not_applied
+            pubsub_push_diff_not_applied_stale: shards_metrics
+                .pubsub_push_diff_not_applied_stale
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            pubsub_push_diff_not_applied_out_of_order: shards_metrics
+                .pubsub_push_diff_not_applied_out_of_order
                 .get_delete_on_drop_counter(vec![shard.clone()]),
             blob_gets: shards_metrics
                 .blob_gets
@@ -1856,27 +1867,82 @@ impl WatchMetrics {
 
 #[derive(Debug)]
 pub struct PushdownMetrics {
-    pub(crate) parts_filtered_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_filtered_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_fetched_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_fetched_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) parts_filtered_count: IntCounter,
+    pub(crate) parts_filtered_bytes: IntCounter,
+    pub(crate) parts_fetched_count: IntCounter,
+    pub(crate) parts_fetched_bytes: IntCounter,
+    pub(crate) parts_audited_count: IntCounter,
+    pub(crate) parts_audited_bytes: IntCounter,
 }
 
 impl PushdownMetrics {
-    fn for_shard(shard_id: &str, shards_metrics: &ShardsMetrics) -> Self {
+    fn new(registry: &MetricsRegistry) -> Self {
         PushdownMetrics {
-            parts_filtered_count: shards_metrics
-                .pushdown_parts_filtered_count
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_filtered_bytes: shards_metrics
-                .pushdown_parts_filtered_bytes
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_fetched_count: shards_metrics
-                .pushdown_parts_fetched_count
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_fetched_bytes: shards_metrics
-                .pushdown_parts_fetched_bytes
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
+            parts_filtered_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_count",
+                help: "count of parts filtered by pushdown",
+            )),
+            parts_filtered_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_bytes",
+                help: "total size of parts filtered by pushdown in bytes",
+            )),
+            parts_fetched_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_count",
+                help: "count of parts not filtered by pushdown",
+            )),
+            parts_fetched_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_bytes",
+                help: "total size of parts not filtered by pushdown in bytes",
+            )),
+            parts_audited_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_audited_count",
+                help: "count of parts fetched only for pushdown audit",
+            )),
+            parts_audited_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_audited_bytes",
+                help: "total size of parts fetched only for pushdown audit",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BlobMemCache {
+    pub(crate) size_blobs: UIntGauge,
+    pub(crate) size_bytes: UIntGauge,
+    pub(crate) hits_blobs: IntCounter,
+    pub(crate) hits_bytes: IntCounter,
+    pub(crate) evictions: IntCounter,
+}
+
+impl BlobMemCache {
+    fn new(registry: &MetricsRegistry) -> Self {
+        BlobMemCache {
+            size_blobs: registry.register(metric!(
+                name: "mz_persist_blob_cache_size_blobs",
+                help: "count of blobs in the cache",
+                const_labels: {"cache" => "mem"},
+            )),
+            size_bytes: registry.register(metric!(
+                name: "mz_persist_blob_cache_size_bytes",
+                help: "total size of blobs in the cache",
+                const_labels: {"cache" => "mem"},
+            )),
+            hits_blobs: registry.register(metric!(
+                name: "mz_persist_blob_cache_hits_blobs",
+                help: "count of blobs served via cache instead of s3",
+                const_labels: {"cache" => "mem"},
+            )),
+            hits_bytes: registry.register(metric!(
+                name: "mz_persist_blob_cache_hits_bytes",
+                help: "total size of blobs served via cache instead of s3",
+                const_labels: {"cache" => "mem"},
+            )),
+            evictions: registry.register(metric!(
+                name: "mz_persist_blob_cache_evictions",
+                help: "count of capacity-based cache evictions",
+                const_labels: {"cache" => "mem"},
+            )),
         }
     }
 }

@@ -190,8 +190,8 @@ renamed_sink
 > SHOW SOURCES;
 name               type   size
 ------------------------------
-renamed_mz_data    kafka  ${arg.default-storage-size}
-mz_data_progress   subsource <null>
+renamed_mz_data    kafka     ${arg.default-storage-size}
+mz_data_progress   progress  <null>
 
 # Sink was successfully renamed
 > SHOW SINKS

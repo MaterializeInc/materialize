@@ -46,7 +46,7 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Map (42) // { arity: 3 }
-        Distinct group_by=[#0, #1] // { arity: 2 }
+        Distinct group_by=[#0, #1] monotonic // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
             Get l0 // { arity: 3 }
 

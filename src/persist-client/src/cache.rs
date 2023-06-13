@@ -33,6 +33,7 @@ use tracing::{debug, instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
+use crate::internal::cache::BlobMemCache;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
 use crate::internal::state::TypedState;
@@ -199,6 +200,9 @@ impl PersistClientCache {
                     Self::PROMETHEUS_SCRAPE_INTERVAL,
                 )
                 .await;
+                // This is intentionally "outside" (wrapping) MetricsBlob so
+                // that we don't include cached responses in blob metrics.
+                let blob = BlobMemCache::new(&self.cfg, Arc::clone(&self.metrics), blob);
                 Arc::clone(&x.insert((RttLatencyTask(task), blob)).1)
             }
         };
@@ -334,7 +338,13 @@ where
                     "failed to apply pushed diff {}. seqno {} vs diff {}",
                     state.shard_id, seqno_before, diff.seqno
                 );
-                self.shard_metrics.pubsub_push_diff_not_applied.inc();
+                if diff.seqno <= seqno_before {
+                    self.shard_metrics.pubsub_push_diff_not_applied_stale.inc();
+                } else {
+                    self.shard_metrics
+                        .pubsub_push_diff_not_applied_out_of_order
+                        .inc();
+                }
             }
         })
     }
@@ -649,7 +659,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn client_cache() {
         let cache = PersistClientCache::new(
@@ -717,7 +727,7 @@ mod tests {
         assert_eq!(cache.consensus_by_uri.lock().await.len(), 4);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn state_cache() {
         mz_ore::test::init_logging();
         fn new_state<K, V, T, D>(shard_id: ShardId) -> TypedState<K, V, T, D>
@@ -858,7 +868,7 @@ mod tests {
         assert_eq!(states.strong_count(), 1);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn state_cache_concurrency() {
         mz_ore::test::init_logging();
 

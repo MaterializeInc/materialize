@@ -88,7 +88,7 @@ use scopeguard::defer;
 // removes panic hooks and can interfere with any concurrently running test.
 // Therefore, it needs to be run in isolation.
 
-#[test]
+#[test] // allow(test-attribute)
 fn catch_panic() {
     let old_hook = panic::take_hook();
     defer! {

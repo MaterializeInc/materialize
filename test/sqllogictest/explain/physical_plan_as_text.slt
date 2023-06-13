@@ -861,11 +861,11 @@ Source materialize.public.r
 
 EOF
 
-# Test `LetRec` printing, with and without ITERATION LIMIT
+# Test `LetRec` printing, with and without RECURSION LIMIT
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT * FROM (
-    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 5)
+    WITH MUTUALLY RECURSIVE (RECURSION LIMIT 5)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
 )
@@ -896,7 +896,7 @@ Explained Query:
             map=((#0 - 2))
           Get::PassArrangements l1
             raw=true
-    cte [iteration_limit=5] l0 =
+    cte [recursion_limit=5] l0 =
       ArrangeBy
         input_key=[#0]
         raw=true

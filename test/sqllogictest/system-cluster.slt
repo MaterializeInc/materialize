@@ -192,7 +192,7 @@ query T multiline
 EXPLAIN SHOW SECRETS
 ----
 Explained Query (fast path):
-  Project (#2)
+  Project (#3)
     ReadExistingIndex mz_internal.mz_show_secrets_ind lookup_value=("u3")
 
 Used Indexes:

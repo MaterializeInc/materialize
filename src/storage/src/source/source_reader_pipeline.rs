@@ -52,13 +52,13 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use mz_storage_client::controller::{CollectionMetadata, CreateResumptionFrontierCalc};
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{
-    MzOffset, SourceConnection, SourceExport, SourceTimestamp, SourceToken,
+    MzOffset, SourceConnection, SourceExport, SourceTimestamp,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -94,6 +94,8 @@ use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 /// prevent hot restart loops.
 const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
 
+pub type SourceStatistics = StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>;
+
 /// Shared configuration information for all source types. This is used in the
 /// `create_raw_source` functions, which produce raw sources.
 #[derive(Clone)]
@@ -121,15 +123,17 @@ pub struct RawSourceCreationConfig {
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
     pub resume_upper: Antichain<mz_repr::Timestamp>,
-    /// The upper frontier this source should resume ingestion at in the source time domain. Since
-    /// every source has a different timestamp type we carry the timestamps of this frontier in an
-    /// encoded `Vec<Row>` form which will get decoded once we reach the connection specialized
-    /// functions.
-    pub source_resume_upper: Vec<Row>,
+    /// For each source export, the upper frontier this source should resume ingestion at in the
+    /// source time domain.
+    ///
+    /// Since every source has a different timestamp type we carry the timestamps of this frontier
+    /// in an encoded `Vec<Row>` form which will get decoded once we reach the connection
+    /// specialized functions.
+    pub source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
-    pub source_statistics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
+    pub source_statistics: SourceStatistics,
     /// Enables reporting the remap operator's write frontier.
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
     /// Configuration parameters, possibly from LaunchDarkly
@@ -137,11 +141,15 @@ pub struct RawSourceCreationConfig {
 }
 
 impl RawSourceCreationConfig {
+    /// Returns the worker id responsible for handling the given partition.
+    pub fn responsible_worker<P: Hash>(&self, partition: P) -> usize {
+        let key = usize::cast_from((self.id, partition).hashed());
+        key % self.worker_count
+    }
+
     /// Returns true if this worker is responsible for handling the given partition.
     pub fn responsible_for<P: Hash>(&self, partition: P) -> bool {
-        let key = usize::cast_from((self.id, partition).hashed());
-        // Distribute partitions equally amongst workers.
-        (key % self.worker_count) == self.worker_id
+        self.responsible_worker(partition) == self.worker_id
     }
 }
 
@@ -176,7 +184,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
-    R: ResumptionFrontierCalculator<mz_repr::Timestamp> + 'static,
+    R: CreateResumptionFrontierCalc<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
     let id = config.id;
@@ -230,8 +238,7 @@ where
     let (remap_stream, remap_token) =
         remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
 
-    let (streams, _reclock_token) =
-        reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
+    let streams = reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
     let token = Rc::new((token, remap_token, resume_token));
 
@@ -284,10 +291,7 @@ where
     let mut data_input = builder.new_input(&data.inner, Pipeline);
     let (mut data_output, data) = builder.new_output();
     let (mut _progress_output, derived_progress) = builder.new_output();
-    let (mut health_output, derived_health): (
-        _,
-        timely::dataflow::StreamCore<G, Vec<(OutputIndex, HealthStatusUpdate)>>,
-    ) = builder.new_output();
+    let (mut health_output, derived_health) = builder.new_output();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -310,9 +314,11 @@ where
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
 
-                let status_wrapper = Some((*output_index, status));
-                if statuses.last() != status_wrapper.as_ref() {
-                    statuses.push(status_wrapper.expect("definitely Some"));
+                let status = (*output_index, status);
+                if statuses.last() != Some(&status) {
+                    statuses.push(status.clone());
+                    // The global status contains the most recent update of the subsources
+                    statuses.push((0, status.1));
                 }
 
                 match message {
@@ -393,6 +399,7 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
+    resume_upper: Antichain<mz_repr::Timestamp>,
     primary_source_id: GlobalId,
     health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
@@ -464,7 +471,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
             .collect();
 
         // Write the initial starting state to the status shard for all managed sources
-        if is_active_worker {
+        if is_active_worker && !resume_upper.is_empty() {
             for state in health_states.values() {
                 if let Some((status_shard, persist_client)) = state.persist_details {
                     let status = HealthStatus::Starting;
@@ -817,13 +824,10 @@ fn reclock_operator<G, K, V, FromTime, D>(
         >,
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
-) -> (
-    Vec<(
-        Collection<G, SourceOutput<K, V>, D>,
-        Collection<G, SourceError, Diff>,
-    )>,
-    Option<SourceToken>,
-)
+) -> Vec<(
+    Collection<G, SourceOutput<K, V>, D>,
+    Collection<G, SourceError, Diff>,
+)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     K: timely::Data + MaybeLength,
@@ -1082,13 +1086,10 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    (
-        ok_streams
-            .into_iter()
-            .zip_eq(err_streams.into_iter())
-            .collect(),
-        None,
-    )
+    ok_streams
+        .into_iter()
+        .zip_eq(err_streams.into_iter())
+        .collect()
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the

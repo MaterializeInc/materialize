@@ -17,8 +17,8 @@ mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-proto = { path = "../proto" }
 once_cell = "1.16.0"
 prometheus = { version = "0.13.3", default-features = false }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 serde = { version = "1.0.152", features = ["derive"] }

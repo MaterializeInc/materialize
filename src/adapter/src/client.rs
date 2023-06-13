@@ -18,7 +18,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::{IdAllocator, IdHandle};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
@@ -39,8 +39,13 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::PeekResponseUnary;
 
+/// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
+///
+/// Note: Generally you should not use this type directly, and instead use [`ConnectionId`].
+pub type ConnectionIdType = u32;
+
 /// An abstraction allowing us to name different connections.
-pub type ConnectionId = u32;
+pub type ConnectionId = IdHandle<ConnectionIdType>;
 
 /// A handle to a running coordinator.
 ///
@@ -80,7 +85,7 @@ impl Handle {
 pub struct Client {
     build_info: &'static BuildInfo,
     inner_cmd_tx: mpsc::UnboundedSender<Command>,
-    id_alloc: Arc<IdAllocator<ConnectionId>>,
+    id_alloc: IdAllocator<ConnectionIdType>,
     now: NowFn,
     metrics: Metrics,
 }
@@ -95,31 +100,89 @@ impl Client {
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
-            id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+            id_alloc: IdAllocator::new(1, 1 << 16),
             now,
             metrics,
         }
     }
 
     /// Allocates a client for an incoming connection.
-    pub fn new_conn(&self) -> Result<ConnClient, AdapterError> {
-        Ok(ConnClient {
-            build_info: self.build_info,
-            conn_id: self
-                .id_alloc
-                .alloc()
-                .ok_or(AdapterError::IdExhaustionError)?,
-            inner: self.clone(),
-        })
+    pub fn new_conn_id(&self) -> Result<ConnectionId, AdapterError> {
+        self.id_alloc.alloc().ok_or(AdapterError::IdExhaustionError)
+    }
+
+    /// Creates a new session associated with this client for the given user.
+    ///
+    /// It is the caller's responsibility to have authenticated the user.
+    pub fn new_session(&self, conn_id: ConnectionId, user: User) -> Session {
+        // We use the system clock to determine when a session connected to Materialize. This is not
+        // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
+        // generating a more correct timestamp.
+        Session::new(self.build_info, conn_id, user, (self.now)())
+    }
+
+    /// Upgrades this client to a session client.
+    ///
+    /// A session is a connection that has successfully negotiated parameters,
+    /// like the user. Most coordinator operations are available only after
+    /// upgrading a connection to a session.
+    ///
+    /// Returns a new client that is bound to the session and a response
+    /// containing various details about the startup.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub async fn startup(
+        &self,
+        session: Session,
+    ) -> Result<(SessionClient, StartupResponse), AdapterError> {
+        // Cancellation works by creating a watch channel (which remembers only
+        // the last value sent to it) and sharing it between the coordinator and
+        // connection. The coordinator will send a canceled message on it if a
+        // cancellation request comes. The connection will reset that on every message
+        // it receives and then check for it where we want to add the ability to cancel
+        // an in-progress statement.
+        let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
+        let cancel_tx = Arc::new(cancel_tx);
+        let mut client = SessionClient {
+            inner: Some(self.clone()),
+            session: Some(session),
+            cancel_tx: Arc::clone(&cancel_tx),
+            cancel_rx,
+            timeouts: Timeout::new(),
+        };
+        let response = client
+            .send(|tx, session| Command::Startup {
+                session,
+                cancel_tx,
+                tx,
+            })
+            .await;
+        match response {
+            Ok(response) => Ok((client, response)),
+            Err(e) => {
+                // When startup fails, no need to call terminate. Remove the
+                // session from the client to sidestep the panic in the `Drop`
+                // implementation.
+                client.session.take();
+                Err(e)
+            }
+        }
+    }
+
+    /// Cancels the query currently running on the specified connection.
+    pub fn cancel_request(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
+        self.send(Command::CancelRequest {
+            conn_id,
+            secret_key,
+        });
     }
 
     /// Executes a single SQL statement that returns rows as the
     /// `mz_introspection` user.
     pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
         // Connect to the coordinator.
-        let conn_client = self.new_conn()?;
-        let session = conn_client.new_session(INTROSPECTION_USER.clone());
-        let (mut session_client, _) = conn_client.startup(session).await?;
+        let conn_id = self.new_conn_id()?;
+        let session = self.new_session(conn_id, INTROSPECTION_USER.clone());
+        let (mut session_client, _) = self.startup(session).await?;
 
         // Parse the SQL statement.
         let stmts = mz_sql::parse::parse(sql)?;
@@ -160,104 +223,12 @@ impl Client {
 
 /// A coordinator client that is bound to a connection.
 ///
-/// The `ConnClient` automatically allocates an ID for the connection when
-/// it is created, and frees that ID for potential reuse when it is dropped.
-///
-/// See also [`Client`].
-#[derive(Debug)]
-pub struct ConnClient {
-    build_info: &'static BuildInfo,
-    conn_id: ConnectionId,
-    inner: Client,
-}
-
-impl ConnClient {
-    /// Creates a new session associated with this connection for the given
-    /// user.
-    ///
-    /// It is the caller's responsibility to have authenticated the user.
-    pub fn new_session(&self, user: User) -> Session {
-        // We use the system clock to determine when a session connected to Materialize. This is not
-        // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
-        // generating a more correct timestamp.
-        Session::new(self.build_info, self.conn_id, user, (self.inner.now)())
-    }
-
-    /// Returns the ID of the connection associated with this client.
-    pub fn conn_id(&self) -> ConnectionId {
-        self.conn_id
-    }
-
-    /// Upgrades this connection client to a session client.
-    ///
-    /// A session is a connection that has successfully negotiated parameters,
-    /// like the user. Most coordinator operations are available only after
-    /// upgrading a connection to a session.
-    ///
-    /// Returns a new client that is bound to the session and a response
-    /// containing various details about the startup.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn startup(
-        self,
-        session: Session,
-    ) -> Result<(SessionClient, StartupResponse), AdapterError> {
-        // Cancellation works by creating a watch channel (which remembers only
-        // the last value sent to it) and sharing it between the coordinator and
-        // connection. The coordinator will send a canceled message on it if a
-        // cancellation request comes. The connection will reset that on every message
-        // it receives and then check for it where we want to add the ability to cancel
-        // an in-progress statement.
-        let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
-        let cancel_tx = Arc::new(cancel_tx);
-        let mut client = SessionClient {
-            inner: Some(self),
-            session: Some(session),
-            cancel_tx: Arc::clone(&cancel_tx),
-            cancel_rx,
-            timeouts: Timeout::new(),
-        };
-        let response = client
-            .send(|tx, session| Command::Startup {
-                session,
-                cancel_tx,
-                tx,
-            })
-            .await;
-        match response {
-            Ok(response) => Ok((client, response)),
-            Err(e) => {
-                // When startup fails, no need to call terminate. Remove the
-                // session from the client to sidestep the panic in the `Drop`
-                // implementation.
-                client.session.take();
-                Err(e)
-            }
-        }
-    }
-
-    /// Cancels the query currently running on another connection.
-    pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner.send(Command::CancelRequest {
-            conn_id,
-            secret_key,
-        });
-    }
-}
-
-impl Drop for ConnClient {
-    fn drop(&mut self) {
-        self.inner.id_alloc.free(self.conn_id);
-    }
-}
-
-/// A coordinator client that is bound to a connection.
-///
 /// See also [`Client`].
 pub struct SessionClient {
     // Invariant: inner may only be `None` after the session has been terminated.
     // Once the session is terminated, no communication to the Coordinator
     // should be attempted.
-    inner: Option<ConnClient>,
+    inner: Option<Client>,
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
@@ -306,17 +277,17 @@ impl SessionClient {
             .expect("must exist"))
     }
 
-    /// Saves the specified statement as a prepared statement.
+    /// Saves the parsed statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`crate::session::Session`]
     /// under the specified name.
-    pub async fn describe(
+    pub async fn prepare(
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::Describe {
+        self.send(|tx, session| Command::Prepare {
             name,
             stmt,
             param_types,
@@ -364,7 +335,7 @@ impl SessionClient {
     }
 
     fn now(&self) -> EpochMillis {
-        (self.inner().inner.now)()
+        (self.inner().now)()
     }
 
     fn now_datetime(&self) -> DateTime<Utc> {
@@ -385,11 +356,6 @@ impl SessionClient {
         };
         self.session = Some(session);
         result
-    }
-
-    /// Cancels the query currently running on another connection.
-    pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner_mut().cancel_request(conn_id, secret_key)
     }
 
     /// Ends a transaction.
@@ -476,12 +442,12 @@ impl SessionClient {
     }
 
     /// Returns a reference to the inner client.
-    pub fn inner(&self) -> &ConnClient {
+    pub fn inner(&self) -> &Client {
         self.inner.as_ref().expect("inner invariant violated")
     }
 
     /// Returns a mutable reference to the inner client.
-    pub fn inner_mut(&mut self) -> &mut ConnClient {
+    pub fn inner_mut(&mut self) -> &mut Client {
         self.inner.as_mut().expect("inner invariant violated")
     }
 
@@ -505,9 +471,8 @@ impl SessionClient {
         let application_name = session.application_name();
         let name_hint = ApplicationNameHint::from_str(application_name);
         let (tx, mut rx) = oneshot::channel();
-        let conn_id = session.conn_id();
-        let secret_key = session.secret_key();
-        self.inner_mut().inner.send({
+        let conn_id = session.conn_id().clone();
+        self.inner_mut().send({
             let cmd = f(tx, session);
             // Measure the success and error rate of certain commands:
             // - declare reports success of SQL statement planning
@@ -516,10 +481,11 @@ impl SessionClient {
                 Command::Declare { .. } => typ = Some("declare"),
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::Startup { .. }
-                | Command::Describe { .. }
+                | Command::Prepare { .. }
                 | Command::VerifyPreparedStatement { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
+                | Command::PrivilegedCancelRequest { .. }
                 | Command::DumpCatalog { .. }
                 | Command::CopyRows { .. }
                 | Command::GetSystemVars { .. }
@@ -542,7 +508,6 @@ impl SessionClient {
                     };
                     if let Some(typ) = typ {
                         self.inner()
-                            .inner
                             .metrics
                             .commands
                             .with_label_values(&[typ, status, name_hint.as_str()])
@@ -553,7 +518,9 @@ impl SessionClient {
                 },
                 _err = &mut cancel_future, if !cancelled => {
                     cancelled = true;
-                    self.inner_mut().cancel_request(conn_id, secret_key);
+                    self.inner().send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
                 }
             };
         }
@@ -601,7 +568,7 @@ impl Drop for SessionClient {
             // We may not have a connection to the Coordinator if the session was
             // prematurely terminated, for example due to a timeout.
             if let Some(inner) = &self.inner {
-                inner.inner.send(Command::Terminate { session, tx: None })
+                inner.send(Command::Terminate { session, tx: None })
             }
         }
     }

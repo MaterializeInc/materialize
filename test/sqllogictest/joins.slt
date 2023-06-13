@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_mz_join_core = true;
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE l (la int, lb text)
 
@@ -1155,3 +1160,59 @@ Explained Query:
           Get materialize.public.c // { arity: 1 }
 
 EOF
+
+# Verify that the fueling logic of the linear join implementation is correct
+# by running a large cross-join that exhausts the avaible fuel (currently
+# 1 million output records) at least once.
+
+statement ok
+CREATE TABLE fuel_test_1 (a int)
+
+statement ok
+CREATE TABLE fuel_test_2 (b int)
+
+statement ok
+INSERT INTO fuel_test_1 SELECT generate_series(1, 2000)
+
+statement ok
+INSERT INTO fuel_test_2 SELECT generate_series(2001, 4000)
+
+query T multiline
+EXPLAIN SELECT sum(a + b) FROM fuel_test_1, fuel_test_2
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 + #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get materialize.public.fuel_test_1
+          ArrangeBy keys=[[]]
+            Get materialize.public.fuel_test_2
+
+EOF
+
+query I
+SELECT sum(a + b) FROM fuel_test_1, fuel_test_2
+----
+16004000000
+
+# Test the code path for producing errors from joins.
+statement ok
+CREATE TABLE error_test (a int)
+
+statement ok
+INSERT INTO error_test VALUES (0)
+
+query error division by zero
+SELECT t1.a / t2.a FROM error_test t1, error_test t2

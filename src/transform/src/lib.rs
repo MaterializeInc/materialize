@@ -181,12 +181,6 @@ impl<'a> Default for TransformArgs<'a> {
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
-    /// Indicates if the transform can be safely applied to expressions containing
-    /// `LetRec` AST nodes.
-    fn recursion_safe(&self) -> bool {
-        false
-    }
-
     /// Transform a relation into a functionally equivalent relation.
     fn transform(
         &self,
@@ -208,8 +202,6 @@ pub trait Transform: std::fmt::Debug {
 pub enum TransformError {
     /// An unstructured error.
     Internal(String),
-    /// An ideally temporary error indicating transforms that do not support the `MirRelationExpr::LetRec` variant.
-    LetRecUnsupported,
     /// A reference to an apparently unbound identifier.
     IdentifierMissing(mz_expr::LocalId),
 }
@@ -218,7 +210,6 @@ impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
-            TransformError::LetRecUnsupported => write!(f, "LetRec AST node not supported"),
             TransformError::IdentifierMissing(i) => {
                 write!(f, "apparently unbound identifier: {:?}", i)
             }
@@ -269,10 +260,6 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -284,8 +271,6 @@ impl Transform for Fixpoint {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
-
         // The number of iterations for a relation to settle depends on the
         // number of nodes in the relation. Instead of picking an arbitrary
         // hard limit on the number of iterations, we use a soft limit and
@@ -307,9 +292,7 @@ impl Transform for Fixpoint {
                 );
                 span.in_scope(|| -> Result<(), TransformError> {
                     for transform in self.transforms.iter() {
-                        if transform.recursion_safe() || !recursive {
-                            transform.transform(relation, args)?;
-                        }
+                        transform.transform(relation, args)?;
                     }
                     mz_repr::explain::trace_plan(relation);
                     Ok(())
@@ -327,9 +310,7 @@ impl Transform for Fixpoint {
             }
         }
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(relation, args)?;
-            }
+            transform.transform(relation, args)?;
         }
         Err(TransformError::Internal(format!(
             "fixpoint looped too many times {:#?}; transformed relation: {}",
@@ -387,10 +368,6 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -402,12 +379,8 @@ impl Transform for FuseAndCollapse {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
-
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(relation, args)?;
-            }
+            transform.transform(relation, args)?;
         }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
@@ -489,7 +462,7 @@ impl Optimizer {
                 name: "fixpoint",
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
+                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence::default()),
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
@@ -689,11 +662,8 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(relation, args)?;
-            }
+            transform.transform(relation, args)?;
         }
 
         Ok(())

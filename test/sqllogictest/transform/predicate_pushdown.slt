@@ -438,7 +438,7 @@ Explained Query:
         ArrangeBy keys=[[#0]]
           Get l0
         ArrangeBy keys=[[#0]]
-          TopK group_by=[#0] limit=5 monotonic=false
+          TopK group_by=[#0] limit=5
             Project (#0)
               Join on=(#0 = #1) type=differential
                 ArrangeBy keys=[[#0]]

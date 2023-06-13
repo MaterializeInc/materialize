@@ -19,6 +19,7 @@ use mz_repr::{strconv, ColumnType, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::func::most_significant_unit;
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
 
@@ -37,6 +38,7 @@ sqlfunc!(
     #[sqlname = "date_to_timestamp"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastTimestampToDate)]
+    #[is_monotone = true]
     fn cast_date_to_timestamp(a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
         Ok(CheckedTimestamp::from_timestamplike(
             NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
@@ -48,6 +50,7 @@ sqlfunc!(
     #[sqlname = "date_to_timestamp_with_timezone"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastTimestampTzToDate)]
+    #[is_monotone = true]
     fn cast_date_to_timestamp_tz(a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
         Ok(CheckedTimestamp::from_timestamplike(
             DateTime::<Utc>::from_utc(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(), Utc),
@@ -102,6 +105,10 @@ impl<'a> EagerUnaryFunc<'a> for ExtractDate {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        most_significant_unit(self.0)
     }
 }
 

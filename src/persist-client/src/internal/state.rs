@@ -15,7 +15,6 @@ use std::marker::PhantomData;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::slice;
-use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -24,7 +23,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
+use proptest_derive::Arbitrary;
 use semver::Version;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::info;
@@ -32,12 +34,11 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::{Determinacy, InvalidUsage};
-use crate::internal::encoding::parse_id;
+use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
-use crate::stats::PartStats;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -53,7 +54,8 @@ include!(concat!(
 
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(into = "String")]
 pub struct IdempotencyToken(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for IdempotencyToken {
@@ -76,6 +78,12 @@ impl std::str::FromStr for IdempotencyToken {
     }
 }
 
+impl From<IdempotencyToken> for String {
+    fn from(x: IdempotencyToken) -> Self {
+        x.to_string()
+    }
+}
+
 impl IdempotencyToken {
     pub(crate) fn new() -> Self {
         IdempotencyToken(*Uuid::new_v4().as_bytes())
@@ -83,7 +91,7 @@ impl IdempotencyToken {
     pub(crate) const SENTINEL: IdempotencyToken = IdempotencyToken([17u8; 16]);
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LeasedReaderState<T> {
     /// The seqno capability of this reader.
     pub seqno: SeqNo,
@@ -98,10 +106,17 @@ pub struct LeasedReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
+#[serde(into = "u64")]
 pub struct OpaqueState(pub [u8; 8]);
 
-#[derive(Clone, Debug, PartialEq)]
+impl From<OpaqueState> for u64 {
+    fn from(value: OpaqueState) -> Self {
+        u64::from_le_bytes(value.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CriticalReaderState<T> {
     /// The since capability of this reader.
     pub since: Antichain<T>,
@@ -113,7 +128,7 @@ pub struct CriticalReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct WriterState<T> {
     /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
@@ -131,7 +146,7 @@ pub struct WriterState<T> {
 }
 
 /// Debugging info for a reader or writer.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
 pub struct HandleDebugState {
     /// Hostname of the persist user that registered this writer or reader. For
     /// critical readers, this is the _most recent_ registration.
@@ -141,48 +156,15 @@ pub struct HandleDebugState {
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
-#[derive(Clone, Debug)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct HollowBatchPart {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
     /// Aggregate statistics about data contained in this part.
-    ///
-    /// Stored inside an Arc because HollowBatchPart needs to be cheaply
-    /// clone-able.
-    pub stats: Option<Arc<PartStats>>,
-}
-
-impl PartialEq for HollowBatchPart {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for HollowBatchPart {}
-
-impl PartialOrd for HollowBatchPart {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for HollowBatchPart {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // TODO(mfp): Extremely sus, but it's not clear what else we can do.
-        let HollowBatchPart {
-            key: self_key,
-            encoded_size_bytes: _,
-            stats: _,
-        } = self;
-        let HollowBatchPart {
-            key: other_key,
-            encoded_size_bytes: _,
-            stats: _,
-        } = other;
-        self_key.cmp(other_key)
-    }
+    #[serde(serialize_with = "serialize_part_stats")]
+    pub stats: Option<LazyPartStats>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -204,6 +186,24 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
     pub runs: Vec<usize>,
+}
+
+impl<T: Serialize> serde::Serialize for HollowBatch<T> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let HollowBatch {
+            desc,
+            len,
+            parts: _,
+            runs: _,
+        } = self;
+        let mut s = s.serialize_struct("HollowBatch", 5)?;
+        let () = s.serialize_field("lower", &desc.lower().elements())?;
+        let () = s.serialize_field("upper", &desc.upper().elements())?;
+        let () = s.serialize_field("since", &desc.since().elements())?;
+        let () = s.serialize_field("len", len)?;
+        let () = s.serialize_field("part_runs", &self.runs().collect::<Vec<_>>())?;
+        s.end()
+    }
 }
 
 impl<T: Ord> PartialOrd for HollowBatch<T> {
@@ -291,7 +291,7 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
 }
 
 /// A pointer to a rollup stored externally.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct HollowRollup {
     /// Pointer usable to retrieve the rollup.
     pub key: PartialRollupKey,
@@ -1156,6 +1156,7 @@ where
                 ret.state_batches_bytes += batch_size;
             }
             HollowBlobRef::Rollup(x) => {
+                ret.state_rollup_count += 1;
                 ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
             }
         });
@@ -1314,14 +1315,29 @@ where
         ret
     }
 
-    pub fn need_rollup(&self) -> Option<SeqNo> {
+    pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
-        if self.seqno.0.saturating_sub(latest_rollup_seqno.0) > PersistConfig::NEED_ROLLUP_THRESHOLD
+        let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
+
+        // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
+        // we avoid assigning rollups to every seqno past the threshold to avoid handles
+        // racing / performing redundant work.
+        if seqnos_since_last_rollup > 0 && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
         {
-            Some(self.seqno)
-        } else {
-            None
+            return Some(self.seqno);
         }
+
+        // however, since maintenance is best-effort and could fail, do assign rollup
+        // work to every seqno after a fallback threshold to ensure one is written.
+        if seqnos_since_last_rollup
+            > u64::cast_from(
+                threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
+            )
+        {
+            return Some(self.seqno);
+        }
+
+        None
     }
 
     pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
@@ -1334,6 +1350,55 @@ where
     }
 }
 
+fn serialize_part_stats<S: Serializer>(
+    val: &Option<LazyPartStats>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    let val = val.as_ref().map(|x| x.decode().key);
+    val.serialize(s)
+}
+
+// This Serialize impl is used for debugging/testing and exposed via SQL. It's
+// intentionally gated from users, so not strictly subject to our backward
+// compatibility guarantees, but still probably best to be thoughtful about
+// making unnecessary changes. Additionally, it's nice to make the output as
+// nice to use as possible without tying our hands for the actual code usages.
+impl<T: Serialize> Serialize for State<T> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let State {
+            applier_version,
+            shard_id,
+            seqno,
+            walltime_ms,
+            hostname,
+            collections:
+                StateCollections {
+                    last_gc_req,
+                    rollups,
+                    leased_readers,
+                    critical_readers,
+                    writers,
+                    trace,
+                },
+        } = self;
+        let mut s = s.serialize_struct("State", 13)?;
+        let () = s.serialize_field("applier_version", &applier_version.to_string())?;
+        let () = s.serialize_field("shard_id", shard_id)?;
+        let () = s.serialize_field("seqno", seqno)?;
+        let () = s.serialize_field("walltime_ms", walltime_ms)?;
+        let () = s.serialize_field("hostname", hostname)?;
+        let () = s.serialize_field("last_gc_req", last_gc_req)?;
+        let () = s.serialize_field("rollups", rollups)?;
+        let () = s.serialize_field("leased_readers", leased_readers)?;
+        let () = s.serialize_field("critical_readers", critical_readers)?;
+        let () = s.serialize_field("writers", writers)?;
+        let () = s.serialize_field("since", &trace.since().elements())?;
+        let () = s.serialize_field("upper", &trace.upper().elements())?;
+        let () = s.serialize_field("batches", &trace.batches().into_iter().collect::<Vec<_>>())?;
+        s.end()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct StateSizeMetrics {
     pub hollow_batch_count: usize,
@@ -1342,6 +1407,7 @@ pub struct StateSizeMetrics {
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
     pub state_rollups_bytes: usize,
+    pub state_rollup_count: usize,
 }
 
 #[derive(Default)]
@@ -1368,13 +1434,171 @@ impl<T> Determinacy for Upper<T> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::ops::Range;
+
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
+    use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
 
+    use crate::internal::paths::RollupId;
+    use crate::internal::trace::tests::any_trace;
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
 
     use super::*;
+
+    pub fn any_hollow_batch<T: Arbitrary + Timestamp>() -> impl Strategy<Value = HollowBatch<T>> {
+        Strategy::prop_map(
+            (
+                any::<T>(),
+                any::<T>(),
+                any::<T>(),
+                proptest::collection::vec(any::<HollowBatchPart>(), 0..3),
+                any::<usize>(),
+                any::<bool>(),
+            ),
+            |(t0, t1, since, parts, len, runs)| {
+                let (lower, upper) = if t0 <= t1 {
+                    (Antichain::from_elem(t0), Antichain::from_elem(t1))
+                } else {
+                    (Antichain::from_elem(t1), Antichain::from_elem(t0))
+                };
+                let since = Antichain::from_elem(since);
+                let runs = if runs { vec![parts.len()] } else { vec![] };
+                HollowBatch {
+                    desc: Description::new(lower, upper, since),
+                    parts,
+                    len: len % 10,
+                    runs,
+                }
+            },
+        )
+    }
+
+    pub fn any_leased_reader_state<T: Arbitrary>() -> impl Strategy<Value = LeasedReaderState<T>> {
+        Strategy::prop_map(
+            (
+                any::<SeqNo>(),
+                any::<Option<T>>(),
+                any::<u64>(),
+                any::<u64>(),
+                any::<HandleDebugState>(),
+            ),
+            |(seqno, since, last_heartbeat_timestamp_ms, mut lease_duration_ms, debug)| {
+                // lease_duration_ms of 0 means this state was written by an old
+                // version of code, which means we'll migrate it in the decode
+                // path. Avoid.
+                if lease_duration_ms == 0 {
+                    lease_duration_ms += 1;
+                }
+                LeasedReaderState {
+                    seqno,
+                    since: since.map_or_else(Antichain::new, Antichain::from_elem),
+                    last_heartbeat_timestamp_ms,
+                    lease_duration_ms,
+                    debug,
+                }
+            },
+        )
+    }
+
+    pub fn any_critical_reader_state<T: Arbitrary>() -> impl Strategy<Value = CriticalReaderState<T>>
+    {
+        Strategy::prop_map(
+            (
+                any::<Option<T>>(),
+                any::<OpaqueState>(),
+                any::<String>(),
+                any::<HandleDebugState>(),
+            ),
+            |(since, opaque, opaque_codec, debug)| CriticalReaderState {
+                since: since.map_or_else(Antichain::new, Antichain::from_elem),
+                opaque,
+                opaque_codec,
+                debug,
+            },
+        )
+    }
+
+    pub fn any_writer_state<T: Arbitrary>() -> impl Strategy<Value = WriterState<T>> {
+        Strategy::prop_map(
+            (
+                any::<u64>(),
+                any::<u64>(),
+                any::<IdempotencyToken>(),
+                any::<Option<T>>(),
+                any::<HandleDebugState>(),
+            ),
+            |(
+                last_heartbeat_timestamp_ms,
+                lease_duration_ms,
+                most_recent_write_token,
+                most_recent_write_upper,
+                debug,
+            )| WriterState {
+                last_heartbeat_timestamp_ms,
+                lease_duration_ms,
+                most_recent_write_token,
+                most_recent_write_upper: most_recent_write_upper
+                    .map_or_else(Antichain::new, Antichain::from_elem),
+                debug,
+            },
+        )
+    }
+
+    pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
+        num_trace_batches: Range<usize>,
+    ) -> impl Strategy<Value = State<T>> {
+        Strategy::prop_map(
+            (
+                any::<ShardId>(),
+                any::<SeqNo>(),
+                any::<u64>(),
+                any::<String>(),
+                any::<SeqNo>(),
+                proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
+                proptest::collection::btree_map(
+                    any::<LeasedReaderId>(),
+                    any_leased_reader_state::<T>(),
+                    1..3,
+                ),
+                proptest::collection::btree_map(
+                    any::<CriticalReaderId>(),
+                    any_critical_reader_state::<T>(),
+                    1..3,
+                ),
+                proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
+                any_trace::<T>(num_trace_batches),
+            ),
+            |(
+                shard_id,
+                seqno,
+                walltime_ms,
+                hostname,
+                last_gc_req,
+                rollups,
+                leased_readers,
+                critical_readers,
+                writers,
+                trace,
+            )| State {
+                applier_version: semver::Version::new(1, 2, 3),
+                shard_id,
+                seqno,
+                walltime_ms,
+                hostname,
+                collections: StateCollections {
+                    last_gc_req,
+                    rollups,
+                    leased_readers,
+                    critical_readers,
+                    writers,
+                    trace,
+                },
+            },
+        )
+    }
 
     fn hollow<T: Timestamp>(lower: T, upper: T, keys: &[&str], len: usize) -> HollowBatch<T> {
         HollowBatch {
@@ -1396,7 +1620,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn downgrade_since() {
         let mut state = TypedState::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -1546,9 +1770,8 @@ mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn compare_and_append() {
-        mz_ore::test::init_logging();
         let state = &mut TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -1632,9 +1855,8 @@ mod tests {
             .is_continue());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn snapshot() {
-        mz_ore::test::init_logging();
         let now = SYSTEM_TIME.clone();
 
         let mut state = TypedState::<String, String, u64, i64>::new(
@@ -1798,10 +2020,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn next_listen_batch() {
-        mz_ore::test::init_logging();
-
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -1870,10 +2090,8 @@ mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn expire_writer() {
-        mz_ore::test::init_logging();
-
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -1949,9 +2167,8 @@ mod tests {
             .is_continue());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn maybe_gc() {
-        mz_ore::test::init_logging();
         let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
@@ -2000,11 +2217,119 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
+    fn need_rollup() {
+        const ROLLUP_THRESHOLD: usize = 3;
+        mz_ore::test::init_logging();
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let rollup_seqno = SeqNo(5);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+
+        assert!(state
+            .collections
+            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .is_continue());
+
+        // shouldn't need a rollup at the seqno of the rollup
+        state.seqno = SeqNo(5);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+
+        // shouldn't need a rollup at seqnos less than our threshold
+        state.seqno = SeqNo(6);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        state.seqno = SeqNo(7);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+
+        // hit our threshold! we should need a rollup
+        state.seqno = SeqNo(8);
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            SeqNo(8)
+        );
+
+        // but we don't need rollups for every seqno > the threshold
+        state.seqno = SeqNo(9);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+
+        // we only need a rollup each `ROLLUP_THRESHOLD` beyond our current seqno
+        state.seqno = SeqNo(11);
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            SeqNo(11)
+        );
+
+        // add another rollup and ensure we're always picking the latest
+        let rollup_seqno = SeqNo(6);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        assert!(state
+            .collections
+            .add_and_remove_rollups((rollup_seqno, &rollup), &[])
+            .is_continue());
+
+        state.seqno = SeqNo(8);
+        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        state.seqno = SeqNo(9);
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            SeqNo(9)
+        );
+
+        // and ensure that after a fallback point, we assign every seqno work
+        let fallback_seqno = SeqNo(
+            rollup_seqno.0
+                * u64::cast_from(PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER),
+        );
+        state.seqno = fallback_seqno;
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            fallback_seqno
+        );
+        state.seqno = fallback_seqno.next();
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            fallback_seqno.next()
+        );
+    }
+
+    #[mz_ore::test]
     fn idempotency_token_sentinel() {
         assert_eq!(
             IdempotencyToken::SENTINEL.to_string(),
             "i11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    /// This test generates an "arbitrary" State, but uses a fixed seed for the
+    /// randomness, so that it's deterministic. This lets us assert the
+    /// serialization of that State against a golden file that's committed,
+    /// making it easy to see what the serialization (used in an upcoming
+    /// INSPECT feature) looks like.
+    ///
+    /// This golden will have to be updated each time we change State, but
+    /// that's a feature, not a bug.
+    #[mz_ore::test]
+    fn state_inspect_serde_json() {
+        const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let tree = any_state::<u64>(5..6).new_tree(&mut runner).unwrap();
+        let json = serde_json::to_string_pretty(&tree.current()).unwrap();
+        assert_eq!(
+            json.trim(),
+            STATE_SERDE_JSON.trim(),
+            "\n\nNEW GOLDEN\n{}\n",
+            json
         );
     }
 }

@@ -68,7 +68,7 @@ pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
     pub tls_mode: Option<TlsMode>,
     /// A client for the adapter.
-    pub adapter_client: mz_adapter::ConnClient,
+    pub adapter_client: mz_adapter::Client,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The protocol version that the client provided in the startup message.
@@ -159,10 +159,13 @@ where
     }
 
     // Construct session.
-    let mut session = adapter_client.new_session(User {
-        name: user.clone(),
-        external_metadata: None,
-    });
+    let mut session = adapter_client.new_session(
+        conn.conn_id().clone(),
+        User {
+            name: user.clone(),
+            external_metadata: None,
+        },
+    );
 
     let is_expired = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
@@ -260,7 +263,7 @@ where
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
     }
     buf.push(BackendMessage::BackendKeyData {
-        conn_id: session.conn_id(),
+        conn_id: session.conn_id().unhandled(),
         secret_key: session.secret_key(),
     });
     // Immediately respond with connection success without waiting on the
@@ -747,7 +750,7 @@ where
         }
         match self
             .adapter_client
-            .describe(name, maybe_stmt, param_types)
+            .prepare(name, maybe_stmt, param_types)
             .await
         {
             Ok(()) => {
@@ -829,7 +832,7 @@ where
                     .await
             }
         };
-        if aborted_txn && !is_txn_exit_stmt(stmt.sql()) {
+        if aborted_txn && !is_txn_exit_stmt(stmt.stmt()) {
             return self.aborted_txn_error().await;
         }
         let buf = RowArena::new();
@@ -893,7 +896,7 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
-        let stmt = stmt.sql().cloned();
+        let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
@@ -1399,6 +1402,26 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
                 self.copy_from(id, columns, params, row_desc).await
             }
+            ExecuteResponse::TransactionCommitted { params }
+            | ExecuteResponse::TransactionRolledBack { params } => {
+                let notify_set: mz_ore::collections::HashSet<String> = self
+                    .adapter_client
+                    .session()
+                    .vars()
+                    .notify_set()
+                    .map(|v| v.name().to_string())
+                    .collect();
+
+                // Only report on parameters that are in the notify set.
+                for (name, value) in params
+                    .into_iter()
+                    .filter(|(name, _v)| notify_set.contains(*name))
+                {
+                    let msg = BackendMessage::ParameterStatus(name, value);
+                    self.send(msg).await?;
+                }
+                command_complete!()
+            }
 
             ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
@@ -1435,8 +1458,6 @@ where
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
-            | ExecuteResponse::TransactionCommitted
-            | ExecuteResponse::TransactionRolledBack
             | ExecuteResponse::Updated(..) => {
                 command_complete!()
             }
@@ -1992,7 +2013,7 @@ enum FetchResult {
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_options() {
         struct TestCase {
             input: &'static str,
@@ -2046,7 +2067,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_option() {
         struct TestCase {
             input: &'static str,
@@ -2093,7 +2114,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_split_options() {
         struct TestCase {
             input: &'static str,

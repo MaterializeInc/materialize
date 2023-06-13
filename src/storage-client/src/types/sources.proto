@@ -212,6 +212,7 @@ message ProtoLoadGeneratorSourceConnection {
         google.protobuf.Empty auction = 3;
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
+        google.protobuf.Empty marketing = 7;
     }
     optional uint64 tick_micros = 2;
 }

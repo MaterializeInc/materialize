@@ -26,10 +26,6 @@ use crate::TransformArgs;
 pub struct ThresholdElision;
 
 impl crate::Transform for ThresholdElision {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

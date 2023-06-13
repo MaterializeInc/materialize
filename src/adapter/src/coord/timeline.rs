@@ -791,7 +791,7 @@ impl Coordinator {
         &self,
         uses_ids: I,
         timeline_context: &TimelineContext,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         compute_instance: ComputeInstanceId,
     ) -> Result<CollectionIdBundle, AdapterError>
     where

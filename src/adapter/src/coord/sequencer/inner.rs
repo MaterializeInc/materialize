@@ -18,15 +18,11 @@ use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
-use mz_controller::clusters::{
-    ClusterConfig, ClusterId, CreateReplicaConfig, ReplicaAllocation, ReplicaConfig, ReplicaId,
-    ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
-};
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -35,33 +31,35 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
-use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
+use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
-    CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
+    CatalogTypeDetails, ObjectType, SessionCatalog,
 };
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan,
-    GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
-    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
-    RevokePrivilegePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan,
+    ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption, InsertPlan, MaterializedView,
+    MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
+    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetTransactionPlan,
+    SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
+    UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::TransactionMode;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -73,8 +71,8 @@ use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
-    StorageSinkConnectionState, UpdatePrivilegeVariant, LINKED_CLUSTER_REPLICA_NAME,
+    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op,
+    StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
@@ -88,8 +86,9 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
-    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, PendingTxnResponse,
+    RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
+    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -197,7 +196,7 @@ impl Coordinator {
                 oid: source_oid,
                 name: plan.name.clone(),
                 item: CatalogItem::Source(source.clone()),
-                owner_id: *session.role_id(),
+                owner_id: *session.current_role_id(),
             });
             sources.push((source_id, source));
         }
@@ -325,7 +324,7 @@ impl Coordinator {
                 connection: connection.clone(),
                 depends_on,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -392,7 +391,7 @@ impl Coordinator {
             name: plan.name.clone(),
             oid: db_oid,
             public_schema_oid: schema_oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
@@ -418,7 +417,7 @@ impl Coordinator {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
             oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
@@ -460,7 +459,7 @@ impl Coordinator {
     // I put this in the `Coordinator`'s impl block in case we ever want to
     // change the logic and make it depend on some other state, but for now it's
     // a pure function of the `n_replicas_per_az` state.
-    fn choose_az<'a>(n_replicas_per_az: &'a BTreeMap<String, usize>) -> String {
+    pub(crate) fn choose_az<'a>(n_replicas_per_az: &'a BTreeMap<String, usize>) -> String {
         let min = *n_replicas_per_az
             .values()
             .min()
@@ -474,300 +473,6 @@ impl Coordinator {
             .expect("Must have at least one value corresponding to `min`");
 
         (*arbitrary_argmin).clone()
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn sequence_create_cluster(
-        &mut self,
-        session: &Session,
-        CreateClusterPlan { name, replicas }: CreateClusterPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        tracing::debug!("sequence_create_cluster");
-
-        let id = self.catalog_mut().allocate_user_cluster_id().await?;
-        // The catalog items for the introspection sources are shared between all replicas
-        // of a compute instance, so we create them unconditionally during instance creation.
-        // Whether a replica actually maintains introspection arrangements is determined by the
-        // per-replica introspection configuration.
-        let introspection_sources = self.catalog_mut().allocate_introspection_sources().await;
-        let mut ops = vec![catalog::Op::CreateCluster {
-            id,
-            name: name.clone(),
-            linked_object_id: None,
-            introspection_sources,
-            owner_id: *session.role_id(),
-        }];
-
-        let azs = self.catalog().state().availability_zones();
-        let mut n_replicas_per_az = azs
-            .iter()
-            .map(|s| (s.clone(), 0))
-            .collect::<BTreeMap<_, _>>();
-        for (_name, r) in replicas.iter() {
-            if let mz_sql::plan::ReplicaConfig::Managed {
-                availability_zone: Some(az),
-                ..
-            } = r
-            {
-                let ct: &mut usize = n_replicas_per_az.get_mut(az).ok_or_else(|| {
-                    AdapterError::InvalidClusterReplicaAz {
-                        az: az.to_string(),
-                        expected: azs.to_vec(),
-                    }
-                })?;
-                *ct += 1
-            }
-        }
-
-        for (replica_name, replica_config) in replicas {
-            // If the AZ was not specified, choose one, round-robin, from the ones with
-            // the lowest number of configured replicas for this cluster.
-            let (compute, location) = match replica_config {
-                mz_sql::plan::ReplicaConfig::Unmanaged {
-                    storagectl_addrs,
-                    storage_addrs,
-                    computectl_addrs,
-                    compute_addrs,
-                    workers,
-                    compute,
-                } => {
-                    let location = SerializedReplicaLocation::Unmanaged {
-                        storagectl_addrs,
-                        storage_addrs,
-                        computectl_addrs,
-                        compute_addrs,
-                        workers,
-                    };
-                    (compute, location)
-                }
-                mz_sql::plan::ReplicaConfig::Managed {
-                    size,
-                    availability_zone,
-                    compute,
-                } => {
-                    let (availability_zone, user_specified) =
-                        availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
-                            let az = Self::choose_az(&n_replicas_per_az);
-                            *n_replicas_per_az
-                                .get_mut(&az)
-                                .expect("availability zone does not exist") += 1;
-                            (az, false)
-                        });
-                    let location = SerializedReplicaLocation::Managed {
-                        size: size.clone(),
-                        availability_zone,
-                        az_user_specified: user_specified,
-                    };
-                    (compute, location)
-                }
-            };
-
-            let logging = if let Some(config) = compute.introspection {
-                ReplicaLogging {
-                    log_logging: config.debugging,
-                    interval: Some(config.interval),
-                }
-            } else {
-                ReplicaLogging::default()
-            };
-
-            let config = ReplicaConfig {
-                location: self.catalog().concretize_replica_location(
-                    location,
-                    &self
-                        .catalog()
-                        .system_config()
-                        .allowed_cluster_replica_sizes(),
-                )?,
-                compute: ComputeReplicaConfig {
-                    logging,
-                    idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
-                },
-            };
-
-            ops.push(catalog::Op::CreateClusterReplica {
-                cluster_id: id,
-                id: self.catalog_mut().allocate_replica_id().await?,
-                name: replica_name.clone(),
-                config,
-                owner_id: *session.role_id(),
-            });
-        }
-
-        self.catalog_transact(Some(session), ops).await?;
-
-        self.create_cluster(id).await;
-
-        Ok(ExecuteResponse::CreatedCluster)
-    }
-
-    async fn create_cluster(&mut self, cluster_id: ClusterId) {
-        let (catalog, controller) = self.catalog_and_controller_mut();
-        let cluster = catalog.get_cluster(cluster_id);
-        let cluster_id = cluster.id;
-        let introspection_source_ids: Vec<_> =
-            cluster.log_indexes.iter().map(|(_, id)| *id).collect();
-
-        controller
-            .create_cluster(
-                cluster_id,
-                ClusterConfig {
-                    arranged_logs: cluster.log_indexes.clone(),
-                },
-            )
-            .expect("creating cluster must not fail");
-
-        let replicas: Vec<_> = cluster
-            .replicas_by_id
-            .keys()
-            .copied()
-            .map(|r| (cluster_id, r))
-            .collect();
-        self.create_cluster_replicas(&replicas).await;
-
-        if !introspection_source_ids.is_empty() {
-            self.initialize_compute_read_policies(
-                introspection_source_ids,
-                cluster_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-            )
-            .await;
-        }
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn sequence_create_cluster_replica(
-        &mut self,
-        session: &Session,
-        CreateClusterReplicaPlan {
-            name,
-            cluster_id,
-            config,
-        }: CreateClusterReplicaPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // Choose default AZ if necessary
-        let (compute, location) = match config {
-            mz_sql::plan::ReplicaConfig::Unmanaged {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-                compute,
-            } => {
-                let location = SerializedReplicaLocation::Unmanaged {
-                    storagectl_addrs,
-                    storage_addrs,
-                    computectl_addrs,
-                    compute_addrs,
-                    workers,
-                };
-                (compute, location)
-            }
-            mz_sql::plan::ReplicaConfig::Managed {
-                size,
-                availability_zone,
-                compute,
-            } => {
-                let (availability_zone, user_specified) = match availability_zone {
-                    Some(az) => {
-                        let azs = self.catalog().state().availability_zones();
-                        if !azs.contains(&az) {
-                            return Err(AdapterError::InvalidClusterReplicaAz {
-                                az,
-                                expected: azs.to_vec(),
-                            });
-                        }
-                        (az, true)
-                    }
-                    None => {
-                        // Choose the least popular AZ among all replicas of this cluster as the default
-                        // if none was specified. If there is a tie for "least popular", pick the first one.
-                        // That is globally unbiased (for Materialize, not necessarily for this customer)
-                        // because we shuffle the AZs on boot in `crate::serve`.
-                        let cluster = self.catalog().get_cluster(cluster_id);
-                        let azs = self.catalog().state().availability_zones();
-                        let mut n_replicas_per_az = azs
-                            .iter()
-                            .map(|s| (s.clone(), 0))
-                            .collect::<BTreeMap<_, _>>();
-                        for r in cluster.replicas_by_id.values() {
-                            if let Some(az) = r.config.location.availability_zone() {
-                                *n_replicas_per_az.get_mut(az).expect("unknown AZ") += 1;
-                            }
-                        }
-                        let az = Self::choose_az(&n_replicas_per_az);
-                        (az, false)
-                    }
-                };
-                let location = SerializedReplicaLocation::Managed {
-                    size,
-                    availability_zone,
-                    az_user_specified: user_specified,
-                };
-                (compute, location)
-            }
-        };
-
-        let logging = if let Some(config) = compute.introspection {
-            ReplicaLogging {
-                log_logging: config.debugging,
-                interval: Some(config.interval),
-            }
-        } else {
-            ReplicaLogging::default()
-        };
-
-        let config = ReplicaConfig {
-            location: self.catalog().concretize_replica_location(
-                location,
-                &self
-                    .catalog()
-                    .system_config()
-                    .allowed_cluster_replica_sizes(),
-            )?,
-            compute: ComputeReplicaConfig {
-                logging,
-                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
-            },
-        };
-
-        let id = self.catalog_mut().allocate_replica_id().await?;
-        let op = catalog::Op::CreateClusterReplica {
-            cluster_id,
-            id,
-            name: name.clone(),
-            config,
-            owner_id: *session.role_id(),
-        };
-
-        self.catalog_transact(Some(session), vec![op]).await?;
-
-        self.create_cluster_replicas(&[(cluster_id, id)]).await;
-
-        Ok(ExecuteResponse::CreatedClusterReplica)
-    }
-
-    async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
-        let mut replicas_to_start = Vec::new();
-
-        for (cluster_id, replica_id) in replicas.iter().copied() {
-            let cluster = self.catalog().get_cluster(cluster_id);
-            let role = cluster.role();
-            let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
-
-            replicas_to_start.push(CreateReplicaConfig {
-                cluster_id,
-                replica_id,
-                role,
-                config: replica_config,
-            });
-        }
-
-        self.controller
-            .create_replicas(replicas_to_start)
-            .await
-            .expect("creating replicas must not fail");
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -793,7 +498,7 @@ impl Coordinator {
             create_sql: table.create_sql,
             desc: table.desc,
             defaults: table.defaults,
-            conn_id,
+            conn_id: conn_id.cloned(),
             depends_on,
             custom_logical_compaction_window: None,
             is_retained_metrics_object: false,
@@ -804,7 +509,7 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
@@ -883,7 +588,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -966,7 +671,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         let from = self.catalog().get_entry(&catalog_sink.from);
@@ -1145,7 +850,7 @@ impl Coordinator {
             optimized_expr,
             desc,
             conn_id: if view.temporary {
-                Some(session.conn_id())
+                Some(session.conn_id().clone())
             } else {
                 None
             },
@@ -1156,7 +861,7 @@ impl Coordinator {
             oid: view_oid,
             name: name.clone(),
             item: CatalogItem::View(view),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         Ok(ops)
@@ -1167,7 +872,6 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateMaterializedViewPlan,
-        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateMaterializedViewPlan {
             name,
@@ -1194,8 +898,12 @@ impl Coordinator {
             return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
-        self.validate_timeline_context(depends_on.clone())?;
+        // Generate the optimized expression, which allows us to know exacly what we depend on.
+        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
+        let depends_on: Vec<_> = optimized_expr.depends_on().into_iter().collect();
 
+        // Validate after generating the optimized expression.
+        self.validate_timeline_context(depends_on.clone())?;
         self.validate_system_column_references(ambiguous_columns, &depends_on)?;
 
         // Materialized views are not allowed to depend on log sources, as replicas
@@ -1221,7 +929,6 @@ impl Coordinator {
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
 
-        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
 
         // Pick the least valid read timestamp as the as-of for the view
@@ -1249,7 +956,7 @@ impl Coordinator {
                 depends_on,
                 cluster_id,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         match self
@@ -1402,7 +1109,7 @@ impl Coordinator {
             oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
@@ -1577,7 +1284,8 @@ impl Coordinator {
             && !session.is_superuser()
         {
             // Obtain all roles that the current session is a member of.
-            let role_membership = session_catalog.collect_role_membership(session.role_id());
+            let role_membership =
+                session_catalog.collect_role_membership(session.current_role_id());
             let invalid_revokes: BTreeSet<_> = revokes
                 .drain_filter_swapping(|(_, privilege)| {
                     !role_membership.contains(&privilege.grantor)
@@ -1793,8 +1501,12 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
+
+        let vars = session.vars_mut();
         let values = match plan.value {
             VariableValue::Default => None,
             VariableValue::Values(values) => Some(values),
@@ -1850,10 +1562,50 @@ impl Coordinator {
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let name = plan.name;
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
         session
             .vars_mut()
             .reset(Some(self.catalog().system_config()), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
+    }
+
+    pub(super) fn sequence_set_transaction(
+        &self,
+        session: &mut Session,
+        plan: SetTransactionPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO(jkosh44) Only supports isolation levels for now.
+        for mode in plan.modes {
+            match mode {
+                TransactionMode::AccessMode(_) => {
+                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
+                }
+                TransactionMode::IsolationLevel(isolation_level) => {
+                    self.validate_set_isolation_level(session)?;
+
+                    session.vars_mut().set(
+                        Some(self.catalog().system_config()),
+                        TRANSACTION_ISOLATION_VAR_NAME.as_str(),
+                        VarInput::Flat(&isolation_level.to_ast_string_stable()),
+                        plan.local,
+                    )?
+                }
+            }
+        }
+        Ok(ExecuteResponse::SetVariable {
+            name: TRANSACTION_ISOLATION_VAR_NAME.to_string(),
+            reset: false,
+        })
+    }
+
+    fn validate_set_isolation_level(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.transaction().contains_ops() {
+            Err(AdapterError::InvalidSetIsolationLevel)
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) fn sequence_end_transaction(
@@ -1869,8 +1621,12 @@ impl Coordinator {
             action = EndTransactionAction::Rollback;
         }
         let response = match action {
-            EndTransactionAction::Commit => Ok(ExecuteResponse::TransactionCommitted),
-            EndTransactionAction::Rollback => Ok(ExecuteResponse::TransactionRolledBack),
+            EndTransactionAction::Commit => Ok(PendingTxnResponse::Committed {
+                params: BTreeMap::new(),
+            }),
+            EndTransactionAction::Rollback => Ok(PendingTxnResponse::Rolledback {
+                params: BTreeMap::new(),
+            }),
         };
 
         let result = self.sequence_end_transaction_inner(&mut session, action);
@@ -1912,7 +1668,13 @@ impl Coordinator {
             Ok((_, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
-        session.vars_mut().end_transaction(action);
+        let changed = session.vars_mut().end_transaction(action);
+        // Append any parameters that changed to the response.
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+
         tx.send(response, session);
     }
 
@@ -2203,9 +1965,9 @@ impl Coordinator {
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
+                let conn_id = session.conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
-                    conn_id,
+                    conn_id.clone(),
                     RealTimeRecencyContext::Peek {
                         tx,
                         finishing,
@@ -2228,7 +1990,7 @@ impl Coordinator {
                     let real_time_recency_ts = fut.await;
                     // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
-                        conn_id,
+                        conn_id: conn_id.clone(),
                         real_time_recency_ts,
                         validity,
                     });
@@ -2378,7 +2140,7 @@ impl Coordinator {
             )?;
 
             // If we've already acquired read holds for the txn, we can skip doing so again
-            if !self.txn_reads.contains_key(&session.conn_id()) {
+            if !self.txn_reads.contains_key(session.conn_id()) {
                 if let Some(timestamp) = determination.timestamp_context.timestamp() {
                     let timedomain_id_bundle = self.timedomain_for(
                         source_ids,
@@ -2389,7 +2151,7 @@ impl Coordinator {
 
                     let read_holds =
                         self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
-                    self.txn_reads.insert(session.conn_id(), read_holds);
+                    self.txn_reads.insert(session.conn_id().clone(), read_holds);
                 }
             }
         }
@@ -2412,7 +2174,7 @@ impl Coordinator {
         key: Vec<MirScalarExpr>,
         typ: RelationType,
     ) -> Result<PlannedPeek, AdapterError> {
-        let conn_id = session.conn_id();
+        let conn_id = session.conn_id().clone();
         let timestamp_context = self
             .sequence_peek_timestamp(
                 session,
@@ -2471,7 +2233,7 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         // If there are no `txn_reads`, then this must be the first query in the transaction
         // and we can skip timedomain validations.
-        if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.get(session.conn_id()) {
             // Queries without a timestamp and timeline can belong to any existing timedomain.
             if let TimestampContext::TimelineTimestamp(_, _) = timestamp_context {
                 // Verify that the references and indexes for this query are in the
@@ -2650,7 +2412,7 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             user: session.user().clone(),
-            conn_id: session.conn_id(),
+            conn_id: session.conn_id().clone(),
             channel: tx,
             emit_progress,
             as_of,
@@ -2679,7 +2441,7 @@ impl Coordinator {
         }
 
         self.active_conns
-            .get_mut(&session.conn_id())
+            .get_mut(session.conn_id())
             .expect("must exist for active sessions")
             .drop_sinks
             .push(ComputeSinkId {
@@ -2985,9 +2747,9 @@ impl Coordinator {
                     replica_id: None,
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
+                let conn_id = session.conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
-                    conn_id,
+                    conn_id.clone(),
                     RealTimeRecencyContext::ExplainTimestamp {
                         tx,
                         session,
@@ -3556,7 +3318,7 @@ impl Coordinator {
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
                             let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
-                                conn_id: session.conn_id(),
+                                conn_id: session.conn_id().clone(),
                             });
                             if let Err(e) = result {
                                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -3973,132 +3735,156 @@ impl Coordinator {
         let ps = session
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");
-        let sql = ps.sql().cloned();
+        let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
-        session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
+        session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
     }
 
-    pub(super) async fn sequence_grant_privilege(
+    pub(super) async fn sequence_grant_privileges(
         &mut self,
         session: &mut Session,
-        GrantPrivilegePlan {
-            acl_mode,
-            object_id,
+        GrantPrivilegesPlan {
+            update_privileges,
             grantees,
-            grantor,
-        }: GrantPrivilegePlan,
+        }: GrantPrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             grantees,
-            grantor,
             UpdatePrivilegeVariant::Grant,
         )
         .await
     }
 
-    pub(super) async fn sequence_revoke_privilege(
+    pub(super) async fn sequence_revoke_privileges(
         &mut self,
         session: &mut Session,
-        RevokePrivilegePlan {
-            acl_mode,
-            object_id,
+        RevokePrivilegesPlan {
+            update_privileges,
             revokees,
-            grantor,
-        }: RevokePrivilegePlan,
+        }: RevokePrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             revokees,
-            grantor,
             UpdatePrivilegeVariant::Revoke,
         )
         .await
     }
 
-    async fn sequence_update_privilege(
+    async fn sequence_update_privileges(
         &mut self,
         session: &mut Session,
-        acl_mode: AclMode,
-        object_id: ObjectId,
+        update_privileges: Vec<UpdatePrivilege>,
         grantees: Vec<RoleId>,
-        grantor: RoleId,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog()
-            .ensure_not_reserved_object(&object_id, session.conn_id())?;
-        for grantee in &grantees {
-            self.catalog().ensure_not_system_role(grantee)?;
-        }
+        let mut ops = Vec::with_capacity(update_privileges.len() * grantees.len());
+        let mut warnings = Vec::new();
+        let catalog = self.catalog().for_session(session);
 
-        let privileges = self
-            .catalog()
-            .get_privileges(&object_id, session.conn_id())
-            .expect("cannot grant privileges on objects without privileges");
+        for UpdatePrivilege {
+            acl_mode,
+            object_id,
+            grantor,
+        } in update_privileges
+        {
+            self.catalog()
+                .ensure_not_reserved_object(&object_id, session.conn_id())?;
 
-        let mut ops = Vec::with_capacity(grantees.len());
-        for grantee in grantees {
-            let existing_privilege = privileges
-                .0
-                .get(&grantee)
-                .and_then(|privileges| {
-                    privileges
-                        .into_iter()
-                        .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-                })
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
-
-            match variant {
-                UpdatePrivilegeVariant::Grant
-                    if !existing_privilege.acl_mode.contains(acl_mode) =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+            let actual_object_type = catalog.get_object_type(&object_id);
+            // For all relations we allow all applicable table privileges, but send a warning if the
+            // privilege isn't actually applicable to the object type.
+            if actual_object_type.is_relation() {
+                let applicable_privileges = rbac::all_object_privileges(actual_object_type);
+                let non_applicable_privileges = acl_mode.difference(applicable_privileges);
+                if !non_applicable_privileges.is_empty() {
+                    let object_name = catalog.get_object_name(&object_id);
+                    warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
+                        non_applicable_privileges,
+                        object_type: actual_object_type,
+                        object_name,
+                    })
                 }
-                UpdatePrivilegeVariant::Revoke
-                    if !existing_privilege
-                        .acl_mode
-                        .intersection(acl_mode)
-                        .is_empty() =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+            }
+
+            let privileges = self
+                .catalog()
+                .get_privileges(&object_id, session.conn_id())
+                // Should be unreachable since the parser will refuse to parse grant/revoke
+                // statements on objects without privileges.
+                .ok_or(AdapterError::Unsupported(
+                    "GRANTs/REVOKEs on an object type with no privileges",
+                ))?;
+
+            for grantee in &grantees {
+                self.catalog().ensure_not_system_role(grantee)?;
+                let existing_privilege = privileges
+                    .0
+                    .get(grantee)
+                    .and_then(|privileges| {
+                        privileges
+                            .into_iter()
+                            .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+                    })
+                    .map(Cow::Borrowed)
+                    .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
+
+                match variant {
+                    UpdatePrivilegeVariant::Grant
+                        if !existing_privilege.acl_mode.contains(acl_mode) =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            object_id: object_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    UpdatePrivilegeVariant::Revoke
+                        if !existing_privilege
+                            .acl_mode
+                            .intersection(acl_mode)
+                            .is_empty() =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            object_id: object_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    // no-op
+                    _ => {}
                 }
-                // no-op
-                _ => {}
             }
         }
 
         if ops.is_empty() {
+            session.add_notices(warnings);
             return Ok(variant.into());
         }
 
-        self.catalog_transact(Some(session), ops)
+        let res = self
+            .catalog_transact(Some(session), ops)
             .await
             .map(|_| match variant {
                 UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
                 UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
-            })
+            });
+        if res.is_ok() {
+            session.add_notices(warnings);
+        }
+        res
     }
 
     pub(super) async fn sequence_grant_role(
@@ -4255,198 +4041,6 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::ReassignOwned)
-    }
-
-    /// Generates the catalog operations to create a linked cluster for the
-    /// source or sink with the given name.
-    ///
-    /// The operations are written to the provided `ops` vector. The ID
-    /// allocated for the linked cluster is returned.
-    async fn create_linked_cluster_ops(
-        &mut self,
-        linked_object_id: GlobalId,
-        name: &QualifiedItemName,
-        config: &SourceSinkClusterConfig,
-        ops: &mut Vec<catalog::Op>,
-        session: &Session,
-    ) -> Result<ClusterId, AdapterError> {
-        let size = match config {
-            SourceSinkClusterConfig::Linked { size } => size.clone(),
-            SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
-            SourceSinkClusterConfig::Existing { id } => return Ok(*id),
-        };
-        let id = self.catalog().allocate_user_cluster_id().await?;
-        let name = self.catalog().resolve_full_name(name, None);
-        let name = format!("{}_{}_{}", name.database, name.schema, name.item);
-        let name = self.catalog().find_available_cluster_name(&name);
-        let introspection_sources = self.catalog().allocate_introspection_sources().await;
-        ops.push(catalog::Op::CreateCluster {
-            id,
-            name: name.clone(),
-            linked_object_id: Some(linked_object_id),
-            introspection_sources,
-            owner_id: *session.role_id(),
-        });
-        self.create_linked_cluster_replica_op(id, size, ops, *session.role_id())
-            .await?;
-        Ok(id)
-    }
-
-    /// Generates the catalog operation to create a replica of the given linked
-    /// cluster for the given storage cluster configuration.
-    async fn create_linked_cluster_replica_op(
-        &mut self,
-        cluster_id: ClusterId,
-        size: String,
-        ops: &mut Vec<catalog::Op>,
-        owner_id: RoleId,
-    ) -> Result<(), AdapterError> {
-        let availability_zone = {
-            let azs = self.catalog().state().availability_zones();
-            let n_replicas_per_az = azs
-                .iter()
-                .map(|az| (az.clone(), 0))
-                .collect::<BTreeMap<_, _>>();
-            Self::choose_az(&n_replicas_per_az)
-        };
-        let location = SerializedReplicaLocation::Managed {
-            size: size.to_string(),
-            availability_zone,
-            az_user_specified: false,
-        };
-        let location = self.catalog().concretize_replica_location(
-            location,
-            &self
-                .catalog()
-                .system_config()
-                .allowed_cluster_replica_sizes(),
-        )?;
-        let logging = {
-            ReplicaLogging {
-                log_logging: false,
-                interval: Some(Duration::from_micros(
-                    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS.into(),
-                )),
-            }
-        };
-        ops.push(catalog::Op::CreateClusterReplica {
-            cluster_id,
-            id: self.catalog().allocate_replica_id().await?,
-            name: LINKED_CLUSTER_REPLICA_NAME.into(),
-            config: ReplicaConfig {
-                location,
-                compute: ComputeReplicaConfig {
-                    logging,
-                    idle_arrangement_merge_effort: None,
-                },
-            },
-            owner_id,
-        });
-        Ok(())
-    }
-
-    /// Generates the catalog operations to alter the linked cluster for the
-    /// source or sink with the given ID, if such a cluster exists.
-    async fn alter_linked_cluster_ops(
-        &mut self,
-        linked_object_id: GlobalId,
-        config: &SourceSinkClusterConfig,
-    ) -> Result<Vec<catalog::Op>, AdapterError> {
-        let mut ops = vec![];
-        match self.catalog().get_linked_cluster(linked_object_id) {
-            None => {
-                coord_bail!("cannot change the size of a source or sink created with IN CLUSTER");
-            }
-            Some(linked_cluster) => {
-                for id in linked_cluster.replicas_by_id.keys() {
-                    ops.extend(
-                        self.catalog()
-                            .cluster_replica_dependents(linked_cluster.id(), *id)
-                            .into_iter()
-                            .map(catalog::Op::DropObject),
-                    );
-                }
-                let size = match config {
-                    SourceSinkClusterConfig::Linked { size } => size.clone(),
-                    SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
-                    SourceSinkClusterConfig::Existing { .. } => {
-                        coord_bail!("cannot change the cluster of a source or sink")
-                    }
-                };
-                self.create_linked_cluster_replica_op(
-                    linked_cluster.id,
-                    size,
-                    &mut ops,
-                    linked_cluster.owner_id,
-                )
-                .await?;
-            }
-        }
-        Ok(ops)
-    }
-
-    fn default_linked_cluster_size(&self) -> Result<String, AdapterError> {
-        if !self.catalog().system_config().allow_unsafe() {
-            let mut entries = self
-                .catalog()
-                .cluster_replica_sizes()
-                .0
-                .iter()
-                .collect::<Vec<_>>();
-            entries.sort_by_key(
-                |(
-                    _name,
-                    ReplicaAllocation {
-                        scale,
-                        workers,
-                        memory_limit,
-                        ..
-                    },
-                )| (scale, workers, memory_limit),
-            );
-            let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-            return Err(AdapterError::SourceOrSinkSizeRequired { expected });
-        }
-        Ok(self.catalog().default_linked_cluster_size())
-    }
-
-    /// Creates the cluster linked to the specified object after a create
-    /// operation, if such a linked cluster exists.
-    async fn maybe_create_linked_cluster(&mut self, linked_object_id: GlobalId) {
-        if let Some(cluster) = self.catalog().get_linked_cluster(linked_object_id) {
-            self.create_cluster(cluster.id).await;
-        }
-    }
-
-    /// Updates the replicas of the cluster linked to the specified object after
-    /// an alter operation, if such a linked cluster exists.
-    async fn maybe_alter_linked_cluster(&mut self, linked_object_id: GlobalId) {
-        if let Some(cluster) = self.catalog().get_linked_cluster(linked_object_id) {
-            // The old replicas of the linked cluster will have been dropped by
-            // `catalog_transact`, both from the catalog state and from the
-            // controller. The new replicas will be in the catalog state, and
-            // need to be recreated in the controller.
-            let cluster_id = cluster.id;
-            let replicas: Vec<_> = cluster
-                .replicas_by_id
-                .keys()
-                .copied()
-                .map(|r| (cluster_id, r))
-                .collect();
-            self.create_cluster_replicas(&replicas).await;
-        }
-    }
-
-    /// Returns whether the given cluster exclusively maintains items
-    /// that were formerly maintained on `computed`.
-    fn is_compute_cluster(&self, id: ClusterId) -> bool {
-        let cluster = self.catalog().get_cluster(id);
-        cluster.bound_objects().iter().all(|id| {
-            matches!(
-                self.catalog().get_entry(id).item_type(),
-                CatalogItemType::Index | CatalogItemType::MaterializedView
-            )
-        })
     }
 }
 

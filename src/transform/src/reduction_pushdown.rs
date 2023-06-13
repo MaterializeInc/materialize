@@ -60,10 +60,6 @@ use crate::TransformArgs;
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

@@ -23,7 +23,9 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, FunctionArgs, Ident, ShowStatement, WithOptionValue};
+use crate::ast::{AstInfo, Expr, Ident, ShowStatement, WithOptionValue};
+
+use super::Function;
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -437,13 +439,17 @@ impl_display_t!(CteMutRecColumnDef);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MutRecBlockOptionName {
-    IterLimit,
+    RecursionLimit,
+    ErrorAtRecursionLimit,
+    ReturnAtRecursionLimit,
 }
 
 impl AstDisplay for MutRecBlockOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            MutRecBlockOptionName::IterLimit => "ITERATION LIMIT",
+            MutRecBlockOptionName::RecursionLimit => "RECURSION LIMIT",
+            MutRecBlockOptionName::ErrorAtRecursionLimit => "ERROR AT RECURSION LIMIT",
+            MutRecBlockOptionName::ReturnAtRecursionLimit => "RETURN AT RECURSION LIMIT",
         })
     }
 }
@@ -527,12 +533,12 @@ pub enum TableFactor<T: AstInfo> {
         alias: Option<TableAlias>,
     },
     Function {
-        function: TableFunction<T>,
+        function: Function<T>,
         alias: Option<TableAlias>,
         with_ordinality: bool,
     },
     RowsFrom {
-        functions: Vec<TableFunction<T>>,
+        functions: Vec<Function<T>>,
         alias: Option<TableAlias>,
         with_ordinality: bool,
     },
@@ -620,21 +626,6 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
     }
 }
 impl_display_t!(TableFactor);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TableFunction<T: AstInfo> {
-    pub name: T::ItemName,
-    pub args: FunctionArgs<T>,
-}
-impl<T: AstInfo> AstDisplay for TableFunction<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        f.write_str("(");
-        f.write_node(&self.args);
-        f.write_str(")");
-    }
-}
-impl_display_t!(TableFunction);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableAlias {

@@ -38,12 +38,14 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_stash::objects::proto;
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -59,6 +61,7 @@ use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
+use crate::controller::command_wals::ProtoShardId;
 use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
 use crate::metrics::StorageControllerMetrics;
@@ -78,10 +81,10 @@ mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
-pub static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
+pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
 
-pub static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> =
+pub static METADATA_EXPORT: TypedCollection<proto::GlobalId, proto::DurableExportMetadata> =
     TypedCollection::new("storage-export-metadata-u64");
 
 pub static ALL_COLLECTIONS: &[&str] = &[
@@ -95,14 +98,15 @@ struct MetadataExportFetcher;
 trait MetadataExport<T>
 where
     // Associated type would be better but you can't express this relationship without unstable
-    DurableExportMetadata<T>: mz_stash::Data,
+    DurableExportMetadata<T>: RustType<proto::DurableExportMetadata>,
 {
-    fn get_stash_collection() -> &'static TypedCollection<GlobalId, DurableExportMetadata<T>>;
+    fn get_stash_collection(
+    ) -> &'static TypedCollection<proto::GlobalId, proto::DurableExportMetadata>;
 }
 
 impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     fn get_stash_collection(
-    ) -> &'static TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> {
+    ) -> &'static TypedCollection<proto::GlobalId, proto::DurableExportMetadata> {
         &METADATA_EXPORT
     }
 }
@@ -390,6 +394,14 @@ pub trait StorageController: Debug + Send {
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;
 
+    /// Returns aggregate statistics about the contents of the local input named
+    /// `id` at `as_of`.
+    async fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Antichain<Self::Timestamp>,
+    ) -> Result<SnapshotStats<Self::Timestamp>, StorageError>;
+
     /// Assigns a read policy to specific identifiers.
     ///
     /// The policies are assigned in the order presented, and repeated identifiers should
@@ -608,22 +620,110 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
 
 /// A trait that is used to calculate safe _resumption frontiers_ for a source.
 ///
-/// Use [`ResumptionFrontierCalculator::initialize_state`] for creating an
-/// opaque state that you should keep around. Then repeatedly call
-/// [`ResumptionFrontierCalculator::calculate_resumption_frontier`] with the
-/// state to efficiently calculate an up-to-date frontier.
+/// Use [`CreateResumptionFrontierCalc::create_calc`] to create a [`ResumptionFrontierCalculator`].
+/// Then repeatedly call [`ResumptionFrontierCalculator::calculate_resumption_frontier`] to
+/// efficiently calculate an up-to-date frontier.
 #[async_trait]
-pub trait ResumptionFrontierCalculator<T> {
-    /// Opaque state that a `ResumptionFrontierCalculator` needs to repeatedly
-    /// (and efficiently) calculate a _resumption frontier_.
-    type State;
+pub trait CreateResumptionFrontierCalc<T: Timestamp + Lattice + Codec64> {
+    /// Creates a [`ResumptionFrontierCalculator`], which can be used to efficiently calculate a new
+    /// _resumption frontier_ when needed.
+    async fn create_calc(
+        &self,
+        client_cache: &PersistClientCache,
+    ) -> ResumptionFrontierCalculator<T>;
+}
 
-    /// Creates an opaque state type that can be used to efficiently calculate a
-    /// new _resumption frontier_ when needed.
-    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State;
+/// Holds both the [`WriteHandle`] and the last effective upper we want to use for that handle.
+///
+/// We use the term "effective upper" because we might want to "move the upper backward" so that the
+/// shard's upper appears to be the resumption frontier. This upper, then, is _not_ appropriate to
+/// use with [`WriteHandle::compare_and_append`] (i.e. it is not appropriate to use as the
+/// `expected_upper` argument), but is meant to be used in contexts where [`WriteHandle::append`] is
+/// appropriate.
+pub struct UpperState<T: Timestamp + Lattice + Codec64> {
+    handle: WriteHandle<SourceData, (), T, Diff>,
+    last_upper: Antichain<T>,
+}
 
-    /// Calculates a new, safe _resumption frontier_.
-    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
+impl<T: Timestamp + Lattice + Codec64> UpperState<T> {
+    pub fn new(handle: WriteHandle<SourceData, (), T, Diff>) -> Self {
+        UpperState {
+            handle,
+            last_upper: Antichain::from_elem(T::minimum()),
+        }
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> std::fmt::Debug for UpperState<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpperState")
+            .field("handle", &"<omitted>")
+            .field("last_upper", &self.last_upper)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+/// Provides convenience method to to efficiently calculate a new _resumption frontier_ from the
+/// shards desribed by its `upper_states.
+///
+/// For details about the resumption frontier calculation logic, see
+/// [`Self::calculate_resumption_frontier`]'s implementation.
+pub struct ResumptionFrontierCalculator<T: Timestamp + Lattice + Codec64> {
+    initial_frontier: Antichain<T>,
+    upper_states: BTreeMap<GlobalId, UpperState<T>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
+    pub fn new(
+        initial_frontier: Antichain<T>,
+        upper_states: BTreeMap<GlobalId, UpperState<T>>,
+    ) -> Self {
+        ResumptionFrontierCalculator {
+            initial_frontier,
+            upper_states,
+        }
+    }
+
+    /// Determine the resumption frontier of an ingestion comprised of the shards described by
+    /// `upper_states`.
+    pub async fn calculate_resumption_frontier(&mut self) -> Antichain<T> {
+        // Refresh all write handles' uppers.
+        for UpperState { handle, last_upper } in self.upper_states.values_mut() {
+            *last_upper = handle.fetch_recent_upper().await.clone();
+        }
+
+        let mut resume_upper = self.initial_frontier.clone();
+
+        // The resumption frontier is the min of (the stored initial frontier, all uppers).
+        for t in self
+            .upper_states
+            .values()
+            .map(|UpperState { last_upper, .. }| last_upper.elements())
+            .flatten()
+        {
+            resume_upper.insert(t.clone());
+        }
+
+        // Ensure no upper exceeds the resume upper; however, uppers are permitted to be below it;
+        // this is currently the same as setting each upper to the resume upper, but will, in the
+        // future, let us add collections whose uppers are beneath the resume upper.
+        for UpperState { last_upper, .. } in self.upper_states.values_mut() {
+            if PartialOrder::less_than(&resume_upper, last_upper) {
+                *last_upper = resume_upper.clone();
+            }
+        }
+
+        resume_upper
+    }
+
+    /// Get the most recent uppers of the shards used to generate the last resumption frontier.
+    pub fn get_uppers(&self) -> BTreeMap<GlobalId, Antichain<T>> {
+        self.upper_states
+            .iter()
+            .map(|(id, state)| (*id, state.last_upper.clone()))
+            .collect()
+    }
 }
 
 /// The subset of [`CollectionMetadata`] that must be durable stored.
@@ -660,6 +760,33 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
                 .data_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
+        })
+    }
+}
+
+impl RustType<mz_stash::objects::proto::DurableCollectionMetadata> for DurableCollectionMetadata {
+    fn into_proto(&self) -> mz_stash::objects::proto::DurableCollectionMetadata {
+        mz_stash::objects::proto::DurableCollectionMetadata {
+            remap_shard: self
+                .remap_shard
+                .map(|id| mz_stash::objects::proto::StringWrapper {
+                    inner: id.into_proto(),
+                }),
+            data_shard: self.data_shard.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: mz_stash::objects::proto::DurableCollectionMetadata,
+    ) -> Result<Self, TryFromProtoError> {
+        let remap_shard = proto
+            .remap_shard
+            .map(|shard| ShardId::from_proto(shard.inner))
+            .transpose()?;
+        let data_shard = proto.data_shard.into_rust()?;
+        Ok(DurableCollectionMetadata {
+            remap_shard,
+            data_shard,
         })
     }
 }
@@ -701,9 +828,30 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
+impl RustType<mz_stash::objects::proto::DurableExportMetadata>
+    for DurableExportMetadata<mz_repr::Timestamp>
+{
+    fn into_proto(&self) -> mz_stash::objects::proto::DurableExportMetadata {
+        mz_stash::objects::proto::DurableExportMetadata {
+            initial_as_of: Some(self.initial_as_of.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: mz_stash::objects::proto::DurableExportMetadata,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(DurableExportMetadata {
+            initial_as_of: proto
+                .initial_as_of
+                .into_rust_if_some("DurableExportMetadata::initial_as_of")?,
+        })
+    }
+}
+
 impl DurableExportMetadata<mz_repr::Timestamp> {
     pub fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
+        let persisted: ProtoDurableExportMetadata = self.into_proto();
+        persisted
             .encode(buf)
             .expect("no required fields means no initialization errors");
     }
@@ -748,12 +896,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
-    /// IDs of sources that were dropped whose statuses should be
-    /// updated during the next call to `StorageController::process`.
-    pending_source_drops: Vec<GlobalId>,
-    /// IDs of sinks that were dropped whose statuses should be
-    /// updated during the next call to `StorageController::process`.
-    pending_sink_drops: Vec<GlobalId>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<(GlobalId, Antichain<T>, Option<StorageInstanceId>)>,
@@ -770,12 +912,13 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    source_statistics:
-        Arc<std::sync::Mutex<BTreeMap<GlobalId, BTreeMap<usize, SourceStatisticsUpdate>>>>,
+    source_statistics: Arc<
+        std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>,
+    >,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics:
-        Arc<std::sync::Mutex<BTreeMap<GlobalId, BTreeMap<usize, SinkStatisticsUpdate>>>>,
+        Arc<std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -1017,8 +1160,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
-            pending_source_drops: vec![],
-            pending_sink_drops: vec![],
             pending_compaction_commands: vec![],
             collection_manager,
             introspection_ids: BTreeMap::new(),
@@ -1042,7 +1183,7 @@ where
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     MetadataExportFetcher: MetadataExport<T>,
-    DurableExportMetadata<T>: mz_stash::Data,
+    DurableExportMetadata<T>: RustType<proto::DurableExportMetadata>,
 {
     type Timestamp = T;
 
@@ -1197,10 +1338,22 @@ where
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
         METADATA_COLLECTION
-            .insert_without_overwrite(&mut self.state.stash, entries.into_iter())
+            .insert_without_overwrite(
+                &mut self.state.stash,
+                entries
+                    .into_iter()
+                    .map(|(key, val)| (key.into_proto(), val.into_proto())),
+            )
             .await?;
 
-        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+        let mut durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> =
+            METADATA_COLLECTION
+                .peek_one(&mut self.state.stash)
+                .await?
+                .into_iter()
+                .map(RustType::from_proto)
+                .collect::<Result<_, _>>()
+                .map_err(|e| StorageError::IOError(e.into()))?;
 
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
@@ -1306,23 +1459,36 @@ where
         let mut to_create = Vec::with_capacity(to_register.len());
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
-        for (id, description, write, since_handle, metadata) in to_register {
-            let data_shard_since = since_handle.since().clone();
+        {
+            // We hold this lock for a very short amount of time, just doing some hashmap inserts
+            // and unbounded channel sends.
+            let mut source_statistics = self.state.source_statistics.lock().expect("poisoned");
+            for (id, description, write, since_handle, metadata) in to_register {
+                let data_shard_since = since_handle.since().clone();
 
-            let collection_state = CollectionState::new(
-                description.clone(),
-                data_shard_since,
-                write.upper().clone(),
-                vec![],
-                metadata.clone(),
-            );
+                let collection_state = CollectionState::new(
+                    description.clone(),
+                    data_shard_since,
+                    write.upper().clone(),
+                    vec![],
+                    metadata.clone(),
+                );
 
-            self.state.persist_write_handles.register(id, write);
-            self.state.persist_read_handles.register(id, since_handle);
+                self.state.persist_write_handles.register(id, write);
+                self.state.persist_read_handles.register(id, since_handle);
 
-            self.state.collections.insert(id, collection_state);
+                self.state.collections.insert(id, collection_state);
 
-            to_create.push((id, description));
+                if let DataSource::Ingestion(i) = &description.data_source {
+                    source_statistics.insert(id, statistics::StatsInitState(BTreeMap::new()));
+                    // Note that `source_exports` contains the subsources as well.
+                    for (id, _) in i.source_exports.iter() {
+                        source_statistics.insert(*id, statistics::StatsInitState(BTreeMap::new()));
+                    }
+                }
+
+                to_create.push((id, description));
+            }
         }
 
         // Patch up the since of all subsources (which includes the "main"
@@ -1496,8 +1662,8 @@ where
                         instance_id: ingestion.instance_id,
                         remap_collection_id: ingestion.remap_collection_id,
                     };
-                    let mut state = desc.initialize_state(&self.persist).await;
-                    let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
+                    let mut calc = desc.create_calc(&self.persist).await;
+                    let resume_upper = calc.calculate_resumption_frontier().await;
 
                     // Fetch the client for this ingestion's instance.
                     let client = self
@@ -1708,15 +1874,18 @@ where
 
             let storage_dependencies = vec![from_id];
 
-            let mut durable_export_data = MetadataExportFetcher::get_stash_collection()
+            let value = MetadataExportFetcher::get_stash_collection()
                 .insert_key_without_overwrite(
                     &mut self.state.stash,
-                    id,
+                    id.into_proto(),
                     DurableExportMetadata {
                         initial_as_of: description.sink.as_of.clone(),
-                    },
+                    }
+                    .into_proto(),
                 )
                 .await?;
+            let mut durable_export_data = DurableExportMetadata::from_proto(value)
+                .map_err(|e| StorageError::IOError(e.into()))?;
 
             durable_export_data.initial_as_of.downgrade(&acquired_since);
 
@@ -1771,6 +1940,12 @@ where
                     export_id: id,
                 })?;
 
+            self.state
+                .sink_statistics
+                .lock()
+                .expect("poisoned")
+                .insert(id, statistics::StatsInitState(BTreeMap::new()));
+
             client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
         Ok(())
@@ -1803,18 +1978,16 @@ where
 
     fn drop_sinks_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
         for id in identifiers {
-            let export = match self.export(id) {
-                Ok(export) => export,
-                Err(_) => continue,
-            };
+            // Already removed.
+            if self.export(id).is_err() {
+                continue;
+            }
 
-            let read_capability = export.read_capability.clone();
-            let storage_dependencies = export.storage_dependencies.clone();
-            self.remove_read_capabilities(read_capability, &storage_dependencies);
+            // We don't explicitly call `remove_read_capabilities`! Downgrading the frontier of the
+            // sink to `[]` (the empty Antichain), will propagate to the storage dependencies.
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
-            self.state.pending_sink_drops.push(id);
         }
     }
 
@@ -1883,6 +2056,17 @@ where
         }
     }
 
+    async fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Antichain<Self::Timestamp>,
+    ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
+        self.state
+            .persist_read_handles
+            .snapshot_stats(id, as_of)
+            .await
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut read_capability_changes = BTreeMap::default();
@@ -1947,8 +2131,15 @@ where
                     export.write_frontier = new_upper.clone();
                 }
 
-                let mut new_read_capability =
-                    export.read_policy.frontier(export.write_frontier.borrow());
+                // Ignore read policy for sinks whose write frontiers are closed, which identifies
+                // the sink is being dropped; we need to advance the read frontier to the empty
+                // chain to signal to the dataflow machinery that they should deprovision this
+                // object.
+                let mut new_read_capability = if export.write_frontier.is_empty() {
+                    export.write_frontier.clone()
+                } else {
+                    export.read_policy.frontier(export.write_frontier.borrow())
+                };
 
                 if timely::order::PartialOrder::less_equal(
                     &export.read_capability,
@@ -2142,7 +2333,12 @@ where
                     .await;
 
                 METADATA_COLLECTION
-                    .delete_keys(&mut self.state.stash, ids)
+                    .delete_keys(
+                        &mut self.state.stash,
+                        ids.into_iter()
+                            .map(|id| RustType::into_proto(&id))
+                            .collect(),
+                    )
                     .await
                     .expect("stash operation must succeed");
 
@@ -2150,40 +2346,75 @@ where
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
-
-                let mut shared_stats = self.state.source_statistics.lock().expect("poisoned");
-                for stat in source_stats {
-                    let shared_stats = shared_stats.entry(stat.id).or_default();
-                    // We just write the whole object, as the update from storage represents the
-                    // current values.
-                    shared_stats.insert(stat.worker_id, stat);
+                //
+                // We just write the whole object, as the update from storage represents the
+                // current values.
+                //
+                // We don't overwrite removed objects, as we may have received a late
+                // `StatisticsUpdates` while we were shutting down the storage object.
+                {
+                    let mut shared_stats = self.state.source_statistics.lock().expect("poisoned");
+                    for stat in source_stats {
+                        statistics::StatsInitState::set_if_not_removed(
+                            shared_stats.get_mut(&stat.id),
+                            stat.worker_id,
+                            stat,
+                        )
+                    }
                 }
 
-                let mut shared_stats = self.state.sink_statistics.lock().expect("poisoned");
-                for stat in sink_stats {
-                    let shared_stats = shared_stats.entry(stat.id).or_default();
-                    // We just write the whole object, as the update from storage represents the
-                    // current values.
-                    shared_stats.insert(stat.worker_id, stat);
+                {
+                    let mut shared_stats = self.state.sink_statistics.lock().expect("poisoned");
+                    for stat in sink_stats {
+                        statistics::StatsInitState::set_if_not_removed(
+                            shared_stats.get_mut(&stat.id),
+                            stat.worker_id,
+                            stat,
+                        )
+                    }
                 }
             }
         }
+
+        // IDs of sources that were dropped whose statuses should be updated.
+        let mut pending_source_drops = vec![];
+
+        // IDs of sinks that were dropped whose statuses should be updated (and statistics
+        // cleared).
+        let mut pending_sink_drops = vec![];
+
+        // IDs of sources (and subsources) whose statistics should be cleared.
+        let mut source_statistics_to_drop = vec![];
 
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
         for (id, frontier, cluster_id) in self.state.pending_compaction_commands.drain(..) {
             // TODO(petrosagg): make this a strict check
             // TODO(aljoscha): What's up with this TODO?
-            let client = cluster_id.and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
-
-            // Only ingestion collections have actual work to do on drop.
-            //
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
+            let client = cluster_id.and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
+
             if cluster_id.is_some() && frontier.is_empty() {
-                self.state.pending_source_drops.push(id);
+                if self.state.collections.get(&id).is_some() {
+                    pending_source_drops.push(id);
+                } else if self.state.exports.get(&id).is_some() {
+                    pending_sink_drops.push(id);
+                } else {
+                    panic!("Reference to absent collection {id}");
+                }
             }
 
+            // Sources can have subsources, which don't have associated clusters, which
+            // is why this operates differently than sinks.
+            if frontier.is_empty() {
+                if self.state.collections.get(&id).is_some() {
+                    source_statistics_to_drop.push(id);
+                }
+            }
+
+            // Note that while collections are dropped, the `client` may already
+            // be cleared out, before we do this post-processing!
             if let Some(client) = client {
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
@@ -2193,14 +2424,19 @@ where
         }
 
         // Delete all source->shard mappings
-        self.append_shard_mappings(self.state.pending_source_drops.iter().cloned(), -1)
+        self.append_shard_mappings(pending_source_drops.iter().cloned(), -1)
             .await;
 
         // Record the drop status for all pending source and sink drops.
+        //
+        // We also delete the items' statistics objects.
+        //
+        // The locks are held for a short time, only while we do some hash map removals.
+
         let source_status_history_id =
             self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
-        for id in self.state.pending_source_drops.drain(..) {
+        for id in pending_source_drops.drain(..) {
             let status_row =
                 healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
             updates.push((status_row, 1));
@@ -2209,14 +2445,26 @@ where
         self.append_to_managed_collection(source_status_history_id, updates)
             .await;
 
+        {
+            let mut source_statistics = self.state.source_statistics.lock().expect("poisoned");
+            for id in source_statistics_to_drop {
+                source_statistics.remove(&id);
+            }
+        }
+
         // Record the drop status for all pending sink drops.
         let sink_status_history_id =
             self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
-        for id in self.state.pending_sink_drops.drain(..) {
-            let status_row =
-                healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
-            updates.push((status_row, 1));
+        {
+            let mut sink_statistics = self.state.sink_statistics.lock().expect("poisoned");
+            for id in pending_sink_drops.drain(..) {
+                let status_row =
+                    healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
+                updates.push((status_row, 1));
+
+                sink_statistics.remove(&id);
+            }
         }
         self.append_to_managed_collection(sink_status_history_id, updates)
             .await;
@@ -2770,7 +3018,10 @@ where
 
         // Update the on-disk representation.
         METADATA_COLLECTION
-            .upsert(&mut self.state.stash, upsert_state.into_iter())
+            .upsert(
+                &mut self.state.stash,
+                upsert_state.into_iter().map(|s| RustType::into_proto(&s)),
+            )
             .await
             .expect("connect to stash");
 
@@ -2835,7 +3086,7 @@ where
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let collection = tx
-                        .collection::<ShardId, ()>(command_wals::SHARD_FINALIZATION.name())
+                        .collection::<ProtoShardId, ()>(command_wals::SHARD_FINALIZATION.name())
                         .await
                         .expect("named collection must exist");
                     tx.peek(collection).await
@@ -2844,7 +3095,7 @@ where
             .await
             .expect("stash operation succeeds")
             .into_iter()
-            .map(|(shard, _, _)| shard);
+            .map(|(shard, _, _)| ShardId::from_proto(shard).expect("invalid ShardId"));
 
         // Open a persist client to delete unused shards.
         let persist_client = self
@@ -3024,7 +3275,7 @@ impl<T: Timestamp> ExportState<T> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn lag_writes_by_zero() {
         let policy =
             ReadPolicy::lag_writes_by(mz_repr::Timestamp::default(), mz_repr::Timestamp::default());

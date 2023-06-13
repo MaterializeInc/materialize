@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arrange, Arranged};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -36,7 +36,9 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
+use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
@@ -90,8 +92,10 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
-    /// An token that operators can probe to know whether the dataflow is shutting down.
+    /// A token that operators can probe to know whether the dataflow is shutting down.
     pub(super) shutdown_token: ShutdownToken,
+    /// The implementation to use for rendering linear joins.
+    pub(super) linear_join_impl: LinearJoinImpl,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -118,6 +122,7 @@ where
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
+            linear_join_impl: Default::default(),
         }
     }
 }
@@ -777,10 +782,9 @@ where
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
-                let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
-                let errs = errs
-                    .concat(&errs_keyed)
-                    .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                let oks = oks_keyed.mz_arrange::<RowSpine<Row, Row, _, _>>(&name);
+                let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
+                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }

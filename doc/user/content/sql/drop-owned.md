@@ -1,12 +1,13 @@
 ---
 title: "DROP OWNED"
-description: "`DROP OWNED` drops all the objects from your Materialize instance that are owned by one of the specified roles. Any privileges granted to the given roles on objects will also be revoked."
+description: "`DROP OWNED` drops all the objects that are owned by one of the specified roles."
 menu:
   main:
     parent: commands
 ---
 
-`DROP OWNED` drops all the objects from your Materialize instance that are owned by one of the specified roles. Any privileges granted to the given roles on objects will also be revoked.
+`DROP OWNED` drops all the objects that are owned by one of the specified roles.
+Any privileges granted to the given roles on objects will also be revoked.
 
 {{< note >}}
 Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize drops

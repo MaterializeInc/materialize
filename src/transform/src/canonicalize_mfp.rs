@@ -38,10 +38,6 @@ use crate::{IndexOracle, TransformArgs};
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

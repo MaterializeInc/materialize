@@ -77,3 +77,36 @@ var0
 3
 4
 5
+
+$ skip-if
+SELECT mz_version_num() >= 5600;
+
+# check that we support creating a source that supports referencing the same upstream table from
+# multiple subsources; the test is simply that this doesn't fail to upgrade to later # versions of
+# Materialize where this behavior is prohibited.
+
+> CREATE SOURCE upgrade_pg_cdc_duplicate_references
+  FROM POSTGRES
+  CONNECTION pgconn
+  (
+    PUBLICATION 'upgrade_pg_cdc_publication'
+  )
+  FOR TABLES
+  (
+    cdc_int_table AS cdc_int_table_zero,
+    cdc_int_table AS cdc_int_table_one
+  );
+
+> SELECT * FROM cdc_int_table_zero;
+1
+2
+3
+4
+5
+
+> SELECT * FROM cdc_int_table_one;
+1
+2
+3
+4
+5

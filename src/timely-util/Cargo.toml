@@ -7,10 +7,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = "0.12.0"
 futures-util = "0.3.25"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+proptest = { version = "1.0.0", default-features = false, features = ["std"]}
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 serde = { version = "1.0.152", features = ["derive"] }
 mz-ore = { path = "../ore", features = ["tracing_"] }
 polonius-the-crab = "0.3.1"

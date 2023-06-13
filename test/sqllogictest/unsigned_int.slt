@@ -22,10 +22,10 @@ SELECT pg_typeof(42::uint2)
 ----
 uint2
 
-query error uint2 out of range
+query error "-666" uint2 out of range
 SELECT -666::uint2
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536::uint2
 
 query I
@@ -48,10 +48,10 @@ SELECT pg_typeof(42::uint4)
 ----
 uint4
 
-query error uint4 out of range
+query error "-666" uint4 out of range
 SELECT -666::uint4
 
-query error uint4 out of range
+query error "4294967296" uint4 out of range
 SELECT 4294967296::uint4
 
 query I
@@ -79,10 +79,10 @@ SELECT pg_typeof(42::uint8)
 ----
 uint8
 
-query error uint8 out of range
+query error "-666" uint8 out of range
 SELECT -666::uint8
 
-query error uint8 out of range
+query error "18446744073709551616" uint8 out of range
 SELECT 18446744073709551616::uint8
 
 statement ok
@@ -94,10 +94,10 @@ INSERT INTO t2 VALUES (13)
 statement ok
 INSERT INTO t2 VALUES (32768)
 
-statement error uint2 out of range
+statement error "65536" uint2 out of range
 INSERT INTO t2 VALUES (65536)
 
-statement error uint2 out of range
+statement error "-13" uint2 out of range
 INSERT INTO t2 VALUES (-13)
 
 query I rowsort
@@ -112,10 +112,10 @@ CREATE TABLE t4 (a uint4)
 statement ok
 INSERT INTO t4 VALUES (13), (65536), (2147483648)
 
-statement error uint4 out of range
+statement error "4294967296" uint4 out of range
 INSERT INTO t4 VALUES (4294967296)
 
-statement error uint4 out of range
+statement error "-13" uint4 out of range
 INSERT INTO t4 VALUES (-13)
 
 query I rowsort
@@ -131,10 +131,10 @@ CREATE TABLE t8 (a uint8)
 statement ok
 INSERT INTO t8 VALUES (13), (65536), (4294967296), (9223372036854775808)
 
-statement error uint8 out of range
+statement error "18446744073709551616" uint8 out of range
 INSERT INTO t8 VALUES (18446744073709551616)
 
-statement error uint8 out of range
+statement error "-13" uint8 out of range
 INSERT INTO t8 VALUES (-13)
 
 query I rowsort
@@ -156,7 +156,7 @@ SELECT 21::int2::uint2
 ----
 21
 
-query error uint2 out of range
+query error "-21" uint2 out of range
 SELECT -21::int2::uint2
 
 query I
@@ -164,7 +164,7 @@ SELECT 47::int2::uint4
 ----
 47
 
-query error uint4 out of range
+query error "-47" uint4 out of range
 SELECT -47::int2::uint4
 
 query I
@@ -172,7 +172,7 @@ SELECT 99::int2::uint8
 ----
 99
 
-query error uint8 out of range
+query error "-99" uint8 out of range
 SELECT -99::int2::uint8
 
 # From int4
@@ -182,10 +182,10 @@ SELECT 21::int4::uint2
 ----
 21
 
-query error uint2 out of range
+query error "-21" uint2 out of range
 SELECT -21::int4::uint2
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536::int4::uint2
 
 query I
@@ -198,7 +198,7 @@ SELECT 65536::int4::uint4
 ----
 65536
 
-query error uint4 out of range
+query error "-47" uint4 out of range
 SELECT -47::int4::uint4
 
 query I
@@ -211,7 +211,7 @@ SELECT 65536::int4::uint8
 ----
 65536
 
-query error uint8 out of range
+query error "-99" uint8 out of range
 SELECT -99::int4::uint8
 
 # From int8
@@ -221,10 +221,10 @@ SELECT 21::int8::uint2
 ----
 21
 
-query error uint2 out of range
+query error "-21" uint2 out of range
 SELECT -21::int8::uint2
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536::int8::uint2
 
 query I
@@ -240,7 +240,7 @@ SELECT 65536::int8::uint4
 query error uint4 out of range
 SELECT -47::int8::uint4
 
-query error uint4 out of range
+query error "4294967296" uint4 out of range
 SELECT 4294967296::int8::uint4
 
 query I
@@ -258,7 +258,7 @@ SELECT 4294967296::int8::uint8
 ----
 4294967296
 
-query error uint8 out of range
+query error "-99" uint8 out of range
 SELECT -99::int8::uint8
 
 # From numeric
@@ -278,10 +278,10 @@ SELECT 12.6::numeric::uint2
 ----
 13
 
-query error uint2 out of range
+query error "-12" uint2 out of range
 SELECT -12.0::numeric::uint2
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536.0::numeric::uint2
 
 query I
@@ -289,7 +289,7 @@ SELECT 65535.4::numeric::uint2
 ----
 65535
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65535.5::numeric::uint2
 
 query I
@@ -351,10 +351,10 @@ SELECT 4294967296.0::numeric::uint8
 ----
 4294967296
 
-query error uint8 out of range
+query error "-12" uint8 out of range
 SELECT -12.0::numeric::uint8
 
-query error uint8 out of range
+query error "18446744073709551616" uint8 out of range
 SELECT 18446744073709551616::numeric::uint8
 
 query I
@@ -362,7 +362,7 @@ SELECT 18446744073709551615.4::numeric::uint8
 ----
 18446744073709551615
 
-query error uint8 out of range
+query error "18446744073709551616" uint8 out of range
 SELECT 18446744073709551615.5::numeric::uint8
 
 # From float32
@@ -382,10 +382,10 @@ SELECT 12.6::float::uint2
 ----
 13
 
-query error uint2 out of range
+query error "-12" uint2 out of range
 SELECT -12.0::float::uint2
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536.0::float::uint2
 
 query I
@@ -393,7 +393,7 @@ SELECT 65535.4::float::uint2
 ----
 65535
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65535.5::float::uint2
 
 query I
@@ -455,10 +455,10 @@ SELECT 4294967296.0::float::uint8
 ----
 4294967296
 
-query error uint8 out of range
+query error "-12" uint8 out of range
 SELECT -12.0::float::uint8
 
-query error uint8 out of range
+query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553665::float::uint8
 
 query I
@@ -466,7 +466,7 @@ SELECT 18446744073709553664.0::float::uint8
 ----
 18446744073709551615
 
-query error uint8 out of range
+query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553664.5::float::uint8
 
 # From float64
@@ -486,10 +486,10 @@ SELECT 12.6::double::uint2
 ----
 13
 
-query error uint2 out of range
+query error "-12" uint2 out of range
 SELECT -12.0::double::uint2
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536.0::double::uint2
 
 query I
@@ -497,7 +497,7 @@ SELECT 65535.4::double::uint2
 ----
 65535
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65535.5::double::uint2
 
 query I
@@ -559,10 +559,10 @@ SELECT 4294967296.0::double::uint8
 ----
 4294967296
 
-query error uint8 out of range
+query error "-12" uint8 out of range
 SELECT -12.0::double::uint8
 
-query error uint8 out of range
+query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553665::double::uint8
 
 query I
@@ -570,7 +570,7 @@ SELECT 18446744073709553664.0::double::uint8
 ----
 18446744073709551615
 
-query error uint8 out of range
+query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553664.5::double::uint8
 
 # From text
@@ -657,7 +657,7 @@ SELECT 6789::uint4::uint2
 ----
 6789
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536::uint4::uint2
 
 query I
@@ -670,7 +670,7 @@ SELECT 6789::uint4::int4
 ----
 6789
 
-query error integer out of range
+query error "2147483648" integer out of range
 SELECT 2147483648::uint4::int4
 
 query I
@@ -705,7 +705,7 @@ SELECT 15445::uint8::uint2
 ----
 15445
 
-query error uint2 out of range
+query error "65536" uint2 out of range
 SELECT 65536::uint8::uint2
 
 query I
@@ -721,7 +721,7 @@ SELECT 15445::uint8::int4
 ----
 15445
 
-query error integer out of range
+query error "2147483648" integer out of range
 SELECT 2147483648::uint8::int4
 
 query I
@@ -729,7 +729,7 @@ SELECT 15445::uint8::int8
 ----
 15445
 
-query error bigint out of range
+query error "9223372036854775808" bigint out of range
 SELECT 9223372036854775808::uint8::int8
 
 query I
@@ -763,7 +763,7 @@ SELECT 10::uint2 + 3::uint2
 ----
 13
 
-query error uint2 out of range
+query error "65535 \+ 1" uint2 out of range
 SELECT 65535::uint2 + 1::uint2
 
 query I
@@ -794,7 +794,7 @@ SELECT 4294967295::uint8 + 1::uint8
 ----
 4294967296
 
-query error uint8 out of range
+query error "18446744073709551615 \+ 1" uint8 out of range
 SELECT 18446744073709551615::uint8 + 1::uint8
 
 # Subtraction
@@ -804,7 +804,7 @@ SELECT 45::uint2 - 3::uint2
 ----
 42
 
-query error uint2 out of range
+query error "45 - 50" uint2 out of range
 SELECT 45::uint2 - 50::uint2
 
 query I
@@ -820,7 +820,7 @@ SELECT 45::uint8 - 3::uint8
 ----
 42
 
-query error uint8 out of range
+query error "45 - 50" uint8 out of range
 SELECT 45::uint8 - 50::uint8
 
 # Multiplication
@@ -830,7 +830,7 @@ SELECT 10::uint2 * 3::uint2
 ----
 30
 
-query error uint2 out of range
+query error "65535 \* 2" uint2 out of range
 SELECT 65535::uint2 * 2::uint2
 
 query I
@@ -861,7 +861,7 @@ SELECT 4294967295::uint8 * 2::uint8
 ----
 8589934590
 
-query error uint8 out of range
+query error "18446744073709551615 \* 2" uint8 out of range
 SELECT 18446744073709551615::uint8 * 2::uint8
 
 # Division

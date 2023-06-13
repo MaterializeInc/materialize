@@ -66,23 +66,27 @@ class Materialized(Service):
         restart: Optional[str] = None,
         use_default_volumes: bool = True,
         ports: Optional[List[str]] = None,
-        system_parameter_defaults: Optional[List[str]] = None,
-        additional_system_parameter_defaults: Optional[List[str]] = None,
+        system_parameter_defaults: Optional[Dict[str, str]] = None,
+        additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
+        soft_assertions: bool = True,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
 
         environment = [
-            "MZ_SOFT_ASSERTIONS=1",
+            f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",
             # TODO(benesch): remove the following environment variables
             # after v0.38 ships, since these environment variables will be
             # baked into the Docker image.
             "MZ_ORCHESTRATOR=process",
             # The following settings can not be baked in the default image, as they
             # are enabled for testing purposes only
-            "ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
-            "ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
+            "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
+            "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
+            "MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/mzdata/source_data",
+            "MZ_BOOTSTRAP_ROLE=materialize",
+            "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -91,27 +95,34 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
-            "BOOTSTRAP_ROLE=materialize",
             *environment_extra,
         ]
 
         if system_parameter_defaults is None:
-            system_parameter_defaults = [
-                "persist_sink_minimum_batch_updates=128",
-                "enable_multi_worker_storage_persist_sink=true",
-                "storage_persist_sink_minimum_batch_updates=100",
-                "persist_pubsub_push_diff_enabled=true",
-                "persist_pubsub_client_enabled=true",
-                "persist_stats_filter_enabled=true",
-                "persist_stats_collection_enabled=true",
-            ]
+            system_parameter_defaults = {
+                "enable_upsert_source_disk": "true",
+                "upsert_source_disk_default": "true",
+                "persist_sink_minimum_batch_updates": "128",
+                "enable_multi_worker_storage_persist_sink": "true",
+                "storage_persist_sink_minimum_batch_updates": "100",
+                "persist_pubsub_push_diff_enabled": "true",
+                "persist_pubsub_client_enabled": "true",
+                "persist_stats_filter_enabled": "true",
+                "persist_stats_collection_enabled": "true",
+                "persist_stats_audit_percent": "100",
+                "enable_ld_rbac_checks": "true",
+                "enable_rbac_checks": "true",
+            }
 
         if additional_system_parameter_defaults is not None:
-            system_parameter_defaults += additional_system_parameter_defaults
+            system_parameter_defaults.update(additional_system_parameter_defaults)
 
         if len(system_parameter_defaults) > 0:
             environment += [
-                "MZ_SYSTEM_PARAMETER_DEFAULT=" + ";".join(system_parameter_defaults)
+                "MZ_SYSTEM_PARAMETER_DEFAULT="
+                + ";".join(
+                    f"{key}={value}" for key, value in system_parameter_defaults.items()
+                )
             ]
 
         command = []
@@ -232,6 +243,7 @@ class Clusterd(Service):
         environment = [
             "CLUSTERD_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
+            "CLUSTERD_SCRATCH_DIRECTORY=/mzdata/source_data",
             *environment_extra,
         ]
 
@@ -311,7 +323,7 @@ class Kafka(Service):
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
             "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
-        extra_environment: List[str] = [],
+        environment_extra: List[str] = [],
         depends_on_extra: List[str] = [],
         volumes: List[str] = [],
         listener_type: str = "PLAINTEXT",
@@ -320,7 +332,7 @@ class Kafka(Service):
             *environment,
             f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:{port}",
             f"KAFKA_BROKER_ID={broker_id}",
-            *extra_environment,
+            *environment_extra,
         ]
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
@@ -504,7 +516,8 @@ class Cockroach(Service):
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: Optional[ServiceHealthcheck] = None,
-        restart: str = "no",
+        # Workaround for #19809, should be "no" otherwise
+        restart: str = "on-failure:5",
     ):
         volumes = []
 
@@ -528,7 +541,6 @@ class Cockroach(Service):
             healthcheck = {
                 # init_success is a file created by the Cockroach container entrypoint
                 "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
-                "timeout": "5s",
                 "interval": "1s",
                 "start_period": "30s",
             }

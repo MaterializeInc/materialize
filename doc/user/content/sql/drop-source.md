@@ -1,21 +1,14 @@
 ---
 title: "DROP SOURCE"
-description: "`DROP SOURCE` removes a source from your Materialize instances."
+description: "`DROP SOURCE` removes a source from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP SOURCE` removes a source from your Materialize instances.
-
-## Conceptual framework
-
-Materialize maintains your instances' sources by attaching the source to its
-internal Differential dataflow engine. If you no longer need the source, you can
-drop it, which will remove it from Differential.
-
-However, if views depend on the source you must either [drop the views
-explicitly](../drop-view) or use the **CASCADE** option.
+`DROP SOURCE` removes a source from Materialize. If there are objects depending
+on the source, you must explicitly drop them first, or use the `CASCADE`
+option.
 
 ## Syntax
 
@@ -30,7 +23,7 @@ _source&lowbar;name_ | The name of the source you want to remove.
 
 ## Examples
 
-### Remove a source with no dependent views
+### Remove a source with no dependent objects
 
 ```sql
 SHOW SOURCES;
@@ -43,7 +36,7 @@ my_source
 DROP SOURCE my_source;
 ```
 
-### Remove a source with dependent views
+### Remove a source with dependent objects
 
 ```sql
 SHOW SOURCES;
@@ -56,7 +49,7 @@ my_source
 DROP SOURCE my_source CASCADE;
 ```
 
-### Remove a source only if it has no dependent views
+### Remove a source only if it has no dependent objects
 
 You can use either of the following commands:
 

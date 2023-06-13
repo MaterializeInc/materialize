@@ -273,6 +273,12 @@ impl StateVersions {
 
                 shard_metrics.set_since(new_state.since());
                 shard_metrics.set_upper(new_state.upper());
+                shard_metrics.seqnos_since_last_rollup.set(
+                    new_state
+                        .seqno
+                        .0
+                        .saturating_sub(new_state.latest_rollup().0 .0),
+                );
                 shard_metrics
                     .spine_batch_count
                     .set(u64::cast_from(new_state.spine_batch_count()));
@@ -286,6 +292,9 @@ impl StateVersions {
                 shard_metrics
                     .update_count
                     .set(u64::cast_from(size_metrics.num_updates));
+                shard_metrics
+                    .rollup_count
+                    .set(u64::cast_from(size_metrics.state_rollup_count));
                 shard_metrics
                     .largest_batch_size
                     .set(u64::cast_from(size_metrics.largest_batch_bytes));
@@ -1041,7 +1050,7 @@ mod tests {
 
     /// Regression test for (part of) #17752, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn fetch_all_live_states_regression_uninitialized() {
         let client = new_test_client().await;

@@ -1135,6 +1135,13 @@ impl fmt::Display for Datum<'_> {
             }
             Datum::Uuid(u) => write!(f, "{}", u),
             Datum::Array(array) => {
+                if array.dims().into_iter().any(|dim| dim.lower_bound != 1) {
+                    write_delimited(f, "", array.dims().into_iter(), |f, e| {
+                        let (lower, upper) = e.dimension_bounds();
+                        write!(f, "[{}:{}]", lower, upper)
+                    })?;
+                    f.write_str("=")?;
+                }
                 f.write_str("{")?;
                 write_delimited(f, ", ", &array.elements, |f, e| write!(f, "{}", e))?;
                 f.write_str("}")
@@ -2762,6 +2769,53 @@ impl<'a> ScalarType {
             */
         ]
     }
+
+    /// Returns the appropriate element type for making a [`ScalarType::Array`] whose elements are
+    /// of `self`.
+    ///
+    /// If the type is not compatible with making an array, returns in the error position.
+    pub fn array_of_self_elem_type(self) -> Result<ScalarType, ScalarType> {
+        match self {
+            t @ (ScalarType::Bool
+            | ScalarType::Int16
+            | ScalarType::Int32
+            | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
+            | ScalarType::Float32
+            | ScalarType::Float64
+            | ScalarType::Numeric { .. }
+            | ScalarType::Date
+            | ScalarType::Time
+            | ScalarType::Timestamp
+            | ScalarType::TimestampTz
+            | ScalarType::Interval
+            | ScalarType::PgLegacyChar
+            | ScalarType::Bytes
+            | ScalarType::String
+            | ScalarType::VarChar { .. }
+            | ScalarType::Jsonb
+            | ScalarType::Uuid
+            | ScalarType::Record { .. }
+            | ScalarType::Oid
+            | ScalarType::RegProc
+            | ScalarType::RegType
+            | ScalarType::RegClass
+            | ScalarType::Int2Vector
+            | ScalarType::MzTimestamp
+            | ScalarType::Range { .. }
+            | ScalarType::MzAclItem { .. }) => Ok(t),
+
+            ScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
+
+            // https://github.com/MaterializeInc/materialize/issues/7613
+            t @ (ScalarType::Char { .. }
+            // not sensible to put in arrays
+            | ScalarType::Map { .. }
+            | ScalarType::List { .. }) => Err(t),
+        }
+    }
 }
 
 // See the chapter "Generating Recurisve Data" from the proptest book:
@@ -2939,10 +2993,10 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         add_arb_duration(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
             .prop_map(PropDatum::Time)
             .boxed(),
-        add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+        arb_naive_date_time()
             .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
-        add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
+        arb_utc_date_time()
             .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
         arb_interval().prop_map(PropDatum::Interval).boxed(),
@@ -2964,6 +3018,16 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         ])
     })
     .boxed()
+}
+
+/// Generates an arbitrary [`NaiveDateTime`].
+pub fn arb_naive_date_time() -> impl Strategy<Value = NaiveDateTime> {
+    add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+}
+
+/// Generates an arbitrary [`DateTime`] in [`Utc`].
+pub fn arb_utc_date_time() -> impl Strategy<Value = DateTime<Utc>> {
+    add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
 }
 
 fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
@@ -3245,7 +3309,7 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn verify_base_eq_record_nullability() {
     let s1 = ScalarType::Record {
         fields: vec![(
@@ -3282,7 +3346,7 @@ mod tests {
     use super::*;
 
     proptest! {
-       #[test]
+       #[mz_ore::test]
        #[cfg_attr(miri, ignore)] // too slow
         fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
@@ -3292,7 +3356,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
             let PropArray(row, elts) = array;
@@ -3301,7 +3365,7 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
             let PropList(row, elts) = array;
@@ -3310,7 +3374,7 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
             let PropDict(row, elts) = array;
@@ -3319,7 +3383,7 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
             let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
@@ -3328,7 +3392,7 @@ mod tests {
             assert_eq!(datums, unpacked);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn range_packing_unpacks_correctly(range in arb_range()) {
             let PropRange(row, prop_range) = range;

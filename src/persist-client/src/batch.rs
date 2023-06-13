@@ -25,6 +25,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
+use mz_persist_types::stats::trim_to_budget;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::order::Reverse;
 use timely::progress::{Antichain, Timestamp};
@@ -34,7 +35,7 @@ use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey};
@@ -203,8 +204,8 @@ impl From<&PersistConfig> for BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
-            // TODO(mfp): Make a dynamic config for this? This initial constant
-            // is the rough upper bound on what we see for the total serialized
+            // TODO: Make a dynamic config for this? This initial constant is
+            // the rough upper bound on what we see for the total serialized
             // batch size in prod, so it will at worst double it.
             stats_budget: 1024,
         }
@@ -665,14 +666,12 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<Arc<PartStats>>)>)>,
+    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<LazyPartStats>)>)>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
 }
 
 fn force_keep_stats_col(name: &str) -> bool {
-    // TODO(mfp): Flesh out initial heuristics. At the very least, this should
-    // probably be case insensitive.
     name == "mz_internal_super_secret_source_data_errors"
         || name == "timestamp"
         || name == "ts"
@@ -743,23 +742,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .spawn_named(|| "batch::encode_part", async move {
                         let stats = if stats_collection_enabled {
                             let stats_start = Instant::now();
-                            // TODO(mfp): For now, if stats collections fails,
-                            // log it with `error!` so it shows up in Sentry,
-                            // but don't crash the process. Turn this into a
-                            // hard error once we've shaken out any issues.
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
-                                // TODO(mfp): HACK Only keep stats if it's not
-                                // empty. This makes it easier to exactly
-                                // roundtrip through the placeholder proto
-                                // serialization, which doesn't keep the
-                                // difference between empty and unset. We could
-                                // make it keep the distinction, but at the cost
-                                // of additional complexity which I don't think
-                                // is worth it.
-                                Ok(x) if x.is_empty() => None,
-                                Ok(mut x) => {
-                                    x.key.trim_to_budget(stats_budget, force_keep_stats_col);
-                                    Some((Arc::new(x), stats_start.elapsed()))
+                                Ok(x) => {
+                                    let x = LazyPartStats::encode(&x, |s| {
+                                        trim_to_budget(s, stats_budget, force_keep_stats_col);
+                                    });
+                                    Some((x, stats_start.elapsed()))
                                 }
                                 Err(err) => {
                                     error!("failed to construct part stats: {}", err);
@@ -880,10 +868,9 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_flushing() {
-        mz_ore::test::init_logging();
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -974,11 +961,9 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_keys() {
-        mz_ore::test::init_logging();
-
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);
@@ -1018,11 +1003,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_partial_order() {
-        mz_ore::test::init_logging();
-
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);

@@ -24,19 +24,17 @@ use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,
-    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, GrantPrivilegeStatement, GrantRoleStatement, Privilege,
-    PrivilegeSpecification, ReassignOwnedStatement, RevokePrivilegeStatement, RevokeRoleStatement,
-    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AlterRoleStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
+    AlterSystemSetStatement, CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption,
+    CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement, SshConnectionOption,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -79,20 +77,21 @@ use crate::ast::{
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
     KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
-    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    TableConstraint, UnresolvedDatabaseName, ViewDefinition,
+    LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
+    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
+    UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
+    ObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, ObjectId, PartialItemName, QualifiedItemName, RawDatabaseSpecifier,
     ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
-    ResolvedObjectName, ResolvedRoleName, SchemaSpecifier,
+    SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -103,19 +102,18 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
-    plan_utils, query, transform_ast, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan,
-    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, FullItemName, GrantPrivilegePlan, GrantRolePlan, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, QueryContext, ReassignOwnedPlan,
-    ReplicaConfig, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, View,
+    plan_utils, query, transform_ast, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
+    QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig,
+    Table, Type, View,
 };
-use crate::session::user::SYSTEM_USER;
 use crate::session::vars;
 
 pub fn describe_create_database(
@@ -891,7 +889,17 @@ pub fn plan_create_source(
         // unused table casts from this connection; this represents the
         // authoritative statement about which publication tables should be
         // used within storage.
-        let used_pos: BTreeSet<_> = subsource_exports.values().collect();
+
+        // we want to temporarily test if any users are referring to the same table in their PG
+        // sources.
+        let mut used_pos: Vec<_> = subsource_exports.values().collect();
+        used_pos.sort();
+
+        if let Some(_) = used_pos.iter().duplicates().next() {
+            tracing::warn!("multiple references to same upstream table in PG source");
+        }
+
+        let used_pos: BTreeSet<_> = used_pos.into_iter().collect();
         conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 
@@ -1298,6 +1306,7 @@ pub(crate) fn load_generator_ast_to_generator(
             }
             LoadGenerator::Counter { max_cardinality }
         }
+        mz_sql_parser::ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
         mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
@@ -1342,6 +1351,7 @@ pub(crate) fn load_generator_ast_to_generator(
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
             schema: match load_generator {
                 LoadGenerator::Counter { .. } => "counter".into(),
+                LoadGenerator::Marketing => "marketing".into(),
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
@@ -2888,7 +2898,9 @@ pub fn plan_create_cluster_replica(
         of_cluster,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
+    let cluster = scx
+        .catalog
+        .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
         && cluster.replica_ids().len() > 0
@@ -3463,7 +3475,12 @@ pub fn plan_drop_objects(
         cascade,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    assert_ne!(object_type, ObjectType::Func, "rejected in parser");
+    assert_ne!(
+        object_type,
+        mz_sql_parser::ast::ObjectType::Func,
+        "rejected in parser"
+    );
+    let object_type = object_type.into();
 
     let mut referenced_ids = Vec::new();
     for name in names {
@@ -3595,11 +3612,11 @@ fn plan_drop_cluster_replica(
     if_exists: bool,
     name: QualifiedReplica,
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
-    let id = resolve_cluster_replica(scx, &name, if_exists)?;
-    if let Some((cluster_id, _)) = &id {
-        ensure_cluster_is_not_linked(scx, *cluster_id)?;
+    let cluster = resolve_cluster_replica(scx, &name, if_exists)?;
+    if let Some((cluster, _)) = &cluster {
+        ensure_cluster_is_not_linked(scx, cluster.id())?;
     }
-    Ok(id)
+    Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
 fn plan_drop_item(
@@ -3972,184 +3989,6 @@ pub fn plan_alter_index_options(
     }
 }
 
-pub fn describe_alter_owner(
-    _: &StatementContext,
-    _: AlterOwnerStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_alter_owner(
-    scx: &StatementContext,
-    AlterOwnerStatement {
-        object_type,
-        if_exists,
-        name,
-        new_owner,
-    }: AlterOwnerStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    match (object_type, name) {
-        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
-            plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
-        }
-        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
-            plan_alter_cluster_replica_owner(scx, if_exists, name, new_owner.id)
-        }
-        (ObjectType::Database, UnresolvedObjectName::Database(name)) => {
-            plan_alter_database_owner(scx, if_exists, name, new_owner.id)
-        }
-        (ObjectType::Schema, UnresolvedObjectName::Schema(name)) => {
-            plan_alter_schema_owner(scx, if_exists, name, new_owner.id)
-        }
-        (ObjectType::Role, UnresolvedObjectName::Role(_)) => unreachable!("rejected by the parser"),
-        (
-            object_type @ ObjectType::Cluster
-            | object_type @ ObjectType::ClusterReplica
-            | object_type @ ObjectType::Database
-            | object_type @ ObjectType::Schema
-            | object_type @ ObjectType::Role,
-            name,
-        )
-        | (
-            object_type,
-            name @ UnresolvedObjectName::Cluster(_)
-            | name @ UnresolvedObjectName::ClusterReplica(_)
-            | name @ UnresolvedObjectName::Database(_)
-            | name @ UnresolvedObjectName::Schema(_)
-            | name @ UnresolvedObjectName::Role(_),
-        ) => {
-            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
-        }
-        (object_type, UnresolvedObjectName::Item(name)) => {
-            plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
-        }
-    }
-}
-
-fn plan_alter_cluster_owner(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: Ident,
-    new_owner: RoleId,
-) -> Result<Plan, PlanError> {
-    match resolve_cluster(scx, &name, if_exists)? {
-        Some(cluster) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::Cluster(cluster.id()),
-            object_type: ObjectType::Cluster,
-            new_owner,
-        })),
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::Cluster,
-        })),
-    }
-}
-
-fn plan_alter_cluster_replica_owner(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: QualifiedReplica,
-    new_owner: RoleId,
-) -> Result<Plan, PlanError> {
-    match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster_id, replica_id)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::ClusterReplica((cluster_id, replica_id)),
-            object_type: ObjectType::ClusterReplica,
-            new_owner,
-        })),
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::ClusterReplica,
-        })),
-    }
-}
-
-fn plan_alter_database_owner(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: UnresolvedDatabaseName,
-    new_owner: RoleId,
-) -> Result<Plan, PlanError> {
-    match resolve_database(scx, &name, if_exists)? {
-        Some(database) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::Database(database.id()),
-            object_type: ObjectType::Database,
-            new_owner,
-        })),
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::Database,
-        })),
-    }
-}
-
-fn plan_alter_schema_owner(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: UnresolvedSchemaName,
-    new_owner: RoleId,
-) -> Result<Plan, PlanError> {
-    match resolve_schema(scx, name.clone(), if_exists)? {
-        Some((database_spec, schema_spec)) => {
-            if let ResolvedDatabaseSpecifier::Ambient = database_spec {
-                sql_bail!(
-                    "cannot alter schema {name} because it is required by the database system",
-                );
-            }
-            if let SchemaSpecifier::Temporary = schema_spec {
-                sql_bail!("cannot alter schema {name} because it is a temporary schema",)
-            }
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Schema((database_spec, schema_spec)),
-                object_type: ObjectType::Schema,
-                new_owner,
-            }))
-        }
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::Database,
-        })),
-    }
-}
-
-fn plan_alter_item_owner(
-    scx: &StatementContext,
-    object_type: ObjectType,
-    if_exists: bool,
-    name: UnresolvedItemName,
-    new_owner: RoleId,
-) -> Result<Plan, PlanError> {
-    match resolve_item(scx, name, if_exists)? {
-        Some(item) => {
-            if item.id().is_system() {
-                sql_bail!(
-                    "cannot alter item {} because it is required by the database system",
-                    scx.catalog.resolve_full_name(item.name()),
-                );
-            }
-            let item_type = item.item_type();
-
-            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
-            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
-                let name = scx.catalog.resolve_full_name(item.name()).to_string();
-                return Err(PlanError::AlterViewOnMaterializedView(name));
-            } else if object_type != item_type {
-                sql_bail!(
-                    "{} is a {} not a {}",
-                    scx.catalog
-                        .resolve_full_name(item.name())
-                        .to_string()
-                        .quoted(),
-                    item.item_type(),
-                    format!("{object_type}").to_lowercase(),
-                );
-            }
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Item(item.id()),
-                object_type,
-                new_owner,
-            }))
-        }
-        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
-    }
-}
-
 pub fn describe_alter_object_rename(
     _: &StatementContext,
     _: AlterObjectRenameStatement,
@@ -4165,6 +4004,38 @@ pub fn plan_alter_object_rename(
         to_item_name,
         if_exists,
     }: AlterObjectRenameStatement,
+) -> Result<Plan, PlanError> {
+    let object_type = object_type.into();
+    match (object_type, name) {
+        (
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::Source
+            | ObjectType::Index
+            | ObjectType::Sink
+            | ObjectType::Secret
+            | ObjectType::Connection,
+            UnresolvedObjectName::Item(name),
+        ) => plan_alter_item_rename(scx, object_type, name, to_item_name, if_exists),
+        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
+            plan_alter_cluster_rename(scx, object_type, name, to_item_name, if_exists)
+        }
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
+            plan_alter_cluster_replica_rename(scx, object_type, name, to_item_name, if_exists)
+        }
+        (object_type, name) => {
+            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+        }
+    }
+}
+
+pub fn plan_alter_item_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    name: UnresolvedItemName,
+    to_item_name: Ident,
+    if_exists: bool,
 ) -> Result<Plan, PlanError> {
     match resolve_item(scx, name, if_exists)? {
         Some(entry) => {
@@ -4198,6 +4069,46 @@ pub fn plan_alter_object_rename(
                 object_type,
             }))
         }
+        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+    }
+}
+
+pub fn plan_alter_cluster_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    name: Ident,
+    to_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster(scx, &name, if_exists)? {
+        Some(entry) => Ok(Plan::AlterClusterRename(AlterClusterRenamePlan {
+            id: entry.id(),
+            name: entry.name().to_string(),
+            to_name: ident(to_name),
+        })),
+        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+    }
+}
+
+pub fn plan_alter_cluster_replica_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    name: QualifiedReplica,
+    to_item_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster_replica(scx, &name, if_exists)? {
+        Some((cluster, replica)) => Ok(Plan::AlterClusterReplicaRename(
+            AlterClusterReplicaRenamePlan {
+                cluster_id: cluster.id(),
+                replica_id: replica,
+                name: QualifiedReplica {
+                    cluster: cluster.name().into(),
+                    replica: name.replica,
+                },
+                to_name: normalize::ident(to_item_name),
+            },
+        )),
         None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
     }
 }
@@ -4502,328 +4413,7 @@ pub fn plan_alter_role(
     }))
 }
 
-pub fn describe_grant_role(
-    _: &StatementContext,
-    _: GrantRoleStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_grant_role(
-    scx: &StatementContext,
-    GrantRoleStatement {
-        role_name,
-        member_names,
-    }: GrantRoleStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    // In PostgreSQL, the grantor must either be a role with ADMIN OPTION on the role being granted,
-    // or the bootstrap superuser. We do not have ADMIN OPTION implemented and 'mz_system' is our
-    // equivalent of the bootstrap superuser. Therefore the grantor is always 'mz_system'.
-    // For more details see:
-    // https://github.com/postgres/postgres/blob/064eb89e83ea0f59426c92906329f1e6c423dfa4/src/backend/commands/user.c#L2180-L2238
-    let grantor_id = scx
-        .catalog
-        .resolve_role(&SYSTEM_USER.name)
-        .expect("system user must exist")
-        .id();
-    Ok(Plan::GrantRole(GrantRolePlan {
-        role_id: role_name.id,
-        member_ids: member_names
-            .into_iter()
-            .map(|member_name| member_name.id)
-            .collect(),
-        grantor_id,
-    }))
-}
-
-pub fn describe_revoke_role(
-    _: &StatementContext,
-    _: RevokeRoleStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_revoke_role(
-    scx: &StatementContext,
-    RevokeRoleStatement {
-        role_name,
-        member_names,
-    }: RevokeRoleStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    // In PostgreSQL, the same role membership can be granted multiple times by different grantors.
-    // When revoking a role membership, only the membership granted by the specified grantor is
-    // revoked. The grantor must either be a role with ADMIN OPTION on the role being granted,
-    // or the bootstrap superuser. We do not have ADMIN OPTION implemented and 'mz_system' is our
-    // equivalent of the bootstrap superuser. Therefore the grantor is always 'mz_system'.
-    // For more details see:
-    // https://github.com/postgres/postgres/blob/064eb89e83ea0f59426c92906329f1e6c423dfa4/src/backend/commands/user.c#L2180-L2238
-    let grantor_id = scx
-        .catalog
-        .resolve_role(&SYSTEM_USER.name)
-        .expect("system user must exist")
-        .id();
-    Ok(Plan::RevokeRole(RevokeRolePlan {
-        role_id: role_name.id,
-        member_ids: member_names
-            .into_iter()
-            .map(|member_name| member_name.id)
-            .collect(),
-        grantor_id,
-    }))
-}
-
-pub fn describe_grant_privilege(
-    _: &StatementContext,
-    _: GrantPrivilegeStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_grant_privilege(
-    scx: &StatementContext,
-    GrantPrivilegeStatement {
-        privileges,
-        object_type,
-        name,
-        roles,
-    }: GrantPrivilegeStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
-    Ok(Plan::GrantPrivilege(plan.into()))
-}
-
-pub fn describe_revoke_privilege(
-    _: &StatementContext,
-    _: RevokePrivilegeStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_revoke_privilege(
-    scx: &StatementContext,
-    RevokePrivilegeStatement {
-        privileges,
-        object_type,
-        name,
-        roles,
-    }: RevokePrivilegeStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
-    Ok(Plan::RevokePrivilege(plan.into()))
-}
-
-struct UpdatePrivilegePlan {
-    acl_mode: AclMode,
-    object_id: ObjectId,
-    grantees: Vec<RoleId>,
-    grantor: RoleId,
-}
-
-impl From<UpdatePrivilegePlan> for GrantPrivilegePlan {
-    fn from(
-        UpdatePrivilegePlan {
-            acl_mode,
-            object_id,
-            grantees,
-            grantor,
-        }: UpdatePrivilegePlan,
-    ) -> GrantPrivilegePlan {
-        GrantPrivilegePlan {
-            acl_mode,
-            object_id,
-            grantees,
-            grantor,
-        }
-    }
-}
-
-impl From<UpdatePrivilegePlan> for RevokePrivilegePlan {
-    fn from(
-        UpdatePrivilegePlan {
-            acl_mode,
-            object_id,
-            grantees,
-            grantor,
-        }: UpdatePrivilegePlan,
-    ) -> RevokePrivilegePlan {
-        RevokePrivilegePlan {
-            acl_mode,
-            object_id,
-            revokees: grantees,
-            grantor,
-        }
-    }
-}
-
-fn plan_update_privilege(
-    scx: &StatementContext,
-    privileges: PrivilegeSpecification,
-    object_type: ObjectType,
-    name: ResolvedObjectName,
-    roles: Vec<ResolvedRoleName>,
-) -> Result<UpdatePrivilegePlan, PlanError> {
-    let object_id = name
-        .try_into()
-        .expect("name resolution should handle invalid objects");
-    let actual_object_type = scx.get_object_type(&object_id);
-    let acl_mode = match privileges {
-        PrivilegeSpecification::All => scx.catalog.all_object_privileges(actual_object_type),
-        PrivilegeSpecification::Privileges(privileges) => privileges
-            .into_iter()
-            .map(privilege_to_acl_mode)
-            // PostgreSQL doesn't care about duplicate privileges, so we don't either.
-            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
-    };
-    if let ObjectId::Item(id) = &object_id {
-        let item = scx.get_item(id);
-        let item_type: ObjectType = item.item_type().into();
-        if (item_type == ObjectType::View
-            || item_type == ObjectType::MaterializedView
-            || item_type == ObjectType::Source)
-            && object_type == ObjectType::Table
-        {
-            // This is an expected mis-match to match PostgreSQL semantics.
-        } else if item_type != object_type {
-            let object_name = scx.catalog.resolve_full_name(item.name()).to_string();
-            return Err(PlanError::InvalidObjectType {
-                expected_type: object_type,
-                actual_type: item_type,
-                object_name,
-            });
-        }
-    }
-
-    let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
-    let invalid_acl_mode = acl_mode.difference(all_object_privileges);
-    if !invalid_acl_mode.is_empty() {
-        let invalid_privileges = acl_mode_to_privileges(invalid_acl_mode);
-        return Err(PlanError::InvalidPrivilegeTypes {
-            privilege_types: invalid_privileges,
-            object_type: actual_object_type,
-        });
-    }
-
-    // In PostgreSQL, the grantor must always be either the object owner or some role that has been
-    // been explicitly granted grant options. In Materialize, we haven't implemented grant options
-    // so the grantor is always the object owner.
-    //
-    // For more details see:
-    // https://github.com/postgres/postgres/blob/78d5952dd0e66afc4447eec07f770991fa406cce/src/backend/utils/adt/acl.c#L5154-L5246
-    let grantor = scx
-        .catalog
-        .get_owner_id(&object_id)
-        .expect("cannot revoke privileges on objects without owners");
-    let grantees = roles.into_iter().map(|role| role.id).collect();
-
-    Ok(UpdatePrivilegePlan {
-        acl_mode,
-        object_id,
-        grantees,
-        grantor,
-    })
-}
-
-fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
-    match privilege {
-        Privilege::SELECT => AclMode::SELECT,
-        Privilege::INSERT => AclMode::INSERT,
-        Privilege::UPDATE => AclMode::UPDATE,
-        Privilege::DELETE => AclMode::DELETE,
-        Privilege::USAGE => AclMode::USAGE,
-        Privilege::CREATE => AclMode::CREATE,
-    }
-}
-
-fn acl_mode_to_privileges(acl_mode: AclMode) -> Vec<Privilege> {
-    let mut privileges = Vec::new();
-    const ALL_PRIVILEGES: [Privilege; 6] = [
-        Privilege::SELECT,
-        Privilege::INSERT,
-        Privilege::UPDATE,
-        Privilege::DELETE,
-        Privilege::USAGE,
-        Privilege::CREATE,
-    ];
-    for privilege in ALL_PRIVILEGES {
-        if acl_mode.contains(privilege_to_acl_mode(privilege.clone())) {
-            privileges.push(privilege);
-        }
-    }
-    privileges
-}
-
-pub fn describe_reassign_owned(
-    _: &StatementContext,
-    _: ReassignOwnedStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_reassign_owned(
-    scx: &StatementContext,
-    ReassignOwnedStatement {
-        old_roles,
-        new_role,
-    }: ReassignOwnedStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    let old_roles: BTreeSet<_> = old_roles.into_iter().map(|role| role.id).collect();
-    let mut reassign_ids: Vec<ObjectId> = Vec::new();
-
-    // Replicas
-    for replica in scx.catalog.get_cluster_replicas() {
-        if old_roles.contains(&replica.owner_id()) {
-            reassign_ids.push((replica.cluster_id(), replica.replica_id()).into());
-        }
-    }
-    // Clusters
-    for cluster in scx.catalog.get_clusters() {
-        if old_roles.contains(&cluster.owner_id()) {
-            reassign_ids.push(cluster.id().into());
-        }
-    }
-    // Items
-    for item in scx.catalog.get_items() {
-        if old_roles.contains(&item.owner_id()) {
-            reassign_ids.push(item.id().into());
-        }
-    }
-    // Schemas
-    for schema in scx.catalog.get_schemas() {
-        if !schema.id().is_temporary() {
-            if old_roles.contains(&schema.owner_id()) {
-                reassign_ids.push((*schema.database(), *schema.id()).into())
-            }
-        }
-    }
-    // Databases
-    for database in scx.catalog.get_databases() {
-        if old_roles.contains(&database.owner_id()) {
-            reassign_ids.push(database.id().into());
-        }
-    }
-
-    let system_ids: Vec<_> = reassign_ids.iter().filter(|id| id.is_system()).collect();
-    if !system_ids.is_empty() {
-        let mut owners = system_ids
-            .into_iter()
-            .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
-        sql_bail!(
-            "cannot reassign objects owned by role {} because they are required by the database system",
-            owners.join(", "),
-        );
-    }
-
-    Ok(Plan::ReassignOwned(ReassignOwnedPlan {
-        old_roles: old_roles.into_iter().collect(),
-        new_role: new_role.id,
-        reassign_ids,
-    }))
-}
-
-fn resolve_cluster<'a>(
+pub(crate) fn resolve_cluster<'a>(
     scx: &'a StatementContext,
     name: &'a Ident,
     if_exists: bool,
@@ -4837,14 +4427,14 @@ fn resolve_cluster<'a>(
     }
 }
 
-fn resolve_cluster_replica(
-    scx: &StatementContext,
+pub(crate) fn resolve_cluster_replica<'a>(
+    scx: &'a StatementContext,
     name: &QualifiedReplica,
     if_exists: bool,
-) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
+) -> Result<Option<(&'a dyn CatalogCluster<'a>, ReplicaId)>, PlanError> {
     match scx.resolve_cluster(Some(&name.cluster)) {
         Ok(cluster) => match cluster.replica_ids().get(name.replica.as_str()) {
-            Some(replica_id) => Ok(Some((cluster.id(), *replica_id))),
+            Some(replica_id) => Ok(Some((cluster, *replica_id))),
             // TODO(benesch): generate a notice indicating that the
             // replica does not exist.
             None if if_exists => Ok(None),
@@ -4861,7 +4451,7 @@ fn resolve_cluster_replica(
     }
 }
 
-fn resolve_database<'a>(
+pub(crate) fn resolve_database<'a>(
     scx: &'a StatementContext,
     name: &'a UnresolvedDatabaseName,
     if_exists: bool,
@@ -4875,7 +4465,7 @@ fn resolve_database<'a>(
     }
 }
 
-fn resolve_schema<'a>(
+pub(crate) fn resolve_schema<'a>(
     scx: &'a StatementContext,
     name: UnresolvedSchemaName,
     if_exists: bool,
@@ -4889,7 +4479,7 @@ fn resolve_schema<'a>(
     }
 }
 
-fn resolve_item<'a>(
+pub(crate) fn resolve_item<'a>(
     scx: &'a StatementContext,
     name: UnresolvedItemName,
     if_exists: bool,

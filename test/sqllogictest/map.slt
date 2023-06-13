@@ -18,10 +18,10 @@ mode cockroach
 # we just convert everything to `text`.
 
 # Test basic string to map casts.
-query error VALUE TYPE   parameter required
+query error VALUE TYPE option is required
 CREATE TYPE custom AS MAP (KEY TYPE = text)
 
-query error KEY TYPE parameter required
+query error KEY TYPE option is required
 CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 
 query error Expected one of KEY or VALUE, found identifier "extra_type"
@@ -33,13 +33,13 @@ CREATE TYPE tbl_map AS MAP (KEY TYPE = pg_enum, VALUE TYPE = text)
 query error VALUE TYPE must be of class type, but received pg_catalog.pg_enum which is of class view
 CREATE TYPE tbl_map AS MAP (KEY TYPE = text, VALUE TYPE = pg_enum)
 
-query error CREATE TYPE ... AS MAP option "VALUE TYPE "  cannot accept type modifier on numeric, you must use the default type
+query error CREATE TYPE ... AS MAP option VALUE TYPE cannot accept type modifier on pg_catalog.numeric, you must use the default type
 CREATE TYPE typ_mod_map AS MAP (KEY TYPE = text, VALUE TYPE = numeric(38,0))
 
-query error CREATE TYPE ... AS LIST option "VALUE TYPE "  can only use named data types, but found unnamed data type int4 list. Use CREATE TYPE to create a named type first
+query error CREATE TYPE ... AS MAP option VALUE TYPE can only use named data types, but found unnamed data type \[s20 AS pg_catalog.int4\] list. Use CREATE TYPE to create a named type first
 CREATE TYPE unnamed_element_map AS MAP (KEY TYPE = text, VALUE TYPE = int4 list)
 
-query error CREATE TYPE not yet supported
+statement ok
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 
 query error expected '\{', found a: "a=>1"

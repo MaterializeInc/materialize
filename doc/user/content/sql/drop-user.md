@@ -1,12 +1,12 @@
 ---
 title: "DROP USER"
-description: "`DROP USER` removes a role from your Materialize instance."
+description: "`DROP USER` removes a role from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP USER` removes a role from your Materialize instance.
+`DROP USER` removes a role from Materialize.
 
 ## Syntax
 

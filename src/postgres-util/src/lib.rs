@@ -91,7 +91,9 @@ macro_rules! bail_generic {
     };
 }
 
+#[cfg(feature = "privileges")]
 pub mod privileges;
+#[cfg(feature = "privileges")]
 pub use privileges::check_table_privileges;
 #[cfg(feature = "schemas")]
 pub mod desc;

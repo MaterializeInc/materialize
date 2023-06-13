@@ -42,13 +42,18 @@ ALTER TABLE other.t REPLICA IDENTITY FULL;
   FOR ALL TABLES;
 contains:multiple tables with name "t": "postgres"."other"."t", "postgres"."public"."t"
 
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (public.t AS x, public.t as Y);
+contains:table "postgres"."public"."t" referred to by multiple subsources: "x", "y"
+
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS (other);
 
 > SHOW sources
  mz_source          postgres  ${arg.default-storage-size}
- mz_source_progress subsource <null>
+ mz_source_progress progress  <null>
  t                  subsource <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

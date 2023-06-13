@@ -238,7 +238,7 @@ static LONG_RECORD_DATUM: Lazy<Value> = Lazy::new(|| {
     ])
 });
 
-#[test]
+#[mz_ore::test]
 fn test_validate() {
     for (raw_schema, value) in SCHEMAS_TO_VALIDATE.iter() {
         let schema = Schema::from_str(raw_schema).unwrap();
@@ -251,7 +251,7 @@ fn test_validate() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_round_trip() {
     for (raw_schema, value) in SCHEMAS_TO_VALIDATE.iter() {
         let schema = Schema::from_str(raw_schema).unwrap();
@@ -261,7 +261,7 @@ fn test_round_trip() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_binary_int_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
         let encoded = to_avro_datum(
@@ -273,7 +273,7 @@ fn test_binary_int_encoding() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_binary_long_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
         let encoded =
@@ -282,7 +282,7 @@ fn test_binary_long_encoding() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_schema_promotion() {
     // Each schema is present in order of promotion (int -> long, long -> float, float -> double)
     // Each value represents the expected decoded value when promoting a value previously encoded with a promotable schema
@@ -312,7 +312,7 @@ fn test_schema_promotion() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_unknown_symbol() {
     let writer_schema =
         Schema::from_str(r#"{"type": "enum", "name": "Test", "symbols": ["FOO", "BAR"]}"#).unwrap();
@@ -325,7 +325,7 @@ fn test_unknown_symbol() {
     assert!(decoded.is_err());
 }
 
-#[test]
+#[mz_ore::test]
 fn test_default_value() {
     for (field_type, default_json, default_datum) in DEFAULT_VALUE_EXAMPLES.iter() {
         let reader_schema = Schema::from_str(&format!(
@@ -351,7 +351,7 @@ fn test_default_value() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_no_default_value() -> Result<(), String> {
     let reader_schema = Schema::from_str(
         r#"{
@@ -376,7 +376,7 @@ fn test_no_default_value() -> Result<(), String> {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_union_default() {
     let reader_schema = Schema::from_str(
         r#"{
@@ -402,7 +402,7 @@ fn test_union_default() {
     resolve_schemas(&writer_schema, &reader_schema).unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_datetime_resolutions() {
     let writer_schema = Schema::from_str(
         r#"{
@@ -554,7 +554,7 @@ fn test_datetime_resolutions() {
     assert_eq!(datum_to_read, datum_read);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_projection() {
     let reader_schema = Schema::from_str(
         r#"
@@ -579,7 +579,7 @@ fn test_projection() {
     assert_eq!(datum_to_read, datum_read);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_field_order() {
     let reader_schema = Schema::from_str(
         r#"
@@ -604,7 +604,7 @@ fn test_field_order() {
     assert_eq!(datum_to_read, datum_read);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_type_exception() -> Result<(), String> {
     let writer_schema = Schema::from_str(
         r#"
@@ -633,7 +633,7 @@ fn test_type_exception() -> Result<(), String> {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_namespaces() {
     let schema = r#"
     {
@@ -673,7 +673,7 @@ fn test_namespaces() {
     assert_eq!(datum_to_write, datum_read);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_self_referential_schema() {
     let schema = r#"
         {
@@ -773,7 +773,7 @@ fn test_self_referential_schema() {
     assert_eq!(datum_to_write, datum_read);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_complex_resolutions() {
     // Attempt to exercise many of the hard parts of schema resolution:
     // Reordering fields in "some_record", field "f0" missing from writer, field "f3" missing
@@ -1094,7 +1094,7 @@ fn test_complex_resolutions() {
     assert_eq!(expected_read, datum_read);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_partially_broken_union() {
     // If one variant of a union fails to match or resolve, we should still be able to decode one of the others.
     // The first variant will fail to match (there is no "r" in the reader schema).

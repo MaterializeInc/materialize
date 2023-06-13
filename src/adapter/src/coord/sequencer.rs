@@ -45,7 +45,9 @@ use crate::util::{send_immediate_rows, ClientTransmitter};
 // this scenario, the session has not been properly initialized and we
 // need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
+mod cluster;
 mod inner;
+mod linked_cluster;
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -173,7 +175,7 @@ impl Coordinator {
             }
             Plan::CreateMaterializedView(plan) => {
                 tx.send(
-                    self.sequence_create_materialized_view(&mut session, plan, depends_on)
+                    self.sequence_create_materialized_view(&mut session, plan)
                         .await,
                     session,
                 );
@@ -214,6 +216,9 @@ impl Coordinator {
             }
             Plan::ResetVariable(plan) => {
                 tx.send(self.sequence_reset_variable(&mut session, plan), session);
+            }
+            Plan::SetTransaction(plan) => {
+                tx.send(self.sequence_set_transaction(&mut session, plan), session);
             }
             Plan::StartTransaction(plan) => {
                 if matches!(session.transaction(), TransactionStatus::InTransaction(_)) {
@@ -288,6 +293,19 @@ impl Coordinator {
                     session,
                 );
             }
+            Plan::AlterClusterRename(plan) => {
+                tx.send(
+                    self.sequence_alter_cluster_rename(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterClusterReplicaRename(plan) => {
+                tx.send(
+                    self.sequence_alter_cluster_replica_rename(&session, plan)
+                        .await,
+                    session,
+                );
+            }
             Plan::AlterItemRename(plan) => {
                 tx.send(
                     self.sequence_alter_item_rename(&session, plan).await,
@@ -343,7 +361,7 @@ impl Coordinator {
                     self.drop_temp_items(&session).await;
                     let conn_meta = self
                         .active_conns
-                        .get_mut(&session.conn_id())
+                        .get_mut(session.conn_id())
                         .expect("must exist for active session");
                     let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
                     self.drop_compute_sinks(drop_sinks);
@@ -437,15 +455,15 @@ impl Coordinator {
             Plan::RotateKeys(RotateKeysPlan { id }) => {
                 tx.send(self.sequence_rotate_keys(&session, id).await, session);
             }
-            Plan::GrantPrivilege(plan) => {
+            Plan::GrantPrivileges(plan) => {
                 tx.send(
-                    self.sequence_grant_privilege(&mut session, plan).await,
+                    self.sequence_grant_privileges(&mut session, plan).await,
                     session,
                 );
             }
-            Plan::RevokePrivilege(plan) => {
+            Plan::RevokePrivileges(plan) => {
                 tx.send(
-                    self.sequence_revoke_privilege(&mut session, plan).await,
+                    self.sequence_revoke_privileges(&mut session, plan).await,
                     session,
                 );
             }

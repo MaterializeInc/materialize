@@ -11,17 +11,21 @@
 //! that the storage controller needs to hold.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use tracing::Instrument;
 
 use crate::client::{StorageResponse, TimestamplessUpdate, Update};
@@ -48,6 +52,16 @@ enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
     Update(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
     Downgrade(BTreeMap<GlobalId, Antichain<T>>),
+    SnapshotStats(GlobalId, Antichain<T>, oneshot::Sender<SnapshotStatsRes<T>>),
+}
+
+/// A newtype wrapper to hang a Debug impl off of.
+pub(crate) struct SnapshotStatsRes<T>(BoxFuture<'static, Result<SnapshotStats<T>, StorageError>>);
+
+impl<T: Debug> Debug for SnapshotStatsRes<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnapshotStatsRes").finish_non_exhaustive()
+    }
 }
 
 impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
@@ -82,6 +96,25 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
                             for (id, frontier) in since_frontiers {
                                 downgrades.insert(id, (span.clone(), frontier));
                             }
+                        }
+                        PersistReadWorkerCmd::SnapshotStats(id, as_of, tx) => {
+                            // NB: The requested as_of could be arbitrarily far in the future. So,
+                            // in order to avoid blocking the PersistReadWorker loop until it's
+                            // available and the `snapshot_stats` call resolves, instead return the
+                            // future to the caller and await it there.
+                            let res = match since_handles.get(&id) {
+                                Some(x) => {
+                                    let fut = x.snapshot_stats(as_of).map(move |x| {
+                                        x.map_err(|_| StorageError::ReadBeforeSince(id))
+                                    });
+                                    SnapshotStatsRes(Box::pin(fut))
+                                }
+                                None => SnapshotStatsRes(Box::pin(futures::future::ready(Err(
+                                    StorageError::IdentifierMissing(id),
+                                )))),
+                            };
+                            // It's fine if the listener hung up.
+                            let _ = tx.send(res);
                         }
                     }
                 }
@@ -148,6 +181,21 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
 
     pub(crate) fn downgrade(&self, frontiers: BTreeMap<GlobalId, Antichain<T>>) {
         self.send(PersistReadWorkerCmd::Downgrade(frontiers))
+    }
+
+    pub(crate) async fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Antichain<T>,
+    ) -> Result<SnapshotStats<T>, StorageError> {
+        // TODO: Pull this out of PersistReadWorker. Unlike the other methods,
+        // the caller of this one drives it to completion.
+        //
+        // We'd need to either share the critical handle somehow or maybe have
+        // two instances around, one in the worker and one in the controller.
+        let (tx, rx) = oneshot::channel();
+        self.send(PersistReadWorkerCmd::SnapshotStats(id, as_of, tx));
+        rx.await.expect("PersistReadWorker should be live").0.await
     }
 
     fn send(&self, cmd: PersistReadWorkerCmd<T>) {
@@ -507,5 +555,92 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                 tracing::trace!("could not forward command: {:?}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+    use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_repr::{RelationDesc, Row};
+
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
+    async fn snapshot_stats(&self) {
+        let client = PersistClientCache::new(
+            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
+        )
+        .open(PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        })
+        .await
+        .unwrap();
+        let shard_id = ShardId::new();
+        let since_handle = client
+            .open_critical_since(shard_id, PersistClient::CONTROLLER_CRITICAL_SINCE, "test")
+            .await
+            .unwrap();
+        let mut write_handle = client
+            .open_writer::<SourceData, (), u64, i64>(
+                shard_id,
+                "test",
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .unwrap();
+
+        let worker = PersistReadWorker::<u64>::new();
+        worker.register(GlobalId::User(1), since_handle);
+
+        // No stats for unknown GlobalId.
+        let stats = worker
+            .snapshot_stats(GlobalId::User(2), Antichain::from_elem(0))
+            .await;
+        assert!(stats.is_err());
+
+        // Stats don't resolve for as_of past the upper.
+        let stats_fut = worker.snapshot_stats(GlobalId::User(1), Antichain::from_elem(1));
+        assert!(stats_fut.now_or_never().is_none());
+        // Call it again because now_or_never consumed our future and it's not clone-able.
+        let stats_ts1_fut = worker.snapshot_stats(GlobalId::User(1), Antichain::from_elem(1));
+
+        // Write some data.
+        let data = ((SourceData(Ok(Row::default())), ()), 0u64, 1i64);
+        let () = write_handle
+            .compare_and_append(&[data], Antichain::from_elem(0), Antichain::from_elem(1))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Verify that we can resolve stats for ts 0 while the ts 1 stats call is outstanding.
+        let stats = worker
+            .snapshot_stats(GlobalId::User(1), Antichain::from_elem(0))
+            .await
+            .unwrap();
+        assert_eq!(stats.num_updates, 1);
+
+        // Write more data and unblock the ts 1 call
+        let data = ((SourceData(Ok(Row::default())), ()), 1u64, 1i64);
+        let () = write_handle
+            .compare_and_append(&[data], Antichain::from_elem(1), Antichain::from_elem(2))
+            .await
+            .unwrap()
+            .unwrap();
+        let stats = stats_ts1_fut.await.unwrap();
+        assert_eq!(stats.num_updates, 2);
     }
 }

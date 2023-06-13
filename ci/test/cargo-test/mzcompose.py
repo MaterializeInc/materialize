@@ -26,7 +26,7 @@ SERVICES = [
         # conflict with a Kafka cluster running on the local machine.
         port="30123:30123",
         allow_host_ports=True,
-        extra_environment=[
+        environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
@@ -116,6 +116,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ],
             env=env,
         )
-
-        cmd = ["cargo", "nextest", "run", "--profile=ci"]
-        spawn.runv(cmd + args.args, env=env)
+        cpu_count = os.cpu_count()
+        assert cpu_count
+        spawn.runv(
+            [
+                "cargo",
+                "nextest",
+                "run",
+                "--profile=ci",
+                # Most tests don't use 100% of a CPU core, so run two tests per CPU.
+                f"--test-threads={cpu_count * 2}",
+                *args.args,
+            ],
+            env=env,
+        )

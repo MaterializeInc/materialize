@@ -339,19 +339,27 @@ impl State {
             }
         }
 
+        // Alter materialize user with all attributes.
+        inner_client
+            .batch_execute(&format!(
+                "ALTER ROLE {} WITH CREATEDB CREATECLUSTER CREATEROLE",
+                self.materialize_user
+            ))
+            .await?;
+
         // Grant initial privileges.
         inner_client
             .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
             .await?;
         inner_client
             .batch_execute(&format!(
-                "GRANT CREATE ON DATABASE materialize TO {}",
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
                 self.materialize_user
             ))
             .await?;
         inner_client
             .batch_execute(&format!(
-                "GRANT CREATE ON SCHEMA materialize.public TO {}",
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
                 self.materialize_user
             ))
             .await?;
@@ -360,7 +368,7 @@ impl State {
             .await?;
         inner_client
             .batch_execute(&format!(
-                "GRANT CREATE ON CLUSTER default TO {}",
+                "GRANT ALL PRIVILEGES ON CLUSTER default TO {}",
                 self.materialize_user
             ))
             .await?;
@@ -689,12 +697,11 @@ pub async fn create_state(
                 .context("setting session parameter")?;
         }
 
-        // Old versions of Materialize did not support `current_user`, so we
-        // fail gracefully.
-        let materialize_user = match pgclient.query_one("SELECT current_user", &[]).await {
-            Ok(row) => row.get(0),
-            Err(_) => "<unknown user>".to_owned(),
-        };
+        let materialize_user = config
+            .materialize_pgconfig
+            .get_user()
+            .expect("testdrive URL must contain user")
+            .to_string();
 
         let materialize_sql_addr = format!(
             "{}:{}",

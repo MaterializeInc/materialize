@@ -20,10 +20,6 @@ use crate::TransformArgs;
 pub struct FlatMapToMap;
 
 impl crate::Transform for FlatMapToMap {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

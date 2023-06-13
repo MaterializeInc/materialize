@@ -228,7 +228,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     primary_source_id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
-    source_resume_upper: Vec<Row>,
+    source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
 ) {
     let worker_id = timely_worker.index();
     let worker_logging = timely_worker.log_register().get("timely");
@@ -249,7 +249,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 &debug_name,
                 primary_source_id,
                 description.clone(),
-                resume_upper,
+                resume_upper.clone(),
                 source_resume_upper,
                 storage_state,
             );
@@ -292,6 +292,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let health_token = crate::source::health_operator(
                 into_time_scope,
                 storage_state,
+                resume_upper,
                 primary_source_id,
                 &health_stream,
                 health_configs,

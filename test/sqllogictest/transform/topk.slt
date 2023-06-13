@@ -34,7 +34,7 @@ Explained Query:
   Project (#4, #0, #1) // { arity: 3 }
     Map ((bigint_to_double(#2) / bigint_to_double(case when (#3 = 0) then null else #3 end))) // { arity: 5 }
       Reduce group_by=[#1, #2] aggregates=[sum(#0), count(#0)] // { arity: 4 }
-        TopK order_by=[#0 asc nulls_first] limit=4 monotonic=false // { arity: 3 }
+        TopK order_by=[#0 asc nulls_first] limit=4 // { arity: 3 }
           Project (#3, #5, #6) // { arity: 3 }
             Map ((#0 + #1), (#4 + #2), (#4 + #3)) // { arity: 7 }
               Get materialize.public.test1 // { arity: 4 }
@@ -108,7 +108,7 @@ query T multiline
 explain with(arity, join_impls) view v1;
 ----
 materialize.public.v1:
-  TopK order_by=[#0 asc nulls_last] limit=3 offset=3 monotonic=false // { arity: 2 }
+  TopK order_by=[#0 asc nulls_last] limit=3 offset=3 // { arity: 2 }
     Get materialize.public.t1 // { arity: 2 }
 
 EOF

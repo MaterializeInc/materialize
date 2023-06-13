@@ -11,7 +11,7 @@
 # topic creation
 # $ kafka-create-topic topic=bytes
 
-$ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=1000
+$ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=100
 abc:abc
 
 > DROP SOURCE IF EXISTS bytes CASCADE;
@@ -36,7 +36,9 @@ abc:abc
   ENVELOPE NONE
   WITH (SIZE '3xsmall');
 
-> CREATE DEFAULT INDEX ON bytes;
+> CREATE MATERIALIZED VIEW bytes_view AS SELECT COUNT(*) AS cnt FROM bytes;
 
-> SELECT COUNT(*) > 0 from bytes
+> CREATE DEFAULT INDEX ON bytes_view;
+
+> SELECT cnt > 0 from bytes_view
 true

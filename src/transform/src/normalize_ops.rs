@@ -12,24 +12,13 @@
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
-use crate::{all, TransformArgs};
+use crate::TransformArgs;
 
 /// Normalize the structure of various operators.
 #[derive(Debug)]
 pub struct NormalizeOps;
 
 impl crate::Transform for NormalizeOps {
-    fn recursion_safe(&self) -> bool {
-        // Keep this in sync with the actions called in `NormalizeOps::action`!
-        all![
-            crate::canonicalization::FlatMapToMap.recursion_safe(),
-            crate::canonicalization::TopKElision.recursion_safe(),
-            crate::canonicalization::ProjectionExtraction.recursion_safe(),
-            crate::fusion::Fusion.recursion_safe(),
-            crate::fusion::join::Join.recursion_safe(),
-        ]
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

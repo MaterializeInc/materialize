@@ -144,6 +144,14 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
+> SELECT source, subsource, type FROM mz_internal.mz_get_subsources('test_slot_source');
+materialize.public.test_slot_source materialize.public.pk_table subsource
+materialize.public.test_slot_source materialize.public.test_slot_source_progress progress
+
+> SELECT source, subsource, type FROM mz_internal.mz_get_subsources('materialize.public.test_slot_source');
+materialize.public.test_slot_source materialize.public.pk_table subsource
+materialize.public.test_slot_source materialize.public.test_slot_source_progress progress
+
 > DROP SOURCE test_slot_source
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
@@ -267,7 +275,7 @@ escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
 mz_source             postgres  ${arg.default-storage-size}
-mz_source_progress    subsource <null>
+mz_source_progress    progress  <null>
 no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
@@ -284,7 +292,7 @@ utf8_table            subsource <null>
 true
 
 # Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
@@ -643,7 +651,7 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null>
 enum_source             postgres  ${arg.default-storage-size}
-enum_source_progress    subsource <null>
+enum_source_progress    progress  <null>
 enum_table              subsource <null>
 
 > SELECT * FROM enum_table
@@ -667,7 +675,7 @@ INSERT INTO pk_table VALUES (99999);
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
 ! SELECT COUNT(*) = 0 FROM pk_table;
-regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
+regex:publication "mz_source" does not exist
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
@@ -685,7 +693,7 @@ regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
 
 > SHOW SOURCES
 another_source          postgres  ${arg.default-storage-size}
-another_source_progress subsource <null>
+another_source_progress progress  <null>
 another_table           subsource <null>
 
 > DROP SOURCE another_source

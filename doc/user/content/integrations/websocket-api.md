@@ -130,10 +130,12 @@ The response messages are WebSocket Text messages containing a JSON object that 
 ---------------------|------------
 `ReadyForQuery` | Sent at the end of each response batch
 `Notice` | An informational notice.
+`CommandStarting` | A command has executed and response data will be returned.
 `CommandComplete` | Executing a statement succeeded.
 `Error` | Executing a statement resulted in an error.
 `Rows` | A rows-returning statement is executing, and some `Row` messages may follow.
 `Row` | A single row result.
+`ParameterStatus` | Executing a statement caused some session parameters to change.
 
 #### `ReadyForQuery`
 
@@ -174,6 +176,23 @@ The payload has the following structure:
 }
 ```
 
+#### `CommandStarting`
+
+A statement has executed and response data will be returned.
+This message can be used to know if rows or streaming data will follow.
+The payload has the following structure:
+
+```
+{
+    "has_rows": <boolean>,
+    "is_streaming": <boolean>,
+}
+```
+
+The `has_rows` field is `true` if a `Rows` message will follow.
+The `is_streaming` field is `true` if there is no expectation that a `CommandComplete` message will ever occur.
+This is the case for `SUBSCRIBE` queries.
+
 #### `CommandComplete`
 
 Executing a statement succeeded.
@@ -190,6 +209,17 @@ Either a `CommandComplete` or `Error` message will always follow indicating ther
 A single row result.
 Will only occur after a `Rows` message.
 The payload is an array of JSON values corresponding to the columns from the `Rows` message.
+
+#### `ParameterStatus`
+
+Executing a statement caused a session parameter to change. The payload has the following structure:
+
+```
+{
+    "name": <name of parameter>,
+    "value": <new value of parameter>,
+}
+```
 
 #### TypeScript definition
 
@@ -230,6 +260,16 @@ interface Error {
 	hint?: string;
 }
 
+interface ParameterStatus {
+	name: string;
+	value: string;
+}
+
+interface CommandStarting {
+	has_rows: boolean;
+	is_streaming: boolean;
+}
+
 type WebSocketResult =
     | { type: "ReadyForQuery"; payload: string }
     | { type: "Notice"; payload: Notice }
@@ -237,6 +277,8 @@ type WebSocketResult =
     | { type: "Error"; payload: Error }
     | { type: "Rows"; payload: string[] }
     | { type: "Row"; payload: any[] }
+    | { type: "ParameterStatus"; payload: ParameterStatus }
+    | { type: "CommandStarting"; payload: CommandStarting }
     ;
 ```
 
@@ -246,9 +288,11 @@ type WebSocketResult =
 
 ```bash
 $ echo '{"query": "select 1,2; values (4), (5)"}' | websocat wss://<MZ host address>/api/experimental/sql
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?","?column?"]}
 {"type":"Row","payload":["1","2"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["column1"]}
 {"type":"Row","payload":["4"]}
 {"type":"Row","payload":["5"]}

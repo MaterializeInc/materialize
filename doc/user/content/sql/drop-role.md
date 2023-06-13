@@ -1,12 +1,12 @@
 ---
 title: "DROP ROLE"
-description: "`DROP ROLE` removes a role from your Materialize instance."
+description: "`DROP ROLE` removes a role from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP ROLE` removes a role from your Materialize instance.
+`DROP ROLE` removes a role from Materialize.
 
 {{< alpha />}}
 

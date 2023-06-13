@@ -43,6 +43,11 @@ message ProtoGetPlan {
     }
 }
 
+message ProtoLetRecLimit {
+  uint64 max_iters = 1;
+  bool return_at_limit = 2;
+}
+
 message ProtoPlan {
    message ProtoRowDiff {
         mz_repr.row.ProtoRow row = 1;
@@ -76,7 +81,8 @@ message ProtoPlan {
    message ProtoPlanLetRec {
         repeated mz_expr.id.ProtoLocalId ids = 1;
         repeated ProtoPlan values = 2;
-        repeated uint64 max_iters = 4;
+        repeated ProtoLetRecLimit limits = 4;
+        repeated bool limit_is_some = 5;
         ProtoPlan body  = 3;
    }
 

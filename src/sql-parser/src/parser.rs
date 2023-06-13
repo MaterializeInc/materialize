@@ -397,8 +397,8 @@ impl<'a> Parser<'a> {
         let expr = match tok {
             Token::LBracket => {
                 self.prev_token();
-                let name = self.parse_raw_name()?;
-                self.parse_function(name)
+                let function = self.parse_named_function()?;
+                Ok(Expr::Function(function))
             }
             Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
                 self.prev_token();
@@ -605,7 +605,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: RawItemName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: RawItemName) -> Result<Function<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let distinct = matches!(
             self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
@@ -660,13 +660,13 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(Expr::Function(Function {
+        Ok(Function {
             name,
             args,
             filter,
             over,
             distinct,
-        }))
+        })
     }
 
     fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
@@ -1044,7 +1044,7 @@ impl<'a> Parser<'a> {
                 IS => {
                     let negated = self.parse_keyword(NOT);
                     if let Some(construct) =
-                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN])
+                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN, DISTINCT])
                     {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
@@ -1054,6 +1054,11 @@ impl<'a> Parser<'a> {
                                 TRUE => IsExprConstruct::True,
                                 FALSE => IsExprConstruct::False,
                                 UNKNOWN => IsExprConstruct::Unknown,
+                                DISTINCT => {
+                                    self.expect_keyword(FROM)?;
+                                    let expr = self.parse_expr()?;
+                                    IsExprConstruct::DistinctFrom(Box::new(expr))
+                                }
                                 _ => unreachable!(),
                             },
                         })
@@ -2704,14 +2709,16 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator =
-                    match self.expect_one_of_keywords(&[COUNTER, AUCTION, TPCH, DATUMS])? {
-                        COUNTER => LoadGenerator::Counter,
-                        AUCTION => LoadGenerator::Auction,
-                        TPCH => LoadGenerator::Tpch,
-                        DATUMS => LoadGenerator::Datums,
-                        _ => unreachable!(),
-                    };
+                let generator = match self
+                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS])?
+                {
+                    COUNTER => LoadGenerator::Counter,
+                    AUCTION => LoadGenerator::Auction,
+                    TPCH => LoadGenerator::Tpch,
+                    DATUMS => LoadGenerator::Datums,
+                    MARKETING => LoadGenerator::Marketing,
+                    _ => unreachable!(),
+                };
                 let options = if self.consume_token(&Token::LParen) {
                     let options =
                         self.parse_comma_separated(Parser::parse_load_generator_option)?;
@@ -3647,9 +3654,15 @@ impl<'a> Parser<'a> {
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
         if self.parse_keyword(SYSTEM) {
-            return self.parse_alter_system();
+            self.parse_alter_system()
+        } else if self.parse_keywords(&[DEFAULT, PRIVILEGES]) {
+            self.parse_alter_default_privileges()
+        } else {
+            self.parse_alter_object()
         }
+    }
 
+    fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = self.expect_object_type()?;
 
         match object_type {
@@ -3661,7 +3674,7 @@ impl<'a> Parser<'a> {
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_item_name()?;
+                let name = UnresolvedObjectName::Item(self.parse_item_name()?);
                 let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
                 self.expect_keyword(TO)?;
                 match action {
@@ -3679,7 +3692,7 @@ impl<'a> Parser<'a> {
                         Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
-                            name: UnresolvedObjectName::Item(name),
+                            name,
                             new_owner,
                         }))
                     }
@@ -3701,26 +3714,56 @@ impl<'a> Parser<'a> {
             ObjectType::Cluster => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::Cluster(self.parse_identifier()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
+                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
             ObjectType::Database => {
                 let if_exists = self.parse_if_exists()?;
@@ -3789,7 +3832,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3844,7 +3887,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Index,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -3884,7 +3927,7 @@ impl<'a> Parser<'a> {
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type: ObjectType::Secret,
                     if_exists,
-                    name,
+                    name: UnresolvedObjectName::Item(name),
                     to_item_name,
                 })
             }
@@ -3940,7 +3983,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Sink,
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -4000,9 +4043,8 @@ impl<'a> Parser<'a> {
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Connection,
-
                         if_exists,
-                        name,
+                        name: UnresolvedObjectName::Item(name),
                         to_item_name,
                     })
                 }
@@ -4031,6 +4073,68 @@ impl<'a> Parser<'a> {
         let _ = self.parse_keyword(WITH);
         let options = self.parse_role_attributes();
         Ok(Statement::AlterRole(AlterRoleStatement { name, options }))
+    }
+
+    fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let target_roles = if self.parse_keyword(FOR) {
+            let _ = self.parse_one_of_keywords(&[ROLE, USER]);
+            Some(self.parse_comma_separated(Parser::parse_identifier)?)
+        } else {
+            None
+        };
+        let target_objects = if self.parse_keyword(IN) {
+            match self.expect_one_of_keywords(&[SCHEMA, DATABASE])? {
+                SCHEMA => GrantTargetAllSpecification::AllSchemas {
+                    schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
+                },
+                DATABASE => GrantTargetAllSpecification::AllDatabases {
+                    databases: self.parse_comma_separated(Parser::parse_database_name)?,
+                },
+                _ => unreachable!(),
+            }
+        } else {
+            GrantTargetAllSpecification::All
+        };
+        let is_grant = self.expect_one_of_keywords(&[GRANT, REVOKE])? == GRANT;
+        let privileges = self.parse_privilege_specification().ok_or_else(|| {
+            self.expected::<_, PrivilegeSpecification>(
+                self.peek_pos(),
+                "ALL or INSERT or SELECT or UPDATE or DELETE or USAGE or CREATE",
+                self.peek_token(),
+            )
+            .expect_err("only returns errors")
+        })?;
+        self.expect_keyword(ON)?;
+        let object_type =
+            self.expect_grant_revoke_plural_object_type(if is_grant { "GRANT" } else { "REVOKE" })?;
+        if is_grant {
+            self.expect_keyword(TO)?;
+        } else {
+            self.expect_keyword(FROM)?;
+        }
+        let grantees = self.parse_comma_separated(Parser::expect_role_specification)?;
+
+        let grant_or_revoke = if is_grant {
+            AbbreviatedGrantOrRevokeStatement::Grant(AbbreviatedGrantStatement {
+                privileges,
+                object_type,
+                grantees,
+            })
+        } else {
+            AbbreviatedGrantOrRevokeStatement::Revoke(AbbreviatedRevokeStatement {
+                privileges,
+                object_type,
+                revokees: grantees,
+            })
+        };
+
+        Ok(Statement::AlterDefaultPrivileges(
+            AlterDefaultPrivilegesStatement {
+                target_roles,
+                target_objects,
+                grant_or_revoke,
+            },
+        ))
     }
 
     /// Parse a copy statement
@@ -4565,9 +4669,10 @@ impl<'a> Parser<'a> {
                 }
                 if ends_with_wildcard {
                     Ok(Expr::QualifiedWildcard(id_parts))
-                } else if self.consume_token(&Token::LParen) {
-                    self.prev_token();
-                    self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))
+                } else if self.peek_token() == Some(Token::LParen) {
+                    let function =
+                        self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))?;
+                    Ok(Expr::Function(function))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -4677,12 +4782,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mut_rec_block_option(&mut self) -> Result<MutRecBlockOption<Raw>, ParserError> {
-        self.expect_keywords(&[ITERATION, LIMIT])?;
-        let name = MutRecBlockOptionName::IterLimit;
-        Ok(MutRecBlockOption {
-            name,
-            value: self.parse_optional_option_value()?,
-        })
+        match self.expect_one_of_keywords(&[RECURSION, RETURN, ERROR])? {
+            RECURSION => {
+                self.expect_keyword(LIMIT)?;
+                Ok(MutRecBlockOption {
+                    name: MutRecBlockOptionName::RecursionLimit,
+                    value: self.parse_optional_option_value()?,
+                })
+            }
+            RETURN => {
+                self.expect_keywords(&[AT, RECURSION, LIMIT])?;
+                Ok(MutRecBlockOption {
+                    name: MutRecBlockOptionName::ReturnAtRecursionLimit,
+                    value: self.parse_optional_option_value()?,
+                })
+            }
+            ERROR => {
+                self.expect_keywords(&[AT, RECURSION, LIMIT])?;
+                Ok(MutRecBlockOption {
+                    name: MutRecBlockOptionName::ErrorAtRecursionLimit,
+                    value: self.parse_optional_option_value()?,
+                })
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_query_tail(
@@ -5033,11 +5156,11 @@ impl<'a> Parser<'a> {
         }
         if variable.as_str().parse() == Ok(SCHEMA) {
             variable = Ident::new("search_path");
-            let to = self.parse_set_variable_value()?;
+            let to = self.parse_set_schema_to()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
-                to: SetVariableTo::Values(vec![to]),
+                to,
             }))
         } else if normal {
             let to = self.parse_set_variable_to()?;
@@ -5046,20 +5169,32 @@ impl<'a> Parser<'a> {
                 variable,
                 to,
             }))
-        } else if
-        // SET TRANSACTION transaction_mode
-        (variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none())
-            ||
-            // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
-            (modifier == Some(SESSION)
-                && variable.as_str().parse() == Ok(CHARACTERISTICS)
-                && self.parse_keywords(&[AS, TRANSACTION]))
-        {
+        } else if variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none() {
+            // SET TRANSACTION transaction_mode
             Ok(Statement::SetTransaction(SetTransactionStatement {
-                modes: self.parse_transaction_modes()?,
+                local: true,
+                modes: self.parse_transaction_modes(true)?,
+            }))
+        } else if modifier == Some(SESSION)
+            && variable.as_str().parse() == Ok(CHARACTERISTICS)
+            && self.parse_keywords(&[AS, TRANSACTION])
+        {
+            // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
+            Ok(Statement::SetTransaction(SetTransactionStatement {
+                local: false,
+                modes: self.parse_transaction_modes(true)?,
             }))
         } else {
             self.expected(self.peek_pos(), "equals sign or TO", self.peek_token())
+        }
+    }
+
+    fn parse_set_schema_to(&mut self) -> Result<SetVariableTo, ParserError> {
+        if self.parse_keyword(DEFAULT) {
+            Ok(SetVariableTo::Default)
+        } else {
+            let to = self.parse_set_variable_value()?;
+            Ok(SetVariableTo::Values(vec![to]))
         }
     }
 
@@ -5084,7 +5219,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let variable = self.parse_identifier()?;
+        let mut variable = self.parse_identifier()?;
+        if variable.as_str().parse() == Ok(SCHEMA) {
+            variable = Ident::new("search_path");
+        }
         Ok(Statement::ResetVariable(ResetVariableStatement {
             variable,
         }))
@@ -5331,7 +5469,13 @@ impl<'a> Parser<'a> {
                 let alias = self.parse_optional_table_alias()?;
                 let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 return Ok(TableFactor::Function {
-                    function: TableFunction { name, args },
+                    function: Function {
+                        name,
+                        args,
+                        filter: None,
+                        over: None,
+                        distinct: false,
+                    },
                     alias,
                     with_ordinality,
                 });
@@ -5397,7 +5541,13 @@ impl<'a> Parser<'a> {
                 let alias = self.parse_optional_table_alias()?;
                 let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
                 Ok(TableFactor::Function {
-                    function: TableFunction { name, args },
+                    function: Function {
+                        name,
+                        args,
+                        filter: None,
+                        over: None,
+                        distinct: false,
+                    },
                     alias,
                     with_ordinality,
                 })
@@ -5412,7 +5562,7 @@ impl<'a> Parser<'a> {
 
     fn parse_rows_from(&mut self) -> Result<TableFactor<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let functions = self.parse_comma_separated(Parser::parse_table_function)?;
+        let functions = self.parse_comma_separated(Parser::parse_named_function)?;
         self.expect_token(&Token::RParen)?;
         let alias = self.parse_optional_table_alias()?;
         let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
@@ -5423,13 +5573,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
+    fn parse_named_function(&mut self) -> Result<Function<Raw>, ParserError> {
         let name = self.parse_raw_name()?;
-        self.expect_token(&Token::LParen)?;
-        Ok(TableFunction {
-            name,
-            args: self.parse_optional_args(false)?,
-        })
+        self.parse_function(name)
     }
 
     fn parse_derived_table_factor(
@@ -5501,6 +5647,13 @@ impl<'a> Parser<'a> {
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
         let table_name = RawItemName::Name(self.parse_item_name()?);
+        // The alias here doesn't support columns, so don't use parse_optional_table_alias.
+        let alias = self.parse_optional_alias(Keyword::is_reserved_in_table_alias)?;
+        let alias = alias.map(|name| TableAlias {
+            name,
+            columns: Vec::new(),
+            strict: false,
+        });
 
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
@@ -5512,6 +5665,7 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Update(UpdateStatement {
             table_name,
+            alias,
             assignments,
             selection,
         }))
@@ -5636,20 +5790,22 @@ impl<'a> Parser<'a> {
     fn parse_start_transaction(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(TRANSACTION)?;
         Ok(Statement::StartTransaction(StartTransactionStatement {
-            modes: self.parse_transaction_modes()?,
+            modes: self.parse_transaction_modes(false)?,
         }))
     }
 
     fn parse_begin(&mut self) -> Result<Statement<Raw>, ParserError> {
         let _ = self.parse_one_of_keywords(&[TRANSACTION, WORK]);
         Ok(Statement::StartTransaction(StartTransactionStatement {
-            modes: self.parse_transaction_modes()?,
+            modes: self.parse_transaction_modes(false)?,
         }))
     }
 
-    fn parse_transaction_modes(&mut self) -> Result<Vec<TransactionMode>, ParserError> {
+    fn parse_transaction_modes(
+        &mut self,
+        mut required: bool,
+    ) -> Result<Vec<TransactionMode>, ParserError> {
         let mut modes = vec![];
-        let mut required = false;
         loop {
             let mode = if self.parse_keywords(&[ISOLATION, LEVEL]) {
                 let iso_level = if self.parse_keywords(&[READ, UNCOMMITTED]) {
@@ -5660,6 +5816,8 @@ impl<'a> Parser<'a> {
                     TransactionIsolationLevel::RepeatableRead
                 } else if self.parse_keyword(SERIALIZABLE) {
                     TransactionIsolationLevel::Serializable
+                } else if self.parse_keywords(&[STRICT, SERIALIZABLE]) {
+                    TransactionIsolationLevel::StrictSerializable
                 } else {
                     self.expected(self.peek_pos(), "isolation level", self.peek_token())?
                 };
@@ -5985,113 +6143,191 @@ impl<'a> Parser<'a> {
     /// has already been consumed.
     fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
         match self.parse_privilege_specification() {
-            Some(privileges) => {
-                self.expect_keyword(ON)?;
-                // If the object type is omitted, then it is assumed to be a table.
-                let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
-                match object_type {
-                    ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
-                        return parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
-                        );
-                    }
-                    ObjectType::Sink
-                    | ObjectType::Index
-                    | ObjectType::ClusterReplica
-                    | ObjectType::Role
-                    | ObjectType::Func => {
-                        return parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("Unsupported GRANT on {object_type}")
-                        );
-                    }
-                    ObjectType::Table
-                    | ObjectType::Type
-                    | ObjectType::Cluster
-                    | ObjectType::Secret
-                    | ObjectType::Connection
-                    | ObjectType::Database
-                    | ObjectType::Schema => {}
-                }
-                let name = self.parse_object_name(object_type)?;
-                self.expect_keyword(TO)?;
-                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
-                    privileges,
-                    object_type,
-                    name,
-                    roles,
-                }))
-            }
-            None => {
-                let role_name = self.parse_identifier()?;
-                self.expect_keyword(TO)?;
-                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::GrantRole(GrantRoleStatement {
-                    role_name,
-                    member_names,
-                }))
-            }
+            Some(privileges) => self.parse_grant_privilege(privileges),
+            None => self.parse_grant_role(),
         }
+    }
+
+    /// Parse a `GRANT PRIVILEGE` statement, assuming that the `GRANT` token
+    /// and all privileges have already been consumed.
+    fn parse_grant_privilege(
+        &mut self,
+        privileges: PrivilegeSpecification,
+    ) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ON)?;
+        let target = self.expect_grant_target_specification("GRANT")?;
+        self.expect_keyword(TO)?;
+        let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
+            privileges,
+            target,
+            roles,
+        }))
+    }
+
+    /// Parse a `GRANT ROLE` statement, assuming that the `GRANT` token
+    /// has already been consumed.
+    fn parse_grant_role(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let role_name = self.parse_identifier()?;
+        self.expect_keyword(TO)?;
+        let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::GrantRole(GrantRoleStatement {
+            role_name,
+            member_names,
+        }))
     }
 
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
         match self.parse_privilege_specification() {
-            Some(privileges) => {
-                self.expect_keyword(ON)?;
-                // If the object type is omitted, then it is assumed to be a table.
-                let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
-                match object_type {
-                    ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
-                        return parser_err!(
+            Some(privileges) => self.parse_revoke_privilege(privileges),
+            None => self.parse_revoke_role(),
+        }
+    }
+
+    /// Parse a `REVOKE PRIVILEGE` statement, assuming that the `REVOKE` token
+    /// and all privileges have already been consumed.
+    fn parse_revoke_privilege(
+        &mut self,
+        privileges: PrivilegeSpecification,
+    ) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ON)?;
+        let target = self.expect_grant_target_specification("REVOKE")?;
+        self.expect_keyword(FROM)?;
+        let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
+            privileges,
+            target,
+            roles,
+        }))
+    }
+
+    /// Parse a `REVOKE ROLE` statement, assuming that the `REVOKE` token
+    /// has already been consumed.
+    fn parse_revoke_role(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let role_name = self.parse_identifier()?;
+        self.expect_keyword(FROM)?;
+        let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
+        Ok(Statement::RevokeRole(RevokeRoleStatement {
+            role_name,
+            member_names,
+        }))
+    }
+
+    fn expect_grant_target_specification(
+        &mut self,
+        statement_type: &str,
+    ) -> Result<GrantTargetSpecification<Raw>, ParserError> {
+        let (object_type, object_spec_inner) = if self.parse_keyword(ALL) {
+            let object_type = self.expect_grant_revoke_plural_object_type(statement_type)?;
+            let object_spec_inner = if self.parse_keyword(IN) {
+                if !object_type.lives_in_schema() && object_type != ObjectType::Schema {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        format!("IN invalid for {object_type}S")
+                    );
+                }
+                match self.expect_one_of_keywords(&[DATABASE, SCHEMA])? {
+                    DATABASE => GrantTargetSpecificationInner::All(
+                        GrantTargetAllSpecification::AllDatabases {
+                            databases: self.parse_comma_separated(Parser::parse_database_name)?,
+                        },
+                    ),
+                    SCHEMA => {
+                        if object_type == ObjectType::Schema {
+                            self.prev_token();
+                            self.expected(self.peek_pos(), DATABASE, self.peek_token())?;
+                        }
+                        GrantTargetSpecificationInner::All(
+                            GrantTargetAllSpecification::AllSchemas {
+                                schemas: self.parse_comma_separated(Parser::parse_schema_name)?,
+                            },
+                        )
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                GrantTargetSpecificationInner::All(GrantTargetAllSpecification::All)
+            };
+            (object_type, object_spec_inner)
+        } else {
+            let object_type = self.expect_grant_revoke_object_type(statement_type)?;
+            let object_spec_inner = GrantTargetSpecificationInner::Objects {
+                names: self
+                    .parse_comma_separated(|parser| parser.parse_object_name(object_type))?,
+            };
+            (object_type, object_spec_inner)
+        };
+
+        Ok(GrantTargetSpecification {
+            object_type,
+            object_spec_inner,
+        })
+    }
+
+    /// Bail out if the current token is not an object type suitable for a GRANT/REVOKE, or consume
+    /// and return it if it is.
+    fn expect_grant_revoke_object_type(
+        &mut self,
+        statement_type: &str,
+    ) -> Result<ObjectType, ParserError> {
+        // If the object type is omitted, then it is assumed to be a table.
+        let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
+        self.expect_grant_revoke_object_type_inner(statement_type, object_type)
+    }
+
+    /// Bail out if the current token is not a plural object type suitable for a GRANT/REVOKE, or consume
+    /// and return it if it is.
+    fn expect_grant_revoke_plural_object_type(
+        &mut self,
+        statement_type: &str,
+    ) -> Result<ObjectType, ParserError> {
+        let object_type = self.expect_plural_object_type().map_err(|_| {
+            // Limit the error message to allowed object types.
+            self.expected::<_, ObjectType>(
+                self.peek_pos(),
+                "one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS",
+                self.peek_token(),
+            )
+            .unwrap_err()
+        })?;
+        self.expect_grant_revoke_object_type_inner(statement_type, object_type)?;
+        Ok(object_type)
+    }
+
+    fn expect_grant_revoke_object_type_inner(
+        &mut self,
+        statement_type: &str,
+        object_type: ObjectType,
+    ) -> Result<ObjectType, ParserError> {
+        match object_type {
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
+                parser_err!(
                             self,
                             self.peek_prev_pos(),
                             format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
-                        );
-                    }
-                    ObjectType::Sink
-                    | ObjectType::Index
-                    | ObjectType::ClusterReplica
-                    | ObjectType::Role
-                    | ObjectType::Func => {
-                        return parser_err!(
-                            self,
-                            self.peek_prev_pos(),
-                            format!("Unsupported REVOKE on {object_type}")
-                        );
-                    }
-                    ObjectType::Table
-                    | ObjectType::Type
-                    | ObjectType::Cluster
-                    | ObjectType::Secret
-                    | ObjectType::Connection
-                    | ObjectType::Database
-                    | ObjectType::Schema => {}
-                }
-                let name = self.parse_object_name(object_type)?;
-                self.expect_keyword(FROM)?;
-                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
-                    privileges,
-                    object_type,
-                    name,
-                    roles,
-                }))
+                        )
             }
-            None => {
-                let role_name = self.parse_identifier()?;
-                self.expect_keyword(FROM)?;
-                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::RevokeRole(RevokeRoleStatement {
-                    role_name,
-                    member_names,
-                }))
+            ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::ClusterReplica
+            | ObjectType::Role
+            | ObjectType::Func => {
+                parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    format!("Unsupported {statement_type} on {object_type}")
+                )
             }
+            ObjectType::Table
+            | ObjectType::Type
+            | ObjectType::Cluster
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Database
+            | ObjectType::Schema => Ok(object_type),
         }
     }
 
@@ -6118,7 +6354,10 @@ impl<'a> Parser<'a> {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
                 MATERIALIZED => {
-                    self.expect_keyword(VIEW)?;
+                    if let Err(e) = self.expect_keyword(VIEW) {
+                        self.prev_token();
+                        return Err(e);
+                    }
                     ObjectType::MaterializedView
                 }
                 SOURCE => ObjectType::Source,
@@ -6190,6 +6429,57 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    /// Bail out if the current token is not an object type in the plural form, or consume and return it if it is.
+    fn expect_plural_object_type(&mut self) -> Result<ObjectType, ParserError> {
+        Ok(
+            match self.expect_one_of_keywords(&[
+                TABLES,
+                VIEWS,
+                MATERIALIZED,
+                SOURCES,
+                SINKS,
+                INDEXES,
+                TYPES,
+                ROLES,
+                USERS,
+                CLUSTER,
+                CLUSTERS,
+                SECRETS,
+                CONNECTIONS,
+                DATABASES,
+                SCHEMAS,
+            ])? {
+                TABLES => ObjectType::Table,
+                VIEWS => ObjectType::View,
+                MATERIALIZED => {
+                    if let Err(e) = self.expect_keyword(VIEWS) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::MaterializedView
+                }
+                SOURCES => ObjectType::Source,
+                SINKS => ObjectType::Sink,
+                INDEXES => ObjectType::Index,
+                TYPES => ObjectType::Type,
+                ROLES | USERS => ObjectType::Role,
+                CLUSTER => {
+                    if let Err(e) = self.expect_keyword(REPLICAS) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::ClusterReplica
+                }
+                CLUSTERS => ObjectType::Cluster,
+                SECRETS => ObjectType::Secret,
+                CONNECTIONS => ObjectType::Connection,
+                DATABASES => ObjectType::Database,
+                SCHEMAS => ObjectType::Schema,
                 _ => unreachable!(),
             },
         )

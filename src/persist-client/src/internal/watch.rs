@@ -154,7 +154,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn state_watch() {
         mz_ore::test::init_logging();
         let metrics = Arc::new(Metrics::new(
@@ -200,7 +200,7 @@ mod tests {
         assert!(w1.wait_for_seqno_ge(SeqNo(2)).now_or_never().is_none());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn state_watch_concurrency() {
         mz_ore::test::init_logging();
         let metrics = Arc::new(Metrics::new(
@@ -266,7 +266,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn state_watch_listen_snapshot() {
         mz_ore::test::init_logging();
         let waker = noop_waker();

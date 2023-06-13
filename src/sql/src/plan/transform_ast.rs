@@ -18,7 +18,7 @@ use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHE
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, Value,
+    TableFactor, TableWithJoins, Value,
 };
 use uuid::Uuid;
 
@@ -502,11 +502,14 @@ impl<'a> Desugarer<'a> {
                 Select::default()
                     .from(TableWithJoins {
                         relation: TableFactor::Function {
-                            function: TableFunction {
+                            function: Function {
                                 name: self
                                     .scx
                                     .dangerous_resolve_name(vec![MZ_CATALOG_SCHEMA, "unnest"]),
                                 args: FunctionArgs::args(vec![right.take()]),
+                                filter: None,
+                                over: None,
+                                distinct: false,
                             },
                             alias: Some(TableAlias {
                                 name: Ident::new("_"),

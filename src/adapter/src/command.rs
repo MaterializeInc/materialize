@@ -22,12 +22,13 @@ use enum_kinds::EnumKind;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
-use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
+use mz_sql::ast::{FetchDirection, Raw, Statement};
+use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, PlanKind};
 use mz_sql::session::vars::Var;
 use tokio::sync::{oneshot, watch};
 
-use crate::client::ConnectionId;
+use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -49,7 +50,7 @@ pub enum Command {
         tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
-    Describe {
+    Prepare {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
@@ -77,8 +78,12 @@ pub enum Command {
     },
 
     CancelRequest {
-        conn_id: ConnectionId,
+        conn_id: ConnectionIdType,
         secret_key: u32,
+    },
+
+    PrivilegedCancelRequest {
+        conn_id: ConnectionId,
     },
 
     DumpCatalog {
@@ -116,7 +121,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -125,7 +130,7 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } => None,
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 
@@ -133,7 +138,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -142,7 +147,7 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } => None,
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 
@@ -156,11 +161,11 @@ impl Command {
         match self {
             Command::Startup { tx, session, .. } => send(tx, session, e),
             Command::Declare { tx, session, .. } => send(tx, session, e),
-            Command::Describe { tx, session, .. } => send(tx, session, e),
+            Command::Prepare { tx, session, .. } => send(tx, session, e),
             Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
             Command::Commit { tx, session, .. } => send(tx, session, e),
-            Command::CancelRequest { .. } => {}
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
             Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
             Command::CopyRows { tx, session, .. } => send(tx, session, e),
             Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
@@ -182,7 +187,7 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
-/// The response to [`ConnClient::startup`](crate::ConnClient::startup).
+/// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
     /// Notifications associated with session startup.
@@ -402,9 +407,15 @@ pub enum ExecuteResponse {
     /// contained receiver.
     Subscribing { rx: RowBatchStream },
     /// The active transaction committed.
-    TransactionCommitted,
+    TransactionCommitted {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The active transaction rolled back.
-    TransactionRolledBack,
+    TransactionRolledBack {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
 }
@@ -468,8 +479,8 @@ impl ExecuteResponse {
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
             Subscribing { .. } => None,
-            TransactionCommitted => Some("COMMIT".into()),
-            TransactionRolledBack => Some("ROLLBACK".into()),
+            TransactionCommitted { .. } => Some("COMMIT".into()),
+            TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
         }
     }
@@ -482,7 +493,14 @@ impl ExecuteResponse {
 
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
-            AlterOwner | AlterItemRename | AlterNoop | AlterSecret | AlterSink | AlterSource
+            AlterClusterRename
+            | AlterClusterReplicaRename
+            | AlterOwner
+            | AlterItemRename
+            | AlterNoop
+            | AlterSecret
+            | AlterSink
+            | AlterSource
             | RotateKeys => {
                 vec![AlteredObject]
             }
@@ -522,16 +540,18 @@ impl ExecuteResponse {
             }
             Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
-            GrantPrivilege => vec![GrantedPrivilege],
+            GrantPrivileges => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
             CopyRows => vec![Inserted],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
             PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
-            RevokePrivilege => vec![RevokedPrivilege],
+            RevokePrivileges => vec![RevokedPrivilege],
             RevokeRole => vec![RevokedRole],
-            PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
+            PlanKind::SetVariable | ResetVariable | PlanKind::SetTransaction => {
+                vec![ExecuteResponseKind::SetVariable]
+            }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
         }

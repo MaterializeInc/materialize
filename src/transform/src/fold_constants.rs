@@ -32,10 +32,6 @@ pub struct FoldConstants {
 }
 
 impl crate::Transform for FoldConstants {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

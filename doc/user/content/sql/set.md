@@ -7,7 +7,8 @@ menu:
 
 ---
 
-`SET` modifies the value of a session variable. By default, values are set for the duration of the current session.
+`SET` modifies the value of a session variable. By default, values are set for
+the duration of the current session.
 
 To see the current value of a session variable, use [`SHOW`](../show).
 
@@ -25,13 +26,13 @@ _variable&lowbar;value_ | The value to assign to the session variable.
 
 {{% session-variables %}}
 
-## Special Syntax
+### Alias session variables
 
 There are a few session variables that act as aliases for other session variables.
 
-- `SCHEMA`: `SCHEMA` is an alias for `search_path`. Only one schema can be specified using this syntax. The `TO` and `=` syntax are optional.
-- `NAMES`: `NAMES` is an alias for `client_encoding`. The `TO` and `=` syntax must be omitted.
-- `TIME ZONE`: `TIME ZONE` is an alias for `timezone`. The `TO` and `=` syntax must be omitted.
+- `schema`: `schema` is an alias for `search_path`. Only one schema can be specified using this syntax. The `TO` and `=` syntax are optional.
+- `names`: `names` is an alias for `client_encoding`. The `TO` and `=` syntax must be omitted.
+- `time zone`: `time zone` is an alias for `timezone`. The `TO` and `=` syntax must be omitted.
 
 ## Examples
 
@@ -57,6 +58,16 @@ SHOW cluster;
 
 ```sql
 SET transaction_isolation = 'serializable';
+```
+
+### Set search path
+
+```sql
+SET search_path = public, qck;
+```
+
+```sql
+SET schema = qck;
 ```
 
 ## Related pages

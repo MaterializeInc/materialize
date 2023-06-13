@@ -7,6 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (
   a int,
@@ -430,5 +440,77 @@ Explained Query:
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT * FROM bar;
+----
+Return
+  Get l1
+With Mutually Recursive
+  cte l1 =
+    Project (#0)
+      Get l0
+  cte l0 =
+    Distinct
+      Union
+        Map (1, 2)
+          Constant
+            - ()
+        Map (7)
+          Get l1
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT = 5)
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT * FROM bar;
+----
+Return
+  Get l1
+With Mutually Recursive [recursion_limit=5]
+  cte l1 =
+    Project (#0)
+      Get l0
+  cte l0 =
+    Distinct
+      Union
+        Map (1, 2)
+          Constant
+            - ()
+        Map (7)
+          Get l1
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 5)
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT * FROM bar;
+----
+Return
+  Get l1
+With Mutually Recursive [recursion_limit=5, return_at_limit]
+  cte l1 =
+    Project (#0)
+      Get l0
+  cte l0 =
+    Distinct
+      Union
+        Map (1, 2)
+          Constant
+            - ()
+        Map (7)
+          Get l1
 
 EOF

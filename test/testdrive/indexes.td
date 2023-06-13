@@ -263,24 +263,36 @@ bar_ind bar <VARIABLE_OUTPUT> {a}
 > DROP CLUSTER clstr CASCADE;
 
 # Test creating indexes on system objects
-> CREATE INDEX sys_ind ON mz_array_types (id)
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+SET CLUSTER TO default
+CREATE INDEX sys_ind ON mz_array_types (id)
+
 > SET CLUSTER TO mz_introspection
 > SHOW INDEXES ON mz_array_types
 sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
 > SHOW INDEXES FROM mz_catalog WHERE name = 'sys_ind'
 sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
 > SET CLUSTER TO default
-> DROP INDEX sys_ind
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+DROP INDEX sys_ind
+ALTER SYSTEM SET enable_rbac_checks TO false
 
 # Test that creating indexes on objects in the mz_internal schema fails
 ! CREATE INDEX illegal_sys_ind ON mz_internal.mz_view_keys (object_id)
 contains:cannot create index with unstable dependencies
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO true
 
 > SHOW INDEXES IN CLUSTER mz_introspection
 mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_worker                   mz_introspection    {id,worker_id}
 mz_arrangement_batches_raw_s2_primary_idx                   mz_arrangement_batches_raw                   mz_introspection    {operator_id,worker_id}
 mz_arrangement_records_raw_s2_primary_idx                   mz_arrangement_records_raw                   mz_introspection    {operator_id,worker_id}
 mz_arrangement_sharing_raw_s2_primary_idx                   mz_arrangement_sharing_raw                   mz_introspection    {operator_id,worker_id}
+mz_arrangement_heap_capacity_raw_s2_primary_idx             mz_arrangement_heap_capacity_raw             mz_introspection    {operator_id,worker_id}
+mz_arrangement_heap_allocations_raw_s2_primary_idx          mz_arrangement_heap_allocations_raw          mz_introspection    {operator_id,worker_id}
+mz_arrangement_heap_size_raw_s2_primary_idx                 mz_arrangement_heap_size_raw                 mz_introspection    {operator_id,worker_id}
 mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_introspection    {replica_id}
 mz_cluster_replica_sizes_ind                                mz_cluster_replica_sizes                     mz_introspection    {size}
 mz_cluster_replica_statuses_ind                             mz_cluster_replica_statuses                  mz_introspection    {replica_id}
@@ -296,6 +308,7 @@ mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresse
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_introspection    {id,worker_id}
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
+mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
@@ -316,5 +329,7 @@ mz_show_sources_ind                                         mz_sources          
 mz_show_tables_ind                                          mz_tables                                    mz_introspection    {schema_id}
 mz_show_types_ind                                           mz_types                                     mz_introspection    {schema_id}
 mz_show_views_ind                                           mz_views                                     mz_introspection    {schema_id}
+mz_sink_statistics_ind                                      mz_sink_statistics                           mz_introspection    {id}
+mz_source_statistics_ind                                    mz_source_statistics                         mz_introspection    {id}
 mz_source_status_history_ind                                mz_source_status_history                     mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}
