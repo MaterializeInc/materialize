@@ -2567,12 +2567,6 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Timestamp, Timestamp) => BinaryFunc::AgeTimestamp => Interval, 2058;
             params!(TimestampTz, TimestampTz) => BinaryFunc::AgeTimestampTz => Interval, 1199;
         },
-        "datediff" => Scalar {
-            params!(String, Timestamp, Timestamp) => VariadicFunc::DateDiffTimestamp => Int64, 10_001;
-            params!(String, TimestampTz, TimestampTz) => VariadicFunc::DateDiffTimestampTz => Int64, 10_002;
-            params!(String, Date, Date) => VariadicFunc::DateDiffDate => Int64, 10_003;
-            params!(String, Time, Time) => VariadicFunc::DateDiffTime => Int64, 10_004;
-        },
         "timezone" => Scalar {
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
             params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz => Timestamp, 1159;
@@ -3142,6 +3136,12 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
+        },
+        "datediff" => Scalar {
+            params!(String, Timestamp, Timestamp) => VariadicFunc::DateDiffTimestamp => Int64, oid::FUNC_DATEDIFF_TIMESTAMP;
+            params!(String, TimestampTz, TimestampTz) => VariadicFunc::DateDiffTimestampTz => Int64, oid::FUNC_DATEDIFF_TIMESTAMPTZ;
+            params!(String, Date, Date) => VariadicFunc::DateDiffDate => Int64, oid::FUNC_DATEDIFF_DATE;
+            params!(String, Time, Time) => VariadicFunc::DateDiffTime => Int64, oid::FUNC_DATEDIFF_TIME;
         },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
