@@ -2549,7 +2549,7 @@ pub fn plan_create_type(
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
                 as_type,
                 key,
-                data_type.to_ast_string(),
+                data_type.human_readable_name(),
             ),
         };
 
