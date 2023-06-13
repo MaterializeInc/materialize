@@ -407,7 +407,7 @@ where
         cfg: &PersistConfig,
     ) -> Result<NextState<K, V, T, D, R>, (SeqNo, E)> {
         let is_write = cmd.name == metrics.cmds.compare_and_append.name;
-        let is_rollup = cmd.name == metrics.cmds.add_and_remove_rollups.name;
+        let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
 
         let expected = state.seqno;
         let was_tombstone_before = state.collections.is_tombstone();
