@@ -24,17 +24,29 @@ use crate::protocol::response::ProtoComputeResponse;
 /// Compute controller metrics
 #[derive(Debug, Clone)]
 pub struct ComputeControllerMetrics {
+    commands_total: IntCounterVec,
     command_message_bytes_total: IntCounterVec,
+    responses_total: IntCounterVec,
     response_message_bytes_total: IntCounterVec,
 }
 
 impl ComputeControllerMetrics {
     pub fn new(metrics_registry: MetricsRegistry) -> Self {
         ComputeControllerMetrics {
+            commands_total: metrics_registry.register(metric!(
+                name: "mz_compute_commands_total",
+                help: "The total number of compute commands sent.",
+                var_labels: ["instance_id", "replica_id", "command_type"],
+            )),
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_command_message_bytes_total",
                 help: "The total number of bytes sent in compute command messages.",
                 var_labels: ["instance_id", "replica_id", "command_type"],
+            )),
+            responses_total: metrics_registry.register(metric!(
+                name: "mz_compute_responses_total",
+                help: "The total number of compute responses sent.",
+                var_labels: ["instance_id", "replica_id", "response_type"],
             )),
             response_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_response_message_bytes_total",
@@ -64,10 +76,22 @@ impl InstanceMetrics {
         let instance_id = self.instance_id.to_string();
         let replica_id = replica_id.to_string();
 
+        let commands_total = CommandMetrics::build(|typ| {
+            let labels = vec![instance_id.clone(), replica_id.clone(), typ.into()];
+            self.metrics
+                .commands_total
+                .get_delete_on_drop_counter(labels)
+        });
         let command_message_bytes_total = CommandMetrics::build(|typ| {
             let labels = vec![instance_id.clone(), replica_id.clone(), typ.into()];
             self.metrics
                 .command_message_bytes_total
+                .get_delete_on_drop_counter(labels)
+        });
+        let responses_total = ResponseMetrics::build(|typ| {
+            let labels = vec![instance_id.clone(), replica_id.clone(), typ.into()];
+            self.metrics
+                .responses_total
                 .get_delete_on_drop_counter(labels)
         });
         let response_message_bytes_total = ResponseMetrics::build(|typ| {
@@ -78,7 +102,9 @@ impl InstanceMetrics {
         });
         ReplicaMetrics {
             inner: Arc::new(ReplicaMetricsInner {
+                commands_total,
                 command_message_bytes_total,
+                responses_total,
                 response_message_bytes_total,
             }),
         }
@@ -95,13 +121,16 @@ type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 
 #[derive(Debug)]
 struct ReplicaMetricsInner {
+    commands_total: CommandMetrics<IntCounter>,
     command_message_bytes_total: CommandMetrics<IntCounter>,
+    responses_total: ResponseMetrics<IntCounter>,
     response_message_bytes_total: ResponseMetrics<IntCounter>,
 }
 
 /// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
 impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetrics {
     fn send_event(&self, item: &ProtoComputeCommand, size: usize) {
+        self.inner.commands_total.for_proto_command(item).inc();
         self.inner
             .command_message_bytes_total
             .for_proto_command(item)
@@ -109,6 +138,7 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
     }
 
     fn receive_event(&self, item: &ProtoComputeResponse, size: usize) {
+        self.inner.responses_total.for_proto_response(item).inc();
         self.inner
             .response_message_bytes_total
             .for_proto_response(item)
