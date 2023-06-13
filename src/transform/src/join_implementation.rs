@@ -168,7 +168,10 @@ impl JoinImplementation {
                 );
             }
 
-            let cardinalities = cardinalities.into_iter().map(|c| c.order()).collect::<Vec<_>>();
+            let cardinalities = cardinalities
+                .into_iter()
+                .map(|c| c.order())
+                .collect::<Vec<_>>();
 
             // The first fundamental question is whether we should employ a delta query or not.
             //
@@ -555,8 +558,14 @@ mod differential {
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
-            let mut orders =
-                super::optimize_orders(equivalences, available, unique_keys, cardinalities, filters, input_mapper);
+            let mut orders = super::optimize_orders(
+                equivalences,
+                available,
+                unique_keys,
+                cardinalities,
+                filters,
+                input_mapper,
+            );
 
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
@@ -832,6 +841,7 @@ fn optimize_orders(
         .collect::<Vec<_>>()
 }
 
+#[allow(dead_code)]
 struct Orderer<'a> {
     inputs: usize,
     equivalences: &'a [Vec<MirScalarExpr>],
