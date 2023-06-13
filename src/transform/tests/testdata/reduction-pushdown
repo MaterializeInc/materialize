@@ -178,19 +178,20 @@ Project (#0, #3)
         Get z
         Get w
 
+# TODO(mgree): is this changed join order okay?
 opt
 (reduce (join [(get x) (get y) (get z) (get w)] [[#0 #2] [#3 #5] [#4 #6]]) [#3 #5] [])
 ----
 Project (#0, #0)
   Join on=(#0 = #1) type=differential
     implementation
-      %0[#0]UKA » %1[#0]UKA
+      %1[#0]UKA|1| » %0[#0]UKA|1|
     ArrangeBy keys=[[#0]]
       Distinct group_by=[#0]
         Project (#2)
           Join on=(#0 = #1) type=differential
             implementation
-              %0:x[#0]K » %1:y[#0]K
+              %0:x[#0]K|1| » %1:y[#0]K|1|
             ArrangeBy keys=[[#0]]
               Project (#0)
                 Get x
@@ -201,7 +202,7 @@ Project (#0, #0)
         Project (#1)
           Join on=(#0 = #2) type=differential
             implementation
-              %0:z[#0]K » %1:w[#0]K
+              %0:z[#0]K|1| » %1:w[#0]K|1|
             ArrangeBy keys=[[#0]]
               Get z
             ArrangeBy keys=[[#0]]

@@ -934,6 +934,7 @@ impl<'a> Orderer<'a> {
 
         // Introduce cross joins as a possibility.
         for input in 0..self.inputs {
+            let cardinality = Some(self.cardinalities[input]);
             let is_unique = self.unique_keys[input].iter().any(|cols| cols.is_empty());
             if let Some(pos) = self.arrangements[input]
                 .iter()
@@ -942,6 +943,7 @@ impl<'a> Orderer<'a> {
                 self.arrangement_active[input].push(pos);
                 self.priority_queue.push((
                     JoinInputCharacteristics::new(
+                        cardinality,
                         is_unique,
                         0,
                         true,
@@ -954,6 +956,7 @@ impl<'a> Orderer<'a> {
             } else {
                 self.priority_queue.push((
                     JoinInputCharacteristics::new(
+                        cardinality,
                         is_unique,
                         0,
                         false,
@@ -987,7 +990,14 @@ impl<'a> Orderer<'a> {
         // input. We know which input that is, but we need to compute a key and characteristics.
         // We start with some default values:
         let mut start_tuple = (
-            JoinInputCharacteristics::new(false, 0, false, self.filters[start].clone(), start),
+            JoinInputCharacteristics::new(
+                Some(self.cardinalities[start]),
+                false,
+                0,
+                false,
+                self.filters[start].clone(),
+                start,
+            ),
             vec![],
             start,
         );
@@ -1006,6 +1016,7 @@ impl<'a> Orderer<'a> {
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
+                let cardinality = Some(self.cardinalities[*second]);
                 let is_unique = self.unique_keys[start].iter().any(|cols| {
                     cols.iter()
                         .all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
@@ -1016,6 +1027,7 @@ impl<'a> Orderer<'a> {
                     .is_some();
                 start_tuple = (
                     JoinInputCharacteristics::new(
+                        cardinality,
                         is_unique,
                         candidate_start_key.len(),
                         arranged,
@@ -1104,6 +1116,7 @@ impl<'a> Orderer<'a> {
                                             let is_unique = self.unique_arrangement[rel][pos];
                                             self.priority_queue.push((
                                                 JoinInputCharacteristics::new(
+                                                    Some(self.cardinalities[rel]),
                                                     is_unique,
                                                     key.len(),
                                                     true,
@@ -1123,6 +1136,7 @@ impl<'a> Orderer<'a> {
                                 });
                                 self.priority_queue.push((
                                     JoinInputCharacteristics::new(
+                                        Some(self.cardinalities[rel]),
                                         is_unique,
                                         self.bound[rel].len(),
                                         false,

@@ -2732,14 +2732,14 @@ impl JoinImplementation {
 /// collections in the interest of consistent tie-breaking.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
 pub struct JoinInputCharacteristics {
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
     /// A weaker signal that record count will not increase.
     pub key_length: usize,
     /// Indicates that there will be no additional in-memory footprint.
     pub arranged: bool,
-    /// Estimated cardinality
-    pub cardinality: Option<usize>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
     /// We want to prefer input earlier in the input list, for stability of ordering.
@@ -2749,6 +2749,7 @@ pub struct JoinInputCharacteristics {
 impl JoinInputCharacteristics {
     /// Creates a new instance with the given characteristics.
     pub fn new(
+        cardinality: Option<usize>,
         unique_key: bool,
         key_length: usize,
         arranged: bool,
@@ -2756,10 +2757,10 @@ impl JoinInputCharacteristics {
         input: usize,
     ) -> Self {
         Self {
+            cardinality: cardinality.map(|n| std::cmp::Reverse(n)),
             unique_key,
             key_length,
             arranged,
-            cardinality: None,
             filters,
             input: std::cmp::Reverse(input),
         }
@@ -2777,7 +2778,7 @@ impl JoinInputCharacteristics {
         if self.arranged {
             e.push_str("A");
         }
-        if let Some(cardinality) = self.cardinality {
+        if let Some(std::cmp::Reverse(cardinality)) = self.cardinality {
             e.push_str(&format!("|{cardinality}|"));
         }
         e.push_str(&self.filters.explain());
