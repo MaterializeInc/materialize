@@ -52,6 +52,11 @@ pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
                                     (new_key, new_value),
                                 ));
                             }
+                        } else {
+                            // schema_id in ItemValue should __never__ be None, so complain loudly
+                            // if it is. But don't panic because maybe some downstream code handles
+                            // this already?
+                            tracing::error!("Found None for an ItemValue schema_id! {new_value:?}");
                         }
                     }
                 }
