@@ -112,6 +112,10 @@ class Materialized(Service):
                 "persist_stats_audit_percent": "100",
                 "enable_ld_rbac_checks": "true",
                 "enable_rbac_checks": "true",
+                # Following values are set based on Load Test environment to
+                # reduce CRDB load as we are struggling with it in CI:
+                "persist_next_listen_batch_retryer_clamp": "100ms",
+                "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
             }
 
         if additional_system_parameter_defaults is not None:
