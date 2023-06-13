@@ -41,6 +41,8 @@ pub struct ComputeControllerMetrics {
     collection_count: UIntGaugeVec,
     peek_count: UIntGaugeVec,
     subscribe_count: UIntGaugeVec,
+    command_queue_size: UIntGaugeVec,
+    response_queue_size: UIntGaugeVec,
 }
 
 impl ComputeControllerMetrics {
@@ -86,6 +88,16 @@ impl ComputeControllerMetrics {
                 help: "The number of active subscribes.",
                 var_labels: ["instance_id"],
             )),
+            command_queue_size: metrics_registry.register(metric!(
+                name: "mz_compute_controller_command_queue_size",
+                help: "The size of the compute command queue.",
+                var_labels: ["instance_id", "replica_id"],
+            )),
+            response_queue_size: metrics_registry.register(metric!(
+                name: "mz_compute_controller_response_queue_size",
+                help: "The size of the compute response queue.",
+                var_labels: ["instance_id", "replica_id"],
+            )),
         }
     }
 
@@ -123,39 +135,57 @@ pub struct InstanceMetrics {
 
 impl InstanceMetrics {
     pub fn for_replica(&self, replica_id: ReplicaId) -> ReplicaMetrics {
-        let instance_id = self.instance_id.to_string();
-        let replica_id = replica_id.to_string();
+        let labels = vec![self.instance_id.to_string(), replica_id.to_string()];
+        let extended_labels = |extra: &str| {
+            labels
+                .iter()
+                .cloned()
+                .chain([extra.into()])
+                .collect::<Vec<_>>()
+        };
 
         let commands_total = CommandMetrics::build(|typ| {
-            let labels = vec![instance_id.clone(), replica_id.clone(), typ.into()];
+            let labels = extended_labels(typ);
             self.metrics
                 .commands_total
                 .get_delete_on_drop_counter(labels)
         });
         let command_message_bytes_total = CommandMetrics::build(|typ| {
-            let labels = vec![instance_id.clone(), replica_id.clone(), typ.into()];
+            let labels = extended_labels(typ);
             self.metrics
                 .command_message_bytes_total
                 .get_delete_on_drop_counter(labels)
         });
         let responses_total = ResponseMetrics::build(|typ| {
-            let labels = vec![instance_id.clone(), replica_id.clone(), typ.into()];
+            let labels = extended_labels(typ);
             self.metrics
                 .responses_total
                 .get_delete_on_drop_counter(labels)
         });
         let response_message_bytes_total = ResponseMetrics::build(|typ| {
-            let labels = vec![instance_id.clone(), replica_id.clone(), typ.into()];
+            let labels = extended_labels(typ);
             self.metrics
                 .response_message_bytes_total
                 .get_delete_on_drop_counter(labels)
         });
+
+        let command_queue_size = self
+            .metrics
+            .command_queue_size
+            .get_delete_on_drop_gauge(labels.clone());
+        let response_queue_size = self
+            .metrics
+            .response_queue_size
+            .get_delete_on_drop_gauge(labels.clone());
+
         ReplicaMetrics {
             inner: Arc::new(ReplicaMetricsInner {
                 commands_total,
                 command_message_bytes_total,
                 responses_total,
                 response_message_bytes_total,
+                command_queue_size,
+                response_queue_size,
             }),
         }
     }
@@ -164,15 +194,18 @@ impl InstanceMetrics {
 /// Per-replica metrics.
 #[derive(Debug, Clone)]
 pub struct ReplicaMetrics {
-    inner: Arc<ReplicaMetricsInner>,
+    pub inner: Arc<ReplicaMetricsInner>,
 }
 
 #[derive(Debug)]
-struct ReplicaMetricsInner {
+pub struct ReplicaMetricsInner {
     commands_total: CommandMetrics<IntCounter>,
     command_message_bytes_total: CommandMetrics<IntCounter>,
     responses_total: ResponseMetrics<IntCounter>,
     response_message_bytes_total: ResponseMetrics<IntCounter>,
+
+    pub command_queue_size: UIntGauge,
+    pub response_queue_size: UIntGauge,
 }
 
 /// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
