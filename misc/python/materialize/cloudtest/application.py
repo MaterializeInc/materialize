@@ -215,3 +215,26 @@ class MaterializeApplication(Application):
         stateful_set.env["FAILPOINTS"] = failpoints
         stateful_set.replace()
         self.wait_for_sql()
+
+
+class CloudtestApplication(Application):
+    def __init__(
+        self,
+        release_mode: bool = True,
+        tag: Optional[str] = None,
+        aws_region: Optional[str] = None,
+        log_filter: Optional[str] = None,
+    ) -> None:
+        pass
+
+    def create(self) -> None:
+        pass
+
+    def wait_replicas(self) -> None:
+        pass
+
+    def wait_for_sql(self) -> None:
+        pass
+
+    def set_environmentd_failpoints(self, failpoints: str) -> None:
+        pass
