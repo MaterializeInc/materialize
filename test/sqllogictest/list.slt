@@ -1989,7 +1989,7 @@ CREATE TYPE tbl_list AS LIST (ELEMENT TYPE=pg_enum)
 query error CREATE TYPE ... AS LIST option ELEMENT TYPE cannot accept type modifier on pg_catalog.numeric, you must use the default type
 CREATE TYPE typ_mod_list AS LIST (ELEMENT TYPE=numeric(38,0))
 
-query error CREATE TYPE ... AS LIST option ELEMENT TYPE can only use named data types, but found unnamed data type \[s20 AS pg_catalog.int4\] list. Use CREATE TYPE to create a named type first
+query error CREATE TYPE ... AS LIST option ELEMENT TYPE can only use named data types, but found unnamed data type pg_catalog.int4 list. Use CREATE TYPE to create a named type first
 CREATE TYPE unnamed_element_list AS LIST (ELEMENT TYPE=int4 list)
 
 statement ok
