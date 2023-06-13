@@ -137,7 +137,7 @@ impl ConnectionContext {
         secrets_reader: Arc<dyn SecretsReader>,
     ) -> ConnectionContext {
         ConnectionContext {
-            librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
+            librdkafka_log_level: mz_ore::tracing::crate_level(filter, "librdkafka"),
             aws_external_id_prefix,
             secrets_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),

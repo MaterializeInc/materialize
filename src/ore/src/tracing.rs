@@ -470,27 +470,38 @@ impl Callsite for EmptyCallsite {
     }
 }
 
-/// Returns the level of a target from an [`EnvFilter`] by performing
-/// an exact match between `target` and the original `EnvFilter` directive
-/// (which may contain information like field names, span IDs, etc.)
-pub fn target_level(filter: &EnvFilter, target: &'static str) -> Level {
+/// Returns the [`Level`] of a crate from an [`EnvFilter`] by performing an
+/// exact match between `crate` and the original `EnvFilter` directive.
+pub fn crate_level(filter: &EnvFilter, crate_name: &'static str) -> Level {
+    // TODO: implement `would_enable` on `EnvFilter` or equivalent
+    // to avoid having to manually parse out the directives. This
+    // would also significantly broaden the lookups the fn is able
+    // to do (modules, spans, fields, etc).
+
+    let mut default_level = Level::ERROR;
     // EnvFilter roundtrips through its Display fmt, so it
     // is safe to split out its individual directives here
     for directive in format!("{}", filter).split(',') {
         match directive.split('=').collect::<Vec<_>>().as_slice() {
-            [directive_target, "=", level] => {
-                if *directive_target == target {
+            [target, "=", level] => {
+                if *target == crate_name {
                     match Level::from_str(*level) {
                         Ok(level) => return level,
                         Err(err) => warn!("invalid level for {}: {}", target, err),
                     }
                 }
             }
+            [level] => match Level::from_str(*level) {
+                Ok(level) => default_level = default_level.max(level),
+                Err(_) => {
+                    // it's valid for a bare target to exist without a level
+                }
+            },
             _ => {}
         }
     }
 
-    Level::ERROR
+    default_level
 }
 
 /// A wrapper around a [`FormatEvent`] that adds an optional prefix to each

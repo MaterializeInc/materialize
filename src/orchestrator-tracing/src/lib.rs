@@ -507,6 +507,11 @@ impl CloneableEnvFilter {
 
 impl Clone for CloneableEnvFilter {
     fn clone(&self) -> Self {
+        // At the time of this implementation, `EnvFilter` does not implement Clone
+        // but is expected, without explicit documentation saying so, to roundtrip
+        // through its Display implementation [1].
+        //
+        // [1]: https://github.com/tokio-rs/tracing/blob/e603c2a254d157a25a7a1fbfd4da46ad7e05f555/tracing-subscriber/src/filter/env/mod.rs#L944-L953
         let filter = EnvFilter::from_str(&format!("{}", self.filter)).expect("roundtrips");
         Self { filter }
     }
