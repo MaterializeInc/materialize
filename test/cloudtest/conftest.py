@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 import pytest
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.materialize_application import MaterializeApplication
 
 
 def pytest_configure(config: "Config") -> None:
