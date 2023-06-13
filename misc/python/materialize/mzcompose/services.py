@@ -541,7 +541,6 @@ class Cockroach(Service):
             healthcheck = {
                 # init_success is a file created by the Cockroach container entrypoint
                 "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
-                "timeout": "5s",
                 "interval": "1s",
                 "start_period": "30s",
             }
