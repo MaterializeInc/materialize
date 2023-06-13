@@ -1,7 +1,7 @@
 tikv_jemalloc_ctl
-0:mz_alloc:jemalloc,tikv-jemallocator
-1:mz_prof:jemalloc,tikv-jemalloc-ctl
+0:mz_alloc:default,jemalloc,tikv-jemallocator,workspace-hack
+1:mz_prof:default,jemalloc,tikv-jemalloc-ctl,workspace-hack
 2:tikv_jemalloc_ctl:default,use_std
 tikv_jemallocator
-0:mz_alloc:jemalloc,tikv-jemallocator
+0:mz_alloc:default,jemalloc,tikv-jemallocator,workspace-hack
 1:tikv_jemallocator:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms
