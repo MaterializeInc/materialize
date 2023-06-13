@@ -17,11 +17,14 @@
 //!
 //! Consult the user-facing documentation for details.
 //!
+use std::time::Duration;
+
 use crate::{context::RegionContext, error::Error};
 
-use mz_cloud_api::client::cloud_provider::CloudProvider;
+use mz_cloud_api::client::{cloud_provider::CloudProvider, environment::Environment};
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
+use tokio::time::{sleep};
 
 /// Enable a region in the profile organization.
 ///
@@ -39,9 +42,25 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
         .create_environment(None, vec![], cloud_provider.clone())
         .await?;
 
-    loading_spinner.set_message("Waiting for the region to come online...");
+    loading_spinner.set_message("Waiting for the region to be online...");
     let region = cx.get_region().await?;
-    let environment = cx.get_environment(region.clone()).await?;
+
+    let mut tries = 0;
+
+    let environment: Environment = loop {
+        tries += 1;
+        match cx.get_environment(region.clone()).await {
+            Ok(environment) => break Ok(environment),
+            Err(e) => {
+                if tries == 10 {
+                    break Err(e);
+                }
+            },
+        }
+        sleep(Duration::from_secs(10)).await;
+    }?;
+
+    loading_spinner.set_message("Waiting for the region to be ready...");
 
     loop {
         if cx
@@ -52,6 +71,25 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
         }
     }
     loading_spinner.finish_with_message(format!("Region in {} is now online", cloud_provider.id));
+
+    Ok(())
+}
+
+/// Disable a region in the profile organization.
+///
+/// This command can take several minutes to complete.
+pub async fn disable(cx: RegionContext) -> Result<(), Error> {
+    let loading_spinner = cx
+        .output_formatter()
+        .loading_spinner("Retrieving information...");
+    let cloud_provider = cx.get_cloud_provider().await?;
+
+    loading_spinner.set_message("Disabling region...");
+    cx.cloud_client()
+        .delete_environment(cloud_provider.clone())
+        .await?;
+
+    loading_spinner.finish_with_message("Region disabled.");
 
     Ok(())
 }

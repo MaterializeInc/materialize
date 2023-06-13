@@ -34,6 +34,9 @@ pub struct RegionCommand {
 pub enum RegionSubcommand {
     /// Enable a region.
     Enable,
+    /// Disable a region.
+    #[clap(hide = true)]
+    Disable,
     /// List all regions.
     #[clap(alias = "ls")]
     List,
@@ -47,6 +50,7 @@ pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
         .activate_region(cmd.region.region)?;
     match cmd.subcommand {
         RegionSubcommand::Enable => mz::command::region::enable(cx).await,
+        RegionSubcommand::Disable => mz::command::region::disable(cx).await,
         RegionSubcommand::List => mz::command::region::list(cx).await,
         RegionSubcommand::Show => mz::command::region::show(cx).await,
     }

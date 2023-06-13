@@ -97,7 +97,7 @@ fn output_to_string(assert: Assert) -> String {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
 fn test_version() {
     // We don't make assertions about the build SHA because caching in CI can
-    // cause the test binary and `environmentd` to have different embedded SHAs.
+    // cause the test binary and `mz` to have different embedded SHAs.
     let expected_version = mz::BUILD_INFO.version;
     assert!(!expected_version.is_empty());
     cmd()
