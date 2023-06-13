@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import List
 
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
 )
@@ -16,6 +17,12 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 )
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
+)
+from materialize.output_consistency.input_data.params.text_operation_param import (
+    TextOperationParam,
+)
+from materialize.output_consistency.input_data.return_specs.array_return_spec import (
+    ArrayReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -26,6 +33,9 @@ from materialize.output_consistency.input_data.return_specs.dynamic_return_spec 
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
+from materialize.output_consistency.input_data.return_specs.text_return_spec import (
+    TextReturnTypeSpec,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbFunctionWithCustomPattern,
@@ -35,6 +45,16 @@ from materialize.output_consistency.operation.operation import (
 
 AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
+# array_agg without ordering (currently ignored)
+AGGREGATE_OPERATION_TYPES.append(
+    DbFunction(
+        "array_agg",
+        [AnyOperationParam()],
+        ArrayReturnTypeSpec(DataTypeCategory.DYNAMIC),
+        is_aggregation=True,
+    ),
+)
+# array_agg with ordering
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "array_agg",
@@ -146,6 +166,28 @@ AGGREGATE_OPERATION_TYPES.append(
     ),
 )
 
+# string_agg without ordering (currently ignored)
+AGGREGATE_OPERATION_TYPES.append(
+    DbFunction(
+        "string_agg",
+        [TextOperationParam(), TextOperationParam()],
+        TextReturnTypeSpec(),
+        is_aggregation=True,
+        relevance=OperationRelevance.LOW,
+    ),
+)
+
+# string_agg with ordering
+AGGREGATE_OPERATION_TYPES.append(
+    DbFunctionWithCustomPattern(
+        "string_agg",
+        {2: "string_agg($, $ ORDER BY row_index)"},
+        [TextOperationParam(), TextOperationParam()],
+        TextReturnTypeSpec(),
+        is_aggregation=True,
+        relevance=OperationRelevance.LOW,
+    ),
+)
+
 # TODO: requires JSON type: jsonb_agg(expression)
 # TODO: requires JSON type: jsonb_object_agg(keys, values)
-# TODO: requires text type: string_agg(valueext, delimiterext)

@@ -37,3 +37,16 @@ TYPE_FORMAT_PARAM = EnumConstantOperationParam(
     {"Dy, Mon DD YYYY HH24:MI:SS +0000", "Welcome to Mon, YYYY", "Dth of Mon"},
     add_quotes=True,
 )
+
+REGEX_PARAM = EnumConstantOperationParam({".*", "A+", "[ab]"}, add_quotes=True)
+
+REGEX_FLAG_PARAM = EnumConstantOperationParam({"i"}, add_quotes=True, optional=True)
+
+TEXT_TRIM_SPEC_PARAM = EnumConstantOperationParam(
+    {"BOTH ", "LEADING", "TRAILING"},
+    add_quotes=False,
+)
+
+REPETITIONS_PARAM = EnumConstantOperationParam(
+    {"0", "1", "2", "10", "100", "-2"}, add_quotes=False
+)

@@ -10,6 +10,7 @@ from typing import Set
 
 from attr import dataclass
 
+from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategyKey,
 )
@@ -25,6 +26,8 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
+    DbOperation,
     DbOperationOrFunction,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
@@ -104,10 +107,6 @@ class PreExecutionInconsistencyIgnoreFilter:
         expression: ExpressionWithArgs,
         row_selection: DataRowSelection,
     ) -> IgnoreVerdict:
-        """True if the expression shall be ignored."""
-        if not expression.operation.is_aggregation:
-            # currently no issues without aggregation are known
-            return NoIgnore()
 
         expression_characteristics = (
             expression.recursively_collect_involved_characteristics(row_selection)
@@ -120,11 +119,19 @@ class PreExecutionInconsistencyIgnoreFilter:
             return invocation_verdict
 
         if isinstance(expression.operation, DbFunction):
-            # currently only issues with functions are known, therefore ignore operations
             db_function = expression.operation
 
             invocation_verdict = self._matches_problematic_function_invocation(
-                db_function, expression_characteristics
+                db_function, expression, expression_characteristics
+            )
+            if invocation_verdict.ignore:
+                return invocation_verdict
+
+        if isinstance(expression.operation, DbOperation):
+            db_operation = expression.operation
+
+            invocation_verdict = self._matches_problematic_operation_invocation(
+                db_operation, expression, expression_characteristics
             )
             if invocation_verdict.ignore:
                 return invocation_verdict
@@ -155,6 +162,7 @@ class PreExecutionInconsistencyIgnoreFilter:
     def _matches_problematic_function_invocation(
         self,
         db_function: DbFunction,
+        expression: ExpressionWithArgs,
         all_involved_characteristics: Set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Note that function names are always provided in lower case.
@@ -176,6 +184,33 @@ class PreExecutionInconsistencyIgnoreFilter:
             ):
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return YesIgnore("#19511")
+
+        if db_function.function_name in {"regexp_match"}:
+            if len(expression.args) == 3 and isinstance(
+                expression.args[2], EnumConstant
+            ):
+                # This is a regexp_match function call with case-insensitive configuration.
+                # https://github.com/MaterializeInc/materialize/issues/18494
+                return YesIgnore("#18494")
+
+        if db_function.function_name in {"array_agg", "string_agg"} and not isinstance(
+            db_function, DbFunctionWithCustomPattern
+        ):
+            # The unordered variants are to be ignored.
+            # https://github.com/MaterializeInc/materialize/issues/19832
+            return YesIgnore("#19832")
+
+        return NoIgnore()
+
+    def _matches_problematic_operation_invocation(
+        self,
+        db_operation: DbOperation,
+        expression: ExpressionWithArgs,
+        all_involved_characteristics: Set[ExpressionCharacteristics],
+    ) -> IgnoreVerdict:
+        # https://github.com/MaterializeInc/materialize/issues/18494
+        if db_operation.pattern in {"$ ~* $", "$ !~* $"}:
+            return YesIgnore("#18494")
 
         return NoIgnore()
 
