@@ -6168,11 +6168,11 @@ impl<'a> Parser<'a> {
     /// Parse a `GRANT ROLE` statement, assuming that the `GRANT` token
     /// has already been consumed.
     fn parse_grant_role(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let role_name = self.parse_identifier()?;
+        let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
         self.expect_keyword(TO)?;
         let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::GrantRole(GrantRoleStatement {
-            role_name,
+            role_names,
             member_names,
         }))
     }
@@ -6206,11 +6206,11 @@ impl<'a> Parser<'a> {
     /// Parse a `REVOKE ROLE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke_role(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let role_name = self.parse_identifier()?;
+        let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
         self.expect_keyword(FROM)?;
         let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::RevokeRole(RevokeRoleStatement {
-            role_name,
+            role_names,
             member_names,
         }))
     }

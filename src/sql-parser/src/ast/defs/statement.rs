@@ -2860,8 +2860,8 @@ impl_display_t!(ShowStatement);
 /// `GRANT ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GrantRoleStatement<T: AstInfo> {
-    /// The role that is gaining a member.
-    pub role_name: T::RoleName,
+    /// The roles that are gaining members.
+    pub role_names: Vec<T::RoleName>,
     /// The roles that will be added to `role_name`.
     pub member_names: Vec<T::RoleName>,
 }
@@ -2869,7 +2869,7 @@ pub struct GrantRoleStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for GrantRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("GRANT ");
-        f.write_node(&self.role_name);
+        f.write_node(&display::comma_separated(&self.role_names));
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.member_names));
     }
@@ -2879,16 +2879,16 @@ impl_display_t!(GrantRoleStatement);
 /// `REVOKE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RevokeRoleStatement<T: AstInfo> {
-    /// The role that is losing a member.
-    pub role_name: T::RoleName,
-    /// The role that will be removed from `role_name`.
+    /// The roles that are losing members.
+    pub role_names: Vec<T::RoleName>,
+    /// The roles that will be removed from `role_name`.
     pub member_names: Vec<T::RoleName>,
 }
 
 impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("REVOKE ");
-        f.write_node(&self.role_name);
+        f.write_node(&display::comma_separated(&self.role_names));
         f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.member_names));
     }
