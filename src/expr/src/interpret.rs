@@ -939,6 +939,7 @@ impl Interpreter for Trace {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
     use proptest::prelude::*;
@@ -952,6 +953,7 @@ mod tests {
     #[derive(Debug)]
     struct ExpressionData {
         relation_type: RelationType,
+        specs: Vec<ResultSpec<'static>>,
         rows: Vec<Row>,
         expr: MirScalarExpr,
     }
@@ -1076,15 +1078,26 @@ mod tests {
         select(values).boxed()
     }
 
-    fn gen_column() -> impl Strategy<Value = (ColumnType, Datum<'static>)> {
-        select(SCALAR_TYPES)
-            .prop_map(|t| t.nullable(true))
+    fn gen_column() -> impl Strategy<Value = (ColumnType, Datum<'static>, ResultSpec<'static>)> {
+        let col_type = (select(SCALAR_TYPES), any::<bool>())
+            .prop_map(|(t, b)| t.nullable(b))
             .prop_filter("need at least one value", |c| {
                 c.scalar_type.interesting_datums().count() > 0
+            });
+
+        let result_spec = select(vec![
+            ResultSpec::nothing(),
+            ResultSpec::null(),
+            ResultSpec::anything(),
+            ResultSpec::value_all(),
+        ]);
+
+        (col_type, result_spec).prop_flat_map(|(col, result_spec)| {
+            gen_datums_for_type(&col).prop_map(move |datum| {
+                let result_spec = result_spec.clone().union(ResultSpec::value(datum));
+                (col.clone(), datum, result_spec)
             })
-            .prop_flat_map(|col| {
-                gen_datums_for_type(&col).prop_map(move |datum| (col.clone(), datum))
-            })
+        })
     }
 
     fn gen_expr_for_relation(
@@ -1100,8 +1113,8 @@ mod tests {
                 .boxed()
         };
 
-        let literal_gen = select(SCALAR_TYPES)
-            .prop_map(|s| s.nullable(true))
+        let literal_gen = (select(SCALAR_TYPES), any::<bool>())
+            .prop_map(|(s, b)| s.nullable(b))
             .prop_flat_map(|ct| {
                 let error_gen = any::<EvalError>().prop_map(Err).boxed();
                 let value_gen = gen_datums_for_type(&ct)
@@ -1179,11 +1192,12 @@ mod tests {
     fn gen_expr_data() -> impl Strategy<Value = ExpressionData> {
         let columns = prop::collection::vec(gen_column(), 1..10);
         columns.prop_flat_map(|data| {
-            let (columns, datums): (Vec<_>, Vec<_>) = data.into_iter().unzip();
+            let (columns, datums, specs): (Vec<_>, Vec<_>, Vec<_>) = data.into_iter().multiunzip();
             let relation = RelationType::new(columns);
             let row = Row::pack_slice(&datums);
             gen_expr_for_relation(&relation).prop_map(move |(expr, _)| ExpressionData {
                 relation_type: relation.clone(),
+                specs: specs.clone(),
                 rows: vec![row.clone()],
                 expr,
             })
@@ -1215,22 +1229,16 @@ mod tests {
         fn check(data: ExpressionData) -> Result<(), TestCaseError> {
             let ExpressionData {
                 relation_type,
+                specs,
                 rows,
                 expr,
             } = data;
-            let num_cols = relation_type.column_types.len();
 
             // We want to ensure that the spec we get when evaluating an expression using
             // `ColumnSpecs` always contains the _actual_ value of that column when evaluated with
             // eval. (This is an important correctness property of abstract interpretation.)
             let arena = RowArena::new();
             let mut interpreter = ColumnSpecs::new(&relation_type, &arena);
-            let mut specs = vec![ResultSpec::nothing(); num_cols];
-            for row in &rows {
-                for (id, datum) in row.iter().enumerate() {
-                    specs[id] = specs[id].clone().union(ResultSpec::value(datum));
-                }
-            }
             for (id, spec) in specs.into_iter().enumerate() {
                 interpreter.push_column(id, spec);
             }
