@@ -1528,7 +1528,7 @@ fn test_leader_promotion() {
             let mut client = server.connect(postgres::NoTls).unwrap();
             client.simple_query("SELECT 1").unwrap();
 
-            // check the we're the leader and promotion doesn't do anything
+            // check that we're the leader and promotion doesn't do anything
             let res = Client::new().get(status_http_url).send().unwrap();
             assert_eq!(res.status(), StatusCode::OK);
             let response: LeaderStatusResponse = res.json().unwrap();
