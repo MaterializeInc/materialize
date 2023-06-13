@@ -11,7 +11,7 @@
 
 use mz_ore::cast::CastLossy;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ordered_float::OrderedFloat;
 
@@ -73,6 +73,42 @@ impl<V> SymbolicExpression<V> {
             Product(ps) => ps.into_iter().map(|p| p.order()).sum(),
             Max(e1, e2) => usize::max(e1.order(), e2.order()),
             Min(e1, e2) => usize::min(e1.order(), e2.order()),
+        }
+    }
+
+    /// Collects all symbolic values in the expression
+    ///
+    /// ```
+    /// use mz_transform::symbolic::SymbolicExpression;
+    ///
+    /// let x = SymbolicExpression::symbolic("x".to_string());
+    /// let y = SymbolicExpression::symbolic("y".to_string());
+    /// // x^3 + xy + 1000000
+    /// let e = SymbolicExpression::sum(vec![SymbolicExpression::product(vec![x.clone(); 3]), SymbolicExpression::product(vec![x, y]), SymbolicExpression::f64(1000000.0)]);
+    /// // has order 3
+    /// let mut symbolics = std::collections::BTreeSet::new();
+    /// e.collect_symbolics(&mut symbolics);
+    /// assert_eq!(symbolics.len(), 2);
+    /// assert!(symbolics.contains(&"x".to_string()));
+    /// assert!(symbolics.contains(&"y".to_string()));
+    /// ```
+    pub fn collect_symbolics(&self, symbolics: &mut BTreeSet<V>)
+    where
+        V: Clone + Ord + Eq,
+    {
+        use SymbolicExpression::*;
+        match self {
+            Constant(_) => (),
+            Symbolic(v, _) => {
+                symbolics.insert(v.clone());
+            }
+            Sum(es) | Product(es) => es
+                .into_iter()
+                .for_each(move |e| e.collect_symbolics(symbolics)),
+            Max(e1, e2) | Min(e1, e2) => {
+                e1.collect_symbolics(symbolics);
+                e2.collect_symbolics(symbolics);
+            }
         }
     }
 

@@ -12,6 +12,7 @@ itertools = "0.10.5"
 mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
+mz-persist-client = { path = "../persist-client" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 num-traits = "0.2"
 num-derive = "0.3"

@@ -24,13 +24,14 @@ use mz_expr::{
     FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
+use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use crate::attribute::cardinality::SymExp;
+use crate::attribute::cardinality::{FactorizerVariable, SymExp};
 use crate::attribute::{Cardinality, RequiredAttributes};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
-use crate::{TransformArgs, TransformError};
+use crate::{StatisticsOracle, TransformArgs, TransformError};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -66,7 +67,7 @@ impl crate::Transform for JoinImplementation {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes));
+        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes), args.stats);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -81,10 +82,11 @@ impl JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
+        stats: &dyn StatisticsOracle,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             if let MirRelationExpr::Let { id, value, body } = relation {
-                self.action_recursive(value, indexes)?;
+                self.action_recursive(value, indexes, stats)?;
                 match &**value {
                     MirRelationExpr::ArrangeBy { keys, .. } => {
                         for key in keys {
@@ -99,14 +101,14 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
-                self.action_recursive(body, indexes)?;
+                self.action_recursive(body, indexes, stats)?;
                 indexes.remove_local(*id);
                 Ok(())
             } else {
                 let (mfp, mfp_input) =
                     MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
-                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
-                self.action(mfp_input, mfp, indexes)?;
+                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes, stats))?;
+                self.action(mfp_input, mfp, indexes, stats)?;
                 Ok(())
             }
         })
@@ -118,6 +120,7 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
+        stats: &dyn StatisticsOracle,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
@@ -153,6 +156,8 @@ impl JoinImplementation {
 
             // Cardinality information for each input relation
             let mut cardinalities: Vec<SymExp> = Vec::with_capacity(inputs.len());
+            // Symbolic terms in the cardinality estimate
+            let mut symbolics = std::collections::BTreeSet::new();
             for input in inputs.iter() {
                 let mut builder = RequiredAttributes::default();
                 builder.require::<Cardinality>();
@@ -160,17 +165,70 @@ impl JoinImplementation {
 
                 input.visit(&mut attributes)?;
 
-                cardinalities.push(
-                    attributes
-                        .get_results_mut::<Cardinality>()
-                        .pop()
-                        .expect("cardinality"),
-                );
+                let cardinality = attributes
+                    .get_results_mut::<Cardinality>()
+                    .pop()
+                    .expect("cardinality");
+
+                cardinality.collect_symbolics(&mut symbolics);
+                cardinalities.push(cardinality);
             }
 
+            let mut cardinality_stats = BTreeMap::new();
+            let mut have_stats_for_all_inputs = true;
+            for s in symbolics {
+                match s {
+                    FactorizerVariable::Id(id) => {
+                        if let Some(cardinality) = stats.cardinality_estimate(id) {
+                            cardinality_stats.insert(id, cardinality);
+                        } else {
+                            have_stats_for_all_inputs = false;
+                            break;
+                        }
+                    }
+                    FactorizerVariable::Index(_) => (),
+                    FactorizerVariable::Unknown => {
+                        have_stats_for_all_inputs = false;
+                        break;
+                    }
+                }
+            }
+
+            let fill_in_estimates = |v: &FactorizerVariable| -> f64 {
+                debug_assert!(have_stats_for_all_inputs);
+
+                match v {
+                    FactorizerVariable::Id(id) => f64::cast_lossy(
+                        *cardinality_stats
+                            .get(id)
+                            .expect("have stats for all inputs"),
+                    ),
+                    // TODO(mgree): should be the # of distinct values in the index of `_col`, but we don't have those statistics (as of 2023-06-13)
+                    FactorizerVariable::Index(_col) => {
+                        crate::attribute::cardinality::WORST_CASE_SELECTIVITY
+                    }
+                    FactorizerVariable::Unknown => {
+                        unreachable!("have stats for all inputs but encounted unknown")
+                    }
+                }
+            };
+
+            // Compute the actual cardinalities given our statistics. One of two cases applies:
+            //
+            //   1. `have_stats_for_all_inputs`, and we can use `fill_in_estimates` to get cardinalities for every input
+            //   2. Some inputs are missing inputs; we treat cardinality estimates in terms of their order (i.e., the degree or highest exponent in their polynomial)
             let cardinalities = cardinalities
                 .into_iter()
-                .map(|c| c.order())
+                .map(|c| {
+                    if have_stats_for_all_inputs {
+                        usize::cast_from(
+                            u64::try_cast_from(c.evaluate(&fill_in_estimates))
+                                .expect("positive and representable cardinality estimate"),
+                        )
+                    } else {
+                        c.order()
+                    }
+                })
                 .collect::<Vec<_>>();
 
             // The first fundamental question is whether we should employ a delta query or not.

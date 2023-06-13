@@ -5233,6 +5233,7 @@ dependencies = [
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist-client",
  "mz-repr",
  "num-derive",
  "num-traits",

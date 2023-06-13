@@ -119,7 +119,10 @@ pub struct WorstCaseFactorizer {
     pub cardinalities: BTreeMap<FactorizerVariable, usize>,
 }
 
-const WORST_CASE_SELECTIVITY: f64 = 0.1;
+/// The default selectivity for predicates we know nothing about.
+///
+/// It is safe to use this instead of `FactorizerVariable::Index(col)`.
+pub const WORST_CASE_SELECTIVITY: f64 = 0.1;
 
 impl Factorizer for WorstCaseFactorizer {
     fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp {

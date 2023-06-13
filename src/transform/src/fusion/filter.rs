@@ -36,6 +36,7 @@
 //! use mz_transform::{Transform, TransformArgs};
 //! Filter.transform(&mut expr, TransformArgs {
 //!   indexes: &mz_transform::EmptyIndexOracle,
+//!   stats: &mz_transform::EmptyStatisticsOracle,
 //!   global_id: None,
 //! });
 //!

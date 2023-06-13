@@ -63,6 +63,7 @@
 //! use mz_transform::{Transform, TransformArgs};
 //! PredicatePushdown::default().transform(&mut expr, TransformArgs {
 //!   indexes: &mz_transform::EmptyIndexOracle,
+//!   stats: &mz_transform::EmptyStatisticsOracle,
 //!   global_id: None,
 //! });
 //!
