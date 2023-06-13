@@ -787,30 +787,16 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
-        let mapped_spec = if func.is_associative() && args.len() >= 2 {
-            let col_type = func.output_type(args.iter().map(|cs| cs.col_type.clone()).collect());
-            let mut expr = MirScalarExpr::CallVariadic {
-                func: func.clone(),
-                exprs: vec![
-                    Self::placeholder(col_type.clone()),
-                    Self::placeholder(col_type.clone()),
-                ],
-            };
-            let is_monotone = func.is_monotone();
-            args.iter()
-                .map(|cs| cs.range.clone())
-                .reduce(|left, right| {
-                    left.flat_map(is_monotone, |left_result| {
-                        Self::set_argument(&mut expr, 0, left_result);
-                        right.flat_map(is_monotone, |right_result| {
-                            Self::set_argument(&mut expr, 1, right_result);
-                            self.eval_result(expr.eval(&[], self.arena))
-                        })
-                    })
-                    .intersect(ResultSpec::has_type(&col_type, true))
-                })
-                .expect("reduce over non-empty argument list")
-        } else if args.len() >= Self::MAX_EVAL_ARGS {
+        if func.is_associative() && args.len() > 2 {
+            // To avoid a combinatorial explosion, evaluate large variadic calls as a series of
+            // smaller ones, since associativity guarantees we'll get compatible results.
+            return args
+                .into_iter()
+                .reduce(|a, b| self.variadic(func, vec![a, b]))
+                .expect("reducing over a non-empty argument list");
+        }
+
+        let mapped_spec = if args.len() >= Self::MAX_EVAL_ARGS {
             ResultSpec::anything()
         } else {
             fn eval_loop<'a>(
