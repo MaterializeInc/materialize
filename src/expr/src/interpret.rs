@@ -793,7 +793,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                 func: func.clone(),
                 exprs: vec![
                     Self::placeholder(col_type.clone()),
-                    Self::placeholder(col_type),
+                    Self::placeholder(col_type.clone()),
                 ],
             };
             let is_monotone = func.is_monotone();
@@ -807,6 +807,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                             self.eval_result(expr.eval(&[], self.arena))
                         })
                     })
+                    .intersect(ResultSpec::has_type(&col_type, true))
                 })
                 .expect("reduce over non-empty argument list")
         } else if args.len() >= Self::MAX_EVAL_ARGS {
