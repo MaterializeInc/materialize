@@ -331,6 +331,9 @@ group3  joe     mz_system  false
 group3  group1  mz_system  false
 group3  group2  mz_system  false
 
+statement ok
+DROP ROLE group1, group2, group3, joe
+
 # Disable RBAC checks
 
 simple conn=mz_system,user=mz_system
