@@ -19,22 +19,28 @@ SELECT
 ----
 0 1 4 30 720
 
-query IIIIIII
+query IIIIIIII
 SELECT
     datediff('millennia', '2000-12-31', '2001-01-01'),
     datediff('century', '2000-12-31', '2001-01-01'),
     datediff('decade', '2000-12-31', '2001-01-01'),
     datediff('year', '2000-12-31', '2001-01-01'),
+    datediff('quarter', '2000-12-31', '2001-01-01'),
     datediff('month', '2000-12-31', '2001-01-01'),
     datediff('year', '2000-12-31', '2001-01-01'),
     datediff('day', '2000-12-31', '2001-01-01')
 ----
-1 1 0 1 1 1 1
+1 1 0 1 1 1 1 1
 
-query I
-SELECT datediff('decade', '2019-12-31', '2020-01-01');
+query IIIII
+SELECT
+    datediff('year', '1998-01-01', '2000-06-01'),
+    datediff('quarter', '1998-01-01', '2000-06-01'),
+    datediff('month', '1998-01-01', '2000-06-01'),
+    datediff('week', '1998-01-01', '2000-06-01'),
+    datediff('day', '1998-01-01', '2000-06-01')
 ----
-1
+2 9 29 126 882
 
 query I
 SELECT datediff('month', '2023-05-08', '2024-06-08');
@@ -102,57 +108,23 @@ SELECT datediff('mil', '0001-01-01', '2000-01-01');
 ----
 1
 
-query I
-SELECT datediff('usec', to_timestamp(-210833720368), to_timestamp(8200000000000));
+query IIIII
+SELECT 
+    datediff('usec', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('ms', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('s', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('m', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('h', to_timestamp(-210833720368), to_timestamp(8200000000000))
 ----
-8410833720368000000
+8410833720368000000 8410833720368000 8410833720368 140180562006 2336342700
 
-query I
-SELECT datediff('ms', to_timestamp(-210833720368), to_timestamp(8200000000000));
+query IIIIII
+SELECT
+    datediff('days', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('months', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('years', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('decade', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('century', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('millennia', to_timestamp(-210833720368), to_timestamp(8200000000000))
 ----
-8410833720368000
-
-query I
-SELECT datediff('s', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-8410833720368
-
-query I
-SELECT datediff('m', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-140180562006
-
-query I
-SELECT datediff('h', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-2336342700
-
-query I
-SELECT datediff('days', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-97347612
-
-query I
-SELECT datediff('months', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-3198344
-
-query I
-SELECT datediff('years', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-266529
-
-query I
-SELECT datediff('decade', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-26653
-
-query I
-SELECT datediff('century', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-2667
-
-query I
-SELECT datediff('millennia', to_timestamp(-210833720368), to_timestamp(8200000000000));
-----
-267
+97347612 3198344 266529 26653 2667 267
