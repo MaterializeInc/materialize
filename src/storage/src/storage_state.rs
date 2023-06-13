@@ -540,7 +540,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let mut empty = false;
             while !empty {
                 match command_rx.try_recv() {
-                    Ok(cmd) => cmds.push(cmd),
+                    // Sequence all commands through worker 0 to guarantee ordering.
+                    Ok(cmd) if self.timely_worker.index() == 0 => cmds.push(cmd),
+                    // All other worker simply drop commands on the floor and handle them as they
+                    // are broadcast through worker 0.
+                    Ok(_) => {}
                     Err(TryRecvError::Empty) => empty = true,
                     Err(TryRecvError::Disconnected) => {
                         empty = true;
@@ -548,15 +552,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
             }
+
             {
                 let mut internal_cmd_tx = command_sequencer.borrow_mut();
+                assert!(
+                    cmds.is_empty() || self.timely_worker.index() == 0,
+                    "only worker 0 broadcasts commands, serializing the order"
+                );
                 for cmd in cmds {
-                    self.storage_state.handle_storage_command(
-                        self.timely_worker.index(),
-                        &mut *internal_cmd_tx,
-                        &mut async_worker,
-                        cmd,
-                    )
+                    internal_cmd_tx.broadcast(InternalStorageCommand::ControllerCommand(cmd));
                 }
             }
 
@@ -628,6 +632,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
         internal_cmd: InternalStorageCommand,
     ) {
         match internal_cmd {
+            InternalStorageCommand::ControllerCommand(cmd) => {
+                self.storage_state.handle_storage_command(
+                    self.timely_worker.index(),
+                    internal_cmd_tx,
+                    async_worker,
+                    cmd,
+                )
+            }
             InternalStorageCommand::SuspendAndRestart { id, reason } => {
                 info!(
                     "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",

@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use mz_repr::{GlobalId, Row};
+use mz_storage_client::client::StorageCommand;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
@@ -48,6 +49,11 @@ impl DataflowParameters {
 /// on them.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InternalStorageCommand {
+    /// Execute the included `StorageCommand`.
+    ///
+    /// `StorageCommand`s are handled by most workers as `InternalStorageCommand` so that a single
+    /// worker can provide serialized execution to all workers.
+    ControllerCommand(StorageCommand),
     /// Suspend and restart the dataflow identified by the `GlobalId`.
     SuspendAndRestart {
         /// The id of the dataflow that should be restarted.
