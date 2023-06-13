@@ -1312,6 +1312,24 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_concat() {
+        let expr = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Concat,
+            exprs: vec![
+                MirScalarExpr::Column(0),
+                MirScalarExpr::literal_ok(Datum::String("a"), ScalarType::String),
+                MirScalarExpr::literal_ok(Datum::String("b"), ScalarType::String),
+            ],
+        };
+
+        let relation = RelationType::new(vec![ScalarType::String.nullable(false)]);
+        let arena = RowArena::new();
+        let interpreter = ColumnSpecs::new(&relation, &arena);
+        let spec = interpreter.expr(&expr);
+        assert!(spec.range.may_contain(Datum::String("blab")));
+    }
+
+    #[mz_ore::test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(
