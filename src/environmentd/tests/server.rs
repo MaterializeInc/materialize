@@ -1575,7 +1575,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
             .blocking_recv()
             .expect("should be populated");
 
-        // check the we're the leader and promotion doesn't do anything
+        // check that we're the leader and promotion doesn't do anything
         let status_http_url =
             Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
         let res = Client::new().get(status_http_url).send().unwrap();
