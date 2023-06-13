@@ -317,3 +317,6 @@ true true true true true
 > DROP INDEX ii_t4
 
 > SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+
+> SELECT DISTINCT object_id IS NULL FROM mz_internal.mz_dataflow_arrangement_sizes
+false

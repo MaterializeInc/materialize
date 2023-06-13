@@ -3057,6 +3057,7 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     AS
         SELECT
             mdod.dataflow_id AS id,
+            mo.id AS object_id,
             mo.name,
             COALESCE(sum(mas.records), 0) AS records,
             COALESCE(sum(mas.batches), 0) AS batches,
@@ -3070,7 +3071,7 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
                 JOIN mz_internal.mz_compute_exports AS mce ON mce.dataflow_id = mda.address[1]
                 JOIN mz_objects AS mo ON mo.id = mce.export_id
                 JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON mdo.id = mdod.id
-        GROUP BY mo.name, mdod.dataflow_id",
+        GROUP BY mo.id, mo.name, mdod.dataflow_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update

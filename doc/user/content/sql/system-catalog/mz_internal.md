@@ -431,15 +431,16 @@ The `mz_dataflow_addresses` view describes how the [dataflow] channels and opera
 The `mz_dataflow_arrangement_sizes` view describes how many records and batches
 are contained in operators under each dataflow.
 
-| Field         | Type       | Meaning                                                                      |
-|---------------|------------|------------------------------------------------------------------------------|
-| `id`          | [`bigint`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`bigint`] | The name of the object (e.g., index) maintained by the dataflow.             |
-| `records`     | [`bigint`] | The number of records in all arrangements in the dataflow.                   |
-| `batches`     | [`bigint`] | The number of batches in all arrangements in the dataflow.                   |
-| `size`        | [`bigint`] | The utilized size in bytes of the arrangements.                              |
-| `capacity`    | [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.      |
-| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangements.          |
+| Field           | Type         | Meaning                                                                                                      |
+| --------------- | ------------ | ------------------------------------------------------------------------------                               |
+| `id`            | [`bigint`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                 |
+| `object_id`     | [`text`]     | The ID of the object. Corresponds to [`mz_objects.id`](/sql/system-catalog/mz_catalog/#mz_objects).         |
+| `name`          | [`bigint`]   | The name of the object (e.g., index) maintained by the dataflow.                                             |
+| `records`       | [`bigint`]   | The number of records in all arrangements in the dataflow.                                                   |
+| `batches`       | [`bigint`]   | The number of batches in all arrangements in the dataflow.                                                   |
+| `size`          | [`bigint`]   | The utilized size in bytes of the arrangements.                                                              |
+| `capacity`      | [`bigint`]   | The capacity in bytes of the arrangements. Can be larger than the size.                                      |
+| `allocations`   | [`bigint`]   | The number of separate memory allocations backing the arrangements.                                          |
 
 ### `mz_dataflow_channels`
 
