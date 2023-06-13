@@ -360,7 +360,7 @@ pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
                 ));
             }
 
-            tracing::info!("Waiting for user to promote this envd to leader. For example, `curl -H 'Content-Type: application/json' -X POST 'http://{}/api/leader/promote'`", config.internal_http_listen_addr);
+            tracing::info!("Waiting for user to promote this envd to leader");
             if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
                 waiting_on_leader_promotion
                     .send(internal_http_listener.local_addr())
