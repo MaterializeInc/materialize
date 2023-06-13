@@ -2732,14 +2732,14 @@ impl JoinImplementation {
 /// collections in the interest of consistent tie-breaking.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
 pub struct JoinInputCharacteristics {
-    /// Estimated cardinality (lower is better)
-    pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
     /// A weaker signal that record count will not increase.
     pub key_length: usize,
     /// Indicates that there will be no additional in-memory footprint.
     pub arranged: bool,
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
     /// We want to prefer input earlier in the input list, for stability of ordering.

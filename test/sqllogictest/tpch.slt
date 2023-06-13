@@ -1106,20 +1106,19 @@ ORDER BY
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#4]
     Return // { arity: 5 }
-      Project (#0..=#3, #5) // { arity: 5 }
-        Join on=(#0 = #4 AND #5 = #6) type=differential // { arity: 7 }
-          implementation
-            %0:supplier[×]|0| » %2[×]UA|0| » %1:l0[#0, #1]UKK|1|
-          ArrangeBy keys=[[]] // { arity: 4 }
-            Project (#0..=#2, #4) // { arity: 4 }
-              Filter (#0) IS NOT NULL // { arity: 7 }
-                Get materialize.public.supplier // { arity: 7 }
-          ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-            Get l0 // { arity: 2 }
-          ArrangeBy keys=[[]] // { arity: 1 }
-            Reduce aggregates=[max(#0)] // { arity: 1 }
-              Project (#1) // { arity: 1 }
-                Get l0 // { arity: 2 }
+      Project (#0..=#2, #4, #8) // { arity: 5 }
+        Filter (#0) IS NOT NULL // { arity: 10 }
+          Join on=(#0 = #7 AND #8 = #9) type=differential // { arity: 10 }
+            implementation
+              %0:supplier[#0]KA|1| » %1:l0[#0]UKA|1| » %2[#0]UK|0|
+            ArrangeBy keys=[[#0]] // { arity: 7 }
+              Get materialize.public.supplier // { arity: 7 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l0 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Reduce aggregates=[max(#0)] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 2 }
     With
       cte l0 =
         Reduce group_by=[#0] aggregates=[sum((#1 * (1 - #2)))] // { arity: 2 }
