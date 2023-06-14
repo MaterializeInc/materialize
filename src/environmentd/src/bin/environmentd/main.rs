@@ -78,6 +78,7 @@
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
 
+use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -123,6 +124,7 @@ use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::{Var, LOGGING_FILTER};
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
@@ -616,6 +618,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
+    let mut system_parameter_defaults: BTreeMap<String, String> = args
+        .system_parameter_default
+        .into_iter()
+        .map(|kv| (kv.key, kv.value))
+        .collect();
+
+    system_parameter_defaults
+        .entry(LOGGING_FILTER.name().to_string())
+        .or_insert(format!("{}", args.tracing.log_filter));
+
+    // WIP: thread default value into configure_tracing
     let (tracing_handle, _tracing_guard) =
         runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
             service_name: "environmentd",

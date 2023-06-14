@@ -1463,6 +1463,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
+        self.catalog.tracing_config().apply(&self.tracing_handle);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is

@@ -718,8 +718,7 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
 
 pub static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
-
-static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+pub static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("mz_log_filter"),
     value: &DEFAULT_LOGGING_FILTER,
     description: "WIP",
@@ -728,8 +727,7 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
 
 pub static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
-
-static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+pub static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("mz_opentelemetry_filter"),
     value: &DEFAULT_OPENTELEMETRY_FILTER,
     description: "WIP",
@@ -1723,8 +1721,6 @@ impl SystemVars {
         let mut vars = vars
             .with_feature_flags()
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
-            .with_var(&LOGGING_FILTER)
-            .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
             .with_var(&MAX_SOURCES)
@@ -1786,6 +1782,10 @@ impl SystemVars {
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION);
+            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION);
+            .with_var(&ENABLE_MZ_JOIN_CORE)
+            .with_var(&LOGGING_FILTER)
+            .with_var(&OPENTELEMETRY_FILTER);
         vars.refresh_internal_state();
         vars
     }
@@ -2077,14 +2077,6 @@ impl SystemVars {
         *self.expect_value(&MAX_RESULT_SIZE)
     }
 
-    pub fn logging_filter(&self) -> CloneableEnvFilter {
-        self.expect_value(&*LOGGING_FILTER).clone()
-    }
-
-    pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
-        self.expect_value(&*OPENTELEMETRY_FILTER).clone()
-    }
-
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
     pub fn allowed_cluster_replica_sizes(&self) -> Vec<String> {
         self.expect_value(&ALLOWED_CLUSTER_REPLICA_SIZES)
@@ -2292,6 +2284,14 @@ impl SystemVars {
     /// Returns the `enable_default_connection_validation` configuration parameter.
     pub fn enable_default_connection_validation(&self) -> bool {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+    }
+
+    pub fn logging_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*LOGGING_FILTER).clone()
+    }
+
+    pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*OPENTELEMETRY_FILTER).clone()
     }
 }
 

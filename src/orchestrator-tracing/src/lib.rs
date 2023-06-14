@@ -401,7 +401,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let tokio_console_listen_addr = listen_addrs.get("tokio-console");
             let mut args = (service_config.args)(listen_addrs);
             let TracingCliArgs {
-                log_filter,
+                log_filter: _log_filter,
                 log_prefix,
                 log_format,
                 opentelemetry_endpoint,
@@ -418,7 +418,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_dsn,
                 sentry_environment,
             } = &self.tracing_args;
-            args.push(format!("--log-filter={log_filter}"));
             args.push(format!("--log-format={log_format}"));
             if log_prefix.is_some() {
                 args.push(format!("--log-prefix={}-{}", self.namespace, id));
