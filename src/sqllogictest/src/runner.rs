@@ -881,7 +881,10 @@ impl RunnerInner {
                 suppress_output: false,
                 environment_id: environment_id.to_string(),
                 secrets_dir: temp_dir.path().join("secrets"),
-                command_wrapper: vec![],
+                command_wrapper: config
+                    .orchestrator_process_wrapper
+                    .as_ref()
+                    .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
                 scratch_directory: None,
@@ -1438,6 +1441,7 @@ pub struct RunConfig<'a> {
     pub auto_index_tables: bool,
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
+    pub orchestrator_process_wrapper: Option<String>,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
