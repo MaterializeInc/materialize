@@ -500,10 +500,11 @@ fn rocksdb_core_loop<K, V, M, O>(
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
 {
+    let retry_max_duration = Duration::from_secs(tuning_config.retry_max_duration_s.into());
     let rocksdb_options = options.as_rocksdb_options(&tuning_config);
 
     let retry_result = Retry::default()
-        .max_duration(Duration::from_secs(1))
+        .max_duration(retry_max_duration)
         .retry(|_| match DB::open(&rocksdb_options, &instance_path) {
             Ok(db) => RetryResult::Ok(db),
             Err(e) => match e.kind() {
@@ -546,32 +547,29 @@ fn rocksdb_core_loop<K, V, M, O>(
 
                 // Perform the multi_get and record metrics, if there wasn't an error.
                 let now = Instant::now();
-                let retry_result =
-                    Retry::default()
-                        .max_duration(Duration::from_secs(1))
-                        .retry(|_| {
-                            let gets = db.multi_get(batch.iter());
-                            let latency = now.elapsed();
+                let retry_result = Retry::default()
+                    .max_duration(retry_max_duration)
+                    .retry(|_| {
+                        let gets = db.multi_get(batch.iter());
+                        let latency = now.elapsed();
 
-                            let gets: Result<Vec<_>, _> = gets.into_iter().collect();
-                            match gets {
-                                Ok(gets) => {
-                                    metrics.multi_get_latency.observe(latency.as_secs_f64());
-                                    metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
-                                    let result = MultiGetResult {
-                                        processed_gets: gets.len().try_into().unwrap(),
-                                    };
+                        let gets: Result<Vec<_>, _> = gets.into_iter().collect();
+                        match gets {
+                            Ok(gets) => {
+                                metrics.multi_get_latency.observe(latency.as_secs_f64());
+                                metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
+                                let result = MultiGetResult {
+                                    processed_gets: gets.len().try_into().unwrap(),
+                                };
 
-                                    RetryResult::Ok((result, gets))
-                                }
-                                Err(e) => match e.kind() {
-                                    ErrorKind::TryAgain => {
-                                        RetryResult::RetryableErr(Error::RocksDB(e))
-                                    }
-                                    _ => RetryResult::FatalErr(Error::RocksDB(e)),
-                                },
+                                RetryResult::Ok((result, gets))
                             }
-                        });
+                            Err(e) => match e.kind() {
+                                ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                                _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                            },
+                        }
+                    });
 
                 let _ = match retry_result {
                     Ok((result, gets)) => {
@@ -645,34 +643,31 @@ fn rocksdb_core_loop<K, V, M, O>(
                 }
                 // Perform the multi_put and record metrics, if there wasn't an error.
                 let now = Instant::now();
-                let retry_result =
-                    Retry::default()
-                        .max_duration(Duration::from_secs(1))
-                        .retry(|_| {
-                            let mut writes = rocksdb::WriteBatch::default();
+                let retry_result = Retry::default()
+                    .max_duration(retry_max_duration)
+                    .retry(|_| {
+                        let mut writes = rocksdb::WriteBatch::default();
 
-                            for (key, value) in encoded_batch.iter() {
-                                match value {
-                                    Some(update) => writes.put(key, update),
-                                    None => writes.delete(key),
-                                }
+                        for (key, value) in encoded_batch.iter() {
+                            match value {
+                                Some(update) => writes.put(key, update),
+                                None => writes.delete(key),
                             }
+                        }
 
-                            match db.write_opt(writes, &wo) {
-                                Ok(()) => {
-                                    let latency = now.elapsed();
-                                    metrics.multi_put_latency.observe(latency.as_secs_f64());
-                                    metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
-                                    RetryResult::Ok(())
-                                }
-                                Err(e) => match e.kind() {
-                                    ErrorKind::TryAgain => {
-                                        RetryResult::RetryableErr(Error::RocksDB(e))
-                                    }
-                                    _ => RetryResult::FatalErr(Error::RocksDB(e)),
-                                },
+                        match db.write_opt(writes, &wo) {
+                            Ok(()) => {
+                                let latency = now.elapsed();
+                                metrics.multi_put_latency.observe(latency.as_secs_f64());
+                                metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
+                                RetryResult::Ok(())
                             }
-                        });
+                            Err(e) => match e.kind() {
+                                ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                                _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                            },
+                        }
+                    });
 
                 // put back the values in the buffer so we don't lose allocation
                 for (i, (_, encoded_buffer)) in encoded_batch.drain(..).enumerate() {

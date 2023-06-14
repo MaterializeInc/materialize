@@ -693,6 +693,15 @@ mod upsert_rocksdb {
                   Can be changed dynamically (Materialize).",
         internal: true,
     };
+
+    pub static UPSERT_ROCKSDB_RETRY_DURATION_S: ServerVar<u32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_retry_duration_s"),
+        value: &mz_rocksdb::defaults::DEFAULT_RETRY_DURATION_S,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -1691,6 +1700,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION_S)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2057,6 +2067,10 @@ impl SystemVars {
 
     pub fn upsert_rocksdb_batch_size(&self) -> usize {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
+    }
+
+    pub fn upsert_rocksdb_retry_duration_s(&self) -> u32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION_S)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
