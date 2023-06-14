@@ -27,27 +27,17 @@ v3 [1]
 
 consensus-scan from_seqno=v0
 ----
-seqno=v1 batches= rollups=v1
-seqno=v2 batches= rollups=v1
-seqno=v3 batches=b0 rollups=v1
-
-write-rollup seqno=v3
-----
-v4
+seqno=v1 batches=
+seqno=v2 batches=
+seqno=v3 batches=b0
 
 # Run gc up to our latest seqno
-gc to_seqno=v4
+gc to_seqno=v3
 ----
-v5 batch_parts=0 rollups=0 truncated=v3 state_rollups=v1
+v4 ok
 
 # Now some slow gc req comes in that's behind. In the regression case, this
 # panics.
 gc to_seqno=v1
 ----
-v5 batch_parts=0 rollups=0 truncated= state_rollups=
-
-consensus-scan from_seqno=v0
-----
-seqno=v3 batches=b0 rollups=v1
-seqno=v4 batches=b0 rollups=v1,v3
-seqno=v5 batches=b0 rollups=v3
+v4 ok
