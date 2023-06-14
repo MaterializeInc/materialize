@@ -1403,7 +1403,7 @@ impl Coordinator {
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
-                        if !seen_revokes.contains(&(*group_id, *id)) {
+                        if seen_revokes.insert((*group_id, *id)) {
                             ops.push(catalog::Op::RevokeRole {
                                 role_id: *group_id,
                                 member_id: *id,
