@@ -1334,9 +1334,12 @@ impl Coordinator {
         session: &mut Session,
         ids: Vec<ObjectId>,
     ) -> Result<DropOps, AdapterError> {
-        let mut ops = Vec::new();
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
+        // Dropping either the group role or the member role of a role membership will trigger a
+        // revoke role. We use a Set for the revokes to avoid trying to attempt to revoke the same
+        // role membership twice.
+        let mut revokes = BTreeSet::new();
 
         let mut dropped_roles: BTreeMap<_, _> = ids
             .iter()
@@ -1359,15 +1362,15 @@ impl Coordinator {
             for dropped_role_id in
                 dropped_role_ids.intersection(&role.membership.map.keys().collect())
             {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id: **dropped_role_id,
-                    member_id: role.id(),
-                    grantor_id: *role
+                revokes.insert((
+                    **dropped_role_id,
+                    role.id(),
+                    *role
                         .membership
                         .map
                         .get(*dropped_role_id)
                         .expect("included in keys above"),
-                })
+                ));
             }
         }
 
@@ -1397,18 +1400,22 @@ impl Coordinator {
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
-                        ops.push(catalog::Op::RevokeRole {
-                            role_id: *group_id,
-                            member_id: *id,
-                            grantor_id: *grantor_id,
-                        });
+                        revokes.insert((*group_id, *id, *grantor_id));
                     }
                 }
                 _ => {}
             }
         }
 
-        ops.extend(ids.into_iter().map(catalog::Op::DropObject));
+        let ops = revokes
+            .into_iter()
+            .map(|(role_id, member_id, grantor_id)| catalog::Op::RevokeRole {
+                role_id,
+                member_id,
+                grantor_id,
+            })
+            .chain(ids.into_iter().map(catalog::Op::DropObject))
+            .collect();
 
         Ok(DropOps {
             ops,
