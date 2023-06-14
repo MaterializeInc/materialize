@@ -1373,7 +1373,6 @@ impl Coordinator {
                             .get(*dropped_role_id)
                             .expect("included in keys above"),
                     });
-                    seen_revokes.insert((**dropped_role_id, role.id()));
                 }
             }
         }
