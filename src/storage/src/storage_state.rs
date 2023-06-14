@@ -36,22 +36,22 @@
 //! when running code that requires `async`. This is needed because a timely
 //! main loop cannot run `async` code.
 //!
-//! ## Example flow of commands for `CreateSources`
+//! ## Example flow of commands for `RunIngestions`
 //!
 //! With external commands, internal commands, and the async worker,
 //! understanding where and how commands from the controller are realized can
-//! get complicated. We will follow the complete flow for `CreateSources`, as an
+//! get complicated. We will follow the complete flow for `RunIngestions`, as an
 //! example:
 //!
-//! 1. Worker receives a [`StorageCommand::CreateSources`] command from the
+//! 1. Worker receives a [`StorageCommand::RunIngestions`] command from the
 //!    controller.
 //! 2. This command is processed in [`StorageState::handle_storage_command`].
 //!    This step cannot render dataflows, because it does not have access to the
 //!    timely worker. It will only set up state that stays over the whole
 //!    lifetime of the source, such as the `reported_frontier`. Putting in place
-//!    this reported frontier will enable frontier reporting for that source.
-//!    We will not start reporting when we only see an internal command for
-//!    rendering a dataflow, which can "overtake" the external `CreateSources`
+//!    this reported frontier will enable frontier reporting for that source. We
+//!    will not start reporting when we only see an internal command for
+//!    rendering a dataflow, which can "overtake" the external `RunIngestions`
 //!    command.
 //! 3. During processing of that command, we call
 //!    [`AsyncStorageWorker::calculate_resume_upper`], which causes a command to
@@ -65,6 +65,13 @@
 //! 7. This message will be processed (on each worker) in
 //!    [`Worker::handle_internal_storage_command`]. This is what will cause the
 //!    required dataflow to be rendered on all workers.
+//!
+//! The process described above assumes that the `RunIngestions` is _not_ an
+//! update, i.e. it is in response to a `CREATE SOURCE`-like statement.
+//!
+//! The primary distinction when handling a `RunIngestions` that represents an
+//! update, is that it might fill out new internal state in the mid-level
+//! clients on the way toward being run.
 
 use std::any::Any;
 use std::cell::RefCell;
