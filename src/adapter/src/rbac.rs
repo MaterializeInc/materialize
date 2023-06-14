@@ -225,6 +225,20 @@ pub fn check_plan(
     role_memberships.insert(*current_role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
 
+    if let Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+        privilege_objects, ..
+    }) = &plan
+    {
+        if privilege_objects
+            .iter()
+            .any(|privilege_object| privilege_object.role_id.is_public())
+        {
+            return Err(AdapterError::Unauthorized(UnauthorizedError::Superuser {
+                action: "ALTER DEFAULT PRIVILEGES FOR ALL ROLES".to_string(),
+            }));
+        }
+    }
+
     Ok(())
 }
 

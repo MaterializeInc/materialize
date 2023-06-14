@@ -41,7 +41,8 @@ already been created.
 
 Field              | Use
 -------------------|--------------------------------------------------
-_target_role_      | The default privilege will apply to objects created by this role. If this is left blank, then the current role is assumed.
+_target_role_      | The default privilege will apply to objects created by this role. If this is left blank, then the current role is assumed. Use the `PUBLIC` pseudo-role to target objects created by all roles.
+**ALL ROLES**      | The default privilege will apply to objects created by all roles. This is shorthand for specifying `PUBLIC` as the _target_role_.
 _schema_name_      | The default privilege will apply only to objects created in this schema, if specified.
 _database_name_    | The default privilege will apply only to objects created in this database, if specified.
 **SELECT**         | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
@@ -66,11 +67,15 @@ ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO joe;
 ```
 
 ```sql
-ALTER DEFAULT PRIVILEGES FOR interns IN DATABASE dev GRANT ALL PRIVILEGES ON TABLES TO intern_managers;
+ALTER DEFAULT PRIVILEGES FOR ROLE interns IN DATABASE dev GRANT ALL PRIVILEGES ON TABLES TO intern_managers;
 ```
 
 ```sql
-ALTER DEFAULT PRIVILEGES FOR developers REVOKE USAGE ON SECRETS FROM project_managers;
+ALTER DEFAULT PRIVILEGES FOR ROLE developers REVOKE USAGE ON SECRETS FROM project_managers;
+```
+
+```sql
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 ```
 
 ## Related pages
