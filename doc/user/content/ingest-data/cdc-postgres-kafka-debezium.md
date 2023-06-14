@@ -17,7 +17,7 @@ This guide shows you how to use [Debezium](https://debezium.io/) and [Kafka](/sq
 
 ### Database setup
 
-**Minimum requirements:** PostgreSQL 10+
+**Minimum requirements:** PostgreSQL 11+
 
 Before deploying a Debezium connector, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/current/logical-replication.html).
 
