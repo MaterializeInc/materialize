@@ -434,9 +434,6 @@ impl Coordinator {
                 });
             }
 
-            if update_tracing_config {
-                self.update_tracing_config();
-            }
             if update_compute_config {
                 self.update_compute_config();
             }
@@ -445,6 +442,9 @@ impl Coordinator {
             }
             if update_metrics_retention {
                 self.update_metrics_retention();
+            }
+            if update_tracing_config {
+                self.update_tracing_config();
             }
         }
         .await;
@@ -662,11 +662,8 @@ impl Coordinator {
     }
 
     fn update_tracing_config(&mut self) {
-        if let Some(x) = self.catalog.tracing_config() {
-            self.tracing_handle
-                .reload_stderr_log_filter(x)
-                .expect("WIP");
-        }
+        let tracing = self.catalog.tracing_config();
+        tracing.apply(&self.tracing_handle);
     }
 
     fn update_compute_config(&mut self) {

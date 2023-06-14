@@ -199,6 +199,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             build_info: BUILD_INFO,
         })
         .await?;
+    let tracing_handle = Arc::new(tracing_handle);
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
@@ -295,6 +296,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_cluster::server::ClusterConfig {
             metrics_registry: metrics_registry.clone(),
             persist_clients: Arc::clone(&persist_clients),
+            tracing_handle: Arc::clone(&tracing_handle),
         },
         SYSTEM_TIME.clone(),
         ConnectionContext::from_cli_args(
@@ -323,6 +325,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_compute::server::serve(mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
+            tracing_handle,
         })?;
     info!(
         "listening for compute controller connections on {}",

@@ -78,7 +78,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
-use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(feature = "tokio-console")]
 use std::time::Duration;
@@ -100,9 +99,10 @@ use mz_ore::netio::SocketAddr;
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
-    CloneableEnvFilter, OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat,
-    TracingConfig, TracingGuard, TracingHandle,
+    OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
+    TracingGuard, TracingHandle,
 };
+use mz_tracing::CloneableEnvFilter;
 use opentelemetry::sdk::resource::Resource;
 use opentelemetry::KeyValue;
 

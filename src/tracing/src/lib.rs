@@ -73,57 +73,66 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::env;
+//!
 
-fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+use std::fmt::Formatter;
+use std::str::FromStr;
+use tracing_subscriber::EnvFilter;
 
-    let mut config = prost_build::Config::new();
-    config.btree_map(["."]);
+pub mod params;
 
-    tonic_build::configure()
-        // Enabling `emit_rerun_if_changed` will rerun the build script when
-        // anything in the include directory (..) changes. This causes quite a
-        // bit of spurious recompilation, so we disable it. The default behavior
-        // is to re-run if any file in the crate changes; that's still a bit too
-        // broad, but it's better.
-        .emit_rerun_if_changed(false)
-        .extern_path(".mz_ccsr.config", "::mz_ccsr")
-        .extern_path(".mz_expr.id", "::mz_expr")
-        .extern_path(".mz_expr.linear", "::mz_expr")
-        .extern_path(".mz_expr.relation", "::mz_expr")
-        .extern_path(".mz_expr.scalar", "::mz_expr")
-        .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
-        .extern_path(".mz_persist_client", "::mz_persist_client")
-        .extern_path(".mz_proto", "::mz_proto")
-        .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
-        .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
-        .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
-        .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
-        .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
-        .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
-        .extern_path(".mz_repr.row", "::mz_repr")
-        .extern_path(".mz_repr.url", "::mz_repr::url")
-        .extern_path(".mz_cluster_client", "::mz_cluster_client")
-        .extern_path(".mz_storage_client", "::mz_storage_client")
-        .extern_path(".mz_tracing", "::mz_tracing")
-        .compile_with_config(
-            config,
-            &[
-                "compute-client/src/logging.proto",
-                "compute-client/src/plan.proto",
-                "compute-client/src/plan/join.proto",
-                "compute-client/src/plan/reduce.proto",
-                "compute-client/src/plan/threshold.proto",
-                "compute-client/src/plan/top_k.proto",
-                "compute-client/src/protocol/command.proto",
-                "compute-client/src/protocol/response.proto",
-                "compute-client/src/service.proto",
-                "compute-client/src/types/dataflows.proto",
-                "compute-client/src/types/sinks.proto",
-                "compute-client/src/types/sources.proto",
-            ],
-            &[".."],
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+/// Wraps [`EnvFilter`] to provide a [`Clone`] implementation.
+pub struct CloneableEnvFilter {
+    filter: EnvFilter,
+}
+
+impl PartialEq for CloneableEnvFilter {
+    fn eq(&self, other: &Self) -> bool {
+        format!("{}", self) == format!("{}", other)
+    }
+}
+
+impl Eq for CloneableEnvFilter {}
+
+impl CloneableEnvFilter {
+    pub fn inner_ref(&self) -> &EnvFilter {
+        &self.filter
+    }
+
+    pub fn inner(self) -> EnvFilter {
+        self.filter
+    }
+}
+
+impl Clone for CloneableEnvFilter {
+    fn clone(&self) -> Self {
+        // At the time of this implementation, `EnvFilter` does not implement Clone
+        // but is expected, without explicit documentation saying so, to roundtrip
+        // through its Display implementation [1].
+        //
+        // [1]: https://github.com/tokio-rs/tracing/blob/e603c2a254d157a25a7a1fbfd4da46ad7e05f555/tracing-subscriber/src/filter/env/mod.rs#L944-L953
+        let filter = EnvFilter::from_str(&format!("{}", self.filter)).expect("roundtrips");
+        Self { filter }
+    }
+}
+
+impl FromStr for CloneableEnvFilter {
+    type Err = tracing_subscriber::filter::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let filter: EnvFilter = s.parse()?;
+        Ok(CloneableEnvFilter { filter })
+    }
+}
+
+impl std::fmt::Display for CloneableEnvFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.filter)
+    }
+}
+
+impl std::fmt::Debug for CloneableEnvFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.filter)
+    }
 }

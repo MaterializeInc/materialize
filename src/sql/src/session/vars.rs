@@ -77,14 +77,12 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
-use mz_ore::tracing::CloneableEnvFilter;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use tracing_subscriber::filter::Directive;
-use tracing_subscriber::EnvFilter;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
@@ -722,8 +720,18 @@ pub static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
 
 static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
-    name: UncasedStr::new("mz_logging_filter"),
+    name: UncasedStr::new("mz_log_filter"),
     value: &DEFAULT_LOGGING_FILTER,
+    description: "WIP",
+    internal: true,
+});
+
+pub static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
+    Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
+
+static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("mz_opentelemetry_filter"),
+    value: &DEFAULT_OPENTELEMETRY_FILTER,
     description: "WIP",
     internal: true,
 });
@@ -1716,6 +1724,7 @@ impl SystemVars {
             .with_feature_flags()
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&LOGGING_FILTER)
+            .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
             .with_var(&MAX_SOURCES)
@@ -2068,9 +2077,12 @@ impl SystemVars {
         *self.expect_value(&MAX_RESULT_SIZE)
     }
 
-    pub fn logging_filter(&self) -> EnvFilter {
-        let x = self.expect_value(&*LOGGING_FILTER);
-        x.clone().inner()
+    pub fn logging_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*LOGGING_FILTER).clone()
+    }
+
+    pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*OPENTELEMETRY_FILTER).clone()
     }
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
@@ -3624,7 +3636,7 @@ impl Value for CloneableEnvFilter {
 }
 
 pub fn is_tracing_var(name: &str) -> bool {
-    name == LOGGING_FILTER.name()
+    name == LOGGING_FILTER.name() || name == OPENTELEMETRY_FILTER.name()
 }
 
 /// Returns whether the named variable is a compute configuration parameter.

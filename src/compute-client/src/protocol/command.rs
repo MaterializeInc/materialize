@@ -19,6 +19,7 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::client::ProtoAllowCompaction;
 use mz_storage_client::controller::CollectionMetadata;
+use mz_tracing::params::TracingParameters;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
@@ -363,6 +364,8 @@ pub struct ComputeParameters {
     pub enable_mz_join_core: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
+    /// Tracing configuration.
+    pub tracing: TracingParameters,
 }
 
 impl ComputeParameters {
@@ -373,6 +376,7 @@ impl ComputeParameters {
             dataflow_max_inflight_bytes,
             enable_mz_join_core,
             persist,
+            tracing,
         } = other;
 
         if max_result_size.is_some() {
@@ -384,7 +388,9 @@ impl ComputeParameters {
         if enable_mz_join_core.is_some() {
             self.enable_mz_join_core = enable_mz_join_core;
         }
+
         self.persist.update(persist);
+        self.tracing.update(tracing);
     }
 
     /// Return whether all parameters are unset.
@@ -400,6 +406,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             persist: Some(self.persist.into_proto()),
+            tracing: Some(self.tracing.into_proto()),
         }
     }
 
@@ -411,6 +418,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,
+            tracing: proto
+                .tracing
+                .into_rust_if_some("ProtoComputeParameters::tracing")?,
         })
     }
 }

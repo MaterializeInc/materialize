@@ -67,6 +67,7 @@ members = [
     "src/test-macro",
     "src/testdrive",
     "src/timely-util",
+    "src/tracing",
     "src/transform",
     "src/cloud-resources",
     "src/walkabout",
