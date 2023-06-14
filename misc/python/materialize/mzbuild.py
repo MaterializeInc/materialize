@@ -31,9 +31,12 @@ from pathlib import Path
 from tempfile import TemporaryFile
 from typing import IO, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set
 
+import boto3
 import yaml
+from botocore.exceptions import NoCredentialsError
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize.elf import get_build_id
 from materialize.xcompile import Arch
 
 
@@ -190,6 +193,65 @@ class Copy(PreImage):
         return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
 
 
+class S3Upload(PreImage):
+    """A `PreImage` action which uploads an executable to S3.
+
+    If no AWS credentials are configured in the environment, no action is taken.
+
+    Otherwise, the ELF file with the specified `NAME` is scanned to get its build ID,
+    then it is uploaded to the path `buildid/BUILDID/executable` in the specified bucket.
+
+    If an ELF file called `NAME.debug` exists, and if its build ID matches
+    that of the main executable, it is uploaded to the path `buildid/BUILDID/debuginfo`.
+    """
+
+    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+        super().__init__(rd, path)
+
+        bin = config.pop("bin", None)
+        if bin is None:
+            raise ValueError("mzbuild config is missing 'bin' argument")
+        self.exe_path = path / bin
+        self.dbg_path = self.exe_path.with_suffix(self.exe_path.suffix + ".debug")
+
+        self.bucket = config.pop("bucket", None)
+        if self.bucket is None:
+            raise ValueError("mzbuild config is missing 'bucket' argument")
+
+    def run(self) -> None:
+        super().run()
+        s3 = boto3.client("s3")
+        with open(self.exe_path, "rb") as exe:
+            build_id = get_build_id(exe)
+            assert build_id.isalnum()
+            assert len(build_id) > 0
+            exe.seek(0)
+            try:
+                s3.upload_fileobj(
+                    exe, str(self.bucket), f"buildid/{build_id}/executable"
+                )
+            except NoCredentialsError:
+                print("Failed to find S3 credentials; not uploading build.")
+
+        try:
+            with open(self.dbg_path, "rb") as dbg:
+                dbg_build_id = get_build_id(dbg)
+                if dbg_build_id != build_id:
+                    print(
+                        f"WARNING: debuginfo build id does not match executable: {dbg_build_id} vs. {build_id}. Not uploading debuginfo."
+                    )
+                    return
+                dbg.seek(0)
+                s3.upload_fileobj(
+                    dbg, str(self.bucket), f"buildid/{build_id}/debuginfo"
+                )
+        except FileNotFoundError:
+            print(f"WARNING: No debuginfo found at {self.dbg_path}.")
+
+    def inputs(self) -> Set[str]:
+        return {self.exe_path, self.dbg_path}
+
+
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
@@ -226,6 +288,7 @@ class CargoBuild(CargoPreImage):
         example = config.pop("example", [])
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
+        self.split_debuginfo = config.pop("split_debuginfo", False)
         self.extract = config.pop("extract", {})
         self.rustflags = config.pop("rustflags", [])
         self.channel = None
@@ -250,10 +313,28 @@ class CargoBuild(CargoPreImage):
         cargo_profile = "release" if self.rd.release_mode else "debug"
 
         def copy(exe: Path) -> None:
-            (self.path / exe).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(
-                self.rd.cargo_target_dir() / cargo_profile / exe, self.path / exe
-            )
+            exe_path = self.path / exe
+            dbg_path = exe_path.with_suffix(exe_path.suffix + ".debug")
+            exe_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(self.rd.cargo_target_dir() / cargo_profile / exe, exe_path)
+
+            if self.split_debuginfo:
+                spawn.runv(
+                    [
+                        *self.rd.tool("objcopy"),
+                        exe_path,
+                        dbg_path,
+                        "--only-keep-debug",
+                    ],
+                    cwd=self.rd.root,
+                )
+                spawn.runv(
+                    [
+                        *self.rd.tool("objcopy"),
+                        exe_path,
+                        f"--add-gnu-debuglink={dbg_path}",
+                    ]
+                )
 
             if self.strip:
                 # NOTE(benesch): the debug information is large enough that it slows
@@ -261,7 +342,7 @@ class CargoBuild(CargoPreImage):
                 # images and shipping them around. A bit unfortunate, since it'd be
                 # nice to have useful backtraces if the binary crashes.
                 spawn.runv(
-                    [*self.rd.tool("strip"), "--strip-debug", self.path / exe],
+                    [*self.rd.tool("strip"), "--strip-debug", exe_path],
                     cwd=self.rd.root,
                 )
             else:
@@ -280,7 +361,7 @@ class CargoBuild(CargoPreImage):
                         ".debug_pubnames",
                         "-R",
                         ".debug_pubtypes",
-                        self.path / exe,
+                        exe_path,
                     ],
                     cwd=self.rd.root,
                 )
@@ -368,6 +449,8 @@ class Image:
                     self.pre_images.append(CargoBuild(self.rd, self.path, pre_image))
                 elif typ == "copy":
                     self.pre_images.append(Copy(self.rd, self.path, pre_image))
+                elif typ == "s3-upload":
+                    self.pre_images.append(S3Upload(self.rd, self.path, pre_image))
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
