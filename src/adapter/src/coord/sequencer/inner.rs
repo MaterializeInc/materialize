@@ -1409,7 +1409,6 @@ impl Coordinator {
                                 member_id: *id,
                                 grantor_id: *grantor_id,
                             });
-                            seen_revokes.insert((*group_id, *id));
                         }
                     }
                 }
