@@ -740,10 +740,11 @@ pub fn wait_for_view_population(
     Ok(())
 }
 
+// Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.
 pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     options: BTreeMap<String, String>,
-) -> Result<(), anyhow::Error> {
+) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
     ws.write_message(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
@@ -753,6 +754,7 @@ pub fn auth_with_ws(
         .unwrap(),
     ))?;
     // Wait for initial ready response.
+    let mut msgs = Vec::new();
     loop {
         let resp = ws.read_message()?;
         match resp {
@@ -760,7 +762,9 @@ pub fn auth_with_ws(
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                 match msg {
                     WebSocketResponse::ReadyForQuery(_) => break,
-                    _ => {}
+                    msg => {
+                        msgs.push(msg);
+                    }
                 }
             }
             Message::Ping(_) => continue,
@@ -771,5 +775,5 @@ pub fn auth_with_ws(
             _ => panic!("unexpected response: {:?}", resp),
         }
     }
-    Ok(())
+    Ok(msgs)
 }
