@@ -4491,7 +4491,8 @@ derive_unary!(
     MzAclItemGrantor,
     MzAclItemGrantee,
     MzAclItemPrivileges,
-    MzValidatePrivileges
+    MzValidatePrivileges,
+    QuoteIdent
 );
 
 impl UnaryFunc {
@@ -4891,6 +4892,7 @@ impl Arbitrary for UnaryFunc {
             MzAclItemGrantee::arbitrary().prop_map_into().boxed(),
             MzAclItemPrivileges::arbitrary().prop_map_into().boxed(),
             MzValidatePrivileges::arbitrary().prop_map_into().boxed(),
+            QuoteIdent::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -5242,6 +5244,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MzAclItemGrantee(_) => MzAclItemGrantee(()),
             UnaryFunc::MzAclItemPrivileges(_) => MzAclItemPrivileges(()),
             UnaryFunc::MzValidatePrivileges(_) => MzValidatePrivileges(()),
+            UnaryFunc::QuoteIdent(_) => QuoteIdent(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -5663,6 +5666,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MzAclItemGrantee(_) => Ok(impls::MzAclItemGrantee.into()),
                 MzAclItemPrivileges(_) => Ok(impls::MzAclItemPrivileges.into()),
                 MzValidatePrivileges(_) => Ok(impls::MzValidatePrivileges.into()),
+                QuoteIdent(_) => Ok(impls::QuoteIdent.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
