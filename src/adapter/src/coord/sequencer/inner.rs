@@ -1363,7 +1363,7 @@ impl Coordinator {
             for dropped_role_id in
                 dropped_role_ids.intersection(&role.membership.map.keys().collect())
             {
-                if !seen_revokes.contains(&(**dropped_role_id, role.id())) {
+                if seen_revokes.insert((**dropped_role_id, role.id())) {
                     ops.push(catalog::Op::RevokeRole {
                         role_id: **dropped_role_id,
                         member_id: role.id(),
