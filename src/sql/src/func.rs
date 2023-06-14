@@ -3392,14 +3392,20 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 ELSE (
                     SELECT mz_internal.mz_error_if_null(
                         (
-                            SELECT DISTINCT concat(qual.d, qual.s, item.name)
+                            SELECT DISTINCT
+                                concat_ws(
+                                    '.',
+                                    qual.d,
+                                    qual.s,
+                                    pg_catalog.quote_ident(item.name)
+                                )
                             FROM
                                 mz_objects AS item
                             JOIN
                             (
                                 SELECT
-                                    d.name || '.' AS d,
-                                    s.name || '.' AS s,
+                                    pg_catalog.quote_ident(d.name) AS d,
+                                    pg_catalog.quote_ident(s.name) AS s,
                                     s.id AS schema_id
                                 FROM
                                     mz_schemas AS s
