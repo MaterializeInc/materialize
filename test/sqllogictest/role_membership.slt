@@ -332,16 +332,7 @@ group3  group1  mz_system  false
 group3  group2  mz_system  false
 
 statement ok
-DROP ROLE group1
-
-statement ok
-DROP ROLE group2
-
-statement ok
-DROP ROLE group3
-
-statement ok
-DROP ROLE joe
+DROP ROLE group1, group2, group3, joe
 
 statement ok
 CREATE ROLE joe
@@ -382,16 +373,7 @@ LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
 ----
 
 statement ok
-DROP ROLE group1
-
-statement ok
-DROP ROLE group2
-
-statement ok
-DROP ROLE joe
-
-statement ok
-DROP ROLE mike
+DROP ROLE group1, group2, joe, mike
 
 # Disable RBAC checks
 
