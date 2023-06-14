@@ -47,7 +47,7 @@ from materialize.mzcompose.services import (
 )
 from materialize.mzcompose.services import Testdrive as TestdriveService
 from materialize.util import MzVersion
-from materialize.version_list import VersionsFromGit
+from materialize.version_list import VersionsFromDocs
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -137,7 +137,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     executor = MzcomposeExecutor(composition=c)
 
     versions = list(
-        [v for v in VersionsFromGit().minor_versions() if v >= args.min_version]
+        [v for v in VersionsFromDocs().minor_versions() if v >= args.min_version]
     )
     print(
         "--- Testing upgrade scenarios involving the following versions: "
