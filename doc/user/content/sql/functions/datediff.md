@@ -61,4 +61,3 @@ SELECT datediff('day', '2005-02-28', '2005-03-01') as non_leap;
 ```
 
 In the statement that uses a leap year (`2004`), the number of day boundaries crossed is `2`. When using a non-leap year (`2005`), only `1` day boundary is crossed.
-

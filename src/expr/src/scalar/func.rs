@@ -7534,11 +7534,7 @@ impl VariadicFunc {
             | VariadicFunc::Greatest
             | VariadicFunc::Least
             | VariadicFunc::And
-            | VariadicFunc::Or
-            | VariadicFunc::DateDiffTimestamp
-            | VariadicFunc::DateDiffTimestampTz
-            | VariadicFunc::DateDiffDate
-            | VariadicFunc::DateDiffTime => true,
+            | VariadicFunc::Or => true,
             VariadicFunc::Concat
             | VariadicFunc::ConcatWs
             | VariadicFunc::MakeTimestamp
@@ -7565,7 +7561,11 @@ impl VariadicFunc {
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::Translate
             | VariadicFunc::ArrayPosition
-            | VariadicFunc::ArrayFill { .. } => false,
+            | VariadicFunc::ArrayFill { .. }
+            | VariadicFunc::DateDiffTimestamp
+            | VariadicFunc::DateDiffTimestampTz
+            | VariadicFunc::DateDiffDate
+            | VariadicFunc::DateDiffTime => false,
         }
     }
 }
