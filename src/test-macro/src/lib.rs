@@ -134,12 +134,6 @@ fn expand_logging_init() -> Tokens {
 /// Emit code for a wrapper function around a test function.
 fn expand_wrapper(inner_test: &Tokens, wrappee: &ItemFn) -> TokenStream {
     let attrs = &wrappee.attrs;
-    let async_ = &wrappee.sig.asyncness;
-    let await_ = if async_.is_some() {
-        quote! {.await}
-    } else {
-        quote! {}
-    };
     let body = &wrappee.block;
     let test_name = &wrappee.sig.ident;
 
@@ -152,17 +146,35 @@ fn expand_wrapper(inner_test: &Tokens, wrappee: &ItemFn) -> TokenStream {
 
     let logging_init = expand_logging_init();
 
+    let test_body = if wrappee.sig.asyncness.is_some() {
+      quote! {
+        let f = async {
+          #body
+        };
+        
+        ::tokio::pin!(f);
+        return tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("Failed building the Runtime")
+            .block_on(f);
+      }
+    } else {
+      quote! {
+        #body
+      }
+    };
+
     let result = quote! {
       #[#inner_test]
       #(#attrs)*
-      #async_ fn #test_name() #ret {
-        #async_ fn test_impl() #ret {
-          #body
+      fn #test_name() #ret {
+        fn test_impl() #ret {
+          #test_body
         }
 
         #logging_init
 
-        test_impl()#await_
+        test_impl()
       }
     };
     result.into()
