@@ -334,6 +334,47 @@ group3  group2  mz_system  false
 statement ok
 DROP ROLE group1, group2, group3, joe
 
+statement ok
+CREATE ROLE joe
+
+statement ok
+CREATE ROLE mike
+
+statement ok
+CREATE ROLE group1
+
+statement ok
+CREATE ROLE group2
+
+statement ok
+GRANT group1, group2 TO joe, mike
+
+query TTTB
+SELECT role.name, member.name, grantor.name, members.admin_option
+FROM pg_auth_members members
+LEFT JOIN mz_roles role ON members.roleid = role.oid
+LEFT JOIN mz_roles member ON members.member = member.oid
+LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
+----
+group1  joe     mz_system  false
+group2  joe     mz_system  false
+group1  mike    mz_system  false
+group2  mike    mz_system  false
+
+statement ok
+REVOKE group1, group2 FROM joe, mike
+
+query TTTB
+SELECT role.name, member.name, grantor.name, members.admin_option
+FROM pg_auth_members members
+LEFT JOIN mz_roles role ON members.roleid = role.oid
+LEFT JOIN mz_roles member ON members.member = member.oid
+LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
+----
+
+statement ok
+DROP ROLE group1, group2, joe, mike
+
 # Disable RBAC checks
 
 simple conn=mz_system,user=mz_system

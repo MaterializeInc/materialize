@@ -889,8 +889,8 @@ pub struct RaisePlan {
 
 #[derive(Debug)]
 pub struct GrantRolePlan {
-    /// The role that is gaining a member.
-    pub role_id: RoleId,
+    /// The roles that are gaining members.
+    pub role_ids: Vec<RoleId>,
     /// The roles that will be added to `role_id`.
     pub member_ids: Vec<RoleId>,
     /// The role that granted the membership.
@@ -899,8 +899,8 @@ pub struct GrantRolePlan {
 
 #[derive(Debug)]
 pub struct RevokeRolePlan {
-    /// The role that is losing a member.
-    pub role_id: RoleId,
+    /// The roles that are losing members.
+    pub role_ids: Vec<RoleId>,
     /// The roles that will be removed from `role_id`.
     pub member_ids: Vec<RoleId>,
     /// The role that revoked the membership.
