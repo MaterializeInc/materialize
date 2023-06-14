@@ -4932,6 +4932,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "similar-asserts",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -7090,6 +7091,20 @@ name = "similar"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "420acb44afdae038210c99e69aae24109f32f15500aa708e81d46c9f29d55fcf"
+dependencies = [
+ "bstr",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "similar-asserts"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbf644ad016b75129f01a34a355dcb8d66a5bc803e417c7a77cc5d5ee9fa0f18"
+dependencies = [
+ "console",
+ "similar",
+]
 
 [[package]]
 name = "simple_asn1"
@@ -8130,6 +8145,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicode-segmentation"
+version = "1.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dd624098567895118886609431a7c3b8f516e41d30e0643f03d94592a147e36"
+
+[[package]]
 name = "unicode-width"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8572,6 +8593,7 @@ dependencies = [
  "cc",
  "chrono",
  "clap",
+ "console",
  "criterion",
  "crossbeam-channel",
  "crossbeam-deque",
@@ -8639,6 +8661,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "similar",
  "smallvec",
  "syn 1.0.107",
  "syn 2.0.18",
