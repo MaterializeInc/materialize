@@ -19,7 +19,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFi
 use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, UsedIndexes};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
-use tracing::dispatcher::{self, with_default};
+use tracing::dispatcher::{self};
 use tracing_subscriber::prelude::*;
 
 use crate::catalog::ConnCatalog;
@@ -73,10 +73,10 @@ impl OptimizerTrace {
         OptimizerTrace(dispatcher::Dispatch::new(subscriber))
     }
 
-    /// Run the given optimization `pipeline` once and collect a trace of all
-    /// plans produced during that run.
-    pub fn collect_trace<T>(&self, pipeline: impl FnOnce() -> T) -> T {
-        with_default(&self.0, pipeline)
+    /// Set up trace collection while the guard that is return is live;
+    /// when the guard is dropped, tracing will return to the previous handler.
+    pub fn set_tracer(&self) -> tracing::subscriber::DefaultGuard {
+        tracing::dispatcher::set_default(&self.0)
     }
 
     /// Collect all traced plans for all plan types `T` that are available in

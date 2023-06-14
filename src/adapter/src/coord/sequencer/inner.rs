@@ -64,7 +64,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
-use mz_transform::Optimizer;
+use mz_transform::{EmptyStatisticsOracle, Optimizer};
 use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
@@ -1920,7 +1920,11 @@ impl Coordinator {
         );
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
+        mz_transform::optimize_dataflow(
+            &mut dataflow,
+            &builder.index_oracle(),
+            &mz_transform::EmptyStatisticsOracle,
+        )?;
 
         Ok(PeekStageTimestamp {
             validity,
@@ -2459,7 +2463,7 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn sequence_explain(
+    pub(super) async fn sequence_explain(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -2469,13 +2473,14 @@ impl Coordinator {
         match plan.stage {
             ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(tx, session, plan),
             _ => tx.send(
-                self.sequence_explain_plan(&mut session, plan, target_cluster),
+                self.sequence_explain_plan(&mut session, plan, target_cluster)
+                    .await,
                 session,
             ),
         }
     }
 
-    fn sequence_explain_plan(
+    async fn sequence_explain_plan(
         &mut self,
         session: &mut Session,
         plan: ExplainPlan,
@@ -2531,7 +2536,9 @@ impl Coordinator {
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
-        let pipeline_result = optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
+        let pipeline_result = {
+            let _guard = optimizer_trace.set_tracer();
+
             let _span = tracing::span!(Level::INFO, "optimize").entered();
 
             let explainee_id = match explainee {
@@ -2596,9 +2603,46 @@ impl Coordinator {
                 |s| prep_scalar_expr(state, s, style),
             )?;
 
+            // TODO(mgree): load cardinality statistics
+            let timestamp_context = self
+                .sequence_peek_timestamp(
+                    session,
+                    &QueryWhen::Immediately,
+                    cluster_id,
+                    timeline_context,
+                    &id_bundle,
+                    &source_ids,
+                    None, // no real-time recency
+                )?
+                .timestamp_context;
+            let query_as_of = timestamp_context.antichain();
+            let cached_stats = mz_ore::future::timeout(
+                OPTIMIZER_MAX_STATS_WAIT,
+                CachedStatisticsOracle::new(
+                    &source_ids,
+                    &query_as_of,
+                    self.controller.storage.as_ref(),
+                ),
+            )
+            .await;
+
             // Execute the `optimize/global` stage.
             catch_unwind(no_errors, "global", || {
-                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster_id))
+                let stats: Box<dyn mz_transform::StatisticsOracle> = match cached_stats {
+                    Ok(stats) => Box::new(stats),
+                    Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                        Box::new(EmptyStatisticsOracle)
+                    }
+                    Err(mz_ore::future::TimeoutError::Inner(e)) => {
+                        panic!("error collecting statistics: {e}")
+                    }
+                };
+
+                mz_transform::optimize_dataflow(
+                    &mut dataflow,
+                    &self.index_oracle(cluster_id),
+                    stats.as_ref(),
+                )
             })?;
 
             // Calculate indexes used by the dataflow at this point
@@ -2611,18 +2655,7 @@ impl Coordinator {
             // Determine if fast path plan will be used for this explainee
             let fast_path_plan = match explainee {
                 Explainee::Query => {
-                    let timestamp_context = self
-                        .sequence_peek_timestamp(
-                            session,
-                            &QueryWhen::Immediately,
-                            cluster_id,
-                            timeline_context,
-                            &id_bundle,
-                            &source_ids,
-                            None, // no real-time recency
-                        )?
-                        .timestamp_context;
-                    dataflow.set_as_of(timestamp_context.antichain());
+                    dataflow.set_as_of(query_as_of);
                     let style = ExprPrepStyle::OneShot {
                         logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
                         session,
@@ -2661,7 +2694,7 @@ impl Coordinator {
             // Return objects that need to be passed to the `ExplainContext`
             // when rendering explanations for the various trace entries.
             Ok((used_indexes, fast_path_plan))
-        });
+        };
 
         let (used_indexes, fast_path_plan) = match pipeline_result {
             Ok((used_indexes, fast_path_plan)) => (used_indexes, fast_path_plan),
@@ -4041,6 +4074,47 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::ReassignOwned)
+    }
+}
+
+#[derive(Debug)]
+struct CachedStatisticsOracle {
+    cache: BTreeMap<GlobalId, usize>,
+}
+
+const OPTIMIZER_MAX_STATS_WAIT: Duration = Duration::from_millis(250);
+
+impl CachedStatisticsOracle {
+    pub async fn new<T: Clone + std::fmt::Debug + timely::PartialOrder + Send + Sync>(
+        ids: &BTreeSet<GlobalId>,
+        as_of: &Antichain<T>,
+        storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
+    ) -> Result<Self, String> {
+        let mut cache = BTreeMap::new();
+
+        for id in ids {
+            let stats = storage
+                .snapshot_stats(*id, as_of.clone())
+                .await
+                .map_err(|e| format!("bad timestamp for statistics: {e}"))?;
+
+            if timely::PartialOrder::less_than(&stats.as_of, as_of) {
+                ::tracing::warn!(
+                    "stale statistics: statistics from {:?} are earlier than query at {as_of:?}",
+                    stats.as_of
+                );
+            }
+
+            cache.insert(*id, stats.num_updates);
+        }
+
+        Ok(Self { cache })
+    }
+}
+
+impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
+    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
+        self.cache.get(&id).map(|estimate| *estimate)
     }
 }
 
