@@ -6,6 +6,9 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+//
+// The original source code is subject to the terms of the PostgreSQL license, a copy
+// of which can be found in the LICENSE file at the root of this repository.
 
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
@@ -1866,7 +1869,7 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     Ok(contains.into())
 }
 
-// transliteration from postgres/src/backend/utils/adt/misc.c
+// transliterated from postgres/src/backend/utils/adt/misc.c
 fn parse_ident<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
