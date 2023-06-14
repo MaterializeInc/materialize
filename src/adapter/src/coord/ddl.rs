@@ -445,6 +445,8 @@ impl Coordinator {
             }
             if update_tracing_config {
                 self.update_tracing_config();
+                self.update_compute_config();
+                self.update_storage_config();
             }
         }
         .await;
