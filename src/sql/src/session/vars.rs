@@ -67,6 +67,8 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::str::FromStr;
+use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -75,11 +77,14 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_ore::tracing::CloneableEnvFilter;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use tracing_subscriber::filter::Directive;
+use tracing_subscriber::EnvFilter;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
@@ -712,6 +717,16 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     replication connections. (Materialize)",
     internal: true,
 };
+
+pub static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
+    Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
+
+static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("mz_logging_filter"),
+    value: &DEFAULT_LOGGING_FILTER,
+    description: "WIP",
+    internal: true,
+});
 
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
 /// when connecting to PG via replication.
@@ -1700,6 +1715,7 @@ impl SystemVars {
         let mut vars = vars
             .with_feature_flags()
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
+            .with_var(&LOGGING_FILTER)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
             .with_var(&MAX_SOURCES)
@@ -2050,6 +2066,11 @@ impl SystemVars {
     /// Returns the value of the `max_result_size` configuration parameter.
     pub fn max_result_size(&self) -> u32 {
         *self.expect_value(&MAX_RESULT_SIZE)
+    }
+
+    pub fn logging_filter(&self) -> EnvFilter {
+        let x = self.expect_value(&*LOGGING_FILTER);
+        x.clone().inner()
     }
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
@@ -3578,6 +3599,32 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
             TransactionIsolationLevel::StrictSerializable => Self::StrictSerializable,
         }
     }
+}
+
+impl Value for CloneableEnvFilter {
+    fn type_name() -> String {
+        "EnvFilter".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        CloneableEnvFilter::from_str(s).map_err(|e| VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: vec![s.to_string()],
+            reason: format!("{}", e),
+        })
+    }
+
+    fn format(&self) -> String {
+        format!("{}", self)
+    }
+}
+
+pub fn is_tracing_var(name: &str) -> bool {
+    name == LOGGING_FILTER.name()
 }
 
 /// Returns whether the named variable is a compute configuration parameter.

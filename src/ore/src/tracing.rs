@@ -599,6 +599,55 @@ impl From<BTreeMap<String, String>> for OpenTelemetryContext {
     }
 }
 
+/// Wraps [`EnvFilter`] to provide a [`Clone`] implementation.
+#[derive(Debug)]
+pub struct CloneableEnvFilter {
+    filter: EnvFilter,
+}
+
+impl PartialEq for CloneableEnvFilter {
+    fn eq(&self, other: &Self) -> bool {
+        format!("{}", self) == format!("{}", other)
+    }
+}
+
+impl CloneableEnvFilter {
+    pub fn inner_ref(&self) -> &EnvFilter {
+        &self.filter
+    }
+
+    pub fn inner(self) -> EnvFilter {
+        self.filter
+    }
+}
+
+impl Clone for CloneableEnvFilter {
+    fn clone(&self) -> Self {
+        // At the time of this implementation, `EnvFilter` does not implement Clone
+        // but is expected, without explicit documentation saying so, to roundtrip
+        // through its Display implementation [1].
+        //
+        // [1]: https://github.com/tokio-rs/tracing/blob/e603c2a254d157a25a7a1fbfd4da46ad7e05f555/tracing-subscriber/src/filter/env/mod.rs#L944-L953
+        let filter = EnvFilter::from_str(&format!("{}", self.filter)).expect("roundtrips");
+        Self { filter }
+    }
+}
+
+impl FromStr for CloneableEnvFilter {
+    type Err = tracing_subscriber::filter::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let filter: EnvFilter = s.parse()?;
+        Ok(CloneableEnvFilter { filter })
+    }
+}
+
+impl std::fmt::Display for CloneableEnvFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.filter)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

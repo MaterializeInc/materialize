@@ -98,6 +98,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::MutexGuard;
 use tracing::{info, trace, warn};
+use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
@@ -7486,6 +7487,11 @@ impl Catalog {
 
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
+    }
+
+    pub fn tracing_config(&self) -> Option<EnvFilter> {
+        let config = self.system_config();
+        Some(config.logging_filter())
     }
 
     /// Return the current compute configuration, derived from the system configuration.
