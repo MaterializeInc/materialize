@@ -2453,6 +2453,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float64, Float64) => BinaryFunc::Power => Float64, 1368;
             params!(Numeric, Numeric) => BinaryFunc::PowerNumeric => Numeric, 2169;
         },
+        "quote_ident" => Scalar {
+            params!(String) => UnaryFunc::QuoteIdent(func::QuoteIdent) => String, 1282;
+        },
         "radians" => Scalar {
             params!(Float64) => UnaryFunc::Radians(func::Radians) => Float64, 1609;
         },

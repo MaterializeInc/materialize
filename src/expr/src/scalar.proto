@@ -420,6 +420,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty mz_acl_item_privileges = 294;
         ProtoCastToVariableType cast_array_to_array = 295;
         google.protobuf.Empty mz_validate_privileges = 296;
+        google.protobuf.Empty quote_ident = 297;
     }
 }
 
