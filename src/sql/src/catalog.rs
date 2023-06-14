@@ -1288,6 +1288,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::View => ObjectType::View,
             mz_sql_parser::ast::ObjectType::MaterializedView => ObjectType::MaterializedView,
             mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
+            mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
             mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
             mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,

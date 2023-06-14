@@ -1823,6 +1823,9 @@ pub enum ShowObjectType<T: AstInfo> {
     Schema {
         from: Option<T::DatabaseName>,
     },
+    Subsource {
+        on_source: T::ItemName,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -1859,6 +1862,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Index { .. } => "INDEXES",
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
+            ShowObjectType::Subsource { .. } => "SUBSOURCES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -1889,6 +1893,12 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             }
             _ => (),
         }
+
+        if let ShowObjectType::Subsource { on_source } = &self.object_type {
+            f.write_str(" ON ");
+            f.write_node(on_source);
+        }
+
         if let Some(filter) = &self.filter {
             f.write_str(" ");
             f.write_node(filter);
@@ -2233,6 +2243,7 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
+    Subsource,
 }
 
 impl ObjectType {
@@ -2247,7 +2258,8 @@ impl ObjectType {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => true,
+            | ObjectType::Func
+            | ObjectType::Subsource => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -2275,6 +2287,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
+            ObjectType::Subsource => "SUBSOURCE",
         })
     }
 }

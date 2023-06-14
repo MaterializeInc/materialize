@@ -3329,25 +3329,6 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // message is the second argument.
             params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
         },
-        "mz_get_subsources" => Table {
-            params!(String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_global_id_to_name(d.object_id) AS source,
-                    mz_internal.mz_global_id_to_name(d.subsource) AS subsource,
-                    s.type AS type
-                FROM
-                    mz_sources AS s
-                    JOIN (
-                        SELECT object_id, referenced_object_id AS subsource
-                        FROM
-                        mz_internal.mz_object_dependencies AS d
-                            JOIN
-                            mz_internal.mz_resolve_object_name($1) AS g
-                            ON d.object_id = g.id
-                    ) AS d
-                    ON s.id = d.subsource
-            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
-        },
         "mz_resolve_object_name" => Table {
             // This implementation is available primarily to drive the other, single-param
             // implementation.

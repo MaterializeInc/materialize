@@ -271,6 +271,41 @@ SHOW INDEXES FROM s ON t
                        ^
 
 parse-statement
+SHOW SUBSOURCES ON c
+----
+SHOW SUBSOURCES ON c
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Subsource { on_source: Name(UnresolvedItemName([Ident("c")])) }, from: None, filter: None }))
+
+parse-statement
+SHOW SUBSOURCES FROM s ON d
+----
+SHOW SUBSOURCES FROM s ON d
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Subsource { on_source: Name(UnresolvedItemName([Ident("d")])) }, from: Some(UnresolvedSchemaName([Ident("s")])), filter: None }))
+
+parse-statement
+SHOW SUBSOURCES ON d LIKE 'foo'
+----
+SHOW SUBSOURCES ON d LIKE 'foo'
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Subsource { on_source: Name(UnresolvedItemName([Ident("d")])) }, from: None, filter: Some(Like("foo")) }))
+
+parse-statement
+SHOW SUBSOURCES FROM s ON d LIKE 'foo'
+----
+SHOW SUBSOURCES FROM s ON d LIKE 'foo'
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Subsource { on_source: Name(UnresolvedItemName([Ident("d")])) }, from: Some(UnresolvedSchemaName([Ident("s")])), filter: Some(Like("foo")) }))
+
+parse-statement
+SHOW SUBSOURCES FROM s IN CLUSTER c
+----
+error: Expected ON, found IN
+SHOW SUBSOURCES FROM s IN CLUSTER c
+                       ^
+
+parse-statement
 SHOW CREATE VIEW foo
 ----
 SHOW CREATE VIEW foo
