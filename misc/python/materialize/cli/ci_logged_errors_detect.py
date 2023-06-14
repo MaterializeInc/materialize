@@ -25,6 +25,7 @@ CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 ERROR_RE = re.compile(
     r"""
     ( panicked\ at
+    | segfault\ at
     | internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
