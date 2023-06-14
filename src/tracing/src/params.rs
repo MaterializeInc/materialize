@@ -14,9 +14,9 @@ use proptest::arbitrary::any;
 use proptest::prelude::{Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de, Deserialize, Serialize, Serializer};
 use std::str::FromStr;
-use tracing_subscriber::filter::ParseError;
+
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
