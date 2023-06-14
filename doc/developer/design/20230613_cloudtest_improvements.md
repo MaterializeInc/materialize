@@ -67,7 +67,7 @@ repo is synchronized to the cloud repo.
 Moving all tests *to the materialize repo* will not be possible because it won't contain all necessary functionality to
 be tested by (current) cloud repo cloudtests.
 
-## Unresolved questions
+## Resolved questions
 
 ### How to handle semver dependency conflict?
 
@@ -82,6 +82,17 @@ most recent version.
 * try to isolate parts of the test framework that touch semver by handing in or injecting some repo-specific helper
 class => this might be a larger refactoring with effects on the code structure
 * other
+
+#### Fix
+
+Use a conditional import, which imports and renames the semver's `Version` class depending on the semver dependency
+version, to work around a breaking name change
+([Migrating from semver2 to semver3](https://python-semver.readthedocs.io/en/latest/migration/migratetosemver3.html)).
+This seems to allow running the code with an older version of semver.
+
+## Unresolved questions
+
+Currently none.
 
 ## Future work
 
