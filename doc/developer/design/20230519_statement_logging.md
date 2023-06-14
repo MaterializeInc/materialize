@@ -184,6 +184,7 @@ particular queries (for example, whether WMR was used).
 | `finished_at`           | `timestamp with time zone` | The time at which the statement finished, or null if it is still running.                                |
 | `was_successful`        | `bool`                     | Whether the statement terminated successfully, or null if it is still running.                           |
 | `was_canceled`          | `bool`                     | Whether the statement was canceled, or null if it is still running.                                      |
+| `was_aborted`           | `bool`                     | Whether the statement was aborted; that is, `environmentd` crashed before execution finished.            |
 | `error_message`         | `text`                     | The error message. Non-null if and only if the statement finished without succeeding or being cancelled. |
 | `rows_returned`         | `bigint`                   | How many rows the statement returned, or null if it is still running, errored or was canceled.           |
 | `was_fast_path`         | `bool`                     | Whether the statement executed on the fast path, or null if it is still running.                         |
@@ -195,7 +196,7 @@ particular queries (for example, whether WMR was used).
 |--------------------|--------|-------------------------------------------------------|
 | `id`               | `uuid` | The unique identifier of the session.                 |
 | `application_name` | `text` | The name of the application that created the session. |
-| `user_name`        | `text` | The name of the user who owns the session.            |
+| `user`        | `text` | The name of the user who owns the session.            |
 
 
 ### Observability and Rollout
