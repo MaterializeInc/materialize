@@ -132,7 +132,7 @@ fn datadriven() {
                 let stmt = s.into_element();
                 let parsed = match parser::parse_statements(&stmt.to_string()) {
                     Ok(parsed) => parsed.into_element(),
-                    Err(err) => panic!("reparse failed: {}\n", err),
+                    Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
                 };
                 if parsed != stmt {
                     panic!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);

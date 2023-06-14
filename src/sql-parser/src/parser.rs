@@ -3327,7 +3327,7 @@ impl<'a> Parser<'a> {
                     cascade,
                 }))
             }
-            ObjectType::Func => parser_err!(
+            ObjectType::Func | ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported DROP on {object_type}")
@@ -3789,7 +3789,7 @@ impl<'a> Parser<'a> {
                     new_owner,
                 }))
             }
-            ObjectType::Func => parser_err!(
+            ObjectType::Func | ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
@@ -4586,6 +4586,7 @@ impl<'a> Parser<'a> {
             | ObjectType::View
             | ObjectType::MaterializedView
             | ObjectType::Source
+            | ObjectType::Subsource
             | ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -5252,6 +5253,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+
             let show_object_type = match object_type {
                 ObjectType::Database => ShowObjectType::Database,
                 ObjectType::Schema => {
@@ -5265,6 +5267,13 @@ impl<'a> Parser<'a> {
                 ObjectType::Table => ShowObjectType::Table,
                 ObjectType::View => ShowObjectType::View,
                 ObjectType::Source => ShowObjectType::Source,
+                ObjectType::Subsource => {
+                    self.expect_keyword(ON)?;
+
+                    ShowObjectType::Subsource {
+                        on_source: self.parse_raw_name()?,
+                    }
+                }
                 ObjectType::Sink => ShowObjectType::Sink,
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
@@ -5305,6 +5314,7 @@ impl<'a> Parser<'a> {
                     )
                 }
             };
+            println!("escaped");
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
                 object_type: show_object_type,
                 from,
@@ -6314,7 +6324,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::ClusterReplica
             | ObjectType::Role
-            | ObjectType::Func => {
+            | ObjectType::Func
+            | ObjectType::Subsource => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -6504,6 +6515,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS,
                 DATABASES,
                 SCHEMAS,
+                SUBSOURCES,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -6533,6 +6545,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS => ObjectType::Connection,
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
+                SUBSOURCES => ObjectType::Subsource,
                 _ => unreachable!(),
             },
         )
