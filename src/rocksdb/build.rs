@@ -88,6 +88,7 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
+        .extern_path(".mz_proto", "::mz_proto")
         .compile_with_config(config, &["rocksdb/src/config.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

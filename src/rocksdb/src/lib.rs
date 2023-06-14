@@ -85,7 +85,7 @@
 use std::convert::AsRef;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use itertools::Itertools;
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -500,7 +500,7 @@ fn rocksdb_core_loop<K, V, M, O>(
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
 {
-    let retry_max_duration = Duration::from_secs(tuning_config.retry_max_duration_s.into());
+    let retry_max_duration = tuning_config.retry_max_duration;
     let rocksdb_options = options.as_rocksdb_options(&tuning_config);
 
     let retry_result = Retry::default()
