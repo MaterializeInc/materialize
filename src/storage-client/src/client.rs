@@ -767,6 +767,7 @@ mod tests {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn storage_response_protobuf_roundtrip(expect in any::<StorageResponse<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoStorageResponse>(&expect);
             assert!(actual.is_ok());

@@ -995,7 +995,6 @@ mod tests {
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_minimum_since() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1062,7 +1061,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn compaction_partial_order() {
         let data = vec![
             (
@@ -1147,7 +1145,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn prefetches() {
         let desc = Description::new(
             Antichain::from_elem(0u64),

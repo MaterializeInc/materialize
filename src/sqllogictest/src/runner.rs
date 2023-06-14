@@ -2276,6 +2276,7 @@ fn mutate(sql: &str) -> Vec<String> {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_generate_view_sql() {
     let uuid = Uuid::parse_str("67e5504410b1426f9247bb680e5fe0c8").unwrap();
     let cases = vec![

@@ -158,8 +158,14 @@ steps:
     label: Miri test %n
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     inputs: [src]
-    parallelism: 2
+    parallelism: 6
     timeout_in_minutes: 30
+    artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+          args: [--miri]
     agents:
       queue: builder-linux-x86_64
     coverage: skip

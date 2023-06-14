@@ -80,6 +80,7 @@ use mz_repr::ScalarType;
 use mz_sql::plan::PlanContext;
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_parameter_type_inference() {
     let test_cases = vec![
         (

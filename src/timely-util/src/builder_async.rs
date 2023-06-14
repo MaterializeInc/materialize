@@ -738,7 +738,6 @@ mod test {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     fn gh_18837() {
         let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
         timely::execute::execute_from(builders, other, WorkerConfig::default(), |worker| {
