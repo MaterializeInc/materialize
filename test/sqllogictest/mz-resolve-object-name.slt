@@ -246,3 +246,12 @@ t 1396
 t 1397
 t 1398
 t 1705
+
+statement ok
+CREATE TABLE "#" ();
+
+query T
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('"#"');
+----
+materialize.public."#"
