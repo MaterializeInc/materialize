@@ -249,7 +249,7 @@ Operator | Meaning | Example
 
 `EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement, view, or materialized view -- valuable information to acknowledge query delays.
 
-The explanation divides in two parts:
+The explanation is divided in two parts:
 
 1. Determinations for a timestamp
 2. Sources frontiers

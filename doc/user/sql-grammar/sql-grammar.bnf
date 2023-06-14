@@ -310,12 +310,12 @@ revoke_role ::=
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
-  'WITH' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )?
-  'AS' '(' select_stmt ')' ( ',' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')' )*
-  'SELECT' ( 'ALL' | 'DISTINCT' ( 'ON' '(' col_ref ( ',' col_ref )* ')' )? )?
-  target_elem ( ',' target_elem )*
-  ( 'FROM' table_expr ( ',' table_expr )* )?
-  join_expr?
+  ( select_with_ctes | select_with_recursive_ctes | simple_select_stmt )
+simple_select_stmt ::=
+  'SELECT'
+    ( 'ALL' | 'DISTINCT' ( 'ON' '(' col_ref ( ',' col_ref )* ')' )? )?
+    target_elem ( ',' target_elem )*
+  'FROM' table_expr ( ',' table_expr )* join_expr?
   ( 'WHERE' expr )?
   ( 'GROUP' 'BY' col_ref ( ',' col_ref )* )?
   ( 'OPTIONS' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
@@ -445,7 +445,21 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
-with_options ::= ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+with_ctes ::=
+  'WITH'
+    cte_binding ( ',' cte_binding )*
+    select_stmt
+with_recursive_ctes ::=
+  'WITH MUTUALLY RECURSIVE'
+    ( '(' ('RETURN AT' | 'ERROR AT')? 'RECURSION LIMIT' limit ')' )?
+    recursive_cte_binding ( ',' recursive_cte_binding )*
+    select_stmt
+cte_binding ::=
+  cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')'
+recursive_cte_binding ::=
+  cte_ident '(' col_ident col_type ( ',' col_ident col_type )* ')' 'AS' '(' select_stmt ')'
+with_options ::=
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 with_options_aws ::= 'WITH' '('
     (
       static_credentials

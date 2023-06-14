@@ -16,11 +16,17 @@ on the underlying relations based on common query patterns.
 
 ## Syntax
 
+### select_stmt
+
 {{< diagram "select-stmt.svg" >}}
+
+### simple_select_stmt
+
+{{< diagram "simple-select-stmt.svg" >}}
 
 Field | Use
 ------|-----
-**WITH** ... **AS** ... | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
+_select&lowbar;with&lowbar;ctes_, _select&lowbar;with&lowbar;recursive&lowbar;ctes_ | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
 **(** _col&lowbar;ident_... **)** | Rename the CTE's columns to the list of identifiers, both of which must be the same length.
 **ALL** | Return all rows from query _(Default)_.
 **DISTINCT** | Return only distinct values.
@@ -81,19 +87,33 @@ it returns the query results to you.
 
 ### Common table expressions (CTEs)
 
-Common table expressions, also known as CTEs or `WITH` queries, create aliases
-for statements that subsequent expressions can refer to (including subsequent
-CTEs). This can enhance legibility of complex queries, but doesn't alter the
-queries' semantics.
+Common table expressions, also known as CTEs or `WITH` queries, create aliases for statements.
 
-For an example, see [Using CTEs](#using-ctes).
+#### Regular CTEs
+
+{{< diagram "with-ctes.svg" >}}
+
+##### cte_binding
+
+{{< diagram "cte-binding.svg" >}}
+
+With _regular CTEs_, any `cte_ident` alias can be referenced in subsequent `cte_binding` definitions and in the final `select_stmt`.
+Regular CTEs can enhance legibility of complex queries, but doesn't alter the queries' semantics.
+For an example, see [Using regular CTEs](#using-regular-ctes).
+
+#### Recursive CTEs
+
+
+In addition, Materialize also provides support for _recursive CTEs_ that can mutually reference each other.
+Recursive CTEs can be used to define computations on recursively defined structures (such as trees or graphs) implied by your data.
+For details and examples, see the [Recursive CTEs](../recursive-ctes) page.
 
 #### Known limitations
 
 CTEs have the following limitations, which we are working to improve:
 
 - `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE. {{% gh 19486 %}}
-- `WITH RECURSIVE` CTEs are not supported. Non-standard support for recursive CTEs is under active development {{% gh 17012 %}}.
+- SQL99-compliant `WITH RECURSIVE` CTEs are not supported (use the [non-standard flavor](../recursive-ctes) instead).
 
 ### Query hints
 
@@ -175,7 +195,7 @@ a materialized view, but it will tear down the dataflow once it's returned its
 results to the client. If you regularly want to view the results of this query,
 you may want to [create a view](../create-view) for it.
 
-### Using CTEs
+### Using regular CTEs
 
 ```sql
 WITH
