@@ -12,6 +12,10 @@ from typing import BinaryIO
 # `stubgen -p elftools` doesn't work out of the box,
 # and manually writing stub files for all of `elftools`
 # seems like a large and error-prone project.
+#
+# If we start using pyelftools from more places, it might be useful to
+# have a stub file. A sketch of one can be found here:
+# https://github.com/MaterializeInc/materialize/pull/19960#discussion_r1231516060
 from elftools.elf.elffile import ELFFile, NoteSection  # type: ignore
 
 from materialize.ui import UIError
