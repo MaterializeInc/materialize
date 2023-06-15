@@ -61,16 +61,19 @@
 //! Note also that after snapshot consolidation, additional space may be used if `StateValue` is
 //! used.
 
+use std::collections::HashMap;
 use std::num::Wrapping;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::{CastFrom, CastLossy};
-use mz_ore::collections::HashMap;
 use mz_ore::error::ErrorExt;
+use mz_rocksdb::RocksDBConfig;
 
+use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
 use crate::source::metrics::UpsertSharedMetrics;
 use crate::source::types::UpsertMetrics;
@@ -432,6 +435,107 @@ impl UpsertStateBackend for InMemoryHashMap {
             *result_out = UpsertValueAndSize { value, size };
         }
         Ok(stats)
+    }
+}
+
+pub enum BackendType {
+    InMemory(InMemoryHashMap, u64),
+    RocksDb(RocksDB),
+}
+/// Params required to create rocksdb instance
+pub(crate) struct RocksDBParams {
+    pub(crate) instance_path: PathBuf,
+    pub(crate) env: rocksdb::Env,
+    pub(crate) tuning_config: RocksDBConfig,
+    pub(crate) metrics: Arc<mz_rocksdb::RocksDBMetrics>,
+}
+
+pub struct AutoSpillBackend {
+    backend_type: BackendType,
+    rockdsdb_params: Option<RocksDBParams>,
+}
+
+impl AutoSpillBackend {
+    pub(crate) fn new(rockdsdb_params: Option<RocksDBParams>) -> Self {
+        Self {
+            backend_type: BackendType::InMemory(InMemoryHashMap::default(), 0),
+            rockdsdb_params,
+        }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl UpsertStateBackend for AutoSpillBackend {
+    async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
+    {
+        match &mut self.backend_type {
+            BackendType::InMemory(in_memory_hash_map, size) => {
+                let result = in_memory_hash_map.multi_put(puts).await;
+                if let Ok(stats) = &result {
+                    if let Some(new_size) = size.checked_add_signed(stats.size_diff) {
+                        *size = new_size;
+                    }
+                    // TODO (mouli): Configure the size
+                    if *size > 10 && self.rockdsdb_params.is_some() {
+                        let RocksDBParams {
+                            instance_path,
+                            env,
+                            tuning_config,
+                            metrics,
+                        } = self.rockdsdb_params.as_ref().unwrap();
+                        tracing::info!("spilling to disk for upsert at {:?}", instance_path);
+
+                        let mut rocksdb_backend = RocksDB::new(
+                            mz_rocksdb::RocksDBInstance::new(
+                                instance_path,
+                                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
+                                tuning_config.clone(),
+                                Arc::clone(metrics),
+                                upsert_bincode_opts(),
+                            )
+                            .await
+                            .unwrap(),
+                        );
+                        // TODO (mouli): Maybe we shouldn't drain unless we are able to successfully able to insert into rocksdb
+                        let new_puts = in_memory_hash_map.state.drain().map(|(k, v)| {
+                            (
+                                k,
+                                PutValue {
+                                    value: Some(v),
+                                    previous_persisted_size: None,
+                                },
+                            )
+                        });
+                        // TODO (mouli): How should we deal with the stats here?
+                        let _ = rocksdb_backend.multi_put(new_puts).await;
+                        *size = 0;
+                        self.backend_type = BackendType::RocksDb(rocksdb_backend);
+                    }
+                }
+                // TODO (mouli): Will the stats be still accurate if it's now written to rocksdb?
+                result
+            }
+            BackendType::RocksDb(rocks_db) => rocks_db.multi_put(puts).await,
+        }
+    }
+
+    async fn multi_get<'r, G, R>(
+        &mut self,
+        gets: G,
+        results_out: R,
+    ) -> Result<GetStats, anyhow::Error>
+    where
+        G: IntoIterator<Item = UpsertKey>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
+    {
+        match &mut self.backend_type {
+            BackendType::InMemory(in_memory_hash_map, _) => {
+                in_memory_hash_map.multi_get(gets, results_out).await
+            }
+            BackendType::RocksDb(rocks_db) => rocks_db.multi_get(gets, results_out).await,
+        }
     }
 }
 
