@@ -25,6 +25,7 @@ setup(
     packages=[
         "materialize",
         "materialize.cloudtest",
+        "materialize.cloudtest.app",
         "materialize.cloudtest.k8s",
         "materialize.mzcompose",
     ],

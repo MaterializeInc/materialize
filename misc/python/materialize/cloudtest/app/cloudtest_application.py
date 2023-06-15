@@ -9,7 +9,7 @@
 
 from typing import Optional
 
-from materialize.cloudtest.application import Application
+from materialize.cloudtest.app.application import Application
 
 
 class CloudtestApplication(Application):

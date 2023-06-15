@@ -9,7 +9,7 @@
 
 import pytest
 
-from materialize.cloudtest.materialize_application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
 @pytest.mark.long

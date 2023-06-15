@@ -12,8 +12,8 @@ from textwrap import dedent
 import pytest
 from pg8000.dbapi import ProgrammingError
 
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.exists import exists, not_exists
-from materialize.cloudtest.materialize_application import MaterializeApplication
 
 
 def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
