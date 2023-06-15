@@ -38,8 +38,7 @@ use opentelemetry::{global, KeyValue};
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::subscriber::Interest;
-use tracing::{warn, Callsite, Event, Level, Metadata, Subscriber};
+use tracing::{warn, Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
@@ -457,17 +456,6 @@ where
     };
 
     Ok((handle, guard))
-}
-
-struct EmptyCallsite;
-impl Callsite for EmptyCallsite {
-    fn set_interest(&self, _: Interest) {
-        unreachable!("EmptyCallsite should never be accessed")
-    }
-
-    fn metadata(&self) -> &Metadata<'_> {
-        unreachable!("EmptyCallsite should never be accessed")
-    }
 }
 
 /// Returns the [`Level`] of a crate from an [`EnvFilter`] by performing an
