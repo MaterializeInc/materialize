@@ -32,7 +32,10 @@ use crate::explain::Explainable;
 /// Internally, this will create a layered [`tracing::subscriber::Subscriber`]
 /// consisting of one layer for each supported plan type `T`.
 ///
-/// The [`OptimizerTrace::collect_trace`] method on the created instance can be
+/// Use `tracing::dispatcher::set_default` to trace in synchronous context.
+/// Use `tracing::instrument::WithSubscriber::with_subscriber(&optimizer_trace)` to trace the result of a `Future`.
+/// 
+/// The [`OptimizerTrace::drain_all`] method on the created instance can be
 /// then used to collect the trace, and [`OptimizerTrace::drain_all`] to obtain
 /// the collected trace as a vector of [`TraceEntry`] instances.
 pub(crate) struct OptimizerTrace(dispatcher::Dispatch);

@@ -178,11 +178,15 @@ impl<'a> TransformArgs<'a> {
     }
 
     /// Geneates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with a `GlobalId`
-    pub fn with_id_and_stats(indexes: &'a dyn IndexOracle, stats: &'a dyn StatisticsOracle, global_id: &'a GlobalId) -> Self {
+    pub fn with_id_and_stats(
+        indexes: &'a dyn IndexOracle,
+        stats: &'a dyn StatisticsOracle,
+        global_id: &'a GlobalId,
+    ) -> Self {
         Self {
             indexes,
             stats,
-            global_id: Some(global_id)
+            global_id: Some(global_id),
         }
     }
 }
