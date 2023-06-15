@@ -9,24 +9,98 @@ menu:
     parent: 'sql-patterns'
 ---
 
-Temporal filters allow you to implement several windowing idioms (tumbling, hopping, and sliding), in addition to more nuanced temporal queries.
+A "temporal filter" is a `WHERE` or `HAVING` clause which uses the [`mz_now`](/sql/functions/now_and_mz_now) function.
+This function returns Materialize's current virtual timestamp, which attempts to keep up with real time as data is processed.
+Applying a temporal filter reduces the working dataset, saving memory resources and focusing results on the recent past.
 
-A "temporal filter" is a `WHERE` or `HAVING` clause which uses the function [`mz_now`](/sql/functions/now_and_mz_now) to represent the current time through which your data is viewed.
-Temporal filters have their own name because they are one of very few instances where you can materialize a view containing a function that changes on its own rather than as a result of changes to your data.
-Even if your input data does not change, your query results can change as the time represented by `mz_now()` changes.
+Here is a typical temporal filter that considers records whose timestamp is within the last 5 minutes. We call this a **sliding window**.
 
-## Details
+```sql
+WHERE mz_now() <= event_ts + INTERVAL '5min'
+```
+
+Consider this diagram that shows an record `E` falling out of the result set as time moves forward:
+
+![temporal filter diagram](/images/temporal-filter.jpg)
+
+{{< note >}}
+It may feel more natural to write this filter as `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
+For reasons having to do with the internal implementation of `mz_now()`, there are currently no valid operators for the resulting [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
+{{< /note >}}
+
+## Requirements
 
 You can only use `mz_now()` to establish a temporal filter under the following conditions:
 
--   `mz_now` appears in a `WHERE` or `HAVING` clause.
--   The clause must directly compare `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`,
+- `mz_now` appears in a `WHERE` or `HAVING` clause.
+- The clause must directly compare `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`,
     or be part of a conjunction phrase (`AND`) which directly compares `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`.
--   The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
-
+- The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
     At the moment, you can't use the `!=` operator with `mz_now()`.
 
-Let's take a look at an example.
+## Examples
+
+### Sliding Window
+
+<!-- This example also appears in temporal-filters -->
+It is common for real-time applications to be concerned with only a recent period of time.
+In this case, we will filter a table of events to include only those from the last 30 seconds.
+
+```sql
+--Create a table of timestamped events.
+CREATE TABLE events (
+    content TEXT,
+    event_ts TIMESTAMP
+);
+
+--Create a view of events from the last 30 seconds.
+CREATE VIEW last_30_sec AS
+SELECT event_ts, content
+FROM events
+WHERE mz_now() <= event_ts + INTERVAL '30s';
+```
+
+Next, subscribe to the results of the view.
+
+```sql
+COPY (SUBSCRIBE (SELECT ts, content FROM last_30_sec)) TO STDOUT;
+```
+
+In a separate session, insert events.
+
+```sql
+INSERT INTO events VALUES (
+    'hello',
+    now()
+);
+INSERT INTO events VALUES (
+    'welcome',
+    now()
+);
+INSERT INTO events VALUES (
+    'goodbye',
+    now()
+);
+```
+
+Back in the first session, watch the events expire as `mz_now()` after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
+
+```nofmt
+1686868190714   1       2023-06-15 22:29:50.711 hello
+1686868190876   1       2023-06-15 22:29:50.874 welcome
+1686868191236   1       2023-06-15 22:29:51.233 goodbye
+1686868220712   -1      2023-06-15 22:29:50.711 hello
+1686868220875   -1      2023-06-15 22:29:50.874 welcome
+1686868221234   -1      2023-06-15 22:29:51.233 goodbye
+```
+
+You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
+
+### Periodically Emit Final Result of a Time Window
+
+
+
+## old
 
 The `SELECT` query below uses one value of `mz_now()` to filter out records inserted after or deleted before that value, which is filled in with the time at which the query executes.
 
@@ -82,7 +156,7 @@ Tumbling windows are useful for maintaining constantly refreshed answers to ques
 **Hopping windows** are windows whose duration is an integer multiple of their period. This creates fixed-size windows that may overlap, with records belonging to multiple windows.
 
 {{< note >}}
-In some systems, these are called "sliding windows". Materialize reserves that term for a different use case, discussed below.
+In some systems, these are called "sliding windows". Materialize reserves that term for a.
 {{< /note >}}
 
 Here we specify a hopping window that has the period `PERIOD_MS` and covers `INTERVALS` number of intervals:

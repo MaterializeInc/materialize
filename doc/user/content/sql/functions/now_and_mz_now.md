@@ -18,82 +18,126 @@ The typical uses of `mz_now()` are:
 
 * **Query timestamp introspection**
 
-  `mz_now()` can be useful if you need to understand how up to date the data returned by a query is. The data returned by a query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
+  `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
+  The data returned by a query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
 
 * **Temporal filters**
 
-  Various windowing idioms involve using `mz_now()` in a [temporal filter](/sql/patterns/temporal-filters).
+  You can use `mz_now()` in a `WHERE` or `HAVING` clause to limit the working dataset.
+  This is referred to as a **temporal filter**.
+  See the [temporal filter](/sql/patterns/temporal-filters) pattern for more details.
 
-## Example
+* **Ad-hoc queries**
 
-### Temporal filter using mz_now()
+  You can use `now()` and `mz_now()` in the `SELECT` clause of ad-hoc queries, but you cannot materialize these queries.
+  This is because `now()` and `mz_now()` change every millisecond.
+  If this materialization _were_ allowed, every record in the collection would be updated every millisecond, which would be absurd.
+
+## Examples
+
+### Consider Recent Data with a Temporal Filter
 
 <!-- This example also appears in temporal-filters -->
-For this example, you'll need to create a sample data source and create an indexed view from it for later reference.
+It is common for real-time applications to be concerned with only a recent period of time.
+In this case, we will filter a table of events to include only those from the last 30 seconds.
 
 ```sql
 --Create a table of timestamped events.
 CREATE TABLE events (
-    content text,
-    insert_t timestamp,
-    delete_t timestamp
+    content TEXT,
+    event_ts TIMESTAMP
 );
 
---Create an indexed view of events valid at a given logical time.
-CREATE VIEW valid AS
-SELECT content, insert_t, delete_t
+--Create a view of events from the last 30 seconds.
+CREATE VIEW last_30_sec AS
+SELECT event_ts, content
 FROM events
-WHERE mz_now() >= insert_t
-  AND mz_now() < delete_t;
-CREATE DEFAULT INDEX ON valid;
+WHERE mz_now() <= event_ts + INTERVAL '30s';
 ```
 
-Next, you'll populate the table with timestamp data.
+Next, subscribe to the results of the view.
+
+```sql
+COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_sec)) TO STDOUT;
+```
+
+In a separate session, insert events.
 
 ```sql
 INSERT INTO events VALUES (
     'hello',
-    now(),
-    now() + '100s'
+    now()
 );
 INSERT INTO events VALUES (
     'welcome',
-    now(),
-    now() + '150s'
+    now()
 );
 INSERT INTO events VALUES (
     'goodbye',
-    now(),
-    now() + '200s'
+    now()
 );
 ```
 
-Then, before 100 seconds elapse, run the following query to see all the records:
+Back in the first session, watch the events expire as `mz_now()` after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
+
+```nofmt
+1686868190714   1       2023-06-15 22:29:50.711 hello
+1686868190876   1       2023-06-15 22:29:50.874 welcome
+1686868191236   1       2023-06-15 22:29:51.233 goodbye
+1686868220712   -1      2023-06-15 22:29:50.711 hello
+1686868220875   -1      2023-06-15 22:29:50.874 welcome
+1686868221234   -1      2023-06-15 22:29:51.233 goodbye
+```
+
+You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
+
+### Ad-hoc queries with now() and mz_now()
+
+If you haven't already done so in the previous example, create a table called `events` and add a few records.
 
 ```sql
-SELECT *, mz_now() FROM valid;
+--Create a table of timestamped events.
+CREATE TABLE events (
+    content TEXT,
+    event_ts TIMESTAMP
+);
+INSERT INTO events VALUES (
+    'hello',
+    now()
+);
+INSERT INTO events VALUES (
+    'welcome',
+    now()
+);
+INSERT INTO events VALUES (
+    'goodbye',
+    now()
+);
 ```
+
+Execute this ad-hoc query that adds the current system timestamp and current logical timestamp to the events in the `events` table.
+
+```sql
+SELECT now(), mz_now(), * FROM events
+```
+
 ```nofmt
- content |        insert_t         |        delete_t         |    mz_now
----------+-------------------------+-------------------------+---------------
- hello   | 2022-09-27 23:52:34.831 | 2022-09-27 23:54:14.831 | 1664322794280
- goodbye | 2022-09-27 23:53:04.262 | 2022-09-27 23:56:24.262 | 1664322794280
- welcome | 2022-09-27 23:53:03.142 | 2022-09-27 23:55:33.142 | 1664322794280
+            now            |    mz_now     | content |       event_ts            
+---------------------------+---------------+---------+-------------------------
+ 2023-06-15 22:38:14.18+00 | 1686868693480 | hello   | 2023-06-15 22:29:50.711
+ 2023-06-15 22:38:14.18+00 | 1686868693480 | goodbye | 2023-06-15 22:29:51.233
+ 2023-06-15 22:38:14.18+00 | 1686868693480 | welcome | 2023-06-15 22:29:50.874
 (3 rows)
 ```
 
-If you run this query again after 100 seconds from the first insertion, you'll see only two results, because the first result no longer satisfies the predicate.
-
-### Query using now()
-
+Notice when you try to materialize this query, you get errors:
 
 ```sql
-SELECT * FROM valid
-  WHERE insert_t <= now();
+CREATE MATERIALIZED VIEW cant_materialize
+    AS SELECT now(), mz_now(), * FROM events;
 ```
+
 ```nofmt
- content |        insert_t         |        delete_t
----------+-------------------------+-------------------------
- goodbye | 2022-09-27 23:53:04.262 | 2022-09-27 23:56:24.262
- welcome | 2022-09-27 23:53:03.142 | 2022-09-27 23:55:33.142
+ERROR:  cannot materialize call to current_timestamp
+ERROR:  cannot materialize call to mz_now
 ```
