@@ -227,11 +227,11 @@ class S3Upload(PreImage):
             assert len(build_id) > 0
             exe.seek(0)
             object_name = f"buildid/{build_id}/executable"
-            print(f"Attempting to upload executable to s3://{self.bucket}/{object_name}")
+            print(
+                f"Attempting to upload executable to s3://{self.bucket}/{object_name}"
+            )
             try:
-                s3.upload_fileobj(
-                    exe, str(self.bucket), object_name
-                )
+                s3.upload_fileobj(exe, str(self.bucket), object_name)
             except NoCredentialsError:
                 print("Failed to find S3 credentials; not uploading build.")
 
@@ -245,10 +245,10 @@ class S3Upload(PreImage):
                     return
                 dbg.seek(0)
                 object_name = f"buildid/{build_id}/debuginfo"
-                print(f"Attempting to upload debug info to s3://{self.bucket}/{object_name}")
-                s3.upload_fileobj(
-                    dbg, str(self.bucket), object_name
+                print(
+                    f"Attempting to upload debug info to s3://{self.bucket}/{object_name}"
                 )
+                s3.upload_fileobj(dbg, str(self.bucket), object_name)
         except FileNotFoundError:
             print(f"WARNING: No debuginfo found at {self.dbg_path}.")
 
