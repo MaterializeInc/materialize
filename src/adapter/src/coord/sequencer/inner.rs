@@ -2537,9 +2537,10 @@ impl Coordinator {
         };
 
         let pipeline_result = {
-            let _guard = optimizer_trace.set_tracer();
+            // dropping this guard at the end of the block will restore the tracing dispatcher
+            let _guard = optimizer_trace.set_as_tracing_dispatcher();
 
-            let _span = tracing::span!(Level::INFO, "optimize").entered();
+            let span = tracing::span!(Level::INFO, "optimize").entered();
 
             let explainee_id = match explainee {
                 Explainee::Dataflow(id) => id,
@@ -2603,7 +2604,7 @@ impl Coordinator {
                 |s| prep_scalar_expr(state, s, style),
             )?;
 
-            // TODO(mgree): load cardinality statistics
+            // Load cardinality statistics.
             let timestamp_context = self
                 .sequence_peek_timestamp(
                     session,
@@ -2625,19 +2626,18 @@ impl Coordinator {
                 ),
             )
             .await;
+            let stats: Box<dyn mz_transform::StatisticsOracle> = match cached_stats {
+                Ok(stats) => Box::new(stats),
+                Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                    Box::new(EmptyStatisticsOracle)
+                }
+                Err(mz_ore::future::TimeoutError::Inner(e)) => {
+                    return Err(AdapterError::Storage(e));
+                }
+            };
 
             // Execute the `optimize/global` stage.
             catch_unwind(no_errors, "global", || {
-                let stats: Box<dyn mz_transform::StatisticsOracle> = match cached_stats {
-                    Ok(stats) => Box::new(stats),
-                    Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
-                        Box::new(EmptyStatisticsOracle)
-                    }
-                    Err(mz_ore::future::TimeoutError::Inner(e)) => {
-                        panic!("error collecting statistics: {e}")
-                    }
-                };
-
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
                     &self.index_oracle(cluster_id),
@@ -2690,6 +2690,8 @@ impl Coordinator {
 
             // Trace the resulting plan for the top-level `optimize` path.
             trace_plan(&dataflow_plan);
+
+            span.exit();
 
             // Return objects that need to be passed to the `ExplainContext`
             // when rendering explanations for the various trace entries.
@@ -4089,14 +4091,11 @@ impl CachedStatisticsOracle {
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
         storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, StorageError> {
         let mut cache = BTreeMap::new();
 
         for id in ids {
-            let stats = storage
-                .snapshot_stats(*id, as_of.clone())
-                .await
-                .map_err(|e| format!("bad timestamp for statistics: {e}"))?;
+            let stats = storage.snapshot_stats(*id, as_of.clone()).await?;
 
             if timely::PartialOrder::less_than(&stats.as_of, as_of) {
                 ::tracing::warn!(

@@ -75,7 +75,7 @@ impl OptimizerTrace {
 
     /// Set up trace collection while the guard that is return is live;
     /// when the guard is dropped, tracing will return to the previous handler.
-    pub fn set_tracer(&self) -> tracing::subscriber::DefaultGuard {
+    pub fn set_as_tracing_dispatcher(&self) -> tracing::subscriber::DefaultGuard {
         tracing::dispatcher::set_default(&self.0)
     }
 

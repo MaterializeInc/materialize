@@ -213,6 +213,11 @@ impl JoinImplementation {
                 }
             };
 
+            // TODO(mgree): debugging...
+            if have_stats_for_all_inputs {
+                println!("computing join with non-trivial stats {cardinality_stats:?}");
+            }
+
             // Compute the actual cardinalities given our statistics. One of two cases applies:
             //
             //   1. `have_stats_for_all_inputs`, and we can use `fill_in_estimates` to get cardinalities for every input
@@ -221,8 +226,11 @@ impl JoinImplementation {
                 .into_iter()
                 .map(|c| {
                     if have_stats_for_all_inputs {
+                        let estimate = c.evaluate(&fill_in_estimates);
+                        let rounded = estimate.round();
+                        println!("cardinality estimate: {c} ~> {estimate} rounds to {rounded}");
                         usize::cast_from(
-                            u64::try_cast_from(c.evaluate(&fill_in_estimates))
+                            u64::try_cast_from(rounded)
                                 .expect("positive and representable cardinality estimate"),
                         )
                     } else {
