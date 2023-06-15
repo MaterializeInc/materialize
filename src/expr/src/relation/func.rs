@@ -9,6 +9,7 @@
 
 #![allow(missing_docs)]
 
+use std::iter::Sum;
 use std::ops::Deref;
 use std::{fmt, iter};
 
@@ -412,107 +413,21 @@ where
     Datum::from(x)
 }
 
-fn sum_int16<'a, I>(datums: I) -> Datum<'a>
+fn sum_datum<'a, I, DatumType, ResultType>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
+    DatumType: TryFrom<Datum<'a>>,
+    <DatumType as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    ResultType: From<DatumType> + Sum + Into<Datum<'a>>,
 {
     let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: i64 = datums.map(|d| i64::from(d.unwrap_int16())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_int32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: i64 = datums.map(|d| i64::from(d.unwrap_int32())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_int64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: i128 = datums.map(|d| i128::from(d.unwrap_int64())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_uint16<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: u64 = datums.map(|d| u64::from(d.unwrap_uint16())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_uint32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: u64 = datums.map(|d| u64::from(d.unwrap_uint32())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_uint64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: u128 = datums.map(|d| u128::from(d.unwrap_uint64())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_float32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: f32 = datums.map(|d| d.unwrap_float32()).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_float64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: f64 = datums.map(|d| d.unwrap_float64()).sum();
-        Datum::from(x)
+        let x = datums
+            .map(|d| ResultType::from(DatumType::try_from(d).expect("unexpected type")))
+            .sum::<ResultType>();
+        x.into()
     }
 }
 
@@ -1589,14 +1504,14 @@ impl AggregateFunc {
             AggregateFunc::MinDate => min_date(datums),
             AggregateFunc::MinTimestamp => min_timestamp(datums),
             AggregateFunc::MinTimestampTz => min_timestamptz(datums),
-            AggregateFunc::SumInt16 => sum_int16(datums),
-            AggregateFunc::SumInt32 => sum_int32(datums),
-            AggregateFunc::SumInt64 => sum_int64(datums),
-            AggregateFunc::SumUInt16 => sum_uint16(datums),
-            AggregateFunc::SumUInt32 => sum_uint32(datums),
-            AggregateFunc::SumUInt64 => sum_uint64(datums),
-            AggregateFunc::SumFloat32 => sum_float32(datums),
-            AggregateFunc::SumFloat64 => sum_float64(datums),
+            AggregateFunc::SumInt16 => sum_datum::<'a, I, i16, i64>(datums),
+            AggregateFunc::SumInt32 => sum_datum::<'a, I, i32, i64>(datums),
+            AggregateFunc::SumInt64 => sum_datum::<'a, I, i64, i128>(datums),
+            AggregateFunc::SumUInt16 => sum_datum::<'a, I, u16, u64>(datums),
+            AggregateFunc::SumUInt32 => sum_datum::<'a, I, u32, u64>(datums),
+            AggregateFunc::SumUInt64 => sum_datum::<'a, I, u64, u128>(datums),
+            AggregateFunc::SumFloat32 => sum_datum::<'a, I, f32, f32>(datums),
+            AggregateFunc::SumFloat64 => sum_datum::<'a, I, f64, f64>(datums),
             AggregateFunc::SumNumeric => sum_numeric(datums),
             AggregateFunc::Count => count(datums),
             AggregateFunc::Any => any(datums),
