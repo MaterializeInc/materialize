@@ -1823,6 +1823,9 @@ pub enum ShowObjectType<T: AstInfo> {
     Schema {
         from: Option<T::DatabaseName>,
     },
+    Subsource {
+        on_source: T::ItemName,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -1859,6 +1862,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Index { .. } => "INDEXES",
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
+            ShowObjectType::Subsource { .. } => "SUBSOURCES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -1889,6 +1893,12 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             }
             _ => (),
         }
+
+        if let ShowObjectType::Subsource { on_source } = &self.object_type {
+            f.write_str(" ON ");
+            f.write_node(on_source);
+        }
+
         if let Some(filter) = &self.filter {
             f.write_str(" ");
             f.write_node(filter);
@@ -2233,6 +2243,7 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
+    Subsource,
 }
 
 impl ObjectType {
@@ -2247,7 +2258,8 @@ impl ObjectType {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => true,
+            | ObjectType::Func
+            | ObjectType::Subsource => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -2275,6 +2287,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
+            ObjectType::Subsource => "SUBSOURCE",
         })
     }
 }
@@ -2860,8 +2873,8 @@ impl_display_t!(ShowStatement);
 /// `GRANT ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GrantRoleStatement<T: AstInfo> {
-    /// The role that is gaining a member.
-    pub role_name: T::RoleName,
+    /// The roles that are gaining members.
+    pub role_names: Vec<T::RoleName>,
     /// The roles that will be added to `role_name`.
     pub member_names: Vec<T::RoleName>,
 }
@@ -2869,7 +2882,7 @@ pub struct GrantRoleStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for GrantRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("GRANT ");
-        f.write_node(&self.role_name);
+        f.write_node(&display::comma_separated(&self.role_names));
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.member_names));
     }
@@ -2879,16 +2892,16 @@ impl_display_t!(GrantRoleStatement);
 /// `REVOKE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RevokeRoleStatement<T: AstInfo> {
-    /// The role that is losing a member.
-    pub role_name: T::RoleName,
-    /// The role that will be removed from `role_name`.
+    /// The roles that are losing members.
+    pub role_names: Vec<T::RoleName>,
+    /// The roles that will be removed from `role_name`.
     pub member_names: Vec<T::RoleName>,
 }
 
 impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("REVOKE ");
-        f.write_node(&self.role_name);
+        f.write_node(&display::comma_separated(&self.role_names));
         f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.member_names));
     }

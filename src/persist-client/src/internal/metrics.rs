@@ -1912,6 +1912,7 @@ impl PushdownMetrics {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // TODO: Remove this when we reintroduce the cache.
 pub struct BlobMemCache {
     pub(crate) size_blobs: UIntGauge,
     pub(crate) size_bytes: UIntGauge,

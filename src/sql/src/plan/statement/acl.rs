@@ -231,7 +231,7 @@ pub fn describe_grant_role(
 pub fn plan_grant_role(
     scx: &StatementContext,
     GrantRoleStatement {
-        role_name,
+        role_names,
         member_names,
     }: GrantRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
@@ -246,7 +246,10 @@ pub fn plan_grant_role(
         .expect("system user must exist")
         .id();
     Ok(Plan::GrantRole(GrantRolePlan {
-        role_id: role_name.id,
+        role_ids: role_names
+            .into_iter()
+            .map(|role_name| role_name.id)
+            .collect(),
         member_ids: member_names
             .into_iter()
             .map(|member_name| member_name.id)
@@ -265,7 +268,7 @@ pub fn describe_revoke_role(
 pub fn plan_revoke_role(
     scx: &StatementContext,
     RevokeRoleStatement {
-        role_name,
+        role_names,
         member_names,
     }: RevokeRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
@@ -282,7 +285,10 @@ pub fn plan_revoke_role(
         .expect("system user must exist")
         .id();
     Ok(Plan::RevokeRole(RevokeRolePlan {
-        role_id: role_name.id,
+        role_ids: role_names
+            .into_iter()
+            .map(|role_name| role_name.id)
+            .collect(),
         member_ids: member_names
             .into_iter()
             .map(|member_name| member_name.id)

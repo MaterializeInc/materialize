@@ -63,6 +63,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-17177",
         "test-github-17510",
         "test-github-17509",
+        "test-github-19610",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
@@ -973,6 +974,118 @@ def workflow_test_github_17509(c: Composition) -> None:
         assert "Negative accumulation in ReduceMinsMaxes" not in c1.stdout
 
 
+def workflow_test_github_19610(c: Composition) -> None:
+    """
+    Test that a monotonic one-shot SELECT will perform consolidation without error on valid data.
+    We introduce data that results in a multiset and compute min/max. In a monotonic one-shot
+    evaluation strategy, we must consolidate and subsequently assert monotonicity.
+
+    This is a regression test for https://github.com/MaterializeInc/materialize/issues/19610, where
+    we observed a performance regression caused by a correctness issue. Here, we validate that the
+    underlying correctness issue has been fixed.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_PERSIST_COMPACTION_DISABLED=true",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 4
+                )
+            );
+            -- Set data for test up.
+            SET cluster = cluster1;
+            CREATE TABLE base (data bigint, diff bigint);
+            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            INSERT INTO base VALUES (1, 6);
+            INSERT INTO base VALUES (1, -3), (1, -2);
+            INSERT INTO base VALUES (2, 3), (2, 2);
+            INSERT INTO base VALUES (2, -1), (2, -1);
+            INSERT INTO base VALUES (3, 3), (3, 2);
+            INSERT INTO base VALUES (3, -3), (3, -2);
+            INSERT INTO base VALUES (4, 1), (4, 2);
+            INSERT INTO base VALUES (4, -1), (4, -2);
+            INSERT INTO base VALUES (5, 5), (5, 6);
+            INSERT INTO base VALUES (5, -5), (5, -6);
+            """
+        )
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            # Computing min/max with a monotonic one-shot SELECT requires
+            # consolidation. We test here that consolidation works correctly,
+            # since we assert monotonicity right after consolidating.
+            # Note that we employ a cursor to avoid testdrive retries.
+            # Hash functions used for exchanges in consolidation may be
+            # nondeterministic and produce the correct output by chance.
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+
+            # To reduce the chance of a (un)lucky strike of the hash function,
+            # let's do the same a few times.
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+            """
+            )
+        )
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
@@ -1091,6 +1204,32 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         ):
             c.up("storage")
             c.run("testdrive", "pg-snapshot-resumption/05-verify-data.td")
+
+
+def workflow_sink_failure(c: Composition) -> None:
+    """Test specific sink failure scenarios"""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="storage",
+            environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
+        ),
+    ):
+        c.up("materialized", "zookeeper", "kafka", "schema-registry", "storage")
+
+        c.run("testdrive", "sink-failure/01-configure-sinks.td")
+        c.run("testdrive", "sink-failure/02-ensure-sink-down.td")
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="storage")
+        ):
+            c.up("storage")
+            c.run("testdrive", "sink-failure/03-verify-data.td")
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:

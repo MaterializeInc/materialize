@@ -273,7 +273,21 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+        let ws_init = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+
+        // Verify ws_init contains roughly what we expect. This varies (rng secret and version
+        // numbers), so easier to test here instead of in the ws file.
+        assert!(
+            ws_init
+                .iter()
+                .filter(|m| matches!(m, WebSocketResponse::ParameterStatus(_)))
+                .count()
+                > 1
+        );
+        assert!(matches!(
+            ws_init.last(),
+            Some(WebSocketResponse::BackendKeyData(_))
+        ));
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {

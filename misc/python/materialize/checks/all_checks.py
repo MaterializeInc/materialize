@@ -20,6 +20,7 @@ from materialize.checks.create_index import *  # noqa: F401 F403
 from materialize.checks.create_table import *  # noqa: F401 F403
 from materialize.checks.databases import *  # noqa: F401 F403
 from materialize.checks.debezium import *  # noqa: F401 F403
+from materialize.checks.default_privileges import *  # noqa: F401 F403
 from materialize.checks.delete import *  # noqa: F401 F403
 from materialize.checks.drop_index import *  # noqa: F401 F403
 from materialize.checks.drop_table import *  # noqa: F401 F403

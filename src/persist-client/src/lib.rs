@@ -143,7 +143,6 @@ pub mod write;
 /// An implementation of the public crate interface.
 mod internal {
     pub mod apply;
-    pub mod cache;
     pub mod compact;
     pub mod encoding;
     pub mod gc;

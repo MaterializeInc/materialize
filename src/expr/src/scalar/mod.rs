@@ -2195,6 +2195,7 @@ pub enum EvalError {
     InvalidRegex(String),
     InvalidRegexFlag(char),
     InvalidParameterValue(String),
+    InvalidDatePart(String),
     NegSqrt,
     NullCharacterNotPermitted,
     UnknownUnits(String),
@@ -2234,6 +2235,11 @@ pub enum EvalError {
     ArrayFillWrongArraySubscripts,
     // TODO: propagate this check more widly throughout the expr crate
     MaxArraySizeExceeded(usize),
+    DateDiffOverflow {
+        unit: String,
+        a: String,
+        b: String,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -2316,6 +2322,7 @@ impl fmt::Display for EvalError {
                 "invalid byte sequence '{}' for encoding '{}'",
                 byte_sequence, encoding_name
             ),
+            EvalError::InvalidDatePart(part) => write!(f, "invalid datepart {}", part.quoted()),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
             EvalError::NullCharacterNotPermitted => f.write_str("null character not permitted"),
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
@@ -2413,6 +2420,9 @@ impl fmt::Display for EvalError {
                     f,
                     "array size exceeds the maximum allowed ({max_size} bytes)"
                 )
+            }
+            EvalError::DateDiffOverflow { unit, a, b } => {
+                write!(f, "datediff overflow, {unit} of {a}, {b}")
             }
         }
     }
@@ -2600,6 +2610,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRegex(v) => InvalidRegex(v.clone()),
             EvalError::InvalidRegexFlag(v) => InvalidRegexFlag(v.into_proto()),
             EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.clone()),
+            EvalError::InvalidDatePart(part) => InvalidDatePart(part.to_string()),
             EvalError::NegSqrt => NegSqrt(()),
             EvalError::NullCharacterNotPermitted => NullCharacterNotPermitted(()),
             EvalError::UnknownUnits(v) => UnknownUnits(v.clone()),
@@ -2656,6 +2667,11 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::MaxArraySizeExceeded(max_size) => {
                 MaxArraySizeExceeded(u64::cast_from(*max_size))
             }
+            EvalError::DateDiffOverflow { unit, a, b } => DateDiffOverflow(ProtoDateDiffOverflow {
+                unit: unit.to_owned(),
+                a: a.to_owned(),
+                b: b.to_owned(),
+            }),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2719,6 +2735,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRegex(v) => Ok(EvalError::InvalidRegex(v)),
                 InvalidRegexFlag(v) => Ok(EvalError::InvalidRegexFlag(char::from_proto(v)?)),
                 InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v)),
+                InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part)),
                 NegSqrt(()) => Ok(EvalError::NegSqrt),
                 NullCharacterNotPermitted(()) => Ok(EvalError::NullCharacterNotPermitted),
                 UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
@@ -2765,6 +2782,11 @@ impl RustType<ProtoEvalError> for EvalError {
                 MaxArraySizeExceeded(max_size) => {
                     Ok(EvalError::MaxArraySizeExceeded(usize::cast_from(max_size)))
                 }
+                DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow {
+                    unit: v.unit,
+                    a: v.a,
+                    b: v.b,
+                }),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

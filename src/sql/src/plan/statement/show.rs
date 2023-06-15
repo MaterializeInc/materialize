@@ -294,6 +294,7 @@ pub fn show_objects<'a>(
     match object_type {
         ShowObjectType::Table => show_tables(scx, from, filter),
         ShowObjectType::Source => show_sources(scx, from, filter),
+        ShowObjectType::Subsource { on_source } => show_subsources(scx, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
         ShowObjectType::Sink => show_sinks(scx, from, filter),
         ShowObjectType::Type => show_types(scx, from, filter),
@@ -367,6 +368,30 @@ fn show_sources<'a>(
         WHERE schema_id = '{schema_spec}'"
     );
     ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size"]))
+}
+
+fn show_subsources<'a>(
+    scx: &'a StatementContext<'a>,
+    from_source: ResolvedItemName,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let source = scx.get_item_by_resolved_name(&from_source)?;
+    let query = format!(
+        "SELECT
+            s.name AS name,
+            s.type AS type
+        FROM
+            mz_sources AS s
+            JOIN (
+                SELECT object_id, referenced_object_id AS subsource
+                FROM
+                mz_internal.mz_object_dependencies AS d
+                WHERE d.object_id = '{}'
+            ) AS d
+            ON s.id = d.subsource",
+        source.id()
+    );
+    ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_views<'a>(

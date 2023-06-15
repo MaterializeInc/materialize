@@ -12,13 +12,13 @@ aliases:
   - /sql/create-source/postgresql
 ---
 
+{{% create-source/intro %}}
+Materialize supports PostgreSQL (11+) as a data source. To connect to a PostgreSQL instance, you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
+{{% /create-source/intro %}}
+
 {{< warning >}}
 Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the integration guide for your PostgreSQL service: [Amazon RDS](/ingest-data/postgres-amazon-rds/), [Amazon Aurora](/ingest-data/postgres-amazon-aurora/), [Azure DB](/ingest-data/postgres-azure-db/), [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/), [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
-
-{{% create-source/intro %}}
-To connect to a PostgreSQL instance, you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
-{{% /create-source/intro %}}
 
 ## Syntax
 

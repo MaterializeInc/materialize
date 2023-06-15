@@ -1758,7 +1758,7 @@ impl Coordinator {
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_peek(
+    pub(super) async fn sequence_peek(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
@@ -3977,32 +3977,34 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         GrantRolePlan {
-            role_id,
+            role_ids,
             member_ids,
             grantor_id,
         }: GrantRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
-        let mut ops = Vec::new();
-        for member_id in member_ids {
-            let member_membership: BTreeSet<_> =
-                catalog.get_role(&member_id).membership().keys().collect();
-            if member_membership.contains(&role_id) {
-                let role_name = catalog.get_role(&role_id).name().to_string();
-                let member_name = catalog.get_role(&member_id).name().to_string();
-                // We need this check so we don't accidentally return a success on a reserved role.
-                catalog.ensure_not_reserved_role(&member_id)?;
-                catalog.ensure_not_reserved_role(&role_id)?;
-                session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
-                    role_name,
-                    member_name,
-                });
-            } else {
-                ops.push(catalog::Op::GrantRole {
-                    role_id,
-                    member_id,
-                    grantor_id,
-                });
+        let mut ops = Vec::with_capacity(role_ids.len() * member_ids.len());
+        for role_id in role_ids {
+            for member_id in &member_ids {
+                let member_membership: BTreeSet<_> =
+                    catalog.get_role(member_id).membership().keys().collect();
+                if member_membership.contains(&role_id) {
+                    let role_name = catalog.get_role(&role_id).name().to_string();
+                    let member_name = catalog.get_role(member_id).name().to_string();
+                    // We need this check so we don't accidentally return a success on a reserved role.
+                    catalog.ensure_not_reserved_role(member_id)?;
+                    catalog.ensure_not_reserved_role(&role_id)?;
+                    session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
+                        role_name,
+                        member_name,
+                    });
+                } else {
+                    ops.push(catalog::Op::GrantRole {
+                        role_id,
+                        member_id: *member_id,
+                        grantor_id,
+                    });
+                }
             }
         }
 
@@ -4019,32 +4021,34 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         RevokeRolePlan {
-            role_id,
+            role_ids,
             member_ids,
             grantor_id,
         }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
-        let mut ops = Vec::new();
-        for member_id in member_ids {
-            let member_membership: BTreeSet<_> =
-                catalog.get_role(&member_id).membership().keys().collect();
-            if !member_membership.contains(&role_id) {
-                let role_name = catalog.get_role(&role_id).name().to_string();
-                let member_name = catalog.get_role(&member_id).name().to_string();
-                // We need this check so we don't accidentally return a success on a reserved role.
-                catalog.ensure_not_reserved_role(&member_id)?;
-                catalog.ensure_not_reserved_role(&role_id)?;
-                session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
-                    role_name,
-                    member_name,
-                });
-            } else {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id,
-                    member_id,
-                    grantor_id,
-                });
+        let mut ops = Vec::with_capacity(role_ids.len() * member_ids.len());
+        for role_id in role_ids {
+            for member_id in &member_ids {
+                let member_membership: BTreeSet<_> =
+                    catalog.get_role(member_id).membership().keys().collect();
+                if !member_membership.contains(&role_id) {
+                    let role_name = catalog.get_role(&role_id).name().to_string();
+                    let member_name = catalog.get_role(member_id).name().to_string();
+                    // We need this check so we don't accidentally return a success on a reserved role.
+                    catalog.ensure_not_reserved_role(member_id)?;
+                    catalog.ensure_not_reserved_role(&role_id)?;
+                    session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
+                        role_name,
+                        member_name,
+                    });
+                } else {
+                    ops.push(catalog::Op::RevokeRole {
+                        role_id,
+                        member_id: *member_id,
+                        grantor_id,
+                    });
+                }
             }
         }
 

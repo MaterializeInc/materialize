@@ -77,7 +77,7 @@ Materialize can efficiently maintain real-time materialized views on top of **Ch
 
 ### PostgreSQL
 
-Postgres is supported as a [**source**](/get-started/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
+PostgreSQL 11+ is supported as a [**source**](/get-started/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
 
 | Service                         | Support level                    | Notes                                                                                                                                                                                                                                                                                         |             |
 | ------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |

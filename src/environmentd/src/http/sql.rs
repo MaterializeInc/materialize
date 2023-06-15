@@ -105,18 +105,32 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         }
     };
 
-    // Successful auth results in an initial ready message.
-    let _ = ws
-        .send(Message::Text(
-            serde_json::to_string(&WebSocketResponse::ReadyForQuery(
-                client.client.session().transaction_code().into(),
+    // Successful auth, send startup messages.
+    let mut msgs = Vec::new();
+    let session = client.client.session();
+    for var in session.vars().notify_set() {
+        msgs.push(WebSocketResponse::ParameterStatus(ParameterStatus {
+            name: var.name().to_string(),
+            value: var.value(),
+        }));
+    }
+    msgs.push(WebSocketResponse::BackendKeyData(BackendKeyData {
+        conn_id: session.conn_id().unhandled(),
+        secret_key: session.secret_key(),
+    }));
+    msgs.push(WebSocketResponse::ReadyForQuery(
+        session.transaction_code().into(),
+    ));
+    for msg in msgs {
+        let _ = ws
+            .send(Message::Text(
+                serde_json::to_string(&msg).expect("must serialize"),
             ))
-            .expect("must serialize"),
-        ))
-        .await;
+            .await;
+    }
 
     // Send any notices that might have been generated on startup.
-    let notices = client.client.session().drain_notices();
+    let notices = session.drain_notices();
     if let Err(err) = forward_notices(&mut ws, notices).await {
         debug!("failed to forward notices to WebSocket, {err:?}");
         return;
@@ -398,6 +412,7 @@ pub enum WebSocketResponse {
     CommandComplete(String),
     Error(SqlError),
     ParameterStatus(ParameterStatus),
+    BackendKeyData(BackendKeyData),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -420,6 +435,12 @@ impl Notice {
 pub struct ParameterStatus {
     name: String,
     value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackendKeyData {
+    conn_id: u32,
+    secret_key: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1223,12 +1223,12 @@ fn generate_required_privileges(
         | Plan::Deallocate(DeallocatePlan { name: _ })
         | Plan::Raise(RaisePlan { severity: _ })
         | Plan::GrantRole(GrantRolePlan {
-            role_id: _,
+            role_ids: _,
             member_ids: _,
             grantor_id: _,
         })
         | Plan::RevokeRole(RevokeRolePlan {
-            role_id: _,
+            role_ids: _,
             member_ids: _,
             grantor_id: _,
         })
