@@ -170,6 +170,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 merge_reqs: &mut merge_reqs,
             },
         );
+        debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
         // Spine::roll_up (internally used by insert) clears all batches out of
         // levels below a target by walking up from level 0 and merging each
         // level into the next (providing the necessary fuel). In practice, this
@@ -183,6 +184,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     /// account for a surprising amount of cpu in prod. #18368
     pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
         self.spine.insert(batch, &mut SpineLog::Disabled);
+        debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
@@ -1144,6 +1146,68 @@ impl<T: Timestamp + Lattice> Spine<T> {
                 }
             }
         }
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn validate(&self) -> Result<(), String> {
+        let mut id = SpineId(0, 0);
+        let mut frontier = Antichain::from_elem(T::minimum());
+        for x in self.merging.iter().rev() {
+            let batches = match x {
+                MergeState::Vacant
+                | MergeState::Single(None)
+                | MergeState::Double(MergeVariant::Complete(None)) => vec![],
+                MergeState::Single(Some(x))
+                | MergeState::Double(MergeVariant::Complete(Some(x))) => vec![x],
+                MergeState::Double(MergeVariant::InProgress(x0, x1, m)) => {
+                    if m.remaining_work > x0.len() + x1.len() {
+                        return Err(format!("too much remaining work: {:?}", x));
+                    }
+                    vec![x0, x1]
+                }
+            };
+            for batch in batches {
+                if batch.id().0 != id.1 {
+                    return Err(format!(
+                        "batch id {:?} does not match the previous id {:?}: {:?}",
+                        batch.id(),
+                        id,
+                        batch
+                    ));
+                }
+                id = batch.id();
+                if batch.desc().lower() != &frontier {
+                    return Err(format!(
+                        "batch lower {:?} does not match the previous upper {:?}: {:?}",
+                        batch.desc().lower(),
+                        frontier,
+                        batch
+                    ));
+                }
+                frontier.clone_from(batch.desc().upper());
+                if !PartialOrder::less_equal(batch.desc().since(), &self.since) {
+                    return Err(format!(
+                        "since of batch {:?} past the spine since {:?}: {:?}",
+                        batch.desc().since(),
+                        self.since,
+                        batch
+                    ));
+                }
+            }
+        }
+        if self.next_id != id.1 {
+            return Err(format!(
+                "spine next_id {:?} does not match the last batch's id {:?}",
+                self.next_id, id
+            ));
+        }
+        if self.upper != frontier {
+            return Err(format!(
+                "spine upper {:?} does not match the last batch's upper {:?}",
+                self.upper, frontier
+            ));
+        }
+        Ok(())
     }
 }
 
