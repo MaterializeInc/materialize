@@ -41,10 +41,13 @@ use crate::util::{send_immediate_rows, ClientTransmitter};
 // plans in `sequence_plan` and guarantee that no caller can circumvent
 // that logic.
 //
-// The one exception is creating a role during connection startup. In
-// this scenario, the session has not been properly initialized and we
-// need to skip directly to creating role. We have a specific method,
+// The two exceptions are:
+//
+// - Creating a role during connection startup. In this scenario, the session has not been properly
+// initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
+// - Methods that continue the execution of some plan that was being run asynchronously, such as
+// `sequence_peek_stage`.
 mod cluster;
 mod inner;
 mod linked_cluster;
