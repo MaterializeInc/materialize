@@ -90,6 +90,10 @@ p+p {
 
     ul {
         margin: var(--micro) 0;
+    }
+
+    ul,
+    ol {
         padding-left: var(--small);
     }
 
