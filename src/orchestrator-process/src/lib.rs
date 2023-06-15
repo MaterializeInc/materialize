@@ -565,7 +565,8 @@ impl NamespacedProcessOrchestrator {
                     cmd
                 };
                 info!(
-                    "launching {full_id}-{i} via {}...",
+                    "launching {full_id}-{i} via {} {}...",
+                    cmd.as_std().get_program().to_string_lossy(),
                     cmd.as_std()
                         .get_args()
                         .map(|arg| arg.to_string_lossy())
@@ -575,7 +576,7 @@ impl NamespacedProcessOrchestrator {
                     cmd.stdout(Stdio::null());
                     cmd.stderr(Stdio::null());
                 }
-                match spawn_process(&state_updater, cmd).await {
+                match spawn_process(&state_updater, cmd, !command_wrapper.is_empty()).await {
                     Ok(status) => {
                         if propagate_crashes && did_process_crash(status) {
                             panic!("{full_id}-{i} crashed; aborting because propagate_crashes is enabled");
@@ -711,16 +712,25 @@ fn interpolate_command(
 async fn spawn_process(
     state_updater: &ProcessStateUpdater,
     mut cmd: Command,
+    send_sigterm: bool,
 ) -> Result<ExitStatus, anyhow::Error> {
-    struct KillOnDropChild(Child);
+    struct KillOnDropChild(Child, bool);
 
     impl Drop for KillOnDropChild {
         fn drop(&mut self) {
+            if let (Some(pid), true) = (self.0.id().and_then(|id| i32::try_from(id).ok()), self.1) {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+                // Give the process a bit of time to react to the signal
+                tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(500)));
+            }
             let _ = self.0.start_kill();
         }
     }
 
-    let mut child = KillOnDropChild(cmd.spawn()?);
+    let mut child = KillOnDropChild(cmd.spawn()?, send_sigterm);
     state_updater.update_state(ProcessStatus::Ready {
         pid: Pid::from_u32(child.0.id().unwrap()),
     });

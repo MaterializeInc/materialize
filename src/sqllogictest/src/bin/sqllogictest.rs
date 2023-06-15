@@ -129,6 +129,9 @@ struct Args {
     /// Inject `ALTER SYSTEM SET enable_table_keys = true` before running the SLT file.
     #[clap(long)]
     enable_table_keys: bool,
+    /// Wrapper program to start child processes
+    #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
+    orchestrator_process_wrapper: Option<String>,
 }
 
 #[tokio::main]
@@ -148,6 +151,7 @@ async fn main() -> ExitCode {
         auto_index_tables: args.auto_index_tables,
         auto_transactions: args.auto_transactions,
         enable_table_keys: args.enable_table_keys,
+        orchestrator_process_wrapper: args.orchestrator_process_wrapper.clone(),
     };
 
     if args.rewrite_results {
