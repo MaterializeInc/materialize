@@ -5314,7 +5314,6 @@ impl<'a> Parser<'a> {
                     )
                 }
             };
-            println!("escaped");
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
                 object_type: show_object_type,
                 from,
