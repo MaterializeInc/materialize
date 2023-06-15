@@ -34,10 +34,10 @@ The existing cloudtest framework in the materialize repo provides an instance of
 context to each test case. This class inherits `Application` and brings functionality to access involved cloud
 resources and interact with kubernetes control.
 
-A further class `CloudtestApplication` inheriting `Application` shall be introduced. It will expose existing
-functionality from materialize repo cloudtests. In addition, it will provide further utility functions to interact
-with the controllers of the cloud repo. Where necessary and sensible, functionality from `MaterializeApplication`
-shall be pulled up into the shared base class.
+A further class `CloudtestApplication` inheriting `Application` shall be introduced in the cloud repo. It will expose
+existing functionality from materialize repo's cloudtests. In addition, it will provide further utility functions to
+interact with the controllers of the cloud repo. Where necessary and sensible, functionality from
+`MaterializeApplication` shall be pulled up into the shared base class.
 
 A few sample tests using the unified framework will be created in the cloud repo. Their execution shall be integrated
 into the CI.
