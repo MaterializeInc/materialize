@@ -483,7 +483,7 @@ pub fn crate_level(filter: &EnvFilter, crate_name: &'static str) -> Level {
     // is safe to split out its individual directives here
     for directive in format!("{}", filter).split(',') {
         match directive.split('=').collect::<Vec<_>>().as_slice() {
-            [target, "=", level] => {
+            [target, level] => {
                 if *target == crate_name {
                     match Level::from_str(*level) {
                         Ok(level) => return level,
@@ -491,10 +491,13 @@ pub fn crate_level(filter: &EnvFilter, crate_name: &'static str) -> Level {
                     }
                 }
             }
-            [level] => match Level::from_str(*level) {
+            [token] => match Level::from_str(*token) {
                 Ok(level) => default_level = default_level.max(level),
                 Err(_) => {
-                    // it's valid for a bare target to exist without a level
+                    // a target without a level is interpreted as trace
+                    if *token == crate_name {
+                        default_level = default_level.max(Level::TRACE);
+                    }
                 }
             },
             _ => {}
@@ -607,8 +610,9 @@ impl From<BTreeMap<String, String>> for OpenTelemetryContext {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use tracing::Level;
-    use tracing_subscriber::filter::{LevelFilter, Targets};
+    use tracing_subscriber::filter::{EnvFilter, LevelFilter, Targets};
 
     #[mz_test_macro::test]
     fn overriding_targets() {
@@ -622,5 +626,54 @@ mod tests {
             .with_targets(default)
             .with_targets(user_defined);
         assert!(filters.would_enable("my_crate", &Level::INFO));
+    }
+
+    #[mz_test_macro::test]
+    fn crate_level() {
+        // target=level directives only. should default to ERROR if unspecified
+        let filter = EnvFilter::from_str("abc=trace,def=debug").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(
+            super::crate_level(&filter, "abc::doesnt::exist"),
+            Level::ERROR
+        );
+        assert_eq!(super::crate_level(&filter, "doesnt::exist"), Level::ERROR);
+
+        // add in a global default
+        let filter = EnvFilter::from_str("abc=trace,def=debug,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(
+            super::crate_level(&filter, "abc::doesnt:exist"),
+            Level::INFO
+        );
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "nan"), Level::INFO);
+
+        // a directive with mod path doesn't match the top-level crate
+        let filter = EnvFilter::from_str("abc::def::ghi=trace,debug").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(
+            super::crate_level(&filter, "gets_the_default"),
+            Level::DEBUG
+        );
+
+        // directives with spans and fields don't match the top-level crate
+        let filter =
+            EnvFilter::from_str("abc[s]=trace,def[s{g=h}]=debug,[{s2}]=debug,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::INFO);
+        assert_eq!(super::crate_level(&filter, "def"), Level::INFO);
+        assert_eq!(super::crate_level(&filter, "gets_the_default"), Level::INFO);
+
+        // a bare target without a level is taken as trace
+        let filter = EnvFilter::from_str("abc,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(super::crate_level(&filter, "gets_the_default"), Level::INFO);
+        // the contract of `crate_level` is that it only matches top-level crates.
+        // if we had a proper EnvFilter::would_match impl, this assertion should
+        // be Level::TRACE
+        assert_eq!(super::crate_level(&filter, "abc::def"), Level::INFO);
     }
 }
