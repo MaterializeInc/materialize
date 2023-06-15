@@ -44,11 +44,11 @@ into the CI.
 
 ## Drawbacks
 
-* Changing the test framework, which resides in the materialize repo, might break test execution in cloud repo; in
+* Changes to the test framework, which resides in the materialize repo, might break test execution in cloud repo; in
 particular when a developer is not aware that the logic is used there as well. This will be mitigated to some degree
 by the build which is executed when synchronizing the materialize repo to the cloud repo.
-* Changing the test framework will cause some overhead when tests in both repositories need to be adapted.
-* Maintaining the test framework might cause additional efforts to work around potential dependency conflicts.
+* Changes to the test framework will cause some overhead when tests in both repositories need to be adapted.
+* Maintenance of the test framework might cause additional efforts to work around potential dependency conflicts.
 * The complexity of the test framework will be higher due to higher generalization.
 
 ## Alternatives
