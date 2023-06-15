@@ -1951,7 +1951,7 @@ pub mod tests {
 
         // Create a new SeqNo
         read.downgrade_since(&Antichain::from_elem(1)).await;
-        let new_seqno_since = read.machine.seqno();
+        let new_seqno_since = read.machine.applier.seqno_since();
 
         // Start a GC in the background for some SeqNo range that is not
         // contiguous compared to the last gc req (in this case, n/a) and then
