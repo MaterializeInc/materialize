@@ -225,6 +225,11 @@ pub fn check_plan(
     role_memberships.insert(*current_role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
 
+    // Altering the default privileges for the PUBLIC role (aka ALL ROLES) will affect all roles
+    // that currently exist and roles that will exist in the future. It's impossible for an exising
+    // role to be a member of a role that doesn't exist yet, so no current role could possibly have
+    // the privileges required to alter default privileges for the PUBLIC role. Therefore we
+    // only superusers can alter default privileges for the PUBLIC role.
     if let Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
         privilege_objects, ..
     }) = &plan
