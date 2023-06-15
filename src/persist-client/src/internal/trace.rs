@@ -475,7 +475,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     /// not brought `fuel` to zero. Otherwise, the merge is still in progress.
     fn done(
         self,
-        b1: SpineBatch<T>,
+        mut b1: SpineBatch<T>,
         b2: SpineBatch<T>,
         log: &mut SpineLog<'_, T>,
     ) -> SpineBatch<T> {
@@ -490,36 +490,23 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
 
         // Special case empty batches merging into a fueled merge whose last batch is empty
         if b2.is_empty() {
-            match &b1 {
+            match &mut b1 {
                 SpineBatch::Merged(_) => {}
                 SpineBatch::Fueled {
-                    desc: _desc,
+                    desc,
                     parts,
-                    len,
+                    len: _len,
                 } => {
-                    if let Some(last) = parts.last() {
+                    if let Some(last) = parts.last_mut() {
                         if last.len == 0 && last.desc.upper() == b2.lower() {
-                            let merge_desc = Description::new(lower, upper, since.clone());
-                            let last_desc = Description::new(
-                                last.desc.lower().clone(),
-                                b2.upper().clone(),
-                                since,
-                            );
-
-                            let mut parts = parts.clone();
-                            let last = parts.last_mut().expect("last");
+                            *desc = Description::new(lower, upper.clone(), since.clone());
                             *last = Arc::new(HollowBatch {
-                                desc: last_desc,
+                                desc: Description::new(last.desc.lower().clone(), upper, since),
                                 len: 0,
                                 parts: vec![],
                                 runs: vec![],
                             });
-
-                            return SpineBatch::Fueled {
-                                desc: merge_desc,
-                                parts,
-                                len: *len,
-                            };
+                            return b1;
                         }
                     }
                 }
