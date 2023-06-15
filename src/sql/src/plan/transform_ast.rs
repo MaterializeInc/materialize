@@ -62,6 +62,7 @@ where
 struct FuncRewriter<'a> {
     scx: &'a StatementContext<'a>,
     status: Result<(), PlanError>,
+    rewriting_table_factor: bool,
 }
 
 impl<'a> FuncRewriter<'a> {
@@ -69,6 +70,7 @@ impl<'a> FuncRewriter<'a> {
         FuncRewriter {
             scx,
             status: Ok(()),
+            rewriting_table_factor: false,
         }
     }
 
@@ -108,13 +110,18 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_agg(
-        &self,
+        &mut self,
         name: ResolvedItemName,
         expr: Expr<Aug>,
         order_by: Vec<OrderByExpr<Aug>>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
     ) -> Expr<Aug> {
+        if self.rewriting_table_factor && self.status.is_ok() {
+            self.status = Err(PlanError::Unstructured(
+                "aggregate functions are not supported in functions in FROM".to_string(),
+            ))
+        }
         Expr::Function(Function {
             name,
             args: FunctionArgs::Args {
@@ -128,7 +135,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_avg(
-        &self,
+        &mut self,
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
@@ -158,7 +165,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_variance(
-        &self,
+        &mut self,
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
@@ -219,7 +226,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_stddev(
-        &self,
+        &mut self,
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
@@ -233,7 +240,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_bool_and(
-        &self,
+        &mut self,
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
@@ -261,7 +268,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_bool_or(
-        &self,
+        &mut self,
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
@@ -289,66 +296,73 @@ impl<'a> FuncRewriter<'a> {
         sum.gt(Expr::Value(Value::Number(0.to_string())))
     }
 
+    fn rewrite_function(&mut self, func: &Function<Aug>) -> Option<(Ident, Expr<Aug>)> {
+        if let Function {
+            name,
+            args: FunctionArgs::Args { args, order_by: _ },
+            filter,
+            distinct,
+            over: None,
+        } = func
+        {
+            let name = match name {
+                ResolvedItemName::Item {
+                    qualifiers,
+                    full_name,
+                    ..
+                } => {
+                    if &qualifiers.schema_spec
+                        != self
+                            .scx
+                            .catalog
+                            .resolve_schema(None, PG_CATALOG_SCHEMA)
+                            .expect("pg_catalog schema exists")
+                            .id()
+                    {
+                        return None;
+                    }
+                    full_name.item.clone()
+                }
+                _ => unreachable!(),
+            };
+
+            let filter = filter.clone();
+            let distinct = *distinct;
+            let expr = if args.len() == 1 {
+                let arg = args[0].clone();
+                match name.as_str() {
+                    "avg" => self.plan_avg(arg, filter, distinct),
+                    "variance" | "var_samp" => self.plan_variance(arg, filter, distinct, true),
+                    "var_pop" => self.plan_variance(arg, filter, distinct, false),
+                    "stddev" | "stddev_samp" => self.plan_stddev(arg, filter, distinct, true),
+                    "stddev_pop" => self.plan_stddev(arg, filter, distinct, false),
+                    "bool_and" => self.plan_bool_and(arg, filter, distinct),
+                    "bool_or" => self.plan_bool_or(arg, filter, distinct),
+                    _ => return None,
+                }
+            } else if args.len() == 2 {
+                let (lhs, rhs) = (args[0].clone(), args[1].clone());
+                match name.as_str() {
+                    "mod" => lhs.modulo(rhs),
+                    "pow" => Expr::call(
+                        self.scx
+                            .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "power"]),
+                        vec![lhs, rhs],
+                    ),
+                    _ => return None,
+                }
+            } else {
+                return None;
+            };
+            Some((Ident::new(name), expr))
+        } else {
+            None
+        }
+    }
+
     fn rewrite_expr(&mut self, expr: &Expr<Aug>) -> Option<(Ident, Expr<Aug>)> {
         match expr {
-            Expr::Function(Function {
-                name,
-                args: FunctionArgs::Args { args, order_by: _ },
-                filter,
-                distinct,
-                over: None,
-            }) => {
-                let name = match name {
-                    ResolvedItemName::Item {
-                        qualifiers,
-                        full_name,
-                        ..
-                    } => {
-                        if &qualifiers.schema_spec
-                            != self
-                                .scx
-                                .catalog
-                                .resolve_schema(None, PG_CATALOG_SCHEMA)
-                                .expect("pg_catalog schema exists")
-                                .id()
-                        {
-                            return None;
-                        }
-                        full_name.item.clone()
-                    }
-                    _ => unreachable!(),
-                };
-
-                let filter = filter.clone();
-                let distinct = *distinct;
-                let expr = if args.len() == 1 {
-                    let arg = args[0].clone();
-                    match name.as_str() {
-                        "avg" => self.plan_avg(arg, filter, distinct),
-                        "variance" | "var_samp" => self.plan_variance(arg, filter, distinct, true),
-                        "var_pop" => self.plan_variance(arg, filter, distinct, false),
-                        "stddev" | "stddev_samp" => self.plan_stddev(arg, filter, distinct, true),
-                        "stddev_pop" => self.plan_stddev(arg, filter, distinct, false),
-                        "bool_and" => self.plan_bool_and(arg, filter, distinct),
-                        "bool_or" => self.plan_bool_or(arg, filter, distinct),
-                        _ => return None,
-                    }
-                } else if args.len() == 2 {
-                    let (lhs, rhs) = (args[0].clone(), args[1].clone());
-                    match name.as_str() {
-                        "mod" => lhs.modulo(rhs),
-                        "pow" => Expr::call(
-                            self.scx
-                                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "power"]),
-                            vec![lhs, rhs],
-                        ),
-                        _ => return None,
-                    }
-                } else {
-                    return None;
-                };
-                Some((Ident::new(name), expr))
-            }
+            Expr::Function(function) => self.rewrite_function(function),
             // Rewrites special keywords that SQL considers to be function calls
             // to actual function calls. For example, `SELECT current_timestamp`
             // is rewritten to `SELECT current_timestamp()`.
@@ -389,6 +403,53 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
             }
         } else {
             visit_mut::visit_select_item_mut(self, item);
+        }
+    }
+
+    fn visit_table_with_joins_mut(&mut self, item: &'ast mut TableWithJoins<Aug>) {
+        visit_mut::visit_table_with_joins_mut(self, item);
+        match &mut item.relation {
+            TableFactor::Function {
+                function,
+                alias,
+                with_ordinality,
+            } => {
+                self.rewriting_table_factor = true;
+                // Functions that get rewritten must be rewritten as exprs
+                // because their catalog functions cannot be planned.
+                if let Some((ident, expr)) = self.rewrite_function(function) {
+                    let mut select = Select::default().project(SelectItem::Expr {
+                        expr,
+                        alias: Some(match &alias {
+                            Some(TableAlias { name, columns, .. }) => {
+                                columns.get(0).unwrap_or(name).clone()
+                            }
+                            None => ident,
+                        }),
+                    });
+
+                    if *with_ordinality {
+                        select = select.project(SelectItem::Expr {
+                            expr: Expr::Value(Value::Number("1".into())),
+                            alias: Some("ordinality".into()),
+                        });
+                    }
+
+                    item.relation = TableFactor::Derived {
+                        lateral: false,
+                        subquery: Box::new(Query {
+                            ctes: mz_sql_parser::ast::CteBlock::Simple(vec![]),
+                            body: mz_sql_parser::ast::SetExpr::Select(Box::new(select)),
+                            order_by: vec![],
+                            limit: None,
+                            offset: None,
+                        }),
+                        alias: alias.clone(),
+                    }
+                }
+                self.rewriting_table_factor = false;
+            }
+            _ => {}
         }
     }
 
