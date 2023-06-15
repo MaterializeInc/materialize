@@ -235,40 +235,63 @@ def workflow_test_github_15531(c: Composition) -> None:
     Test that compute command history does not leak peek commands.
 
     Regression test for https://github.com/MaterializeInc/materialize/issues/15531.
-
-    The test currently only inspects the history on clusterd, and it should be
-    extended in the future to also consider the history size in the compute
-    controller.
     """
 
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.up("clusterd1")
 
-    # helper function to get command history metrics for clusterd
-    def find_clusterd_command_history_metrics(c: Composition) -> Tuple[int, int]:
-        metrics = c.exec(
+    # helper function to get command history metrics
+    def find_command_history_metrics(c: Composition) -> Tuple[int, int, int, int]:
+        controller_metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        replica_metrics = c.exec(
             "clusterd1", "curl", "localhost:6878/metrics", capture=True
         ).stdout
+        metrics = controller_metrics + replica_metrics
 
-        history_len = None
-        dataflow_count = None
+        controller_command_count, controller_command_count_found = 0, False
+        controller_dataflow_count, controller_dataflow_count_found = 0, False
+        replica_command_count, replica_command_count_found = 0, False
+        replica_dataflow_count, replica_dataflow_count_found = 0, False
         for metric in metrics.splitlines():
-            if metric.startswith("mz_compute_command_history_size"):
-                history_len = int(metric[len("mz_compute_command_history_size") :])
-            elif metric.startswith("mz_compute_dataflow_count_in_history"):
-                dataflow_count = int(
-                    metric[len("mz_compute_dataflow_count_in_history") :]
-                )
+            if (
+                metric.startswith("mz_compute_controller_history_command_count")
+                and 'instance_id="u2"' in metric
+            ):
+                controller_command_count += int(metric.split()[1])
+                controller_command_count_found = True
+            elif (
+                metric.startswith("mz_compute_controller_history_dataflow_count")
+                and 'instance_id="u2"' in metric
+            ):
+                controller_dataflow_count += int(metric.split()[1])
+                controller_dataflow_count_found = True
+            elif metric.startswith("mz_compute_replica_history_command_count"):
+                replica_command_count += int(metric.split()[1])
+                replica_command_count_found = True
+            elif metric.startswith("mz_compute_replica_history_dataflow_count"):
+                replica_dataflow_count += int(metric.split()[1])
+                replica_dataflow_count_found = True
 
         assert (
-            history_len is not None
-        ), "command history length not found in clusterd metrics"
+            controller_command_count_found
+        ), "command count not found in controller metrics"
         assert (
-            dataflow_count is not None
-        ), "dataflow count in history not found in clusterd metrics"
+            controller_dataflow_count_found
+        ), "dataflow count not found in controller metrics"
+        assert replica_command_count_found, "command count not found in replica metrics"
+        assert (
+            replica_dataflow_count_found
+        ), "dataflow count not found in replica metrics"
 
-        return (history_len, dataflow_count)
+        return (
+            controller_command_count,
+            controller_dataflow_count,
+            replica_command_count,
+            replica_dataflow_count,
+        )
 
     c.sql(
         "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
@@ -299,16 +322,22 @@ def workflow_test_github_15531(c: Composition) -> None:
 
     # obtain initial history size and dataflow count
     (
-        clusterd_history_len,
-        clusterd_dataflow_count,
-    ) = find_clusterd_command_history_metrics(c)
+        controller_command_count,
+        controller_dataflow_count,
+        replica_command_count,
+        replica_dataflow_count,
+    ) = find_command_history_metrics(c)
+    assert controller_command_count > 0, "controller history cannot be empty"
     assert (
-        clusterd_dataflow_count == 1
-    ), "more dataflows than expected in clusterd history"
-    assert clusterd_history_len > 0, "clusterd history cannot be empty"
+        controller_dataflow_count == 1
+    ), "more dataflows than expected in controller history"
+    assert replica_command_count > 0, "replica history cannot be empty"
+    assert (
+        replica_dataflow_count == 1
+    ), "more dataflows than expected in replica history"
 
     # execute 400 fast- and slow-path peeks
-    for i in range(20):
+    for _ in range(20):
         c.sql(
             """
             SELECT * FROM t;
@@ -337,15 +366,23 @@ def workflow_test_github_15531(c: Composition) -> None:
     # check that dataflow count is the same and
     # that history size is well-behaved
     (
-        clusterd_history_len,
-        clusterd_dataflow_count,
-    ) = find_clusterd_command_history_metrics(c)
+        controller_command_count,
+        controller_dataflow_count,
+        replica_command_count,
+        replica_dataflow_count,
+    ) = find_command_history_metrics(c)
     assert (
-        clusterd_dataflow_count == 1
-    ), "more dataflows than expected in clusterd history"
+        controller_command_count < 100
+    ), "controller history grew more than expected after peeks"
     assert (
-        clusterd_history_len < 100
-    ), "clusterd history grew more than expected after peeks"
+        controller_dataflow_count == 1
+    ), "more dataflows than expected in controller history"
+    assert (
+        replica_command_count < 100
+    ), "replica history grew more than expected after peeks"
+    assert (
+        replica_dataflow_count == 1
+    ), "more dataflows than expected in replica history"
 
 
 def workflow_test_github_15535(c: Composition) -> None:
