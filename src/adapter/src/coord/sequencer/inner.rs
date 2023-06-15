@@ -1725,7 +1725,7 @@ impl Coordinator {
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_peek(
+    pub(super) async fn sequence_peek(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
