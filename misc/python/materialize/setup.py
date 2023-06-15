@@ -17,7 +17,7 @@
 from setuptools import setup
 
 setup(
-    name="mz_test_base",
+    name="materialize",
     version="0.2.0",
     description="Materialize test base.",
     author="Materialize, Inc.",
