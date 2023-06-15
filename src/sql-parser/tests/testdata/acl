@@ -905,7 +905,7 @@ ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO joe
 ----
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([SELECT]), object_type: Table, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([SELECT]), object_type: Table, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLE TO joe
@@ -919,54 +919,54 @@ ALTER DEFAULT PRIVILEGES GRANT USAGE, CREATE ON SCHEMAS TO joe, GROUP mike
 ----
 ALTER DEFAULT PRIVILEGES GRANT USAGE, CREATE ON SCHEMAS TO joe, mike
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE, CREATE]), object_type: Schema, grantees: [Ident("joe"), Ident("mike")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE, CREATE]), object_type: Schema, grantees: [Ident("joe"), Ident("mike")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES GRANT ALL ON DATABASES TO GROUP joe
 ----
 ALTER DEFAULT PRIVILEGES GRANT ALL ON DATABASES TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Database, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Database, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON CLUSTERS TO joe
 ----
 ALTER DEFAULT PRIVILEGES GRANT ALL ON CLUSTERS TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Cluster, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Cluster, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1 GRANT USAGE ON TYPES TO joe
 ----
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1 GRANT USAGE ON TYPES TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Type, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Type, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1, d1.s2 GRANT USAGE ON SECRETS TO joe
 ----
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1, d1.s2 GRANT USAGE ON SECRETS TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")]), UnresolvedSchemaName([Ident("d1"), Ident("s2")])] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Secret, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")]), UnresolvedSchemaName([Ident("d1"), Ident("s2")])] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Secret, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN DATABASE d1 GRANT USAGE ON CONNECTIONS TO joe
 ----
 ALTER DEFAULT PRIVILEGES IN DATABASE d1 GRANT USAGE ON CONNECTIONS TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Connection, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Connection, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT INSERT, DELETE ON TABLES TO joe
 ----
 ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT INSERT, DELETE ON TABLES TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1")), UnresolvedDatabaseName(Ident("d2"))] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([INSERT, DELETE]), object_type: Table, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1")), UnresolvedDatabaseName(Ident("d2"))] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([INSERT, DELETE]), object_type: Table, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR r1 GRANT ALL ON CLUSTERS TO joe
 ----
-error: Expected one of ROLE or USER, found identifier "r1"
+error: Expected one of ROLE or USER or ALL, found identifier "r1"
 ALTER DEFAULT PRIVILEGES FOR r1 GRANT ALL ON CLUSTERS TO joe
                              ^
 
@@ -975,35 +975,35 @@ ALTER DEFAULT PRIVILEGES FOR ROLE r1 GRANT ALL ON CLUSTERS TO joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 GRANT ALL ON CLUSTERS TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Cluster, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Cluster, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR USER r1 GRANT ALL ON CLUSTERS TO joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 GRANT ALL ON CLUSTERS TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Cluster, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: All, object_type: Cluster, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR ROLE r1, r2 GRANT CREATE ON DATABASES TO joe, mike
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1, r2 GRANT CREATE ON DATABASES TO joe, mike
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1"), Ident("r2")]), target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([CREATE]), object_type: Database, grantees: [Ident("joe"), Ident("mike")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1"), Ident("r2")]), target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([CREATE]), object_type: Database, grantees: [Ident("joe"), Ident("mike")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA s1 GRANT CREATE ON SCHEMAS TO joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA s1 GRANT CREATE ON SCHEMAS TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([CREATE]), object_type: Schema, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([CREATE]), object_type: Schema, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN DATABASE d1 GRANT USAGE ON SECRETS TO joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN DATABASE d1 GRANT USAGE ON SECRETS TO joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Secret, grantees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([USAGE]), object_type: Secret, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN GRANT USAGE ON CONNECTIONS TO joe
@@ -1013,11 +1013,18 @@ ALTER DEFAULT PRIVILEGES IN GRANT USAGE ON CONNECTIONS TO joe
                             ^
 
 parse-statement
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO joe
+----
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO joe
+=>
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: AllRoles, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([SELECT]), object_type: Table, grantees: [Ident("joe")] }) })
+
+parse-statement
 ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM joe
 ----
 ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([SELECT]), object_type: Table, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([SELECT]), object_type: Table, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLE FROM joe
@@ -1031,54 +1038,54 @@ ALTER DEFAULT PRIVILEGES REVOKE USAGE, CREATE ON SCHEMAS FROM joe, GROUP mike
 ----
 ALTER DEFAULT PRIVILEGES REVOKE USAGE, CREATE ON SCHEMAS FROM joe, mike
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Schema, revokees: [Ident("joe"), Ident("mike")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Schema, revokees: [Ident("joe"), Ident("mike")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES REVOKE ALL ON DATABASES FROM GROUP joe
 ----
 ALTER DEFAULT PRIVILEGES REVOKE ALL ON DATABASES FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Database, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Database, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON CLUSTERS FROM joe
 ----
 ALTER DEFAULT PRIVILEGES REVOKE ALL ON CLUSTERS FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Cluster, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Cluster, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1 REVOKE USAGE ON TYPES FROM joe
 ----
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1 REVOKE USAGE ON TYPES FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Type, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Type, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1, d1.s2 REVOKE USAGE ON SECRETS FROM joe
 ----
 ALTER DEFAULT PRIVILEGES IN SCHEMA s1, d1.s2 REVOKE USAGE ON SECRETS FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")]), UnresolvedSchemaName([Ident("d1"), Ident("s2")])] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Secret, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")]), UnresolvedSchemaName([Ident("d1"), Ident("s2")])] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Secret, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN DATABASE d1 REVOKE USAGE ON CONNECTIONS FROM joe
 ----
 ALTER DEFAULT PRIVILEGES IN DATABASE d1 REVOKE USAGE ON CONNECTIONS FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Connection, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Connection, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE INSERT, DELETE ON TABLES FROM joe
 ----
 ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE INSERT, DELETE ON TABLES FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: None, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1")), UnresolvedDatabaseName(Ident("d2"))] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([INSERT, DELETE]), object_type: Table, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1")), UnresolvedDatabaseName(Ident("d2"))] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([INSERT, DELETE]), object_type: Table, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR r1 REVOKE ALL ON CLUSTERS FROM joe
 ----
-error: Expected one of ROLE or USER, found identifier "r1"
+error: Expected one of ROLE or USER or ALL, found identifier "r1"
 ALTER DEFAULT PRIVILEGES FOR r1 REVOKE ALL ON CLUSTERS FROM joe
                              ^
 
@@ -1087,35 +1094,35 @@ ALTER DEFAULT PRIVILEGES FOR ROLE r1 REVOKE ALL ON CLUSTERS FROM joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 REVOKE ALL ON CLUSTERS FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Cluster, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Cluster, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR USER r1 REVOKE ALL ON CLUSTERS FROM joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 REVOKE ALL ON CLUSTERS FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Cluster, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: All, object_type: Cluster, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR ROLE r1, r2 REVOKE CREATE ON DATABASES FROM joe, mike
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1, r2 REVOKE CREATE ON DATABASES FROM joe, mike
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1"), Ident("r2")]), target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([CREATE]), object_type: Database, revokees: [Ident("joe"), Ident("mike")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1"), Ident("r2")]), target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([CREATE]), object_type: Database, revokees: [Ident("joe"), Ident("mike")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA s1 REVOKE CREATE ON SCHEMAS FROM joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA s1 REVOKE CREATE ON SCHEMAS FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([CREATE]), object_type: Schema, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: AllSchemas { schemas: [UnresolvedSchemaName([Ident("s1")])] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([CREATE]), object_type: Schema, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN DATABASE d1 REVOKE USAGE ON SECRETS FROM joe
 ----
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN DATABASE d1 REVOKE USAGE ON SECRETS FROM joe
 =>
-AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Some([Ident("r1")]), target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Secret, revokees: [Ident("joe")] }) })
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: Roles([Ident("r1")]), target_objects: AllDatabases { databases: [UnresolvedDatabaseName(Ident("d1"))] }, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([USAGE]), object_type: Secret, revokees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES IN REVOKE USAGE ON CONNECTIONS FROM joe
@@ -1123,6 +1130,13 @@ ALTER DEFAULT PRIVILEGES IN REVOKE USAGE ON CONNECTIONS FROM joe
 error: Expected one of SCHEMA or DATABASE, found REVOKE
 ALTER DEFAULT PRIVILEGES IN REVOKE USAGE ON CONNECTIONS FROM joe
                             ^
+
+parse-statement
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE SELECT ON TABLES FROM joe
+----
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE SELECT ON TABLES FROM joe
+=>
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: AllRoles, target_objects: All, grant_or_revoke: Revoke(AbbreviatedRevokeStatement { privileges: Privileges([SELECT]), object_type: Table, revokees: [Ident("joe")] }) })
 
 parse-statement
 REASSIGN OWNED BY joe TO yisachar

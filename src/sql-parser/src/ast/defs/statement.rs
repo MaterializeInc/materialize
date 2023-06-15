@@ -3062,6 +3062,27 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegesStatement<T> {
 impl_display_t!(RevokePrivilegesStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TargetRoleSpecification<T: AstInfo> {
+    /// Specific list of roles.
+    Roles(Vec<T::RoleName>),
+    /// The current role executing the statement.
+    CurrentRole,
+    /// All current and future roles.
+    AllRoles,
+}
+
+impl<T: AstInfo> AstDisplay for TargetRoleSpecification<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            TargetRoleSpecification::Roles(roles) => f.write_node(&display::comma_separated(roles)),
+            TargetRoleSpecification::CurrentRole => {}
+            TargetRoleSpecification::AllRoles => f.write_str("ALL ROLES"),
+        }
+    }
+}
+impl_display_t!(TargetRoleSpecification);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AbbreviatedGrantStatement<T: AstInfo> {
     /// The privileges being granted.
     pub privileges: PrivilegeSpecification,
@@ -3152,7 +3173,7 @@ impl_display_t!(AbbreviatedGrantOrRevokeStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterDefaultPrivilegesStatement<T: AstInfo> {
     /// The roles for which created objects are affected.
-    pub target_roles: Option<Vec<T::RoleName>>,
+    pub target_roles: TargetRoleSpecification<T>,
     /// The objects that are affected by the default privilege.
     pub target_objects: GrantTargetAllSpecification<T>,
     /// The privilege to grant or revoke.
@@ -3162,9 +3183,16 @@ pub struct AlterDefaultPrivilegesStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for AlterDefaultPrivilegesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER DEFAULT PRIVILEGES");
-        if let Some(target_roles) = &self.target_roles {
-            f.write_str(" FOR ROLE ");
-            f.write_node(&display::comma_separated(target_roles));
+        match &self.target_roles {
+            TargetRoleSpecification::Roles(_) => {
+                f.write_str(" FOR ROLE ");
+                f.write_node(&self.target_roles);
+            }
+            TargetRoleSpecification::CurrentRole => {}
+            TargetRoleSpecification::AllRoles => {
+                f.write_str(" FOR ");
+                f.write_node(&self.target_roles);
+            }
         }
         match &self.target_objects {
             GrantTargetAllSpecification::All => {}

@@ -3944,7 +3944,7 @@ impl Coordinator {
         };
         for privilege_object in &privilege_objects {
             self.catalog()
-                .ensure_not_reserved_role(&privilege_object.role_id)?;
+                .ensure_not_system_role(&privilege_object.role_id)?;
             if let Some(database_id) = privilege_object.database_id {
                 self.catalog()
                     .ensure_not_reserved_object(&database_id.into(), session.conn_id())?;

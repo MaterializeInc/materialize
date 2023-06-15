@@ -38,8 +38,8 @@ use mz_sql_parser::ast::{
     AbbreviatedGrantOrRevokeStatement, AlterDefaultPrivilegesStatement, AlterOwnerStatement,
     GrantPrivilegesStatement, GrantRoleStatement, GrantTargetAllSpecification,
     GrantTargetSpecification, GrantTargetSpecificationInner, Privilege, PrivilegeSpecification,
-    ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName,
+    ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement,
+    TargetRoleSpecification, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName,
 };
 
 pub fn describe_alter_owner(
@@ -609,9 +609,11 @@ pub fn plan_alter_default_privileges(
         });
     }
 
-    let target_roles = target_roles
-        .map(|target_roles| target_roles.into_iter().map(|role| role.id).collect())
-        .unwrap_or_else(|| vec![*scx.catalog.active_role_id()]);
+    let target_roles = match target_roles {
+        TargetRoleSpecification::Roles(roles) => roles.into_iter().map(|role| role.id).collect(),
+        TargetRoleSpecification::CurrentRole => vec![*scx.catalog.active_role_id()],
+        TargetRoleSpecification::AllRoles => vec![RoleId::Public],
+    };
     let mut privilege_objects = Vec::with_capacity(target_roles.len() * target_objects.len());
     for target_role in target_roles {
         match &target_objects {

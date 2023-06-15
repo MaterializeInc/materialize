@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="463" height="531">
+<svg xmlns="http://www.w3.org/2000/svg" width="463" height="575">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="66" height="32" rx="10"/>
@@ -60,60 +60,76 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="288" y="87">,</text>
-   <rect x="45" y="283" width="34" height="32" rx="10"/>
+   <rect x="76" y="201" width="46" height="32" rx="10"/>
+   <rect x="74"
+         y="199"
+         width="46"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="84" y="219">ALL</text>
+   <rect x="142" y="201" width="66" height="32" rx="10"/>
+   <rect x="140"
+         y="199"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="150" y="219">ROLES</text>
+   <rect x="45" y="327" width="34" height="32" rx="10"/>
    <rect x="43"
-         y="281"
+         y="325"
          width="34"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="53" y="301">IN</text>
-   <rect x="119" y="283" width="82" height="32" rx="10"/>
+   <text class="terminal" x="53" y="345">IN</text>
+   <rect x="119" y="327" width="82" height="32" rx="10"/>
    <rect x="117"
-         y="281"
+         y="325"
          width="82"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="127" y="301">SCHEMA</text>
-   <rect x="241" y="283" width="114" height="32"/>
-   <rect x="239" y="281" width="114" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="249" y="301">schema_name</text>
-   <rect x="241" y="239" width="24" height="32" rx="10"/>
+   <text class="terminal" x="127" y="345">SCHEMA</text>
+   <rect x="241" y="327" width="114" height="32"/>
+   <rect x="239" y="325" width="114" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="249" y="345">schema_name</text>
+   <rect x="241" y="283" width="24" height="32" rx="10"/>
    <rect x="239"
-         y="237"
+         y="281"
          width="24"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="249" y="257">,</text>
-   <rect x="119" y="371" width="98" height="32" rx="10"/>
+   <text class="terminal" x="249" y="301">,</text>
+   <rect x="119" y="415" width="98" height="32" rx="10"/>
    <rect x="117"
-         y="369"
+         y="413"
          width="98"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="127" y="389">DATABASE</text>
-   <rect x="257" y="371" width="124" height="32"/>
-   <rect x="255" y="369" width="124" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="265" y="389">database_name</text>
-   <rect x="257" y="327" width="24" height="32" rx="10"/>
+   <text class="terminal" x="127" y="433">DATABASE</text>
+   <rect x="257" y="415" width="124" height="32"/>
+   <rect x="255" y="413" width="124" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="265" y="433">database_name</text>
+   <rect x="257" y="371" width="24" height="32" rx="10"/>
    <rect x="255"
-         y="325"
+         y="369"
          width="24"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="265" y="345">,</text>
-   <rect x="265" y="453" width="140" height="32"/>
-   <rect x="263" y="451" width="140" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="273" y="471">abbreviated_grant</text>
-   <rect x="265" y="497" width="150" height="32"/>
-   <rect x="263" y="495" width="150" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="273" y="515">abbreviated_revoke</text>
+   <text class="terminal" x="265" y="389">,</text>
+   <rect x="265" y="497" width="140" height="32"/>
+   <rect x="263" y="495" width="140" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="273" y="515">abbreviated_grant</text>
+   <rect x="265" y="541" width="150" height="32"/>
+   <rect x="263" y="539" width="150" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="273" y="559">abbreviated_revoke</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m66 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m102 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-311 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m48 0 h10 m20 0 h10 m56 0 h10 m-96 0 h20 m76 0 h20 m-116 0 q10 0 10 10 m96 0 q0 -10 10 -10 m-106 10 v24 m96 0 v-24 m-96 24 q0 10 10 10 m76 0 q10 0 10 -10 m-86 10 h10 m56 0 h10 m40 -44 h10 m90 0 h10 m-130 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m110 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-110 0 h10 m24 0 h10 m0 0 h66 m-334 44 h20 m334 0 h20 m-374 0 q10 0 10 10 m354 0 q0 -10 10 -10 m-364 10 v58 m354 0 v-58 m-354 58 q0 10 10 10 m334 0 q10 0 10 -10 m-344 10 h10 m0 0 h324 m22 -78 l2 0 m2 0 l2 0 m2 0 l2 0 m-429 170 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m34 0 h10 m20 0 h10 m82 0 h10 m20 0 h10 m114 0 h10 m-154 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m134 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-134 0 h10 m24 0 h10 m0 0 h90 m20 44 h26 m-322 0 h20 m302 0 h20 m-342 0 q10 0 10 10 m322 0 q0 -10 10 -10 m-332 10 v68 m322 0 v-68 m-322 68 q0 10 10 10 m302 0 q10 0 10 -10 m-312 10 h10 m98 0 h10 m20 0 h10 m124 0 h10 m-164 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m144 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-144 0 h10 m24 0 h10 m0 0 h100 m-376 -44 h20 m396 0 h20 m-436 0 q10 0 10 10 m416 0 q0 -10 10 -10 m-426 10 v102 m416 0 v-102 m-416 102 q0 10 10 10 m396 0 q10 0 10 -10 m-406 10 h10 m0 0 h386 m22 -122 l2 0 m2 0 l2 0 m2 0 l2 0 m-240 170 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m140 0 h10 m0 0 h10 m-190 0 h20 m170 0 h20 m-210 0 q10 0 10 10 m190 0 q0 -10 10 -10 m-200 10 v24 m190 0 v-24 m-190 24 q0 10 10 10 m170 0 q10 0 10 -10 m-180 10 h10 m150 0 h10 m23 -44 h-3"/>
-   <polygon points="453 467 461 463 461 471"/>
-   <polygon points="453 467 445 463 445 471"/>
+         d="m17 17 h2 m0 0 h10 m66 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m102 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-311 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m48 0 h10 m20 0 h10 m56 0 h10 m-96 0 h20 m76 0 h20 m-116 0 q10 0 10 10 m96 0 q0 -10 10 -10 m-106 10 v24 m96 0 v-24 m-96 24 q0 10 10 10 m76 0 q10 0 10 -10 m-86 10 h10 m56 0 h10 m40 -44 h10 m90 0 h10 m-130 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m110 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-110 0 h10 m24 0 h10 m0 0 h66 m-334 44 h20 m334 0 h20 m-374 0 q10 0 10 10 m354 0 q0 -10 10 -10 m-364 10 v68 m354 0 v-68 m-354 68 q0 10 10 10 m334 0 q10 0 10 -10 m-344 10 h10 m46 0 h10 m0 0 h10 m66 0 h10 m0 0 h182 m-344 -10 v20 m354 0 v-20 m-354 20 v14 m354 0 v-14 m-354 14 q0 10 10 10 m334 0 q10 0 10 -10 m-344 10 h10 m0 0 h324 m22 -122 l2 0 m2 0 l2 0 m2 0 l2 0 m-429 214 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m34 0 h10 m20 0 h10 m82 0 h10 m20 0 h10 m114 0 h10 m-154 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m134 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-134 0 h10 m24 0 h10 m0 0 h90 m20 44 h26 m-322 0 h20 m302 0 h20 m-342 0 q10 0 10 10 m322 0 q0 -10 10 -10 m-332 10 v68 m322 0 v-68 m-322 68 q0 10 10 10 m302 0 q10 0 10 -10 m-312 10 h10 m98 0 h10 m20 0 h10 m124 0 h10 m-164 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m144 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-144 0 h10 m24 0 h10 m0 0 h100 m-376 -44 h20 m396 0 h20 m-436 0 q10 0 10 10 m416 0 q0 -10 10 -10 m-426 10 v102 m416 0 v-102 m-416 102 q0 10 10 10 m396 0 q10 0 10 -10 m-406 10 h10 m0 0 h386 m22 -122 l2 0 m2 0 l2 0 m2 0 l2 0 m-240 170 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m140 0 h10 m0 0 h10 m-190 0 h20 m170 0 h20 m-210 0 q10 0 10 10 m190 0 q0 -10 10 -10 m-200 10 v24 m190 0 v-24 m-190 24 q0 10 10 10 m170 0 q10 0 10 -10 m-180 10 h10 m150 0 h10 m23 -44 h-3"/>
+   <polygon points="453 511 461 507 461 515"/>
+   <polygon points="453 511 445 507 445 515"/>
 </svg>

@@ -4802,6 +4802,134 @@ ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CONNECTIONS FROM r1
 statement ok
 DROP ROLE r1
 
+# Test ALL ROLES variant
+
+statement ok
+CREATE ROLE r1
+
+statement error permission denied to ALTER DEFAULT PRIVILEGES FOR ALL ROLES
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT INSERT ON TABLES TO r1
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT INSERT ON TABLES TO r1;
+----
+COMPLETE 0
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TABLE  r1      a
+PUBLIC  NULL  NULL  TYPE   PUBLIC  U
+
+statement ok
+CREATE ROLE r2
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO r2;
+----
+COMPLETE 0
+
+simple conn=r2,user=r2
+CREATE TABLE t ();
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
+----
+t  r1=a/r2
+t  r2=arwd/r2
+
+simple conn=r2,user=r2
+DROP TABLE t;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA materialize.public FROM r2;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE r2
+
+statement error permission denied to ALTER DEFAULT PRIVILEGES FOR ALL ROLES
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE INSERT ON TABLES FROM r1
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE INSERT ON TABLES FROM r1;
+----
+COMPLETE 0
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TYPE   PUBLIC  U
+
+statement ok
+DROP ROLE r1
+
+## Test that we can remove pre-populated global default privileges.
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE USAGE ON TYPES FROM PUBLIC;
+----
+COMPLETE 0
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+
+statement ok
+CREATE TYPE ty AS LIST (ELEMENT TYPE = int4);
+
+query T
+SELECT unnest(privileges)::text FROM mz_types WHERE name = 'ty'
+----
+materialize=U/materialize
+
+statement ok
+DROP TYPE ty;
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON TYPES TO PUBLIC;
+----
+COMPLETE 0
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TYPE   PUBLIC  U
+
+## Test that you can also specify PUBLIC in target role list
+
+statement error permission denied to ALTER DEFAULT PRIVILEGES FOR ALL ROLES
+ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC GRANT CREATE ON CLUSTERS TO materialize
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC GRANT CREATE ON CLUSTERS TO materialize
+----
+COMPLETE 0
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TYPE     PUBLIC      U
+PUBLIC  NULL  NULL  CLUSTER  materialize  C
+
+statement error permission denied to ALTER DEFAULT PRIVILEGES FOR ALL ROLES
+ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC REVOKE CREATE ON CLUSTERS FROM materialize
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC REVOKE CREATE ON CLUSTERS FROM materialize
+----
+COMPLETE 0
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  TYPE   PUBLIC  U
+
 # Test that DROP OWNED drops default privileges
 
 statement ok
@@ -4898,16 +5026,13 @@ simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE mz_introspection GRANT SELECT ON TABLES TO PUBLIC
 ----
 db error: ERROR: role name "mz_introspection" is reserved
-DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
 
 statement error system schema 'mz_catalog' cannot be modified
 ALTER DEFAULT PRIVILEGES IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO PUBLIC
 
 statement error role name "mz_system" is reserved
 ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO mz_system
-
-statement error role name "public" is reserved
-ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC GRANT INSERT ON TABLES TO materialize
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
