@@ -183,9 +183,6 @@ impl From<objects_v18::AclMode> for objects_v19::AclMode {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::metrics::MetricsRegistry;
-    use tokio_postgres::Config;
-
     use super::objects_v18::{
         self, global_id::Value as GlobalIdInnerV18, schema_id::Value as SchemaIdInnerV18,
         GlobalId as GlobalIdV18, ItemKey as ItemKeyV18, ItemValue as ItemValueV18,
@@ -197,17 +194,14 @@ mod tests {
     };
     use super::upgrade;
 
-    use crate::{StashFactory, TypedCollection};
+    use crate::{DebugStashFactory, TypedCollection};
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test() {
         // Connect to the Stash.
-        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
-        let factory = StashFactory::new(&MetricsRegistry::new());
-
-        let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
-        let mut stash = factory.open(connstr.to_string(), None, tls).await.unwrap();
+        let factory = DebugStashFactory::new().await;
+        let mut stash = factory.open_debug().await;
 
         // Insert some items.
         let items_v18: TypedCollection<objects_v18::ItemKey, objects_v18::ItemValue> =
