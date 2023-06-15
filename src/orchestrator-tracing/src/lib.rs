@@ -554,3 +554,24 @@ impl fmt::Display for LogFormat {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::CloneableEnvFilter;
+    use std::str::FromStr;
+
+    #[mz_ore::test]
+    fn roundtrips() {
+        let filter = CloneableEnvFilter::from_str(
+            "abc=debug,def=trace,[123],foo,baz[bar{a=b}]=debug,[{13=37}]=trace,info",
+        )
+        .expect("valid");
+        assert_eq!(
+            format!("{}", filter),
+            format!(
+                "{}",
+                CloneableEnvFilter::from_str(&format!("{}", filter)).expect("valid")
+            )
+        );
+    }
+}
