@@ -69,7 +69,9 @@ class RepositoryDetails:
 
     """
 
-    def __init__(self, root: Path, arch: Arch, release_mode: bool, coverage: bool, stable: bool):
+    def __init__(
+        self, root: Path, arch: Arch, release_mode: bool, coverage: bool, stable: bool
+    ):
         self.root = root
         self.arch = arch
         self.release_mode = release_mode
@@ -246,7 +248,7 @@ class S3UploadDebuginfo(PreImage):
             assert build_id == dbg_build_id
             exe.seek(0)
             dbg.seek(0)
-            
+
             exe_object_name = f"buildid/{build_id}/executable"
             dbg_object_name = f"buildid/{build_id}/debuginfo"
             print(
@@ -256,14 +258,18 @@ class S3UploadDebuginfo(PreImage):
                 s3.upload_fileobj(exe, self.bucket, exe_object_name)
             except NoCredentialsError:
                 print("Failed to find S3 credentials; not uploading build.")
-            print(f"Attempting to upload debug info to s3://{self.bucket}/{dbg_object_name}")
+            print(
+                f"Attempting to upload debug info to s3://{self.bucket}/{dbg_object_name}"
+            )
             s3.upload_fileobj(dbg, self.bucket, dbg_object_name)
 
-            ephemeral_str = 'false' if self.rd.stable else 'true'
+            ephemeral_str = "false" if self.rd.stable else "true"
             for key in [exe_object_name, dbg_object_name]:
-                s3.put_object_tagging(Bucket = self.bucket, Key = key, Tagging = {
-                    'TagSet': [{'Key': 'ephemeral', 'Value': ephemeral_str}]
-                })
+                s3.put_object_tagging(
+                    Bucket=self.bucket,
+                    Key=key,
+                    Tagging={"TagSet": [{"Key": "ephemeral", "Value": ephemeral_str}]},
+                )
 
 
 class CargoPreImage(PreImage):
@@ -460,7 +466,9 @@ class Image:
                 elif typ == "copy":
                     self.pre_images.append(Copy(self.rd, self.path, pre_image))
                 elif typ == "s3-upload-debuginfo":
-                    self.pre_images.append(S3UploadDebuginfo(self.rd, self.path, pre_image))
+                    self.pre_images.append(
+                        S3UploadDebuginfo(self.rd, self.path, pre_image)
+                    )
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
