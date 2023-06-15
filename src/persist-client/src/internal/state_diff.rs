@@ -26,10 +26,10 @@ use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
     CriticalReaderState, HollowBatch, HollowBlobRef, HollowRollup, LeasedReaderState,
-    ProtoSpineBatch, ProtoSpineLevel, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, State, StateCollections, WriterState,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
+    WriterState,
 };
-use crate::internal::trace::{FueledMergeRes, SpineId, Trace};
+use crate::internal::trace::{FueledMergeRes, SpineId, SpineLevel, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig};
@@ -77,8 +77,8 @@ pub struct StateDiff<T> {
     pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
     pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState<T>>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
-    pub(crate) spine_batches: Vec<StateFieldDiff<SpineId, ProtoSpineBatch>>,
-    pub(crate) spine_levels: Vec<StateFieldDiff<usize, ProtoSpineLevel>>,
+    pub(crate) spine_batches: Vec<StateFieldDiff<SpineId, ThinSpineBatch<T>>>,
+    pub(crate) spine_levels: Vec<StateFieldDiff<usize, SpineLevel<T>>>,
 }
 
 impl<T: Timestamp + Codec64> StateDiff<T> {
@@ -540,7 +540,7 @@ pub(crate) fn diff_field_sorted_iter<'a, K, V, IF, IT>(
     }
 }
 
-fn apply_diffs_map<K: Ord, V: PartialEq + Debug>(
+pub(crate) fn apply_diffs_map<K: Ord, V: PartialEq + Debug>(
     name: &str,
     diffs: Vec<StateFieldDiff<K, V>>,
     map: &mut BTreeMap<K, V>,

@@ -36,18 +36,18 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, HollowRollup,
-    IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
+    proto_spine_batch, CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart,
+    HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoLeasedReaderState, ProtoSpineBatch, ProtoSpineId, ProtoSpineLevel, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace,
-    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    ProtoLeasedReaderState, ProtoMergeInProgress, ProtoSpineBatch, ProtoSpineId, ProtoSpineLevel,
+    ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State,
+    StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
-use crate::internal::trace::{SpineId, Trace};
+use crate::internal::trace::{SpineId, SpineLevel, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
 use crate::write::WriterEnrichedHollowBatch;
@@ -481,7 +481,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                             diff,
                             &mut state_diff.spine_batches,
                             |k| k.into_rust(),
-                            |v| Ok(v),
+                            |v| v.into_rust(),
                         )?
                     }
                     ProtoStateField::SpineLevels => {
@@ -1120,23 +1120,59 @@ impl RustType<ProtoHollowRollup> for HollowRollup {
     }
 }
 
-// WIP no
-impl RustType<ProtoSpineBatch> for ProtoSpineBatch {
+impl<T: Timestamp + Codec64> RustType<ProtoSpineBatch> for ThinSpineBatch<T> {
     fn into_proto(&self) -> ProtoSpineBatch {
-        self.clone()
+        match self {
+            ThinSpineBatch::Hollow(x) => ProtoSpineBatch {
+                kind: Some(proto_spine_batch::Kind::Merged(x.into_proto())),
+            },
+            ThinSpineBatch::Fueled { since } => ProtoSpineBatch {
+                kind: Some(proto_spine_batch::Kind::Fueled(ProtoMergeInProgress {
+                    since: Some(since.into_proto()),
+                })),
+            },
+        }
     }
     fn from_proto(proto: ProtoSpineBatch) -> Result<Self, TryFromProtoError> {
-        Ok(proto)
+        match proto.kind {
+            Some(proto_spine_batch::Kind::Merged(x)) => Ok(ThinSpineBatch::Hollow(x.into_rust()?)),
+            Some(proto_spine_batch::Kind::Fueled(x)) => Ok(ThinSpineBatch::Fueled {
+                since: x.since.into_rust_if_some("WIP")?,
+            }),
+            None => Err(TryFromProtoError::unknown_enum_variant("WIP")),
+        }
     }
 }
 
-// WIP no
-impl RustType<ProtoSpineLevel> for ProtoSpineLevel {
+impl<T: Timestamp + Codec64> RustType<ProtoSpineLevel> for SpineLevel<T> {
     fn into_proto(&self) -> ProtoSpineLevel {
-        self.clone()
+        match self {
+            SpineLevel::Single(id) => ProtoSpineLevel {
+                remaining_work: 0,
+                since: None,
+                batches: vec![id.into_proto()],
+            },
+            SpineLevel::Double(b0, b1, remaining_work, since) => ProtoSpineLevel {
+                remaining_work: remaining_work.into_proto(),
+                since: Some(since.into_proto()),
+                batches: vec![b0.into_proto(), b1.into_proto()],
+            },
+        }
     }
     fn from_proto(proto: ProtoSpineLevel) -> Result<Self, TryFromProtoError> {
-        Ok(proto)
+        if proto.batches.len() == 1 {
+            // WIP check remaining_work and since
+            Ok(SpineLevel::Single(proto.batches[0].clone().into_rust()?))
+        } else if proto.batches.len() == 2 {
+            Ok(SpineLevel::Double(
+                proto.batches[0].clone().into_rust()?,
+                proto.batches[1].clone().into_rust()?,
+                proto.remaining_work.into_rust()?,
+                proto.since.into_rust_if_some("WIP")?,
+            ))
+        } else {
+            Err(TryFromProtoError::InvalidPersistState(format!("WIP")))
+        }
     }
 }
 
