@@ -84,9 +84,10 @@ where
         // bins is small (as is our case), so we'd have a theoretical guarantee.
         // NOTE: We fix the seeds of a RandomState instance explicity with the same
         // seeds that would be given by `AHash` via ahash::AHasher::default() so as
-        // to avoid a different selection due to compilation flags being differently
+        // to avoid a different selection due to compile-time features being differently
         // selected in other dependencies using `AHash` vis-à-vis cargo's strategy
-        // of unioning compilation flags.
+        // of unioning features. This implies that we end up employ the fallback
+        // hasher of `AHash`, but it should be sufficient for our needs.
         let random_state = ahash::RandomState::with_seeds(
             0x243f_6a88_85a3_08d3,
             0x1319_8a2e_0370_7344,
