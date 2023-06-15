@@ -121,13 +121,13 @@ CREATE CLUSTER foo SIZE 'small';
 --
 -- If you NEED graceful resizing, convert this cluster to an unmanaged
 -- cluster and handle dropping/creating replicas yourself.
-ALTER CLUSTER foo SIZE 'medium';
+ALTER CLUSTER foo SET (SIZE 'medium');
 
 -- Add two new replicas automatically.
-ALTER CLUSTER foo REPLICATION FACTOR 3;
+ALTER CLUSTER foo SET (REPLICATION FACTOR 3);
 
 -- Turn off the cluster for the night.
-ALTER CLUSTER foo REPLICATION FACTOR 0;
+ALTER CLUSTER foo SET (REPLICATION FACTOR 0);
 
 -- You can also create a cluster with multiple replicas from the get go.
 CREATE CLUSTER foo2 SIZE 'small', REPLICATION FACTOR 2;
@@ -157,6 +157,10 @@ The `CREATE CLUSTER` statement will learn three new options:
   * `REPLICATION FACTOR`, an integer, which specifies the desired number of
     replicas.
 
+In addition to this, the `CREATE CLUSTER` statement will learn specialized
+configuration parameters for replicas to control introspection, the
+arrangement idle merge effort, and availability zone.
+
 Users must specify either the `SIZE` or `REPLICAS` option when creating a
 cluster. The two options may not be specified simultaneously.
 
@@ -176,13 +180,16 @@ change in future versions of Materialize.
 
 For unmanaged clusters, `CREATE CLUSTER`'s behavior remains unchanged.
 
+**Note:** Managed clusters can not be used to host sources and sinks, or can be
+used as linked clusters.
+
 ### `ALTER CLUSTER`
 
 #### Changing size and replication factor
 
 We'll extend the `ALTER CLUSTER` statement to support altering the `SIZE` and
 `REPLICATION FACTOR` of a cluster using the usual syntax for `ALTER ... SET`
-commands:
+and `ALTER ... RESET` commands:
 
 ```sql
 -- Change the size of a cluster to `medium`.
@@ -191,6 +198,8 @@ ALTER CLUSTER c SET (SIZE = 'medium');
 ALTER CLUSTER c SET (REPLICATION FACTOR = 2);
 -- Simultaneously change the size and replication factor of a cluster.
 ALTER CLUSTER c SET (SIZE = 'medium', REPLICATION FACTOR = 2);
+-- Change the replication factor of a cluster to the default value of 1.
+ALTER CLUSTER c RESET (REPLICATION FACTOR);
 ```
 
 When the command updates the cluster's size, Materialize will immediately drop
