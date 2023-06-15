@@ -721,7 +721,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     coverage: only
 
   - wait: ~
