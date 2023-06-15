@@ -211,13 +211,15 @@ class QueryGenerator:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
-            if self.randomized_picker.random_boolean(0.8):
-                # In 80% of the cases, try to pick two or three rows
+            if self.randomized_picker.random_boolean(
+                self.config.probabilities.restrict_vertical_layout_to_2_or_3_rows
+            ):
+                # With some probability, try to pick two or three rows
                 max_number_of_rows_to_select = self.randomized_picker.random_number(
                     2, 3
                 )
             else:
-                # In 20% of the cases, pick an arbitrary number of rows
+                # With some probability, pick an arbitrary number of rows
                 max_number_of_rows_to_select = self.randomized_picker.random_number(
                     0, self.vertical_storage_row_count
                 )

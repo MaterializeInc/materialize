@@ -153,15 +153,19 @@ class ExpressionGenerator:
             # results in (an unexpected) error. Furthermore, in case of an error, error messages of non-aggregate
             # expressions can only be compared in HORIZONTAL layout (because the row processing order of an
             # evaluation strategy is not defined).)
-            if self.randomized_picker.random_boolean(0.9):
+            if self.randomized_picker.random_boolean(
+                self.config.probabilities.horizontal_layout_when_not_aggregated
+            ):
                 return ValueStorageLayout.HORIZONTAL
             else:
                 return ValueStorageLayout.VERTICAL
 
         # strongly prefer vertical storage for aggregations but allow some variance
 
-        if self.randomized_picker.random_boolean(0.1):
-            # Use horizontal layout in 10 % different of the cases
+        if self.randomized_picker.random_boolean(
+            self.config.probabilities.horizontal_layout_when_aggregated
+        ):
+            # Use horizontal layout in some cases
             return ValueStorageLayout.HORIZONTAL
 
         return ValueStorageLayout.VERTICAL
@@ -229,7 +233,9 @@ class ExpressionGenerator:
 
         create_complex_arg = (
             arg_context.requires_aggregation()
-            or self.randomized_picker.random_boolean(0.2)
+            or self.randomized_picker.random_boolean(
+                self.config.probabilities.create_complex_expression
+            )
         )
 
         if create_complex_arg:
