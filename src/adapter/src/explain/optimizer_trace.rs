@@ -34,7 +34,7 @@ use crate::explain::Explainable;
 ///
 /// Use `tracing::dispatcher::set_default` to trace in synchronous context.
 /// Use `tracing::instrument::WithSubscriber::with_subscriber(&optimizer_trace)` to trace the result of a `Future`.
-/// 
+///
 /// The [`OptimizerTrace::drain_all`] method on the created instance can be
 /// then used to collect the trace, and [`OptimizerTrace::drain_all`] to obtain
 /// the collected trace as a vector of [`TraceEntry`] instances.

@@ -1766,8 +1766,11 @@ impl Coordinator {
                     (tx, session, PeekStage::Optimize(next))
                 }
                 PeekStage::Optimize(stage) => {
-                    let next =
-                        return_if_err!(self.peek_stage_optimize(&session, stage), tx, session);
+                    let next = return_if_err!(
+                        self.peek_stage_optimize(&session, stage).await,
+                        tx,
+                        session
+                    );
                     (tx, session, PeekStage::Timestamp(next))
                 }
                 PeekStage::Timestamp(stage) => {
@@ -1865,7 +1868,7 @@ impl Coordinator {
         })
     }
 
-    fn peek_stage_optimize(
+    async fn peek_stage_optimize(
         &mut self,
         session: &Session,
         PeekStageOptimize {
@@ -1884,6 +1887,10 @@ impl Coordinator {
         }: PeekStageOptimize,
     ) -> Result<PeekStageTimestamp, AdapterError> {
         let source = self.view_optimizer.optimize(source)?;
+
+        let id_bundle = self
+            .index_oracle(cluster_id)
+            .sufficient_collections(&source_ids);
 
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
@@ -1920,11 +1927,25 @@ impl Coordinator {
             typ.clone(),
         );
 
+        let query_as_of = self
+            .determine_timestamp(
+                session,
+                &id_bundle,
+                &when,
+                cluster_id,
+                timeline_context.clone(),
+                None, // TODO(mgree): is this right?
+            )?
+            .timestamp_context
+            .antichain();
+
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(
             &mut dataflow,
             &builder.index_oracle(),
-            &mz_transform::EmptyStatisticsOracle,
+            self.statistics_oracle(&source_ids, query_as_of)
+                .await?
+                .as_ref(),
         )?;
 
         Ok(PeekStageTimestamp {
@@ -2687,7 +2708,7 @@ impl Coordinator {
             |s| prep_scalar_expr(state, s, style),
         )?;
 
-        // Load cardinality statistics.
+        // Acquire a timestamp (necessary for loading statistics).
         let timestamp_context = self
             .sequence_peek_timestamp(
                 session,
@@ -2700,22 +2721,11 @@ impl Coordinator {
             )?
             .timestamp_context;
         let query_as_of = timestamp_context.antichain();
-        let cached_stats = mz_ore::future::timeout(
-            OPTIMIZER_MAX_STATS_WAIT,
-            CachedStatisticsOracle::new(
-                &source_ids,
-                &query_as_of,
-                self.controller.storage.as_ref(),
-            ),
-        )
-        .await;
-        let stats: Box<dyn mz_transform::StatisticsOracle> = match cached_stats {
-            Ok(stats) => Box::new(stats),
-            Err(mz_ore::future::TimeoutError::DeadlineElapsed) => Box::new(EmptyStatisticsOracle),
-            Err(mz_ore::future::TimeoutError::Inner(e)) => {
-                return Err(AdapterError::Storage(e));
-            }
-        };
+
+        // Load cardinality statistics.
+        let stats = self
+            .statistics_oracle(&source_ids, query_as_of.clone())
+            .await?;
 
         // Execute the `optimize/global` stage.
         catch_unwind(no_errors, "global", || {
@@ -4128,6 +4138,28 @@ impl CachedStatisticsOracle {
 impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
     fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
         self.cache.get(&id).map(|estimate| *estimate)
+    }
+}
+
+impl Coordinator {
+    async fn statistics_oracle(
+        &self,
+        source_ids: &BTreeSet<GlobalId>,
+        query_as_of: Antichain<Timestamp>,
+    ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
+        let cached_stats = mz_ore::future::timeout(
+            OPTIMIZER_MAX_STATS_WAIT,
+            CachedStatisticsOracle::new(source_ids, &query_as_of, self.controller.storage.as_ref()),
+        )
+        .await;
+
+        match cached_stats {
+            Ok(stats) => Ok(Box::new(stats)),
+            Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                Ok(Box::new(EmptyStatisticsOracle))
+            }
+            Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
+        }
     }
 }
 
