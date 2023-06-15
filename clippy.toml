@@ -1,5 +1,6 @@
 await-holding-invalid-types = [
     { path = "tracing::span::Entered", reason = "use `tracing::instrument`, `tracing::Instrument::instrument`, or `tracing::Span::in_scope` instead" },
+    { path = "tracing::span::EnteredSpan", reason = "use `tracing::instrument`, `tracing::Instrument::instrument`, or `tracing::Span::in_scope` instead" },
 ]
 
 disallowed-methods = [
