@@ -3862,40 +3862,97 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 WHERE r.id = o.id AND r.rank = 1 AND r.reg = $1;
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
         },
+        // Returns the an array representing the minimal namespace a user must
+        // provide to refer to an item whose name is the first argument.
+        //
+        // The first argument must be a fully qualified name (i.e. contain
+        // database.schema.object), with each level of the namespace being an
+        // element.
+        //
+        // The second argument represents the `GlobalId` of the resolved object.
+        // This is a safeguard to ensure that the name we are resolving refers
+        // to the expected entry. For example, this helps us disambiguate cases
+        // where e.g. types and functions have the same name.
+        "mz_minimal_name_qualification" => Scalar {
+            params!(ScalarType::Array(Box::new(ScalarType::String)), String) => {
+                sql_impl_func("(
+                    SELECT
+                    CASE
+                        WHEN $1::pg_catalog.text[] IS NULL
+                            THEN NULL
+                    -- If DB doesn't match, requires full qual
+                        WHEN $1[1] != pg_catalog.current_database()
+                            THEN $1
+                    -- If not in currently searchable schema, must be schema qualified
+                        WHEN NOT $1[2] = ANY(pg_catalog.current_schemas(true))
+                            THEN ARRAY[$1[2], $1[3]]
+                    ELSE
+                        minimal_name
+                    END
+                FROM (
+                    -- Subquery so we return one null row in the cases where
+                    -- there are no matches.
+                    SELECT (
+                        SELECT DISTINCT
+                        CASE
+                            -- If there is only one item with this name and it's rank 1,
+                            -- it is uniquely nameable with just the final element
+                            WHEN rank = 1 AND count = 1
+                                THEN ARRAY[name[3]]
+                            -- Otherwise, it is findable in the search path, so does not
+                            -- need database qualification
+                            ELSE
+                                ARRAY[name[2], name[3]]
+                        END AS minimal_name
+                        FROM mz_internal.mz_name_rank(
+                            pg_catalog.current_database(),
+                            pg_catalog.current_schemas(true),
+                            $1[3]
+                        )
+                        WHERE
+                            -- Ensure name and ID matches
+                            name = $1 AND id = $2
+                    )
+                )
+            )")
+            } => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_MINIMINAL_NAME_QUALIFICATION;
+        },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("
             CASE
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
-                    SELECT mz_unsafe.mz_error_if_null(
-                        (
-                            SELECT DISTINCT
-                                concat_ws(
-                                    '.',
-                                    qual.d,
-                                    qual.s,
-                                    pg_catalog.quote_ident(item.name)
-                                )
-                            FROM
-                                mz_objects AS item
-                            JOIN
+                    SELECT array_to_string(minimal_name, '.')
+                    FROM (
+                        SELECT mz_unsafe.mz_error_if_null(
                             (
-                                SELECT
-                                    pg_catalog.quote_ident(d.name) AS d,
-                                    pg_catalog.quote_ident(s.name) AS s,
-                                    s.id AS schema_id
+                                -- Return the fully-qualified name
+                                SELECT DISTINCT ARRAY[qual.d, qual.s, item.name]
                                 FROM
-                                    mz_schemas AS s
-                                    LEFT JOIN
-                                        (SELECT id, name FROM mz_databases)
-                                        AS d
-                                        ON s.database_id = d.id
-                            ) AS qual
-                            ON qual.schema_id = item.schema_id
-                            WHERE item.id = CAST($1 AS text)
-                        ),
-                        'global ID ' || $1 || ' does not exist'
-                    )
+                                    mz_objects AS item
+                                JOIN
+                                (
+                                    SELECT
+                                        d.name AS d,
+                                        s.name AS s,
+                                        s.id AS schema_id
+                                    FROM
+                                        mz_schemas AS s
+                                        LEFT JOIN
+                                            (SELECT id, name FROM mz_databases)
+                                            AS d
+                                            ON s.database_id = d.id
+                                ) AS qual
+                                ON qual.schema_id = item.schema_id
+                                WHERE item.id = CAST($1 AS text)
+                            ),
+                            'global ID ' || $1 || ' does not exist'
+                        )
+                    ) AS n (fqn),
+                    LATERAL (
+                        -- Get the minimal qualification of the fully qualified name
+                        SELECT mz_internal.mz_minimal_name_qualification(fqn, $1)
+                    ) AS m (minimal_name)
                 )
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
