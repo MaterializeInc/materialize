@@ -119,6 +119,8 @@ To avoid sending this information on every tick of the storage worker's main pro
 
 When dropping a replica, the storage controller will need to retrieve all source/sink dataflows associated with the given storage instance. To achieve this, we can keep a mapping of storage instance id to active ingestions/exports on that instance as part of the storage controller's state. Upon creating collections/exports we can update the map and upon dropping a storage instance, we remove the corresponding entry in the map. The storage controller will only write statuses upon receiving a `StorageResponse::StatusUpdates` response iff the specified `GlobalId` exists in some active mapping. This allows us to ignore any late status updates that are sent back from storage workers.
 
+Immediately after the coordinator announces initialization is complete, the storage controller will be updated to look for any ingestion/export dataflows that belong to an instance with 0 replicas and set their status to `paused`. This should allow `environmentd` to correctly set the status for sources/sinks in scenarios where it crashes before it was able to write the `paused` status to persist.
+
 In order to support the future in which storage clusters may have multiple replicas, we will need to update the schemas for the `mz_{source|sink}_status_history` relations to include a `replica_id`. This is necessary for the reason that dropping a replica in a storage cluster with multiple replicas shouldn't set the status of a source, for example, to `paused`. Isolating status updates for a source/sink to a specific replica allows any derived relations such as `mz_{source|sink}_statuses` to make determinations based on all the replicas in the cluster.
 
 ### Rollout strategy
@@ -146,5 +148,4 @@ expanded during the doc meeting as other unknowns are pointed out. These
 questions may be technical, product, or anything in-between.
 -->
 
-- The issue thread contains a good comment about how to handle scenarios in which `environmentd` crashes before a status update is written to persist. It seems like maintaining a durable log of pending updates and then replaying them when the storage controller starts is a possible solution. While we perform rehydration upon storage replicas crashing, I'm not sure if machinery exists in the storage controller to do the same upon `environmentd` crashing. Does this sound correct, or is there something I'm missing?
 - Should we control the rate of `StatusUpdates` from the worker or batch writes at the controller?
