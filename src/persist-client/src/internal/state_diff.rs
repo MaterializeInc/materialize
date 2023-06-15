@@ -20,7 +20,7 @@ use mz_persist_types::Codec64;
 use mz_proto::TryFromProtoError;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
@@ -325,16 +325,35 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
     // Intentionally not even pub(crate) because all callers should use
     // [Self::apply_diffs].
     fn apply_diff(&mut self, metrics: &Metrics, diff: StateDiff<T>) -> Result<(), String> {
-        if self.seqno == diff.seqno_to {
+        // Deconstruct diff so we get a compile failure if new fields are added.
+        let StateDiff {
+            applier_version: diff_applier_version,
+            seqno_from: diff_seqno_from,
+            seqno_to: diff_seqno_to,
+            walltime_ms: diff_walltime_ms,
+            latest_rollup_key: _,
+            rollups: diff_rollups,
+            hostname: diff_hostname,
+            last_gc_req: diff_last_gc_req,
+            leased_readers: diff_leased_readers,
+            critical_readers: diff_critical_readers,
+            writers: diff_writers,
+            since: diff_since,
+            spine: diff_spine,
+        } = diff;
+        if self.seqno == diff_seqno_to {
             return Ok(());
         }
-        if self.seqno != diff.seqno_from {
+        if self.seqno != diff_seqno_from {
             return Err(format!(
                 "could not apply diff {} -> {} to state {}",
-                diff.seqno_from, diff.seqno_to, self.seqno
+                diff_seqno_from, diff_seqno_to, self.seqno
             ));
         }
-        self.seqno = diff.seqno_to;
+        self.seqno = diff_seqno_to;
+        self.applier_version = diff_applier_version;
+        self.walltime_ms = diff_walltime_ms;
+        force_apply_diffs_single("hostname", diff_hostname, &mut self.hostname)?;
 
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
@@ -347,13 +366,13 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             trace,
         } = &mut self.collections;
 
-        apply_diffs_map("rollups", diff.rollups, rollups)?;
-        apply_diffs_single("last_gc_req", diff.last_gc_req, last_gc_req)?;
-        apply_diffs_map("leased_readers", diff.leased_readers, leased_readers)?;
-        apply_diffs_map("critical_readers", diff.critical_readers, critical_readers)?;
-        apply_diffs_map("writers", diff.writers, writers)?;
+        apply_diffs_map("rollups", diff_rollups, rollups)?;
+        apply_diffs_single("last_gc_req", diff_last_gc_req, last_gc_req)?;
+        apply_diffs_map("leased_readers", diff_leased_readers, leased_readers)?;
+        apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
+        apply_diffs_map("writers", diff_writers, writers)?;
 
-        for x in diff.since {
+        for x in diff_since {
             match x.val {
                 Update(from, to) => {
                     if trace.since() != &from {
@@ -369,7 +388,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff.spine, trace)?;
+        apply_diffs_spine(metrics, diff_spine, trace)?;
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==
@@ -418,6 +437,44 @@ fn apply_diff_single<X: PartialEq + Debug>(
                     "{} update didn't match: {:?} vs {:?}",
                     name, single, &from
                 ));
+            }
+            *single = to
+        }
+        Insert(_) => return Err(format!("cannot insert {} field", name)),
+        Delete(_) => return Err(format!("cannot delete {} field", name)),
+    }
+    Ok(())
+}
+
+// A hack to force apply a diff, making `single` equal to
+// the Update `to` value, ignoring a mismatch on `from`.
+// Used to migrate forward after writing down incorrect
+// diffs.
+//
+// TODO: delete this once `hostname` has zero mismatches
+fn force_apply_diffs_single<X: PartialEq + Debug>(
+    name: &str,
+    diffs: Vec<StateFieldDiff<(), X>>,
+    single: &mut X,
+) -> Result<(), String> {
+    for diff in diffs {
+        force_apply_diff_single(name, diff, single)?;
+    }
+    Ok(())
+}
+
+fn force_apply_diff_single<X: PartialEq + Debug>(
+    name: &str,
+    diff: StateFieldDiff<(), X>,
+    single: &mut X,
+) -> Result<(), String> {
+    match diff.val {
+        Update(from, to) => {
+            if single != &from {
+                error!(
+                    "{} update didn't match: {:?} vs {:?}, continuing to force apply diff...",
+                    name, single, &from
+                );
             }
             *single = to
         }
