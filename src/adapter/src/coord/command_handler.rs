@@ -38,7 +38,10 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
+use crate::coord::{
+    ConnMeta, Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message,
+    PendingTxn,
+};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
@@ -537,6 +540,7 @@ impl Coordinator {
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
+                    | Statement::ValidateConnection(_)
                     | Statement::ReassignOwned(_) => {
                         return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
                             stmt.to_string(),
@@ -597,6 +601,52 @@ impl Coordinator {
             Statement::CreateSubsource(_) => ctx.retire(Err(AdapterError::Unsupported(
                 "CREATE SUBSOURCE statements",
             ))),
+
+            // `CREATE CONNECTION` statements might need validation which happens off the main
+            // coordinator thread of control.
+            stmt @ Statement::CreateConnection(_) => {
+                let plan = match self.plan_statement(ctx.session_mut(), stmt, &params) {
+                    Ok(Plan::CreateConnection(plan)) => plan,
+                    Ok(_) => unreachable!(),
+                    Err(e) => {
+                        ctx.retire(Err(e));
+                        return;
+                    }
+                };
+
+                if plan.validate {
+                    let internal_cmd_tx = self.internal_cmd_tx.clone();
+                    let conn_id = ctx.session().conn_id().clone();
+                    let connection_context = self.connection_context.clone();
+                    let otel_ctx = OpenTelemetryContext::obtain();
+                    task::spawn(|| format!("validate_connection:{conn_id}"), async move {
+                        let connection = &plan.connection.connection;
+                        let result = match connection.validate(&connection_context).await {
+                            Ok(()) => Ok(plan),
+                            Err(err) => Err(err.into()),
+                        };
+
+                        // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
+                        let result =
+                            internal_cmd_tx.send(Message::CreateConnectionValidationReady(
+                                CreateConnectionValidationReady {
+                                    ctx,
+                                    result,
+                                    params,
+                                    depends_on,
+                                    original_stmt,
+                                    otel_ctx,
+                                },
+                            ));
+                        if let Err(e) = result {
+                            tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                        }
+                    });
+                } else {
+                    self.sequence_plan(ctx, Plan::CreateConnection(plan), depends_on)
+                        .await;
+                }
+            }
 
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session_mut(), stmt, &params) {

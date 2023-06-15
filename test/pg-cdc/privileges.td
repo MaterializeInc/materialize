@@ -29,22 +29,18 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 REVOKE CONNECT ON DATABASE postgres FROM public;
 
+#
+# CONNECT error
+#
+
 > CREATE SECRET pgpass AS 'priv'
-> CREATE CONNECTION pg TO POSTGRES (
+! CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER priv,
     PASSWORD SECRET pgpass
   )
-
-#
-# CONNECT error
-#
-
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR SCHEMAS(public, other);
-contains:failed to connect to PostgreSQL database
+contains:permission denied for database "postgres"
 
 #
 # USAGE error
@@ -53,6 +49,13 @@ contains:failed to connect to PostgreSQL database
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 GRANT CONNECT ON DATABASE postgres TO public;
 REVOKE USAGE ON SCHEMA other FROM priv;
+
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER priv,
+    PASSWORD SECRET pgpass
+  )
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

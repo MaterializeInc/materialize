@@ -71,7 +71,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                     'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az1', PORT 9093),
                     'customer-hostname-4:9094'
                 )
-            );
+            ) WITH (VALIDATE = false);
             """
         )
     )
@@ -110,7 +110,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                 USER postgres,
                 AWS PRIVATELINK privatelinkconn,
                 SSH TUNNEL sshconn
-            )
+            ) WITH (VALIDATE = false);
             """
             )
         )
@@ -141,7 +141,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                     BROKERS (
                         'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az3', PORT 9093)
                     )
-                );
+                ) WITH (VALIDATE = false);
                 """
             )
         )

@@ -22,6 +22,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
 use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::error::KafkaError;
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
@@ -211,15 +212,12 @@ impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
 pub async fn create_consumer(
     connection_context: &ConnectionContext,
     kafka_connection: &KafkaConnection,
-    topic: &str,
-) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>, PlanError> {
+) -> Result<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>, PlanError> {
     let consumer: BaseConsumer<_> = kafka_connection
         .create_with_context(connection_context, MzClientContext, &BTreeMap::new())
         .await
         .map_err(|e| sql_err!("{}", e.display_with_causes()))?;
-    let consumer = Arc::new(consumer);
 
-    let owned_topic = String::from(topic);
     // librdkafka doesn't expose an API for determining whether a connection to
     // the Kafka cluster has been successfully established. So we make a
     // metadata request, though we don't care about the results, so that we can
@@ -233,10 +231,13 @@ pub async fn create_consumer(
     //
     // TODO(benesch): pull out more error details from the librdkafka logs and
     // include them in the error message.
-    task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
-        let consumer = Arc::clone(&consumer);
-        move || consumer.fetch_metadata(Some(&owned_topic), DEFAULT_FETCH_METADATA_TIMEOUT)
-    })
+    let consumer = task::spawn_blocking(
+        || "kafka_get_metadata",
+        move || {
+            consumer.fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)?;
+            Ok::<_, KafkaError>(consumer)
+        },
+    )
     .await
     .map_err(|e| sql_err!("{}", e))?
     .map_err(|e| sql_err!("librdkafka: {}", e.display_with_causes()))?;

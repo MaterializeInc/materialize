@@ -51,7 +51,7 @@ source          subsource
     DATABASE unused,
     USER unused,
     SSH TUNNEL ssh_conn
-  );
+  ) WITH (VALIDATE = false);
 
 > SELECT
   top_level_c.name as conn,

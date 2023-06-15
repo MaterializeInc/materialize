@@ -156,62 +156,47 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 # Error checking
 #
 
-> CREATE CONNECTION no_such_host TO POSTGRES (
+! CREATE CONNECTION no_such_host TO POSTGRES (
     HOST 'no_such_postgres.mtrlz.com',
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_host"
-  FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:error connecting to server: failed to lookup address information: Name or service not known: failed to lookup address
 
-> CREATE CONNECTION no_such_port TO POSTGRES (
+! CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
     PORT 65534,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_port"
-  FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:error connecting to server: Connection refused
 
-> CREATE CONNECTION no_such_user TO POSTGRES (
+! CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER no_such_user,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_user"
-  FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:password authentication failed for user "no_such_user"
 
 > CREATE SECRET badpass AS 'badpass'
-> CREATE CONNECTION no_such_password TO POSTGRES (
+! CREATE CONNECTION no_such_password TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET badpass
   )
-! CREATE SOURCE "no_such_password"
-  FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:password authentication failed for user "postgres"
 
-> CREATE CONNECTION no_such_dbname TO POSTGRES (
+! CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
     DATABASE no_such_dbname,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_dbname"
-  FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:database "no_such_dbname" does not exist
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');

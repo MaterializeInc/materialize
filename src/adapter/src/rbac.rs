@@ -36,7 +36,7 @@ use mz_sql::plan::{
     ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
     SelectPlan, SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan,
     SideEffectingFunc, SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan,
-    UpdatePrivilege,
+    UpdatePrivilege, ValidateConnectionPlan,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -346,7 +346,8 @@ pub fn generate_required_role_membership(
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::GrantPrivileges(_)
-        | Plan::RevokePrivileges(_) => Vec::new(),
+        | Plan::RevokePrivileges(_)
+        | Plan::ValidateConnection(_) => Vec::new(),
     }
 }
 
@@ -402,7 +403,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::DropOwned(_)
         | Plan::ReassignOwned(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::SideEffectingFunc(_) => Vec::new(),
+        | Plan::SideEffectingFunc(_)
+        | Plan::ValidateConnection(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -516,6 +518,7 @@ fn generate_required_privileges(
             name,
             if_not_exists: _,
             connection: _,
+            validate: _,
         }) => {
             let mut privileges = vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -1165,7 +1168,8 @@ fn generate_required_privileges(
             new_role: _,
             reassign_ids: _,
         })
-        | Plan::SideEffectingFunc(_) => Vec::new(),
+        | Plan::SideEffectingFunc(_)
+        | Plan::ValidateConnection(ValidateConnectionPlan { connection: _ }) => Vec::new(),
     }
 }
 

@@ -82,7 +82,7 @@ name     pkey1 pkey2
     DATABASE 'source',
     USER 'yshtola',
     SSH TUNNEL phoenix
-  );
+  ) WITH (VALIDATE = false);
 
 ! CREATE CONNECTION papalymo TO POSTGRES (
     HOST 'gridania.example.com',

@@ -16,7 +16,7 @@ use mz_secrets::SecretsReader;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::types::connections::StringOrSecret;
+use crate::types::connections::{ConnectionContext, StringOrSecret};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -178,5 +178,17 @@ impl AwsConfig {
             loader = loader.endpoint_url(endpoint);
         }
         loader.load().await
+    }
+
+    #[allow(clippy::unused_async)]
+    pub(crate) async fn validate(
+        &self,
+        _connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    pub(crate) fn validate_by_default(&self) -> bool {
+        false
     }
 }

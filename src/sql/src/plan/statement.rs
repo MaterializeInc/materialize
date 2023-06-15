@@ -43,6 +43,7 @@ mod raise;
 mod scl;
 pub(crate) mod show;
 mod tcl;
+mod validate;
 
 pub(crate) use ddl::PgConfigOptionExtracted;
 use mz_repr::role_id::RoleId;
@@ -218,6 +219,7 @@ pub fn describe(
         Statement::Show(ShowStatement::InspectShard(stmt)) => {
             scl::describe_inspect_shard(&scx, stmt)?
         }
+        Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -354,6 +356,7 @@ pub fn plan(
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
+        Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
     };
 
     if let Ok(plan) = &plan {

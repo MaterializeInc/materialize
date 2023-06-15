@@ -28,11 +28,11 @@ use enum_kinds::EnumKind;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput,
-    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, CreateConnection, CreateConnectionOption, CreateSinkConnection,
+    CreateSourceConnection, CreateSourceFormat, CreateSourceOption, CreateSourceOptionName,
+    DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint, Query, SelectItem,
+    SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint, TableWithJoins,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -97,6 +97,7 @@ pub enum Statement<T: AstInfo> {
     RevokePrivileges(RevokePrivilegesStatement<T>),
     AlterDefaultPrivileges(AlterDefaultPrivilegesStatement<T>),
     ReassignOwned(ReassignOwnedStatement<T>),
+    ValidateConnection(ValidateConnectionStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -159,6 +160,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::RevokePrivileges(stmt) => f.write_node(stmt),
             Statement::AlterDefaultPrivileges(stmt) => f.write_node(stmt),
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
+            Statement::ValidateConnection(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -546,6 +548,7 @@ pub struct CreateConnectionStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
     pub connection: CreateConnection<T>,
     pub if_not_exists: bool,
+    pub with_options: Vec<CreateConnectionOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateConnectionStatement<T> {
@@ -556,10 +559,30 @@ impl<T: AstInfo> AstDisplay for CreateConnectionStatement<T> {
         }
         f.write_node(&self.name);
         f.write_str(" TO ");
-        self.connection.fmt(f)
+        self.connection.fmt(f);
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
     }
 }
 impl_display_t!(CreateConnectionStatement);
+
+/// `VALIDATE CONNECTION`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ValidateConnectionStatement<T: AstInfo> {
+    /// The connection to validate
+    pub name: T::ItemName,
+}
+
+impl<T: AstInfo> AstDisplay for ValidateConnectionStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("VALIDATE CONNECTION ");
+        f.write_node(&self.name);
+    }
+}
+impl_display_t!(ValidateConnectionStatement);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

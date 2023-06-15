@@ -309,6 +309,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
                 Token::Keyword(REASSIGN) => Ok(self.parse_reassign_owned()?),
                 Token::Keyword(INSPECT) => Ok(Statement::Show(self.parse_inspect()?)),
+                Token::Keyword(VALIDATE) => Ok(self.parse_validate()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -1993,6 +1994,15 @@ impl<'a> Parser<'a> {
         Ok(envelope)
     }
 
+    /// Parse a `VALIDATE` statement
+    fn parse_validate(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(CONNECTION)?;
+        let name = self.parse_raw_name()?;
+        Ok(Statement::ValidateConnection(ValidateConnectionStatement {
+            name,
+        }))
+    }
+
     fn parse_create_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
         let if_not_exists = self.parse_if_not_exists()?;
@@ -2010,62 +2020,87 @@ impl<'a> Parser<'a> {
                     if expect_paren {
                         self.expect_token(&Token::LParen)?;
                     }
-                    let with_options = self
+                    let options = self
                         .parse_comma_separated(Parser::parse_aws_privatelink_connection_option)?;
-                    CreateConnection::AwsPrivatelink { with_options }
+                    CreateConnection::AwsPrivatelink { options }
                 } else {
                     if expect_paren {
                         self.expect_token(&Token::LParen)?;
                     }
-                    let with_options =
+                    let options =
                         self.parse_comma_separated(Parser::parse_aws_connection_option)?;
-                    CreateConnection::Aws { with_options }
+                    CreateConnection::Aws { options }
                 }
             }
             KAFKA => {
                 if expect_paren {
                     self.expect_token(&Token::LParen)?;
                 }
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
-                CreateConnection::Kafka { with_options }
+                let options = self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
+                CreateConnection::Kafka { options }
             }
             CONFLUENT => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 if expect_paren {
                     self.expect_token(&Token::LParen)?;
                 }
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_csr_connection_option)?;
-                CreateConnection::Csr { with_options }
+                let options = self.parse_comma_separated(Parser::parse_csr_connection_option)?;
+                CreateConnection::Csr { options }
             }
             POSTGRES => {
                 if expect_paren {
                     self.expect_token(&Token::LParen)?;
                 }
-                let with_options =
+                let options =
                     self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
-                CreateConnection::Postgres { with_options }
+                CreateConnection::Postgres { options }
             }
             SSH => {
                 self.expect_keyword(TUNNEL)?;
                 if expect_paren {
                     self.expect_token(&Token::LParen)?;
                 }
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
-                CreateConnection::Ssh { with_options }
+                let options = self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
+                CreateConnection::Ssh { options }
             }
             _ => unreachable!(),
         };
         if expect_paren {
             self.expect_token(&Token::RParen)?;
         }
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_connection_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
         Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection,
             if_not_exists,
+            with_options,
         }))
+    }
+
+    fn parse_connection_option_name(&mut self) -> Result<CreateConnectionOptionName, ParserError> {
+        let name = match self.expect_one_of_keywords(&[VALIDATE])? {
+            VALIDATE => CreateConnectionOptionName::Validate,
+            _ => unreachable!(),
+        };
+        Ok(name)
+    }
+
+    /// Parses a single valid option in the WITH block of a create source
+    fn parse_connection_option(&mut self) -> Result<CreateConnectionOption<Raw>, ParserError> {
+        let name = self.parse_connection_option_name()?;
+        Ok(CreateConnectionOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_kafka_connection_option(&mut self) -> Result<KafkaConnectionOption<Raw>, ParserError> {
