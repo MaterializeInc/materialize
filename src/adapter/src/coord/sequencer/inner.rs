@@ -68,6 +68,7 @@ use mz_transform::{EmptyStatisticsOracle, Optimizer};
 use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tracing::instrument::WithSubscriber;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
@@ -2486,7 +2487,6 @@ impl Coordinator {
         plan: ExplainPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_repr::explain::trace_plan;
         use ExplainStage::*;
 
         let ExplainPlan {
@@ -2508,27 +2508,6 @@ impl Coordinator {
             cluster.id
         };
 
-        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
-        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
-        where
-            F: FnOnce() -> Result<R, E>,
-            E: Into<AdapterError>,
-        {
-            if guard {
-                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-                match r {
-                    Ok(result) => result.map_err(Into::into),
-                    Err(_) => {
-                        let msg = format!("panic at the `{}` optimization stage", stage);
-                        Err(AdapterError::Internal(msg))
-                    }
-                }
-            } else {
-                f().map_err(Into::into)
-            }
-        }
-
         assert_ne!(stage, ExplainStage::Timestamp);
 
         let optimizer_trace = match stage {
@@ -2537,165 +2516,16 @@ impl Coordinator {
         };
 
         let pipeline_result = {
-            // dropping this guard at the end of the block will restore the tracing dispatcher
-            let _guard = optimizer_trace.set_as_tracing_dispatcher();
-
-            let span = tracing::span!(Level::INFO, "optimize").entered();
-
-            let explainee_id = match explainee {
-                Explainee::Dataflow(id) => id,
-                Explainee::Query => GlobalId::Explain,
-            };
-
-            // Execute the various stages of the optimization pipeline
-            // -------------------------------------------------------
-
-            // Trace the pipeline input under `optimize/raw`.
-            tracing::span!(Level::INFO, "raw").in_scope(|| {
-                trace_plan(&raw_plan);
-            });
-
-            // Execute the `optimize/hir_to_mir` stage.
-            let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
-                raw_plan.optimize_and_lower(&OptimizerConfig {})
-            })?;
-
-            let mut timeline_context =
-                self.validate_timeline_context(decorrelated_plan.depends_on())?;
-            if matches!(explainee, Explainee::Query)
-                && matches!(timeline_context, TimelineContext::TimestampIndependent)
-                && decorrelated_plan.contains_temporal()
-            {
-                // If the source IDs are timestamp independent but the query contains temporal functions,
-                // then the timeline context needs to be upgraded to timestamp dependent. This is
-                // required because `source_ids` doesn't contain functions.
-                timeline_context = TimelineContext::TimestampDependent;
-            }
-
-            let source_ids = decorrelated_plan.depends_on();
-            let id_bundle = self
-                .index_oracle(cluster_id)
-                .sufficient_collections(&source_ids);
-
-            // Execute the `optimize/local` stage.
-            let optimized_plan = catch_unwind(no_errors, "local", || {
-                tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
-                    let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
-                    if let Ok(ref optimized_plan) = optimized_plan {
-                        trace_plan(optimized_plan.as_inner());
-                    }
-                    optimized_plan.map_err(Into::into)
-                })
-            })?;
-
-            let mut dataflow = DataflowDesc::new("explanation".to_string());
-            let mut builder = self.dataflow_builder(cluster_id);
-            builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
-
-            // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
-            // timestamp.
-            let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::Deferred,
+            self.sequence_explain_plan_pipeline(
+                &optimizer_trace,
+                explainee,
+                raw_plan,
+                no_errors,
+                cluster_id,
                 session,
-            };
-            let state = self.catalog().state();
-            dataflow.visit_children(
-                |r| prep_relation_expr(state, r, style),
-                |s| prep_scalar_expr(state, s, style),
-            )?;
-
-            // Load cardinality statistics.
-            let timestamp_context = self
-                .sequence_peek_timestamp(
-                    session,
-                    &QueryWhen::Immediately,
-                    cluster_id,
-                    timeline_context,
-                    &id_bundle,
-                    &source_ids,
-                    None, // no real-time recency
-                )?
-                .timestamp_context;
-            let query_as_of = timestamp_context.antichain();
-            let cached_stats = mz_ore::future::timeout(
-                OPTIMIZER_MAX_STATS_WAIT,
-                CachedStatisticsOracle::new(
-                    &source_ids,
-                    &query_as_of,
-                    self.controller.storage.as_ref(),
-                ),
             )
-            .await;
-            let stats: Box<dyn mz_transform::StatisticsOracle> = match cached_stats {
-                Ok(stats) => Box::new(stats),
-                Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
-                    Box::new(EmptyStatisticsOracle)
-                }
-                Err(mz_ore::future::TimeoutError::Inner(e)) => {
-                    return Err(AdapterError::Storage(e));
-                }
-            };
-
-            // Execute the `optimize/global` stage.
-            catch_unwind(no_errors, "global", || {
-                mz_transform::optimize_dataflow(
-                    &mut dataflow,
-                    &self.index_oracle(cluster_id),
-                    stats.as_ref(),
-                )
-            })?;
-
-            // Calculate indexes used by the dataflow at this point
-            let used_indexes = dataflow
-                .index_imports
-                .keys()
-                .cloned()
-                .collect::<Vec<GlobalId>>();
-
-            // Determine if fast path plan will be used for this explainee
-            let fast_path_plan = match explainee {
-                Explainee::Query => {
-                    dataflow.set_as_of(query_as_of);
-                    let style = ExprPrepStyle::OneShot {
-                        logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
-                        session,
-                    };
-                    let state = self.catalog().state();
-                    dataflow.visit_children(
-                        |r| prep_relation_expr(state, r, style),
-                        |s| prep_scalar_expr(state, s, style),
-                    )?;
-                    peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-                }
-                _ => None,
-            };
-
-            if matches!(explainee, Explainee::Query) {
-                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
-                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-                if let Some(as_of) = dataflow.as_of.as_ref() {
-                    if !as_of.is_empty() {
-                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
-                        {
-                            dataflow.until = timely::progress::Antichain::from_elem(next);
-                        }
-                    }
-                }
-            }
-
-            // Execute the `optimize/finalize_dataflow` stage.
-            let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
-                self.finalize_dataflow(dataflow, cluster_id)
-            })?;
-
-            // Trace the resulting plan for the top-level `optimize` path.
-            trace_plan(&dataflow_plan);
-
-            span.exit();
-
-            // Return objects that need to be passed to the `ExplainContext`
-            // when rendering explanations for the various trace entries.
-            Ok((used_indexes, fast_path_plan))
+            .with_subscriber(&optimizer_trace)
+            .await
         };
 
         let (used_indexes, fast_path_plan) = match pipeline_result {
@@ -2760,6 +2590,190 @@ impl Coordinator {
         };
 
         Ok(send_immediate_rows(rows))
+    }
+
+    #[tracing::instrument(level = "info", name = "optimize", skip_all)]
+    async fn sequence_explain_plan_pipeline(
+        &mut self,
+        _optimizer_trace: &OptimizerTrace,
+        explainee: Explainee,
+        raw_plan: mz_sql::plan::HirRelationExpr,
+        no_errors: bool,
+        cluster_id: mz_storage_client::types::instances::StorageInstanceId,
+        session: &mut Session,
+    ) -> Result<(Vec<GlobalId>, Option<FastPathPlan>), AdapterError> {
+        use mz_repr::explain::trace_plan;
+
+        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
+        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+        where
+            F: FnOnce() -> Result<R, E>,
+            E: Into<AdapterError>,
+        {
+            if guard {
+                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+                match r {
+                    Ok(result) => result.map_err(Into::into),
+                    Err(_) => {
+                        let msg = format!("panic at the `{}` optimization stage", stage);
+                        Err(AdapterError::Internal(msg))
+                    }
+                }
+            } else {
+                f().map_err(Into::into)
+            }
+        }
+
+        let explainee_id = match explainee {
+            Explainee::Dataflow(id) => id,
+            Explainee::Query => GlobalId::Explain,
+        };
+
+        // Execute the various stages of the optimization pipeline
+        // -------------------------------------------------------
+
+        // Trace the pipeline input under `optimize/raw`.
+        tracing::span!(Level::INFO, "raw").in_scope(|| {
+            trace_plan(&raw_plan);
+        });
+
+        // Execute the `optimize/hir_to_mir` stage.
+        let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
+            raw_plan.optimize_and_lower(&OptimizerConfig {})
+        })?;
+
+        let mut timeline_context =
+            self.validate_timeline_context(decorrelated_plan.depends_on())?;
+        if matches!(explainee, Explainee::Query)
+            && matches!(timeline_context, TimelineContext::TimestampIndependent)
+            && decorrelated_plan.contains_temporal()
+        {
+            // If the source IDs are timestamp independent but the query contains temporal functions,
+            // then the timeline context needs to be upgraded to timestamp dependent. This is
+            // required because `source_ids` doesn't contain functions.
+            timeline_context = TimelineContext::TimestampDependent;
+        }
+
+        let source_ids = decorrelated_plan.depends_on();
+        let id_bundle = self
+            .index_oracle(cluster_id)
+            .sufficient_collections(&source_ids);
+
+        // Execute the `optimize/local` stage.
+        let optimized_plan = catch_unwind(no_errors, "local", || {
+            tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
+                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
+                if let Ok(ref optimized_plan) = optimized_plan {
+                    trace_plan(optimized_plan.as_inner());
+                }
+                optimized_plan.map_err(Into::into)
+            })
+        })?;
+
+        let mut dataflow = DataflowDesc::new("explanation".to_string());
+        let mut builder = self.dataflow_builder(cluster_id);
+        builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+
+        // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
+        // timestamp.
+        let style = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::Deferred,
+            session,
+        };
+        let state = self.catalog().state();
+        dataflow.visit_children(
+            |r| prep_relation_expr(state, r, style),
+            |s| prep_scalar_expr(state, s, style),
+        )?;
+
+        // Load cardinality statistics.
+        let timestamp_context = self
+            .sequence_peek_timestamp(
+                session,
+                &QueryWhen::Immediately,
+                cluster_id,
+                timeline_context,
+                &id_bundle,
+                &source_ids,
+                None, // no real-time recency
+            )?
+            .timestamp_context;
+        let query_as_of = timestamp_context.antichain();
+        let cached_stats = mz_ore::future::timeout(
+            OPTIMIZER_MAX_STATS_WAIT,
+            CachedStatisticsOracle::new(
+                &source_ids,
+                &query_as_of,
+                self.controller.storage.as_ref(),
+            ),
+        )
+        .await;
+        let stats: Box<dyn mz_transform::StatisticsOracle> = match cached_stats {
+            Ok(stats) => Box::new(stats),
+            Err(mz_ore::future::TimeoutError::DeadlineElapsed) => Box::new(EmptyStatisticsOracle),
+            Err(mz_ore::future::TimeoutError::Inner(e)) => {
+                return Err(AdapterError::Storage(e));
+            }
+        };
+
+        // Execute the `optimize/global` stage.
+        catch_unwind(no_errors, "global", || {
+            mz_transform::optimize_dataflow(
+                &mut dataflow,
+                &self.index_oracle(cluster_id),
+                stats.as_ref(),
+            )
+        })?;
+
+        // Calculate indexes used by the dataflow at this point
+        let used_indexes = dataflow
+            .index_imports
+            .keys()
+            .cloned()
+            .collect::<Vec<GlobalId>>();
+
+        // Determine if fast path plan will be used for this explainee
+        let fast_path_plan = match explainee {
+            Explainee::Query => {
+                dataflow.set_as_of(query_as_of);
+                let style = ExprPrepStyle::OneShot {
+                    logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+                    session,
+                };
+                let state = self.catalog().state();
+                dataflow.visit_children(
+                    |r| prep_relation_expr(state, r, style),
+                    |s| prep_scalar_expr(state, s, style),
+                )?;
+                peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+            }
+            _ => None,
+        };
+
+        if matches!(explainee, Explainee::Query) {
+            // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+            // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+            if let Some(as_of) = dataflow.as_of.as_ref() {
+                if !as_of.is_empty() {
+                    if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
+                        dataflow.until = timely::progress::Antichain::from_elem(next);
+                    }
+                }
+            }
+        }
+
+        // Execute the `optimize/finalize_dataflow` stage.
+        let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
+            self.finalize_dataflow(dataflow, cluster_id)
+        })?;
+
+        // Trace the resulting plan for the top-level `optimize` path.
+        trace_plan(&dataflow_plan);
+
+        // Return objects that need to be passed to the `ExplainContext`
+        // when rendering explanations for the various trace entries.
+        Ok((used_indexes, fast_path_plan))
     }
 
     fn sequence_explain_timestamp_begin(

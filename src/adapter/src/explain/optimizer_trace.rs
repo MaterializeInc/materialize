@@ -73,12 +73,6 @@ impl OptimizerTrace {
         OptimizerTrace(dispatcher::Dispatch::new(subscriber))
     }
 
-    /// Set up trace collection while the guard that is return is live;
-    /// when the guard is dropped, tracing will return to the previous handler.
-    pub fn set_as_tracing_dispatcher(&self) -> tracing::subscriber::DefaultGuard {
-        tracing::dispatcher::set_default(&self.0)
-    }
-
     /// Collect all traced plans for all plan types `T` that are available in
     /// the wrapped [`dispatcher::Dispatch`].
     pub fn drain_all(
@@ -221,5 +215,11 @@ impl OptimizerTrace {
         } else {
             vec![]
         }
+    }
+}
+
+impl From<&OptimizerTrace> for tracing::Dispatch {
+    fn from(value: &OptimizerTrace) -> Self {
+        value.0.clone()
     }
 }
