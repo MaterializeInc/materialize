@@ -27,7 +27,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, error, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -442,6 +442,15 @@ where
                     batch_shard: batch.shard_id(),
                     handle_shard: self.machine.shard_id(),
                 });
+            }
+            if self.cfg.build_version != batch.version {
+                error!(
+                    shard_id =? self.machine.shard_id(),
+                    batch_version =? batch.version,
+                    writer_version =? self.cfg.build_version,
+                    "Appending batch with a version that does not match the current build. \
+                    This may fail in the future."
+                )
             }
         }
 
