@@ -25,7 +25,7 @@ use mz_persist_client::rpc::{
     GrpcPubSubClient, PersistGrpcPubSubServer, PersistPubSubClient, PersistPubSubClientConfig,
 };
 use mz_persist_client::ShardId;
-use tracing::{info, Span};
+use tracing::info;
 
 use crate::BUILD_INFO;
 
@@ -48,12 +48,10 @@ pub struct Args {
 }
 
 pub async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let span = Span::current();
     let shard_id = ShardId::from_str("s00000000-0000-0000-0000-000000000000").expect("shard id");
     let config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
     match args.role {
         Role::Server => {
-            let _guard = span.enter();
             info!("listening on {}", args.listen_addr);
             PersistGrpcPubSubServer::new(&config, &MetricsRegistry::new())
                 .serve(args.listen_addr.clone())
