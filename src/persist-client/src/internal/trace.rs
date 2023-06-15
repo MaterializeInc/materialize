@@ -47,6 +47,7 @@
 //! [Batch]: differential_dataflow::trace::Batch
 //! [Batch::Merger]: differential_dataflow::trace::Batch::Merger
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -55,11 +56,14 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use mz_persist_types::Codec64;
+use mz_proto::RustType;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
-use crate::internal::state::HollowBatch;
+use crate::internal::state::{proto_spine_batch, HollowBatch, ProtoSpineBatch, ProtoSpineLevel};
+use crate::internal::state_diff::StateFieldDiff;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FueledMergeReq<T> {
@@ -286,6 +290,99 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 }
 
+impl<T: Timestamp + Lattice + Codec64> Trace<T> {
+    pub fn diff(
+        &self,
+        other: &Trace<T>,
+        batches: &mut Vec<StateFieldDiff<SpineId, ProtoSpineBatch>>,
+        levels: &mut Vec<StateFieldDiff<usize, ProtoSpineLevel>>,
+    ) {
+        // WIP do this without the Clones and BTreeMaps
+        let self_batches = self.batches_map().collect::<BTreeMap<_, _>>();
+        let other_batches = other.batches_map().collect::<BTreeMap<_, _>>();
+        super::state_diff::diff_field_sorted_iter(
+            self_batches.iter(),
+            other_batches.iter(),
+            batches,
+        );
+
+        // WIP do this without the Clones and BTreeMaps
+        let self_levels = self.levels_map().collect::<BTreeMap<_, _>>();
+        let other_levels = other.levels_map().collect::<BTreeMap<_, _>>();
+        super::state_diff::diff_field_sorted_iter(self_levels.iter(), other_levels.iter(), levels);
+    }
+
+    fn batches_map(&self) -> impl Iterator<Item = (SpineId, ProtoSpineBatch)> + '_ {
+        fn into_proto<T: Timestamp + Lattice + Codec64>(
+            x: &SpineBatch<T>,
+        ) -> (SpineId, ProtoSpineBatch) {
+            match x {
+                SpineBatch::Merged(x) => (
+                    x.id,
+                    ProtoSpineBatch {
+                        kind: Some(proto_spine_batch::Kind::Merged(x.batch.into_proto())),
+                    },
+                ),
+                SpineBatch::Fueled { id, .. } => (
+                    *id,
+                    ProtoSpineBatch {
+                        kind: Some(proto_spine_batch::Kind::Fueled(())),
+                    },
+                ),
+            }
+        }
+        // WIP use arrays/slices instead of vecs
+        self.spine.merging.iter().flat_map(|x| match x {
+            MergeState::Vacant
+            | MergeState::Single(None)
+            | MergeState::Double(MergeVariant::Complete(None)) => vec![],
+            MergeState::Single(Some(x)) | MergeState::Double(MergeVariant::Complete(Some(x))) => {
+                vec![into_proto(x)]
+            }
+            MergeState::Double(MergeVariant::InProgress(b0, b1, _m)) => {
+                vec![into_proto(b0), into_proto(b1)]
+            }
+        })
+    }
+
+    fn levels_map(&self) -> impl Iterator<Item = (usize, ProtoSpineLevel)> + '_ {
+        self.spine
+            .merging
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, x)| match x {
+                MergeState::Vacant
+                | MergeState::Single(None)
+                | MergeState::Double(MergeVariant::Complete(None)) => None,
+                MergeState::Single(Some(x))
+                | MergeState::Double(MergeVariant::Complete(Some(x))) => {
+                    let l = ProtoSpineLevel {
+                        remaining_work: 0,
+                        since: None,
+                        batches: vec![x.id().into_proto()],
+                    };
+                    Some((idx, l))
+                }
+                MergeState::Double(MergeVariant::InProgress(b0, b1, m)) => {
+                    let l = ProtoSpineLevel {
+                        remaining_work: m.remaining_work.into_proto(),
+                        since: Some(m.since.into_proto()),
+                        batches: vec![b0.id().into_proto(), b1.id().into_proto()],
+                    };
+                    Some((idx, l))
+                }
+            })
+    }
+
+    pub fn apply_diffs(
+        &mut self,
+        batches: Vec<StateFieldDiff<SpineId, ProtoSpineBatch>>,
+        levels: Vec<StateFieldDiff<usize, ProtoSpineLevel>>,
+    ) -> Result<(), String> {
+        todo!("WIP {:?} {:?}", batches, levels);
+    }
+}
+
 /// A log of what transitively happened during a Spine operation: e.g.
 /// FueledMergeReqs were generated.
 enum SpineLog<'a, T> {
@@ -296,7 +393,7 @@ enum SpineLog<'a, T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SpineId(usize, usize);
+pub struct SpineId(pub usize, pub usize);
 
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]

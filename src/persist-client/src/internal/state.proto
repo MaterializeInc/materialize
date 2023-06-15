@@ -9,6 +9,7 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
 import "persist-types/src/stats.proto";
 
 package mz_persist_client.internal.state;
@@ -38,6 +39,24 @@ message ProtoHollowBatch {
     repeated uint64 runs = 5;
 
     repeated string deprecated_keys = 2;
+}
+
+message ProtoSpineId {
+    uint64 lo = 1;
+    uint64 hi = 2;
+}
+
+message ProtoSpineBatch {
+    oneof kind {
+        ProtoHollowBatch merged = 1;
+        google.protobuf.Empty fueled = 2;
+    }
+}
+
+message ProtoSpineLevel {
+    uint64 remaining_work = 1;
+    ProtoU64Antichain since = 2;
+    repeated ProtoSpineId batches = 3;
 }
 
 message ProtoHollowRollup {

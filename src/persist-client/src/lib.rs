@@ -76,6 +76,7 @@
 //! An abstraction presenting as a durable time-varying collection (aka shard)
 
 #![doc = include_str!("../README.md")]
+#![allow(dead_code, unused_variables)] // WIP
 #![warn(missing_docs, missing_debug_implementations)]
 // #[track_caller] is currently a no-op on async functions, but that hopefully won't be the case
 // forever. So we already annotate those functions now and ignore the compiler warning until

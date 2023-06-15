@@ -20,7 +20,9 @@ enum ProtoStateField {
     CRITICAL_READERS = 6;
     WRITERS = 3;
     SINCE = 4;
-    SPINE = 5;
+    DEPRECATED_SPINE = 5;
+    SPINE_BATCHES = 9;
+    SPINE_LEVELS = 10;
 }
 
 enum ProtoStateFieldDiffType {

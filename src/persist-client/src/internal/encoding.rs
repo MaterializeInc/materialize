@@ -39,14 +39,15 @@ use crate::internal::state::{
     CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, HollowRollup,
     IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
-    ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    ProtoLeasedReaderState, ProtoSpineBatch, ProtoSpineId, ProtoSpineLevel, ProtoStateDiff,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace,
+    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState,
+    WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
-use crate::internal::trace::Trace;
+use crate::internal::trace::{SpineId, Trace};
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
 use crate::write::WriterEnrichedHollowBatch;
@@ -343,7 +344,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             critical_readers,
             writers,
             since,
-            spine,
+            spine_batches,
+            spine_levels,
         } = self;
 
         let proto = ProtoStateFieldDiffs::default();
@@ -362,7 +364,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         );
         field_diffs_into_proto(ProtoStateField::Writers, writers, &mut writer);
         field_diffs_into_proto(ProtoStateField::Since, since, &mut writer);
-        field_diffs_into_proto(ProtoStateField::Spine, spine, &mut writer);
+        field_diffs_into_proto(ProtoStateField::SpineBatches, spine_batches, &mut writer);
+        field_diffs_into_proto(ProtoStateField::SpineLevels, spine_levels, &mut writer);
 
         // After encoding all of our data, convert back into the proto.
         let field_diffs = writer.into_proto();
@@ -472,12 +475,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                             |v| v.into_rust(),
                         )?
                     }
-                    ProtoStateField::Spine => {
-                        field_diff_into_rust::<ProtoHollowBatch, (), _, _, _, _>(
+                    ProtoStateField::DeprecatedSpine => todo!("WIP"),
+                    ProtoStateField::SpineBatches => {
+                        field_diff_into_rust::<ProtoSpineId, ProtoSpineBatch, _, _, _, _>(
                             diff,
-                            &mut state_diff.spine,
+                            &mut state_diff.spine_batches,
                             |k| k.into_rust(),
-                            |()| Ok(()),
+                            |v| Ok(v),
+                        )?
+                    }
+                    ProtoStateField::SpineLevels => {
+                        field_diff_into_rust::<u64, ProtoSpineLevel, _, _, _, _>(
+                            diff,
+                            &mut state_diff.spine_levels,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
                         )?
                     }
                 }
@@ -1105,6 +1117,39 @@ impl RustType<ProtoHollowRollup> for HollowRollup {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
         })
+    }
+}
+
+// WIP no
+impl RustType<ProtoSpineBatch> for ProtoSpineBatch {
+    fn into_proto(&self) -> ProtoSpineBatch {
+        self.clone()
+    }
+    fn from_proto(proto: ProtoSpineBatch) -> Result<Self, TryFromProtoError> {
+        Ok(proto)
+    }
+}
+
+// WIP no
+impl RustType<ProtoSpineLevel> for ProtoSpineLevel {
+    fn into_proto(&self) -> ProtoSpineLevel {
+        self.clone()
+    }
+    fn from_proto(proto: ProtoSpineLevel) -> Result<Self, TryFromProtoError> {
+        Ok(proto)
+    }
+}
+
+impl RustType<ProtoSpineId> for SpineId {
+    fn into_proto(&self) -> ProtoSpineId {
+        ProtoSpineId {
+            lo: self.0.into_proto(),
+            hi: self.1.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoSpineId) -> Result<Self, TryFromProtoError> {
+        Ok(SpineId(proto.lo.into_rust()?, proto.hi.into_rust()?))
     }
 }
 
