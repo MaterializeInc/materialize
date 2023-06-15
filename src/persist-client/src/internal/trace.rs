@@ -64,7 +64,7 @@ use crate::internal::state::HollowBatch;
 #[derive(Debug, Clone, PartialEq)]
 pub struct FueledMergeReq<T> {
     pub desc: Description<T>,
-    pub inputs: Vec<Arc<HollowBatch<T>>>,
+    pub inputs: Vec<Arc<IdHollowBatch<T>>>,
 }
 
 #[derive(Debug)]
@@ -118,10 +118,10 @@ impl<T> Trace<T> {
 
     pub fn map_batches<'a, F: FnMut(&'a HollowBatch<T>)>(&'a self, mut f: F) {
         self.spine.map_batches(move |b| match b {
-            SpineBatch::Merged(b) => f(b),
+            SpineBatch::Merged(b) => f(&b.batch),
             SpineBatch::Fueled { parts, .. } => {
                 for b in parts.iter() {
-                    f(b);
+                    f(&b.batch);
                 }
             }
         })
@@ -165,7 +165,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
         let mut merge_reqs = Vec::new();
         self.spine.insert(
-            SpineBatch::Merged(Arc::new(batch)),
+            batch,
             &mut SpineLog::Enabled {
                 merge_reqs: &mut merge_reqs,
             },
@@ -182,8 +182,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
     /// account for a surprising amount of cpu in prod. #18368
     pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
-        self.spine
-            .insert(SpineBatch::Merged(Arc::new(batch)), &mut SpineLog::Disabled);
+        self.spine.insert(batch, &mut SpineLog::Disabled);
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
@@ -272,13 +271,24 @@ enum SpineLog<'a, T> {
     Disabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SpineId(usize, usize);
+
+#[derive(Debug, Clone)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+pub struct IdHollowBatch<T> {
+    pub id: SpineId,
+    pub batch: HollowBatch<T>,
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 enum SpineBatch<T> {
-    Merged(Arc<HollowBatch<T>>),
+    Merged(Arc<IdHollowBatch<T>>),
     Fueled {
+        id: SpineId,
         desc: Description<T>,
-        parts: Vec<Arc<HollowBatch<T>>>,
+        parts: Vec<Arc<IdHollowBatch<T>>>,
         // A cached version of parts.iter().map(|x| x.len).sum()
         len: usize,
     },
@@ -319,22 +329,33 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         self.desc().upper()
     }
 
+    fn id(&self) -> SpineId {
+        match self {
+            SpineBatch::Merged(b) => b.id,
+            SpineBatch::Fueled { id, parts, .. } => {
+                debug_assert_eq!(parts.first().map(|x| x.id.0), Some(id.0));
+                debug_assert_eq!(parts.last().map(|x| x.id.1), Some(id.1));
+                *id
+            }
+        }
+    }
+
     fn desc(&self) -> &Description<T> {
         match self {
-            SpineBatch::Merged(b) => &b.desc,
+            SpineBatch::Merged(b) => &b.batch.desc,
             SpineBatch::Fueled { desc, .. } => desc,
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            SpineBatch::Merged(b) => b.len,
+            SpineBatch::Merged(b) => b.batch.len,
             // NB: This is an upper bound on len, we won't know for sure until
             // we compact it.
             SpineBatch::Fueled { len, parts, .. } => {
                 // Sanity check the cached len value in debug mode, to hopefully
                 // find any bugs with its maintenance.
-                debug_assert_eq!(*len, parts.iter().map(|x| x.len).sum::<usize>());
+                debug_assert_eq!(*len, parts.iter().map(|x| x.batch.len).sum::<usize>());
                 *len
             }
         }
@@ -344,12 +365,20 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         self.len() == 0
     }
 
-    pub fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
-        SpineBatch::Merged(Arc::new(HollowBatch {
-            desc: Description::new(lower, upper, since),
-            parts: vec![],
-            len: 0,
-            runs: vec![],
+    pub fn empty(
+        id: SpineId,
+        lower: Antichain<T>,
+        upper: Antichain<T>,
+        since: Antichain<T>,
+    ) -> Self {
+        SpineBatch::Merged(Arc::new(IdHollowBatch {
+            id,
+            batch: HollowBatch {
+                desc: Description::new(lower, upper, since),
+                parts: vec![],
+                len: 0,
+                runs: vec![],
+            },
         }))
     }
 
@@ -369,6 +398,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         }
     }
 
+    // WIP roundtrip the SpineId through FueledMergeReq/FueledMergeRes?
     fn maybe_replace(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
@@ -392,7 +422,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             if res.output.len > self.len() {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
-            *self = SpineBatch::Merged(Arc::new(res.output.clone()));
+            *self = SpineBatch::Merged(Arc::new(IdHollowBatch {
+                id: self.id(),
+                batch: res.output.clone(),
+            }));
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -406,6 +439,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         // are `[0,1),[1,2),[2,3),[3,4)`, we can swap out the middle two parts for res.
         match self {
             SpineBatch::Fueled {
+                id,
                 parts,
                 desc,
                 len: _,
@@ -414,11 +448,11 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 let mut lower = None;
                 let mut upper = None;
                 for (i, batch) in parts.iter().enumerate() {
-                    if batch.desc.lower() == res.output.desc.lower() {
-                        lower = Some(i);
+                    if batch.batch.desc.lower() == res.output.desc.lower() {
+                        lower = Some((i, batch.id.0));
                     }
-                    if batch.desc.upper() == res.output.desc.upper() {
-                        upper = Some(i);
+                    if batch.batch.desc.upper() == res.output.desc.upper() {
+                        upper = Some((i, batch.id.1));
                     }
                     if lower.is_some() && upper.is_some() {
                         break;
@@ -426,14 +460,18 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 }
                 // next, replace parts with the merge res batch if we can
                 match (lower, upper) {
-                    (Some(lower), Some(upper)) => {
+                    (Some((lower, id_lower)), Some((upper, id_upper))) => {
                         let mut new_parts = vec![];
                         new_parts.extend_from_slice(&parts[..lower]);
-                        new_parts.push(Arc::new(res.output.clone()));
+                        new_parts.push(Arc::new(IdHollowBatch {
+                            id: SpineId(id_lower, id_upper),
+                            batch: res.output.clone(),
+                        }));
                         new_parts.extend_from_slice(&parts[upper + 1..]);
                         let new_spine_batch = SpineBatch::Fueled {
+                            id: *id,
                             desc: desc.to_owned(),
-                            len: new_parts.iter().map(|x| x.len).sum(),
+                            len: new_parts.iter().map(|x| x.batch.len).sum(),
                             parts: new_parts,
                         };
                         if new_spine_batch.len() > self.len() {
@@ -479,13 +517,15 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         b2: SpineBatch<T>,
         log: &mut SpineLog<'_, T>,
     ) -> SpineBatch<T> {
+        let id = SpineId(b1.id().0, b2.id().1);
+        assert!(id.0 < id.1);
         let lower = b1.desc().lower().clone();
         let upper = b2.desc().upper().clone();
         let since = self.since;
 
         // Special case empty batches.
         if b1.is_empty() && b2.is_empty() {
-            return SpineBatch::empty(lower, upper, since);
+            return SpineBatch::empty(id, lower, upper, since);
         }
 
         let desc = Description::new(lower, upper, since);
@@ -519,6 +559,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         }
 
         SpineBatch::Fueled {
+            id,
             desc,
             len,
             parts: merged_parts,
@@ -611,6 +652,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
 #[derive(Debug, Clone)]
 struct Spine<T> {
     effort: usize,
+    next_id: usize,
     since: Antichain<T>,
     upper: Antichain<T>,
     merging: Vec<MergeState<T>>,
@@ -642,6 +684,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     pub fn new() -> Self {
         Spine {
             effort: 1,
+            next_id: 0,
             since: Antichain::from_elem(T::minimum()),
             upper: Antichain::from_elem(T::minimum()),
             merging: Vec::new(),
@@ -651,9 +694,13 @@ impl<T: Timestamp + Lattice> Spine<T> {
     // Ideally, this method acts as insertion of `batch`, even if we are not yet
     // able to begin merging the batch. This means it is a good time to perform
     // amortized work proportional to the size of batch.
-    pub fn insert(&mut self, batch: SpineBatch<T>, log: &mut SpineLog<'_, T>) {
-        assert!(batch.lower() != batch.upper());
-        assert_eq!(batch.lower(), &self.upper);
+    pub fn insert(&mut self, batch: HollowBatch<T>, log: &mut SpineLog<'_, T>) {
+        assert!(batch.desc.lower() != batch.desc.upper());
+        assert_eq!(batch.desc.lower(), &self.upper);
+        let id = self.next_id;
+        self.next_id += 1;
+        let id = SpineId(id, self.next_id);
+        let batch = SpineBatch::Merged(Arc::new(IdHollowBatch { id, batch }));
 
         self.upper.clone_from(batch.upper());
 
@@ -1222,21 +1269,31 @@ pub mod datadriven {
         datadriven.trace.spine.map_batches(|b| {
             let b = match b {
                 SpineBatch::Merged(b) => format!(
-                    "{:?}{:?}{:?} {}{}\n",
-                    b.desc.lower().elements(),
-                    b.desc.upper().elements(),
-                    b.desc.since().elements(),
-                    b.len,
-                    b.parts
+                    "[{}-{}]{:?}{:?}{:?} {}{}\n",
+                    b.id.0,
+                    b.id.1,
+                    b.batch.desc.lower().elements(),
+                    b.batch.desc.upper().elements(),
+                    b.batch.desc.since().elements(),
+                    b.batch.len,
+                    b.batch
+                        .parts
                         .iter()
                         .map(|x| format!(" {}", x.key))
                         .collect::<Vec<_>>()
                         .join(""),
                 ),
-                SpineBatch::Fueled { desc, parts, len } => {
-                    assert_eq!(*len, parts.iter().map(|x| x.len).sum::<usize>());
+                SpineBatch::Fueled {
+                    id,
+                    desc,
+                    parts,
+                    len,
+                } => {
+                    assert_eq!(*len, parts.iter().map(|x| x.batch.len).sum::<usize>());
                     format!(
-                        "{:?}{:?}{:?} {}/{}{}\n",
+                        "[{}-{}]{:?}{:?}{:?} {}/{}{}\n",
+                        id.0,
+                        id.1,
                         desc.lower().elements(),
                         desc.upper().elements(),
                         desc.since().elements(),
@@ -1244,7 +1301,7 @@ pub mod datadriven {
                         len,
                         parts
                             .iter()
-                            .flat_map(|x| x.parts.iter())
+                            .flat_map(|x| x.batch.parts.iter())
                             .map(|x| format!(" {}", x.key))
                             .collect::<Vec<_>>()
                             .join("")
@@ -1299,7 +1356,7 @@ pub mod datadriven {
                 merge_req
                     .inputs
                     .iter()
-                    .flat_map(|x| x.parts.iter())
+                    .flat_map(|x| x.batch.parts.iter())
                     .map(|x| x.key.0.clone())
                     .collect::<Vec<_>>()
                     .join(" ")
