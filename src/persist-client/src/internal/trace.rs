@@ -488,6 +488,44 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
             return SpineBatch::empty(lower, upper, since);
         }
 
+        // Special case empty batches merging into a fueled merge whose last batch is empty
+        if b2.is_empty() {
+            match &b1 {
+                SpineBatch::Merged(_) => {}
+                SpineBatch::Fueled {
+                    desc: _desc,
+                    parts,
+                    len,
+                } => {
+                    if let Some(last) = parts.last() {
+                        if last.len == 0 && last.desc.upper() == b2.lower() {
+                            let merge_desc = Description::new(lower, upper, since.clone());
+                            let last_desc = Description::new(
+                                last.desc.lower().clone(),
+                                b2.upper().clone(),
+                                since,
+                            );
+
+                            let mut parts = parts.clone();
+                            let last = parts.last_mut().expect("last");
+                            *last = Arc::new(HollowBatch {
+                                desc: last_desc,
+                                len: 0,
+                                parts: vec![],
+                                runs: vec![],
+                            });
+
+                            return SpineBatch::Fueled {
+                                desc: merge_desc,
+                                parts,
+                                len: *len,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
         let desc = Description::new(lower, upper, since);
         let len = b1.len() + b2.len();
 

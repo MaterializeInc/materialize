@@ -1,0 +1,59 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Batches start empty
+spine-batches
+----
+<empty>
+
+# Insert a len=1 batch.
+push-batch
+[0][1][0] 1 k0
+----
+ok
+
+spine-batches
+----
+[0][1][0] 1 k0
+
+take-merge-reqs
+----
+<empty>
+
+push-batch
+[1][2][0] 0
+----
+ok
+
+spine-batches
+----
+[0][1][0] 1 k0
+[1][2][0] 0
+
+# Inserting further len=0 creates a fueled merge that absorbs the empty batches
+push-batch
+[2][3][0] 0
+[3][4][0] 0
+[4][5][0] 0
+[5][6][0] 0
+[6][7][0] 0
+[7][8][0] 0
+[8][9][0] 0
+----
+ok
+
+spine-batches
+----
+[0][8][0] 2/1 k0
+[8][9][0] 0
+
+# No compaction needed (after initial fueled merge)
+take-merge-reqs
+----
+[0][2][0] k0
