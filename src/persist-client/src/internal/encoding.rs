@@ -1155,6 +1155,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SerdeWriterEnrichedHollowBatch {
     pub(crate) shard_id: ShardId,
+    pub(crate) version: Version,
     pub(crate) batch: Vec<u8>,
 }
 
@@ -1162,6 +1163,7 @@ impl<T: Timestamp + Codec64> From<WriterEnrichedHollowBatch<T>> for SerdeWriterE
     fn from(x: WriterEnrichedHollowBatch<T>) -> Self {
         SerdeWriterEnrichedHollowBatch {
             shard_id: x.shard_id,
+            version: x.version,
             batch: x.batch.into_proto().encode_to_vec(),
         }
     }
@@ -1169,13 +1171,19 @@ impl<T: Timestamp + Codec64> From<WriterEnrichedHollowBatch<T>> for SerdeWriterE
 
 impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnrichedHollowBatch<T> {
     fn from(x: SerdeWriterEnrichedHollowBatch) -> Self {
-        let proto_batch = ProtoHollowBatch::decode(x.batch.as_slice())
+        let SerdeWriterEnrichedHollowBatch {
+            shard_id,
+            version,
+            batch,
+        } = x;
+        let proto_batch = ProtoHollowBatch::decode(batch.as_slice())
             .expect("internal error: could not decode WriterEnrichedHollowBatch");
         let batch = proto_batch
             .into_rust()
             .expect("internal error: could not decode WriterEnrichedHollowBatch");
         WriterEnrichedHollowBatch {
-            shard_id: x.shard_id,
+            shard_id,
+            version,
             batch,
         }
     }
