@@ -129,15 +129,15 @@ All metrics in this list are exposed through direct export using the controller'
 All metrics in this list have an `instance_id` label identifying the compute instance and, if applicable, a `replica_id` label.
 
 * Compute protocol
-  * [ ] `mz_compute_commands_total`
+  * [x] `mz_compute_commands_total`
     * **Type**: counter
     * **Labels**: `instance_id`, `replica_id`, `command_type`
     * **Description**: The total number of compute commands sent, by replica and command type.
-  * [ ] `mz_compute_responses_total`
+  * [x] `mz_compute_responses_total`
     * **Type**: counter
     * **Labels**: `instance_id`, `replica_id`, `response_type`
     * **Description**: The total number of compute responses sent, by replica and response type.
-  * [ ] `mz_compute_command_message_bytes_total`
+  * [x] `mz_compute_command_message_bytes_total`
     * **Type**: counter
     * **Labels**: `instance_id`, `replica_id`, `command_type`
     * **Description**: The total number of bytes sent in compute command messages, by replica and command type.
@@ -145,7 +145,7 @@ All metrics in this list have an `instance_id` label identifying the compute ins
                  Proposing to rename it because "messages sent" doesn't imply who the sender is.
                  Also proposing to make it a counter to reduce its cardinality.
                  Also proposing to add a `command_type` label.
-  * [ ] `mz_compute_response_message_bytes_total`
+  * [x] `mz_compute_response_message_bytes_total`
     * **Type**: counter
     * **Labels**: `instance_id`, `replica_id`, `response_type`
     * **Description**: The total number of bytes sent in compute response messages, by replica and response type.
@@ -154,36 +154,36 @@ All metrics in this list have an `instance_id` label identifying the compute ins
                  Also proposing to make it a counter to reduce its cardinality.
                  Also proposing to add a `response_type` label.
 * Controller state
-  * [ ] `mz_compute_controller_replica_count`
+  * [x] `mz_compute_controller_replica_count`
     * **Type**: gauge
     * **Labels**: `instance_id`
     * **Description**: The number of replicas.
-  * [ ] `mz_compute_controller_collection_count`
+  * [x] `mz_compute_controller_collection_count`
     * **Type**: gauge
     * **Labels**: `instance_id`
     * **Description**: The number of installed compute collections.
-  * [ ] `mz_compute_controller_peek_count`
+  * [x] `mz_compute_controller_peek_count`
     * **Type**: gauge
     * **Labels**: `instance_id`
     * **Description**: The number of pending peeks.
-  * [ ] `mz_compute_controller_subscribe_count`
+  * [x] `mz_compute_controller_subscribe_count`
     * **Type**: gauge
     * **Labels**: `instance_id`
     * **Description**: The number of active subscribes.
-  * [ ] `mz_compute_controller_command_queue_size`
+  * [x] `mz_compute_controller_command_queue_size`
     * **Type**: gauge
     * **Labels**: `instance_id`, `replica_id`
     * **Description**: The size of the compute command queue, by replica.
-  * [ ] `mz_compute_controller_response_queue_size`
+  * [x] `mz_compute_controller_response_queue_size`
     * **Type**: gauge
     * **Labels**: `instance_id`, `replica_id`
     * **Description**: The size of the compute response queue, by replica.
 * Command history
-  * [ ] `mz_compute_controller_history_command_count`
+  * [x] `mz_compute_controller_history_command_count`
     * **Type**: gauge
     * **Labels**: `instance_id`, `type`
     * **Description**: The number of commands in the command history, by command type.
-  * [ ] `mz_compute_controller_history_dataflow_count`
+  * [x] `mz_compute_controller_history_dataflow_count`
     * **Type**: gauge
     * **Labels**: `instance_id`
     * **Description**: The number of dataflows in the command history.
@@ -217,14 +217,14 @@ These metrics are either exported directly or from introspection sources using t
 All metrics in this list have a `worker_id` label identifying the Timely worker.
 
 * Command history
-  * [ ] `mz_compute_replica_history_command_count`
+  * [x] `mz_compute_replica_history_command_count`
     * **Type**: gauge
     * **Labels**: `worker_id`, `type`
     * **Description**: The number of commands in the command history, by command type.
     * **Export Type**: direct
     * **Notes**: This metric exists already as `mz_compute_command_history_size`.
                  Proposing to rename for consistency, and adding worker and command type labels.
-  * [ ] `mz_compute_replica_history_dataflow_count`
+  * [x] `mz_compute_replica_history_dataflow_count`
     * **Type**: gauge
     * **Labels**: `worker_id`
     * **Description**: The number of dataflows in the command history.
@@ -232,19 +232,19 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Notes**: This metric exists already as `mz_compute_dataflow_count_in_history`.
                  Proposing to rename for consistency, and adding a worker label.
 * Dataflows
-  * [ ] `mz_dataflow_elapsed_seconds_total`
+  * [x] `mz_dataflow_elapsed_seconds_total`
     * **Type**: gauge
     * **Labels**: `worker_id`, `collection_id`
     * **Description**: The total time spent computing dataflows, by dataflow.
     * **Export Type**: prometheus-exporter, through the `mz_scheduling_elapsed` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to dataflows that have an elapsed time of more than 1 second.
-  * [ ] `mz_dataflow_join_elapsed_seconds_total`
+  * [x] `mz_dataflow_join_elapsed_seconds_total`
     * **Type**: gauge
     * **Labels**: `worker_id`, `collection_id`
     * **Description**: The total time spent computing joins in dataflows, by dataflow.
     * **Export Type**: prometheus-exporter, through the `mz_scheduling_elapsed` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to joins that have an elapsed time of more than 1 second.
-  * [ ] `mz_dataflow_shutdown_duration_seconds`
+  * [x] `mz_dataflow_shutdown_duration_seconds`
     * **Type**: histogram
     * **Labels**: `worker_id`
     * **Description**: A histogram of dataflow shutdown durations since restart.
