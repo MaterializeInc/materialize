@@ -1610,6 +1610,29 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Set persisted default privilege.
+    pub fn set_default_privilege(
+        &mut self,
+        role_id: RoleId,
+        database_id: Option<DatabaseId>,
+        schema_id: Option<SchemaId>,
+        object_type: ObjectType,
+        grantee: RoleId,
+        privileges: Option<AclMode>,
+    ) -> Result<(), Error> {
+        self.default_privileges.set(
+            DefaultPrivilegesKey {
+                role_id,
+                database_id,
+                schema_id,
+                object_type,
+                grantee,
+            },
+            privileges.map(|privileges| DefaultPrivilegesValue { privileges }),
+        )?;
+        Ok(())
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {

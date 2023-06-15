@@ -90,3 +90,4 @@ GRANT ALL ON CLUSTER dev TO joe;
 - [REVOKE ROLE](../revoke-role)
 - [ALTER OWNER](../alter-owner)
 - [REVOKE PRIVILEGE](../revoke-privilege)
+- [ALTER DEFAULT PRIVILEGES](../alter-default-privileges)

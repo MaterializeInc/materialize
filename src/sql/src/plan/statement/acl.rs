@@ -17,7 +17,9 @@ use std::collections::BTreeSet;
 use itertools::Itertools;
 
 use crate::ast::{Ident, QualifiedReplica, UnresolvedDatabaseName};
-use crate::catalog::{CatalogItemType, ObjectType};
+use crate::catalog::{
+    CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType,
+};
 use crate::names::{Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedRoleName, SchemaSpecifier};
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
@@ -25,19 +27,19 @@ use crate::plan::statement::ddl::{
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    AlterNoopPlan, AlterOwnerPlan, GrantPrivilegesPlan, GrantRolePlan, Plan, ReassignOwnedPlan,
-    RevokePrivilegesPlan, RevokeRolePlan, UpdatePrivilege,
+    AlterDefaultPrivilegesPlan, AlterNoopPlan, AlterOwnerPlan, GrantPrivilegesPlan, GrantRolePlan,
+    Plan, ReassignOwnedPlan, RevokePrivilegesPlan, RevokeRolePlan, UpdatePrivilege,
 };
 use crate::session::user::SYSTEM_USER;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
 use mz_sql_parser::ast::{
-    AlterDefaultPrivilegesStatement, AlterOwnerStatement, GrantPrivilegesStatement,
-    GrantRoleStatement, GrantTargetAllSpecification, GrantTargetSpecification,
-    GrantTargetSpecificationInner, Privilege, PrivilegeSpecification, ReassignOwnedStatement,
-    RevokePrivilegesStatement, RevokeRoleStatement, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName,
+    AbbreviatedGrantOrRevokeStatement, AlterDefaultPrivilegesStatement, AlterOwnerStatement,
+    GrantPrivilegesStatement, GrantRoleStatement, GrantTargetAllSpecification,
+    GrantTargetSpecification, GrantTargetSpecificationInner, Privilege, PrivilegeSpecification,
+    ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName,
 };
 
 pub fn describe_alter_owner(
@@ -461,14 +463,7 @@ fn plan_update_privilege(
         let actual_object_type = scx.get_object_type(&object_id);
         let mut reference_object_type = actual_object_type.clone();
 
-        let acl_mode = match &privileges {
-            PrivilegeSpecification::All => scx.catalog.all_object_privileges(actual_object_type),
-            PrivilegeSpecification::Privileges(privileges) => privileges
-                .into_iter()
-                .map(|privilege| privilege_to_acl_mode(privilege.clone()))
-                // PostgreSQL doesn't care about duplicate privileges, so we don't either.
-                .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
-        };
+        let acl_mode = privilege_spec_to_acl_mode(scx, &privileges, actual_object_type);
 
         if let ObjectId::Item(id) = &object_id {
             let item = scx.get_item(id);
@@ -497,7 +492,7 @@ fn plan_update_privilege(
             return Err(PlanError::InvalidPrivilegeTypes {
                 invalid_privileges,
                 object_type: actual_object_type,
-                object_name,
+                object_name: Some(object_name),
             });
         }
 
@@ -527,6 +522,21 @@ fn plan_update_privilege(
     })
 }
 
+fn privilege_spec_to_acl_mode(
+    scx: &StatementContext,
+    privilege_spec: &PrivilegeSpecification,
+    object_type: ObjectType,
+) -> AclMode {
+    match privilege_spec {
+        PrivilegeSpecification::All => scx.catalog.all_object_privileges(object_type),
+        PrivilegeSpecification::Privileges(privileges) => privileges
+            .into_iter()
+            .map(|privilege| privilege_to_acl_mode(privilege.clone()))
+            // PostgreSQL doesn't care about duplicate privileges, so we don't either.
+            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
+    }
+}
+
 fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
     match privilege {
         Privilege::SELECT => AclMode::SELECT,
@@ -542,14 +552,117 @@ pub fn describe_alter_default_privileges(
     _: &StatementContext,
     _: AlterDefaultPrivilegesStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    bail_unsupported!("ALTER DEFAULT PRIVILEGES")
+    Ok(StatementDesc::new(None))
 }
 
 pub fn plan_alter_default_privileges(
-    _: &StatementContext,
-    _: AlterDefaultPrivilegesStatement<Aug>,
+    scx: &StatementContext,
+    AlterDefaultPrivilegesStatement {
+        target_roles,
+        target_objects,
+        grant_or_revoke,
+    }: AlterDefaultPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    bail_unsupported!("ALTER DEFAULT PRIVILEGES")
+    let object_type = (*grant_or_revoke.object_type()).into();
+    match object_type {
+        ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
+            "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
+        ),
+        ObjectType::Sink | ObjectType::ClusterReplica | ObjectType::Role | ObjectType::Func => {
+            sql_bail!("{object_type}S do not have privileges")
+        }
+        ObjectType::Cluster | ObjectType::Database
+            if matches!(
+                target_objects,
+                GrantTargetAllSpecification::AllDatabases { .. }
+            ) =>
+        {
+            sql_bail!("cannot specify {object_type}S and IN DATABASE")
+        }
+
+        ObjectType::Cluster | ObjectType::Database | ObjectType::Schema
+            if matches!(
+                target_objects,
+                GrantTargetAllSpecification::AllSchemas { .. }
+            ) =>
+        {
+            sql_bail!("cannot specify {object_type}S and IN SCHEMA")
+        }
+        ObjectType::Table
+        | ObjectType::Index
+        | ObjectType::Type
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Cluster
+        | ObjectType::Database
+        | ObjectType::Schema => {}
+    }
+
+    let acl_mode = privilege_spec_to_acl_mode(scx, grant_or_revoke.privileges(), object_type);
+    let all_object_privileges = scx.catalog.all_object_privileges(object_type);
+    let invalid_privileges = acl_mode.difference(all_object_privileges);
+    if !invalid_privileges.is_empty() {
+        return Err(PlanError::InvalidPrivilegeTypes {
+            invalid_privileges,
+            object_type,
+            object_name: None,
+        });
+    }
+
+    let target_roles = target_roles
+        .map(|target_roles| target_roles.into_iter().map(|role| role.id).collect())
+        .unwrap_or_else(|| vec![*scx.catalog.active_role_id()]);
+    let mut privilege_objects = Vec::with_capacity(target_roles.len() * target_objects.len());
+    for target_role in target_roles {
+        match &target_objects {
+            GrantTargetAllSpecification::All => privilege_objects.push(DefaultPrivilegeObject {
+                role_id: target_role,
+                database_id: None,
+                schema_id: None,
+                object_type,
+            }),
+            GrantTargetAllSpecification::AllDatabases { databases } => {
+                for database in databases {
+                    privilege_objects.push(DefaultPrivilegeObject {
+                        role_id: target_role,
+                        database_id: Some(*database.database_id()),
+                        schema_id: None,
+                        object_type,
+                    });
+                }
+            }
+            GrantTargetAllSpecification::AllSchemas { schemas } => {
+                for schema in schemas {
+                    privilege_objects.push(DefaultPrivilegeObject {
+                        role_id: target_role,
+                        database_id: schema.database_spec().id(),
+                        schema_id: Some(schema.schema_spec().into()),
+                        object_type,
+                    });
+                }
+            }
+        }
+    }
+
+    let privilege_acl_items = grant_or_revoke
+        .roles()
+        .into_iter()
+        .map(|grantee| DefaultPrivilegeAclItem {
+            grantee: grantee.id,
+            acl_mode,
+        })
+        .collect();
+
+    let is_grant = match grant_or_revoke {
+        AbbreviatedGrantOrRevokeStatement::Grant(_) => true,
+        AbbreviatedGrantOrRevokeStatement::Revoke(_) => false,
+    };
+
+    Ok(Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+        privilege_objects,
+        privilege_acl_items,
+        is_grant,
+    }))
 }
 
 pub fn describe_reassign_owned(

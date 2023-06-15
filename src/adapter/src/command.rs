@@ -294,6 +294,8 @@ impl IntoIterator for GetVariablesResponse {
 #[derivative(Debug)]
 #[enum_kind(ExecuteResponseKind)]
 pub enum ExecuteResponse {
+    /// The default privileges were altered.
+    AlteredDefaultPrivileges,
     /// The requested object was altered.
     AlteredObject(ObjectType),
     /// The index was altered.
@@ -424,6 +426,7 @@ impl ExecuteResponse {
     pub fn tag(&self) -> Option<String> {
         use ExecuteResponse::*;
         match self {
+            AlteredDefaultPrivileges => Some("ALTER DEFAULT PRIVILEGES".into()),
             AlteredObject(o) => Some(format!("ALTER {}", o)),
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
             AlteredRole => Some("ALTER ROLE".into()),
@@ -504,6 +507,7 @@ impl ExecuteResponse {
             | RotateKeys => {
                 vec![AlteredObject]
             }
+            AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }

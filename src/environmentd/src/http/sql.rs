@@ -927,6 +927,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::Raised
         | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege
+        | ExecuteResponse::AlteredDefaultPrivileges
         | ExecuteResponse::RevokedRole
         | ExecuteResponse::StartedTransaction { .. }
         | ExecuteResponse::Updated(_)

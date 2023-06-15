@@ -92,3 +92,4 @@ REVOKE ALL ON CLUSTER dev FROM joe;
 - [REVOKE ROLE](../revoke-role)
 - [ALTER OWNER](../alter-owner)
 - [GRANT PRIVILEGE](../revoke-privilege)
+- [ALTER DEFAULT PRIVILEGES](../alter-default-privileges)

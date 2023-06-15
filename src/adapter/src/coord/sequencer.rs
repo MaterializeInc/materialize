@@ -470,6 +470,13 @@ impl Coordinator {
                     session,
                 );
             }
+            Plan::AlterDefaultPrivileges(plan) => {
+                tx.send(
+                    self.sequence_alter_default_privileges(&mut session, plan)
+                        .await,
+                    session,
+                );
+            }
             Plan::GrantRole(plan) => {
                 tx.send(self.sequence_grant_role(&mut session, plan).await, session);
             }

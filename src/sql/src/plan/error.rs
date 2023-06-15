@@ -94,7 +94,7 @@ pub enum PlanError {
     InvalidPrivilegeTypes {
         invalid_privileges: AclMode,
         object_type: ObjectType,
-        object_name: String,
+        object_name: Option<String>,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
@@ -371,7 +371,8 @@ impl fmt::Display for PlanError {
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
             Self::InvalidPrivilegeTypes{ invalid_privileges, object_type, object_name} => {
-                write!(f, "invalid privilege types {} for {} {}", invalid_privileges.to_error_string(), object_type, object_name.quoted())
+                let object_name = object_name.as_ref().map(|object_name| format!(" {}", object_name.quoted())).unwrap_or_else(||"".to_string());
+                write!(f, "invalid privilege types {} for {}{}", invalid_privileges.to_error_string(), object_type, object_name)
             },
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {

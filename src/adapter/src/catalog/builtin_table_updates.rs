@@ -23,7 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
@@ -1273,32 +1273,30 @@ impl CatalogState {
         &self,
         default_privilege_object: &DefaultPrivilegeObject,
         grantee: &RoleId,
+        acl_mode: &AclMode,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let privileges = self
-            .default_privileges
-            .get_privileges_for_grantee(default_privilege_object, grantee)
-            .expect("catalog out of sync");
-        let database_id = default_privilege_object
-            .database_id
-            .map(|database_id| database_id.to_string());
-        let schema_id = default_privilege_object
-            .schema_id
-            .map(|schema_id| schema_id.to_string());
-
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DEFAULT_PRIVILEGES),
             row: Row::pack_slice(&[
                 default_privilege_object.role_id.to_string().as_str().into(),
-                database_id.as_deref().into(),
-                schema_id.as_deref().into(),
+                default_privilege_object
+                    .database_id
+                    .map(|database_id| database_id.to_string())
+                    .as_deref()
+                    .into(),
+                default_privilege_object
+                    .schema_id
+                    .map(|schema_id| schema_id.to_string())
+                    .as_deref()
+                    .into(),
                 default_privilege_object
                     .object_type
                     .to_string()
                     .as_str()
                     .into(),
                 grantee.to_string().as_str().into(),
-                privileges.to_string().as_str().into(),
+                acl_mode.to_string().as_str().into(),
             ]),
             diff,
         }

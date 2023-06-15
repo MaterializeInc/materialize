@@ -295,6 +295,15 @@ impl From<DatabaseId> for ResolvedDatabaseSpecifier {
     }
 }
 
+impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
+    fn from(id: Option<DatabaseId>) -> Self {
+        match id {
+            Some(id) => Self::Id(id),
+            None => Self::Ambient,
+        }
+    }
+}
+
 /*
  * TODO(jkosh44) It's possible that in order to fix
  * https://github.com/MaterializeInc/materialize/issues/8805 we will need to assign temporary

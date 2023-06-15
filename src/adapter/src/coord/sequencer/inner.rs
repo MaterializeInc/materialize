@@ -40,19 +40,19 @@ use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
     CatalogTypeDetails, ObjectType, SessionCatalog,
 };
-use mz_sql::names::{ObjectId, QualifiedItemName};
+use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan,
-    ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption, InsertPlan, MaterializedView,
-    MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
-    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetTransactionPlan,
-    SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
-    UpdatePrivilege, VariableValue, View,
+    AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan,
+    DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
+    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
+    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
+    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -1259,6 +1259,30 @@ impl Coordinator {
                 }
             }
         }
+        for (default_privilege_object, default_privilege_acl_items) in
+            self.catalog.default_privileges()
+        {
+            if let Some(role_name) = dropped_roles.get(&default_privilege_object.role_id) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!(
+                        "default privileges on {}S created by {}",
+                        default_privilege_object.object_type, role_name
+                    ));
+            }
+            for default_privilege_acl_item in default_privilege_acl_items {
+                if let Some(role_name) = dropped_roles.get(&default_privilege_acl_item.grantee) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
+                            "default privileges on {}S granted to {}",
+                            default_privilege_object.object_type, role_name
+                        ));
+                }
+            }
+        }
 
         if !dependent_objects.is_empty() {
             Err(AdapterError::DependentObject(dependent_objects))
@@ -1276,7 +1300,7 @@ impl Coordinator {
             self.catalog().ensure_not_reserved_role(role_id)?;
         }
 
-        let mut revokes = plan.revokes;
+        let mut privilege_revokes = plan.privilege_revokes;
 
         // Make sure this stays in sync with the beginning of `rbac::check_plan`.
         let session_catalog = self.catalog().for_session(session);
@@ -1286,7 +1310,7 @@ impl Coordinator {
             // Obtain all roles that the current session is a member of.
             let role_membership =
                 session_catalog.collect_role_membership(session.current_role_id());
-            let invalid_revokes: BTreeSet<_> = revokes
+            let invalid_revokes: BTreeSet<_> = privilege_revokes
                 .drain_filter_swapping(|(_, privilege)| {
                     !role_membership.contains(&privilege.grantor)
                 })
@@ -1298,21 +1322,30 @@ impl Coordinator {
             }
         }
 
-        let mut ops: Vec<_> = revokes
-            .into_iter()
-            .map(|(object_id, privilege)| catalog::Op::UpdatePrivilege {
+        let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
+            catalog::Op::UpdatePrivilege {
                 object_id,
                 privilege,
                 variant: UpdatePrivilegeVariant::Revoke,
-            })
-            .collect();
-
+            }
+        });
+        let default_privilege_revoke_ops = plan.default_privilege_revokes.into_iter().map(
+            |(privilege_object, privilege_acl_item)| catalog::Op::UpdateDefaultPrivilege {
+                privilege_object,
+                privilege_acl_item,
+                variant: UpdatePrivilegeVariant::Revoke,
+            },
+        );
         let DropOps {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
         } = self.sequence_drop_common(session, plan.drop_ids)?;
-        ops.extend(drop_ops);
+
+        let ops = privilege_revoke_ops
+            .chain(default_privilege_revoke_ops)
+            .chain(drop_ops.into_iter())
+            .collect();
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -3892,6 +3925,52 @@ impl Coordinator {
             session.add_notices(warnings);
         }
         res
+    }
+
+    pub(super) async fn sequence_alter_default_privileges(
+        &mut self,
+        session: &mut Session,
+        AlterDefaultPrivilegesPlan {
+            privilege_objects,
+            privilege_acl_items,
+            is_grant,
+        }: AlterDefaultPrivilegesPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let mut ops = Vec::with_capacity(privilege_objects.len() * privilege_acl_items.len());
+        let variant = if is_grant {
+            UpdatePrivilegeVariant::Grant
+        } else {
+            UpdatePrivilegeVariant::Revoke
+        };
+        for privilege_object in &privilege_objects {
+            self.catalog()
+                .ensure_not_reserved_role(&privilege_object.role_id)?;
+            if let Some(database_id) = privilege_object.database_id {
+                self.catalog()
+                    .ensure_not_reserved_object(&database_id.into(), session.conn_id())?;
+            }
+            if let Some(schema_id) = privilege_object.schema_id {
+                let database_spec: ResolvedDatabaseSpecifier = privilege_object.database_id.into();
+                let schema_spec: SchemaSpecifier = schema_id.into();
+
+                self.catalog().ensure_not_reserved_object(
+                    &(database_spec, schema_spec).into(),
+                    session.conn_id(),
+                )?;
+            }
+            for privilege_acl_item in &privilege_acl_items {
+                self.catalog()
+                    .ensure_not_system_role(&privilege_acl_item.grantee)?;
+                ops.push(Op::UpdateDefaultPrivilege {
+                    privilege_object: privilege_object.clone(),
+                    privilege_acl_item: privilege_acl_item.clone(),
+                    variant,
+                })
+            }
+        }
+
+        self.catalog_transact(Some(session), ops).await?;
+        Ok(ExecuteResponse::AlteredDefaultPrivileges)
     }
 
     pub(super) async fn sequence_grant_role(

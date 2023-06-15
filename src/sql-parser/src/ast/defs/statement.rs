@@ -2973,6 +2973,16 @@ pub enum GrantTargetAllSpecification<T: AstInfo> {
     AllSchemas { schemas: Vec<T::SchemaName> },
 }
 
+impl<T: AstInfo> GrantTargetAllSpecification<T> {
+    pub fn len(&self) -> usize {
+        match self {
+            GrantTargetAllSpecification::All => 1,
+            GrantTargetAllSpecification::AllDatabases { databases } => databases.len(),
+            GrantTargetAllSpecification::AllSchemas { schemas } => schemas.len(),
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match &self.object_spec_inner {
@@ -3105,6 +3115,29 @@ pub enum AbbreviatedGrantOrRevokeStatement<T: AstInfo> {
     Revoke(AbbreviatedRevokeStatement<T>),
 }
 
+impl<T: AstInfo> AbbreviatedGrantOrRevokeStatement<T> {
+    pub fn privileges(&self) -> &PrivilegeSpecification {
+        match self {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => &grant.privileges,
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => &revoke.privileges,
+        }
+    }
+
+    pub fn object_type(&self) -> &ObjectType {
+        match self {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => &grant.object_type,
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => &revoke.object_type,
+        }
+    }
+
+    pub fn roles(&self) -> &Vec<T::RoleName> {
+        match self {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => &grant.grantees,
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => &revoke.revokees,
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for AbbreviatedGrantOrRevokeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -3130,7 +3163,7 @@ impl<T: AstInfo> AstDisplay for AlterDefaultPrivilegesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER DEFAULT PRIVILEGES");
         if let Some(target_roles) = &self.target_roles {
-            f.write_str(" FOR ");
+            f.write_str(" FOR ROLE ");
             f.write_node(&display::comma_separated(target_roles));
         }
         match &self.target_objects {
