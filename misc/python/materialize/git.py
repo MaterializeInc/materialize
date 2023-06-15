@@ -15,12 +15,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Set, Union
 
-import semver
-
-if semver.__version__.startswith("2."):
-    from semver import VersionInfo as Version
-else:
+try:
     from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version
 
 from materialize import spawn
 
