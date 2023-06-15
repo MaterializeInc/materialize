@@ -271,6 +271,9 @@ class S3UploadDebuginfo(PreImage):
                     Tagging={"TagSet": [{"Key": "ephemeral", "Value": ephemeral_str}]},
                 )
 
+    def inputs(self) -> Set[str]:
+        return {self.exe_path, self.dbg_path}
+
 
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
