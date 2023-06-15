@@ -7,14 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
-use mz_ore::metrics::raw::IntCounterVec;
+use mz_ore::metrics::raw::{IntCounterVec, UIntGaugeVec};
 use mz_ore::metrics::{IntCounter, MetricsRegistry, UIntGauge};
 
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
-    pub command_history_size: UIntGauge,
-    pub dataflow_count_in_history: UIntGauge,
+    pub history_command_count: UIntGaugeVec,
+    pub history_dataflow_count: UIntGauge,
     pub reconciliation_reused_dataflows: IntCounter,
     pub reconciliation_replaced_dataflows: IntCounterVec,
 }
@@ -22,13 +23,14 @@ pub struct ComputeMetrics {
 impl ComputeMetrics {
     pub fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
-            command_history_size: registry.register(metric!(
-                name: "mz_compute_command_history_size",
-                help: "The size of the compute command history.",
+            history_command_count: registry.register(metric!(
+                name: "mz_compute_replica_history_command_count",
+                help: "The number of commands in the replica's command history.",
+                var_labels: ["command_type"],
             )),
-            dataflow_count_in_history: registry.register(metric!(
-                name: "mz_compute_dataflow_count_in_history",
-                help: "The number of dataflow descriptions in the compute command history.",
+            history_dataflow_count: registry.register(metric!(
+                name: "mz_compute_replica_history_dataflow_count",
+                help: "The number of dataflows in the replica's command history.",
             )),
             reconciliation_reused_dataflows: registry.register(metric!(
                 name: "mz_compute_reconciliation_reused_dataflows",
@@ -39,6 +41,20 @@ impl ComputeMetrics {
                 help: "The number of dataflows that were replaced during compute reconciliation.",
                 var_labels: ["reason"],
             )),
+        }
+    }
+
+    pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
+        let command_counts = CommandMetrics::build(|typ| {
+            self.history_command_count
+                .get_metric_with_label_values(&[typ])
+                .unwrap()
+        });
+        let dataflow_count = self.history_dataflow_count.clone();
+
+        HistoryMetrics {
+            command_counts,
+            dataflow_count,
         }
     }
 
