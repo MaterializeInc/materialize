@@ -195,6 +195,49 @@ impl RustType<ProtoDateTimeUnits> for DateTimeUnits {
     }
 }
 
+/// Order of definition is important for PartialOrd and Ord to be derived correctly
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub enum DateTimePart {
+    Microseconds,
+    Milliseconds,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+    Decade,
+    Century,
+    Millennium,
+}
+
+impl FromStr for DateTimePart {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let units: DateTimeUnits = s.parse()?;
+
+        match units {
+            DateTimeUnits::Microseconds => Ok(DateTimePart::Microseconds),
+            DateTimeUnits::Milliseconds => Ok(DateTimePart::Milliseconds),
+            DateTimeUnits::Second => Ok(DateTimePart::Second),
+            DateTimeUnits::Minute => Ok(DateTimePart::Minute),
+            DateTimeUnits::Hour => Ok(DateTimePart::Hour),
+            DateTimeUnits::Day => Ok(DateTimePart::Day),
+            DateTimeUnits::Week => Ok(DateTimePart::Week),
+            DateTimeUnits::Month => Ok(DateTimePart::Month),
+            DateTimeUnits::Quarter => Ok(DateTimePart::Quarter),
+            DateTimeUnits::Year => Ok(DateTimePart::Year),
+            DateTimeUnits::Decade => Ok(DateTimePart::Decade),
+            DateTimeUnits::Century => Ok(DateTimePart::Century),
+            DateTimeUnits::Millennium => Ok(DateTimePart::Millennium),
+            _ => Err(s.to_string()),
+        }
+    }
+}
+
 // Order of definition is important for PartialOrd and Ord to be derived correctly
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {

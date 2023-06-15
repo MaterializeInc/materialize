@@ -3137,6 +3137,12 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
         },
+        "datediff" => Scalar {
+            params!(String, Timestamp, Timestamp) => VariadicFunc::DateDiffTimestamp => Int64, oid::FUNC_DATEDIFF_TIMESTAMP;
+            params!(String, TimestampTz, TimestampTz) => VariadicFunc::DateDiffTimestampTz => Int64, oid::FUNC_DATEDIFF_TIMESTAMPTZ;
+            params!(String, Date, Date) => VariadicFunc::DateDiffDate => Int64, oid::FUNC_DATEDIFF_DATE;
+            params!(String, Time, Time) => VariadicFunc::DateDiffTime => Int64, oid::FUNC_DATEDIFF_TIME;
+        },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                 if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
