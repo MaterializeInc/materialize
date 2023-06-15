@@ -13,6 +13,6 @@ pre-image:
     bin: clusterd
     strip: true
     split_debuginfo: true
-  - type: s3-upload
+  - type: s3-upload-debuginfo
     bin: clusterd
     bucket: materialize-debuginfo

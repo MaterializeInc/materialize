@@ -13,6 +13,6 @@ pre-image:
     bin: environmentd
     strip: true
     split_debuginfo: true
-  - type: s3-upload
+  - type: s3-upload-debuginfo
     bin: environmentd
     bucket: materialize-debuginfo
