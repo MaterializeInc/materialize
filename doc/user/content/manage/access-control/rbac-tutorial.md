@@ -3,7 +3,7 @@ title: "Tutorial: Manage privileges in a non-production cluster"
 description: "Add users, create roles, and assign privileges in Materialize"
 menu:
   main:
-    parent: user-management
+    parent: access-control 
     weight: 25
 ---
 

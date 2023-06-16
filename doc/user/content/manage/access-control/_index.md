@@ -6,8 +6,8 @@ menu:
   main:
     parent: manage
     name: Access control
-    identifier: 'user-management'
-    weight: 10
+    identifier: 'access-control'
+    weight: 15
 ---
 
 {{< alpha />}}

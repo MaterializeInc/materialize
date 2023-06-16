@@ -3,7 +3,7 @@ title: "Manage roles"
 description: "Create and manage roles in Materialize"
 menu:
   main:
-    parent: user-management
+    parent: access-control 
     weight: 15
 ---
 

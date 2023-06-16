@@ -3,7 +3,7 @@ title: "Invite users"
 description: "Invite new organization members or administrators"
 menu:
   main:
-    parent: user-management
+    parent: manage
     weight: 10
 ---
 
