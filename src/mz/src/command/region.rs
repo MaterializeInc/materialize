@@ -50,7 +50,11 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
     let environment: Environment = loop {
         tries += 1;
         match cx.get_environment(region.clone()).await {
-            Ok(environment) => break Ok(environment),
+            Ok(environment) => {
+                if environment.resolvable {
+                    break Ok(environment)
+                }
+            },
             Err(e) => {
                 if tries == 10 {
                     break Err(e);
@@ -61,7 +65,6 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
     }?;
 
     loading_spinner.set_message("Waiting for the region to be ready...");
-
     loop {
         if cx
             .sql_client()
