@@ -51,7 +51,6 @@ Chapter One is a prerequisite for implementing Chapter Two.
   otherwise we would have to persist the text of every statement (in
   either Cockroach or S3), which we consider unacceptable for `SELECT`
   queries.
-  
   In the future, we may allow such durability as a specially feature
   for users who request it, are willing to pay for it, and are also
   willing to accept increased latency on the read path. It is not hard
