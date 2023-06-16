@@ -15,7 +15,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Set, Union
 
-import semver.version
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version
 
 from materialize import spawn
 
@@ -84,9 +87,7 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(
-    *, fetch: bool = True, prefix: str = "v"
-) -> List[semver.version.Version]:
+def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> List[Version]:
     """List all the version-like tags in the repo
 
     Args:
@@ -101,7 +102,7 @@ def get_version_tags(
         if not t.startswith(prefix):
             continue
         try:
-            tags.append(semver.version.Version.parse(t.removeprefix(prefix)))
+            tags.append(Version.parse(t.removeprefix(prefix)))
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 

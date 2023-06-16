@@ -13,7 +13,7 @@ from textwrap import dedent
 import pytest
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 

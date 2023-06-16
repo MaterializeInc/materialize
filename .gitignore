@@ -37,3 +37,7 @@ perf.data*
 # flake.lock that works well with the rest of the package versions on our
 # system.
 **/flake.lock
+
+/misc/python/materialize/build/
+/misc/python/materialize/mz_test_base.egg-info/
+/misc/python/materialize/dist/
