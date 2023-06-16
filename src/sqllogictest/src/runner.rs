@@ -1220,7 +1220,7 @@ impl RunnerInner {
         match statement {
             Statement::Select(stmt) => {
                 is_select = true;
-                num_attributes = analyze_num_attributes(&stmt.query.body);
+                num_attributes = derive_num_attributes(&stmt.query.body);
             }
             _ => (),
         }
@@ -2017,10 +2017,45 @@ fn generate_view_sql(
     (create_view, create_index, view_sql, drop_view)
 }
 
+/// Analyzes the provided query `body` to derive the number of
+/// attributes in the query. We only consider syntactic cues,
+/// so we may end up deriving `None` for the number of attributes
+/// as a conservative approximation.
+fn derive_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
+    let Some(projection) = find_projection(body) else { return None };
+    derive_num_attributes_from_projection(projection)
+}
+
+/// Analyzes a query's `ORDER BY` clause to derive an `ORDER BY`
+/// clause that is exclusively making numeric references. The
+/// rewritten `ORDER BY` clause is then usable when querying a
+/// view that contains the same `SELECT` as the given query.
+fn derive_order_by(body: &SetExpr<Raw>, order_by: &Vec<OrderByExpr<Raw>>) -> Vec<OrderByExpr<Raw>> {
+    let Some(projection) = find_projection(body) else { return vec![] };
+    derive_order_by_from_projection(projection, order_by)
+}
+
+/// Finds the projection list in a `SELECT` query body.
+fn find_projection(body: &SetExpr<Raw>) -> Option<&Vec<SelectItem<Raw>>> {
+    // Iterate to peel off the query body until the query's
+    // projection list is found.
+    let mut set_expr = body;
+    loop {
+        match set_expr {
+            SetExpr::Select(select) => {
+                return Some(&select.projection);
+            }
+            SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
+            SetExpr::Query(query) => set_expr = &query.body,
+            _ => return None,
+        }
+    }
+}
+
 /// Computes the number of attributes that are obtained by the
 /// projection of a `SELECT` query. The projection may include
 /// wildcards, in which case the analysis just returns `None`.
-fn analyze_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
+fn derive_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
     let mut num_attributes = 0usize;
     for item in projection.iter() {
         let SelectItem::Expr { expr, .. } = item else { return None };
@@ -2034,48 +2069,6 @@ fn analyze_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> 
         }
     }
     Some(num_attributes)
-}
-
-/// Performs an analysis of the provided query `body` to derive the
-/// number of attributes in the query. We only consider syntactic
-/// cues, so the analysis may end up deriving `None` for the number
-/// of attributes as a conservative approximation.
-fn analyze_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
-    // Iterate to peel off the query body until the query's
-    // projection list is found.
-    let mut set_expr = body;
-    loop {
-        match set_expr {
-            SetExpr::Select(select) => {
-                return analyze_num_attributes_from_projection(&select.projection)
-            }
-            SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
-            SetExpr::Query(query) => set_expr = &query.body,
-            _ => return None,
-        }
-    }
-}
-
-/// Analyzes a query's `ORDER BY` clause to derive an `ORDER BY`
-/// clause that is exclusively making numeric references. The
-/// rewritten `ORDER BY` clause is then usable when querying a
-/// view that contains the same `SELECT` as the given query.
-fn derive_order_by(body: &SetExpr<Raw>, order_by: &Vec<OrderByExpr<Raw>>) -> Vec<OrderByExpr<Raw>> {
-    // Iterate to peel off the query body until the query's
-    // projection list is found.
-    let mut set_expr = body;
-    loop {
-        match set_expr {
-            SetExpr::Select(select) => {
-                // We found the projection list. Process the `ORDER BY`
-                // clause and match the referenced expressions.
-                return derive_order_by_from_projection(&select.projection, order_by);
-            }
-            SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
-            SetExpr::Query(query) => set_expr = &query.body,
-            _ => return vec![],
-        }
-    }
 }
 
 /// Computes an `ORDER BY` clause with only numeric references
