@@ -99,6 +99,7 @@ pub struct Compactor<K, V, T, D> {
         Machine<K, V, T, D>,
         oneshot::Sender<Result<ApplyMergeResult, anyhow::Error>>,
     )>,
+    filter: CompactionFilter<T>,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -108,6 +109,7 @@ impl<K, V, T, D> Clone for Compactor<K, V, T, D> {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             sender: self.sender.clone(),
+            filter: self.filter.clone(),
             _phantom: Default::default(),
         }
     }
@@ -209,9 +211,10 @@ where
         });
 
         Compactor {
-            cfg,
-            metrics,
+            cfg: cfg.clone(),
+            metrics: Arc::clone(&metrics),
             sender: compact_req_sender,
+            filter: CompactionFilter::new(cfg, metrics),
             _phantom: PhantomData,
         }
     }
@@ -225,17 +228,7 @@ where
         req: CompactReq<T>,
         machine: &Machine<K, V, T, D>,
     ) -> Option<oneshot::Receiver<Result<ApplyMergeResult, anyhow::Error>>> {
-        // Run some initial heuristics to ignore some requests for compaction.
-        // We don't gain much from e.g. compacting two very small batches that
-        // were just written, but it does result in non-trivial blob traffic
-        // (especially in aggregate). This heuristic is something we'll need to
-        // tune over time.
-        let should_compact = req.inputs.len() >= self.cfg.dynamic.compaction_heuristic_min_inputs()
-            || req.inputs.iter().map(|x| x.parts.len()).sum::<usize>()
-                >= self.cfg.dynamic.compaction_heuristic_min_parts()
-            || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                >= self.cfg.dynamic.compaction_heuristic_min_updates();
-        if !should_compact {
+        if !self.filter.should_compact(&req) {
             self.metrics.compaction.skipped.inc();
             return None;
         }
@@ -829,6 +822,104 @@ where
             ));
         }
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CompactionFilter<T> {
+    cfg: PersistConfig,
+    metrics: Arc<Metrics>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> Clone for CompactionFilter<T> {
+    fn clone(&self) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<T: PartialOrder> CompactionFilter<T> {
+    fn new(cfg: PersistConfig, metrics: Arc<Metrics>) -> Self {
+        Self {
+            cfg,
+            metrics,
+            _phantom: Default::default(),
+        }
+    }
+
+    fn should_compact(&self, req: &CompactReq<T>) -> bool {
+        let blob_target_size = self.cfg.dynamic.blob_target_size();
+
+        if !Self::may_have_logical_compaction(req)
+            && !Self::may_have_physical_compaction(req, blob_target_size)
+        {
+            self.metrics.compaction.filter.drop_unneeded.inc();
+            return false;
+        }
+
+        // At this point, we know our req contains batches that may benefit from
+        // logical and/or physical compaction. Apply some heuristics to see whether
+        // there's enough work in some dimension (# batches, # parts, # updates)
+        // to be worthwhile.
+
+        if req.inputs.len() >= self.cfg.dynamic.compaction_heuristic_min_inputs() {
+            self.metrics.compaction.filter.pass_batches.inc();
+            return true;
+        }
+
+        if req.inputs.iter().map(|x| x.parts.len()).sum::<usize>()
+            >= self.cfg.dynamic.compaction_heuristic_min_parts()
+        {
+            self.metrics.compaction.filter.pass_parts.inc();
+            return true;
+        }
+
+        if req.inputs.iter().map(|x| x.len).sum::<usize>()
+            >= self.cfg.dynamic.compaction_heuristic_min_updates()
+        {
+            self.metrics.compaction.filter.pass_updates.inc();
+            return true;
+        }
+
+        self.metrics.compaction.filter.drop_no_match.inc();
+        false
+    }
+
+    fn may_have_logical_compaction(req: &CompactReq<T>) -> bool {
+        // if the req's `since` is beyond any input's, there may be logical compaction to do
+        req.inputs
+            .iter()
+            .any(|x| PartialOrder::less_than(x.desc.since(), req.desc.since()))
+    }
+
+    fn may_have_physical_compaction(req: &CompactReq<T>, blob_target_size: usize) -> bool {
+        // physical compaction is beneficial when there's >1 part below the
+        // target size, so that the space used by the small ones may be merged
+        // together. having zero or one parts below the target size means that
+        // overall the batches are already as tightly packed as they can be
+        // given the current level of logical compaction.
+        let parts_below_target_size = req
+            .inputs
+            .iter()
+            .flat_map(|x| x.parts.iter())
+            .filter(|x| x.encoded_size_bytes < blob_target_size)
+            .count();
+        if parts_below_target_size > 1 {
+            return true;
+        }
+
+        // compaction also gives us the opportunity to reduce runs, so we should
+        // consider any req that contains batches that haven't been fully reduced
+        // to one run already.
+        if req.inputs.iter().any(|x| x.runs.len() > 0) {
+            return true;
+        }
+
+        false
     }
 }
 

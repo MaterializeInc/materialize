@@ -726,10 +726,14 @@ pub struct CompactionMetrics {
     pub(crate) applied_subset_match: IntCounter,
     pub(crate) not_applied_too_many_updates: IntCounter,
 
+    pub(crate) filter: CompactionFilterMetrics,
+
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
 
     pub(crate) _steps_vec: CounterVec,
+    pub(crate) _filter_pass_vec: IntCounterVec,
+    pub(crate) _filter_drop_vec: IntCounterVec,
 }
 
 impl CompactionMetrics {
@@ -738,6 +742,16 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_step_seconds",
                 help: "time spent on individual steps of compaction",
                 var_labels: ["step"],
+        ));
+        let filter_pass: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_compaction_filter_passed",
+                help: "compaction reqs that passed the filter",
+                var_labels: ["filter"],
+        ));
+        let filter_drop: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_compaction_filter_dropped",
+                help: "compaction reqs that were dropped by the filter",
+                var_labels: ["filter"],
         ));
 
         CompactionMetrics {
@@ -825,9 +839,12 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_not_applied_too_many_updates",
                 help: "count of merge results that did not apply due to too many updates",
             )),
+            filter: CompactionFilterMetrics::new(&filter_pass, &filter_drop),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),
             _steps_vec: step_timings,
+            _filter_pass_vec: filter_pass,
+            _filter_drop_vec: filter_drop,
         }
     }
 }
@@ -843,6 +860,27 @@ impl CompactionStepTimings {
         CompactionStepTimings {
             part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
             heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionFilterMetrics {
+    pub(crate) pass_batches: IntCounter,
+    pub(crate) pass_parts: IntCounter,
+    pub(crate) pass_updates: IntCounter,
+    pub(crate) drop_unneeded: IntCounter,
+    pub(crate) drop_no_match: IntCounter,
+}
+
+impl CompactionFilterMetrics {
+    fn new(pass: &IntCounterVec, drop: &IntCounterVec) -> Self {
+        Self {
+            pass_batches: pass.with_label_values(&["batches"]),
+            pass_parts: pass.with_label_values(&["parts"]),
+            pass_updates: pass.with_label_values(&["updates"]),
+            drop_unneeded: drop.with_label_values(&["unneeded"]),
+            drop_no_match: drop.with_label_values(&["no_match"]),
         }
     }
 }
