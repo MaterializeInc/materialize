@@ -59,10 +59,7 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         self.output_printer = output_printer
 
     def ddl(self, sql: str) -> None:
-        try:
-            self.cursor.execute(sql)
-        except (ProgrammingError, DatabaseError) as err:
-            raise SqlExecutionError(self._extract_message_from_error(err))
+        self._execute_with_cursor(sql)
 
     def begin_tx(self, isolation_level: str) -> None:
         self._execute_with_cursor(f"BEGIN ISOLATION LEVEL {isolation_level};")
