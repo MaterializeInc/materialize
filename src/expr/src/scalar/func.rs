@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 //
-// The original source code is subject to the terms of the PostgreSQL license, a copy
-// of which can be found in the LICENSE file at the root of this repository.
+// Portions of this file are derived from the PostgreSQL project. The original
+// source code is subject to the terms of the PostgreSQL license, a copy of
+// which can be found in the LICENSE file at the root of this repository.
 
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
