@@ -140,7 +140,7 @@ Materialize then helps perform actions according to each task's expiration time.
     FROM tasks
     WHERE mz_now() < created_ts + ttl;
     ```
-    The moment `mz_now()` crosses the expiration time of a record, it is removed from the result set.
+    The moment `mz_now()` crosses the expiration time of a record, that record is retracted (removed) from the result set.
 
 You can now:
 
@@ -172,8 +172,10 @@ You can now:
 
 ### Periodically Emit Results
 
-Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column, and emit a single result at the end of each window.
+Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column.
+You don't care to receive every update as it happens; instead, you would prefer Materialize to emit a single result at the end of each window.
 Materialize [date functions](/sql/functions/#date-and-time-func) are helpful for use cases like this where you want to bucket records into time windows.
+
 The strategy for this example is to put an initial temporal filter on the input (say, 30 days) to bound it, use the [`date_bin` function](/sql/functions/date-bin) to bin records into 1 minute windows, use a second temporal filter to emit results at the end of the window, and finally apply a third temporal filter shorter than the first (say, 7 days) to set how long results should persist in Materialize.
 
 1. First, create a table for the input records.
@@ -234,6 +236,7 @@ The strategy for this example is to put an initial temporal filter on the input 
     1686889140000       1       1       3       2023-06-16 04:19:00
     1686889140000       1       2       1       2023-06-16 04:19:00
     ```
+    If you are very patient, you will see these results retracted in 7 days.
     Press `Ctrl+C` to exit the `SUBSCRIBE` when you are finished playing.
 
 From here, you could create a [Kafka sink](/sql/create-sink/) and use Kafka Connect to archive the historical results to a data warehouse (ignoring Kafka tombstone records that represent retracted results).
