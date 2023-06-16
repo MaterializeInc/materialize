@@ -99,7 +99,12 @@ FROM{space_separator}{db_object_name}
         if len(where_conditions) == 0:
             return ""
 
-        return f"WHERE {' AND '.join(where_conditions)}"
+        # It is important that the condition parts are in parentheses so that they are connected with AND.
+        # Otherwise, a generated condition containing OR at the top level may lift the row filter clause.
+        all_conditions_sql = " AND ".join(
+            [f"({condition})" for condition in where_conditions]
+        )
+        return f"WHERE {all_conditions_sql}"
 
     def _create_row_filter_clause(self) -> Optional[str]:
         """Create s SQL clause to only include rows of certain indices"""
