@@ -60,8 +60,13 @@
 //!
 //! Note also that after snapshot consolidation, additional space may be used if `StateValue` is
 //! used.
+//!
+//! Allow usage of `std::collections::HashMap`.
+//! We need to iterate through all the values in the map, so we can't use `mz_ore` wrapper.
+//! Also, we don't need any ordering for the values fetched, so using std HashMap.
+#![allow(clippy::disallowed_types)]
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::num::Wrapping;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -368,16 +373,24 @@ pub trait UpsertStateBackend {
         R: IntoIterator<Item = &'r mut UpsertValueAndSize>;
 }
 
-/// A `HashMap` with additional scratch space used in some
-/// methods.
+/// A `HashMap` tracking its total size
 pub struct InMemoryHashMap {
-    state: BTreeMap<UpsertKey, StateValue>,
+    state: HashMap<UpsertKey, StateValue>,
+    total_size: i64,
+}
+
+impl InMemoryHashMap {
+    fn clear(&mut self) {
+        self.state.clear();
+        self.total_size = 0;
+    }
 }
 
 impl Default for InMemoryHashMap {
     fn default() -> Self {
         Self {
-            state: BTreeMap::new(),
+            state: HashMap::new(),
+            total_size: 0,
         }
     }
 }
@@ -414,6 +427,7 @@ impl UpsertStateBackend for InMemoryHashMap {
                     self.state.remove(&key);
                 }
             }
+            self.total_size += stats.size_diff;
         }
         Ok(stats)
     }
@@ -439,7 +453,7 @@ impl UpsertStateBackend for InMemoryHashMap {
 }
 
 pub enum BackendType {
-    InMemory(InMemoryHashMap, u64),
+    InMemory(InMemoryHashMap),
     RocksDb(RocksDB),
 }
 /// Params required to create rocksdb instance
@@ -458,9 +472,31 @@ pub struct AutoSpillBackend {
 impl AutoSpillBackend {
     pub(crate) fn new(rockdsdb_params: Option<RocksDBParams>) -> Self {
         Self {
-            backend_type: BackendType::InMemory(InMemoryHashMap::default(), 0),
+            backend_type: BackendType::InMemory(InMemoryHashMap::default()),
             rockdsdb_params,
         }
+    }
+
+    async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB {
+        let RocksDBParams {
+            instance_path,
+            env,
+            tuning_config,
+            metrics,
+        } = rocksdb_params;
+        tracing::info!("spilling to disk for upsert at {:?}", instance_path);
+
+        RocksDB::new(
+            mz_rocksdb::RocksDBInstance::new(
+                instance_path,
+                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
+                tuning_config.clone(),
+                Arc::clone(metrics),
+                upsert_bincode_opts(),
+            )
+            .await
+            .unwrap(),
+        )
     }
 }
 
@@ -471,41 +507,12 @@ impl UpsertStateBackend for AutoSpillBackend {
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
     {
         match &mut self.backend_type {
-            BackendType::InMemory(hash_map, size) => {
-                let mut result = hash_map.multi_put(puts).await;
-
+            BackendType::InMemory(map) => {
+                let mut result = map.multi_put(puts).await;
                 if let Ok(result_status) = &mut result {
-                    if let Some(new_size) = size.checked_add_signed(result_status.size_diff) {
-                        *size = new_size;
-                    }
                     // TODO (mouli): Configure the size
-                    if *size > 10 && self.rockdsdb_params.is_some() {
-                        let RocksDBParams {
-                            instance_path,
-                            env,
-                            tuning_config,
-                            metrics,
-                        } = self.rockdsdb_params.as_ref().unwrap();
-                        tracing::info!("spilling to disk for upsert at {:?}", instance_path);
-
-                        let mut rocksdb_backend = RocksDB::new(
-                            mz_rocksdb::RocksDBInstance::new(
-                                instance_path,
-                                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
-                                tuning_config.clone(),
-                                Arc::clone(metrics),
-                                upsert_bincode_opts(),
-                            )
-                            .await
-                            .unwrap(),
-                        );
-
-                        let mut total_size_in_memory: i64 = 0;
-                        let new_puts = hash_map.state.iter().map(|(k, v)| {
-                            let memory_size: i64 =
-                                v.memory_size().try_into().expect("less than i64 size");
-                            total_size_in_memory = total_size_in_memory + memory_size;
-
+                    if map.total_size > 10 && self.rockdsdb_params.is_some() {
+                        let new_puts = map.state.iter().map(|(k, v)| {
                             (
                                 k.clone(),
                                 PutValue {
@@ -515,14 +522,18 @@ impl UpsertStateBackend for AutoSpillBackend {
                             )
                         });
 
+                        let mut rocksdb_backend =
+                            AutoSpillBackend::init_rocksdb(self.rockdsdb_params.as_ref().unwrap())
+                                .await;
+
                         match rocksdb_backend.multi_put(new_puts).await {
                             Ok(puts_stats) => {
-                                *size = 0;
-                                hash_map.state.clear();
+                                // clearing the in memory map after successfully writing to rocksdb
+                                map.clear();
                                 // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
-                                result_status.size_diff = result_status.size_diff
-                                    + puts_stats.size_diff
-                                    - total_size_in_memory;
+                                result_status.size_diff += puts_stats.size_diff;
+                                result_status.size_diff -= map.total_size;
+
                                 self.backend_type = BackendType::RocksDb(rocksdb_backend);
                             }
                             Err(e) => {
@@ -550,7 +561,7 @@ impl UpsertStateBackend for AutoSpillBackend {
         R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
     {
         match &mut self.backend_type {
-            BackendType::InMemory(in_memory_hash_map, _) => {
+            BackendType::InMemory(in_memory_hash_map) => {
                 in_memory_hash_map.multi_get(gets, results_out).await
             }
             BackendType::RocksDb(rocks_db) => rocks_db.multi_get(gets, results_out).await,
