@@ -48,14 +48,32 @@ bitflags! {
     ///
     /// Modeled after:
     /// https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101
+    ///
+    /// The lower 32 bits are used for different privilege types.
+    ///
+    /// The upper 32 bits indicate a grant option on the privilege for the current bit shifted
+    /// right by 32 bits (Currently unimplemented in Materialize).
+    ///
+    /// Privileges that exist in Materialize but not PostgreSQL start at the highest available bit
+    /// and move down towards the PostgreSQL compatible bits. This is try to avoid collisions with
+    /// privileges that PostgreSQL may add in the future.
     #[derive(Serialize, Deserialize)]
     pub struct AclMode: u64 {
+        // PostgreSQL compatible privileges.
         const INSERT = 1 << 0;
         const SELECT = 1 << 1;
         const UPDATE = 1 << 2;
         const DELETE = 1 << 3;
         const USAGE = 1 << 8;
         const CREATE = 1 << 9;
+
+        // Materialize custom privileges.
+        const CREATE_CLUSTER = 1 << 29;
+        const CREATE_DB = 1 << 30;
+        const CREATE_ROLE = 1 << 31;
+
+        // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
+        // reserved for grant options.
     }
 }
 
