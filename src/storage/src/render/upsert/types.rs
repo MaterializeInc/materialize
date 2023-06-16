@@ -61,7 +61,7 @@
 //! Note also that after snapshot consolidation, additional space may be used if `StateValue` is
 //! used.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::num::Wrapping;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -371,13 +371,13 @@ pub trait UpsertStateBackend {
 /// A `HashMap` with additional scratch space used in some
 /// methods.
 pub struct InMemoryHashMap {
-    state: HashMap<UpsertKey, StateValue>,
+    state: BTreeMap<UpsertKey, StateValue>,
 }
 
 impl Default for InMemoryHashMap {
     fn default() -> Self {
         Self {
-            state: HashMap::new(),
+            state: BTreeMap::new(),
         }
     }
 }
@@ -471,10 +471,11 @@ impl UpsertStateBackend for AutoSpillBackend {
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
     {
         match &mut self.backend_type {
-            BackendType::InMemory(in_memory_hash_map, size) => {
-                let result = in_memory_hash_map.multi_put(puts).await;
-                if let Ok(stats) = &result {
-                    if let Some(new_size) = size.checked_add_signed(stats.size_diff) {
+            BackendType::InMemory(hash_map, size) => {
+                let mut result = hash_map.multi_put(puts).await;
+
+                if let Ok(result_status) = &mut result {
+                    if let Some(new_size) = size.checked_add_signed(result_status.size_diff) {
                         *size = new_size;
                     }
                     // TODO (mouli): Configure the size
@@ -498,23 +499,41 @@ impl UpsertStateBackend for AutoSpillBackend {
                             .await
                             .unwrap(),
                         );
-                        // TODO (mouli): Maybe we shouldn't drain unless we are able to successfully able to insert into rocksdb
-                        let new_puts = in_memory_hash_map.state.drain().map(|(k, v)| {
+
+                        let mut total_size_in_memory: i64 = 0;
+                        let new_puts = hash_map.state.iter().map(|(k, v)| {
+                            let memory_size: i64 =
+                                v.memory_size().try_into().expect("less than i64 size");
+                            total_size_in_memory = total_size_in_memory + memory_size;
+
                             (
-                                k,
+                                k.clone(),
                                 PutValue {
-                                    value: Some(v),
+                                    value: Some(v.clone()),
                                     previous_persisted_size: None,
                                 },
                             )
                         });
-                        // TODO (mouli): How should we deal with the stats here?
-                        let _ = rocksdb_backend.multi_put(new_puts).await;
-                        *size = 0;
-                        self.backend_type = BackendType::RocksDb(rocksdb_backend);
+
+                        match rocksdb_backend.multi_put(new_puts).await {
+                            Ok(puts_stats) => {
+                                *size = 0;
+                                hash_map.state.clear();
+                                // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
+                                result_status.size_diff = result_status.size_diff
+                                    + puts_stats.size_diff
+                                    - total_size_in_memory;
+                                self.backend_type = BackendType::RocksDb(rocksdb_backend);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "error spilling to disk {}",
+                                    e.display_with_causes()
+                                );
+                            }
+                        }
                     }
                 }
-                // TODO (mouli): Will the stats be still accurate if it's now written to rocksdb?
                 result
             }
             BackendType::RocksDb(rocks_db) => rocks_db.multi_put(puts).await,
