@@ -38,7 +38,32 @@ You can only use `mz_now()` to establish a temporal filter under the following c
 - The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
     At the moment, you can't use the `!=` operator with `mz_now()`.
 
+## "Late Arriving Events" and Grace Period
+
+For various reasons, it's possible for records to arrive out of order.
+For example, network connectivity issues may cause a mobile device to emit data with a timestamp from the relatively distant past.
+How can you account for late arriving data in Materialize?
+
+Consider the temporal filter for the most recent hour's worth of records.
+
+```sql
+WHERE mz_now() <= event_ts + INTERVAL '1hr'
+```
+
+Suppose the current value for `mz_now()` corresponds to `11:59:59`, and a record with a timestamp `11:00:01` arrives.
+Further suppose you query this collection at a virtual timestamp of `12:00:00`. According to the temporal filter, the record is included in your result set!
+In an ideal world, it would have been included for the whole hour, but as Materialize can't (yet?) tell the future, the record is only included once it arrives.
+Since the record arrived late, it only made its appearance for a brief moment before being retracted just after `12:00:01` virtual time.
+
+Let's say another record comes in with a timestamp of `11:00:01`, but `mz_now()` has marched forward to `12:00:02`.
+Unfortunately, this record does not pass the filter and is excluded from processing.
+
+All this to say, if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set. This is known as a **grace period**.
+
 ## Examples
+
+These examples create real objects.
+After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
 
 ### Sliding Window
 
@@ -49,48 +74,47 @@ Other systems use this term differently because they cannot achieve a continuous
 
 In this case, we will filter a table to only include only records from the last 30 seconds.
 
-```sql
---Create a table of timestamped events.
-CREATE TABLE events (
-    content TEXT,
-    event_ts TIMESTAMP
-);
+1. First, create a table called `events` and a view of the most recent 30 seconds of events.
+    ```sql
+    --Create a table of timestamped events.
+    CREATE TABLE events (
+        content TEXT,
+        event_ts TIMESTAMP
+    );
 
--- Create a view of events from the last 30 seconds.
-CREATE VIEW last_30_sec AS
-SELECT event_ts, content
-FROM events
-WHERE mz_now() <= event_ts + INTERVAL '30s';
-```
+    -- Create a view of events from the last 30 seconds.
+    CREATE VIEW last_30_sec AS
+    SELECT event_ts, content
+    FROM events
+    WHERE mz_now() <= event_ts + INTERVAL '30s';
+    ```
 
-Next, subscribe to the results of the view.
+1. Next, subscribe to the results of the view.
+    ```sql
+    COPY (SUBSCRIBE (SELECT ts, content FROM last_30_sec)) TO STDOUT;
+    ```
 
-```sql
-COPY (SUBSCRIBE (SELECT ts, content FROM last_30_sec)) TO STDOUT;
-```
+1. In a separate session, insert a record.
+    ```sql
+    INSERT INTO events VALUES (
+        'hello',
+        now()
+    );
+    ```
 
-In a separate session, insert a record.
-
-```sql
-INSERT INTO events VALUES (
-    'hello',
-    now()
-);
-```
-
-Back in the first session, watch the record expire after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
-
-```nofmt
-1686868190714   1       2023-06-15 22:29:50.711 hello
-1686868220712   -1      2023-06-15 22:29:50.711 hello
-```
+1. Back in the first session, watch the record expire after 30 seconds.
+    ```nofmt
+    1686868190714   1       2023-06-15 22:29:50.711 hello
+    1686868220712   -1      2023-06-15 22:29:50.711 hello
+    ```
+    Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
 You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
 
-### Time to Live (TTL)
+### Time-to-Live (TTL)
 
 The **time to live (TTL)** pattern helps to filter rows using expiration times.
-This example uses a `tasks` table and adds a time to live for each task.
+This example uses a `tasks` table with a time to live for each task.
 Materialize then helps perform actions according to each task's expiration time.
 
 1.  First, create a table:
@@ -142,13 +166,66 @@ Materialize then helps perform actions according to each task's expiration time.
 
 ### Periodically Emit Results
 
-Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column, and emit the result at the end of each window.
-Materialize [date functions](/sql/functions/#date-and-time-func) are helpful when bucketing records into time windows.
+Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column, and emit a single result at the end of each window.
+Materialize [date functions](/sql/functions/#date-and-time-func) are helpful for use cases like this where you want to bucket records into time windows.
+The strategy for this example is to put an initial temporal filter on the input (say, 30 days) to bound it, use the [`date_bin` function](/sql/functions/date-bin) to bin records into 1 minute windows, use a second temporal filter to emit results at the end of the window, and finally apply a third temporal filter shorter than the first filter on the inputs (say, 7 days) to set how long results should persist in Materialize.
 
-First, create a table for the input records.
+1. First, create a table for the input records.
+    ```sql
+    CREATE TABLE input (id INT, event_ts TIMESTAMP);
+    ```
+1. Create a view that filters the input for the most recent 30 days and buckets records into 1 minute windows.
+    ```sql
+    CREATE VIEW
+        input_recent_bucketed
+        AS
+            SELECT
+                id,
+                date_bin(
+                        '1 minute',
+                        event_ts,
+                        '2000-01-01 00:00:00+00'
+                    )
+                    + INTERVAL '1 minute'
+                    AS window_end
+            FROM input
+            WHERE mz_now() <= event_ts + INTERVAL '30 days';
+    ```
+1. Create the final output view that does the aggregation and maintains 7 days worth of results.
+    ```sql
+    CREATE MATERIALIZED VIEW output
+        AS
+            SELECT id, count(id) AS count, window_end
+            FROM input_recent_bucketed
+            WHERE
+                mz_now() >= window_end
+                    AND
+                mz_now() < window_end + INTERVAL '7 days'
+            GROUP BY window_end, id;
+    ```
+    This final filter means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without this, records in the result set would receive strange updates as input records expire from the initial 30 day filter.
+1. Subscribe to the `output`.
+    ```sql
+    COPY (SUBSCRIBE (SELECT * FROM output)) TO STDOUT;
+    ```
+1. In a different session, insert some records.
+    ```sql
+    INSERT INTO input VALUES (1, now());
+    -- wait a moment
+    INSERT INTO input VALUES (1, now());
+    -- wait a moment
+    INSERT INTO input VALUES (1, now());
+    -- wait a moment
+    INSERT INTO input VALUES (2, now());
+    ```
+1. Back at the `SUBSCRIBE`, wait about a minute for your final aggregation result to show up the moment the 1 minute window ends.
+    ```nofmt
+     mz_timestamp | mz_diff |  id   | count |      window_end
+    --------------|---------|-------|-------|---------------------
+    1686889140000       1       1       3       2023-06-16 04:19:00
+    1686889140000       1       2       1       2023-06-16 04:19:00
+    ```
+    Press `Ctrl+C` to exit the `SUBSCRIBE` when you are finished playing.
 
-```sql
-
-```
-
+From here, you could create a [Kafka sink](/sql/create-sink/) and use Kafka Connect to archive the historical results to a data warehouse (ignoring Kafka tombstone records that represent retracted results).
 
