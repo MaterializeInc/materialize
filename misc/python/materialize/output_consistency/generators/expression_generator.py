@@ -114,7 +114,7 @@ class ExpressionGenerator:
     def pick_random_operation(
         self,
         include_aggregates: bool,
-        filter: Optional[Callable[[DbOperationOrFunction], bool]] = None,
+        accept_op_filter: Optional[Callable[[DbOperationOrFunction], bool]] = None,
     ) -> DbOperationOrFunction:
         all_weights = (
             self.operation_weights
@@ -122,11 +122,11 @@ class ExpressionGenerator:
             else self.operation_weights_no_aggregates
         )
 
-        if filter:
+        if accept_op_filter:
             selected_operations = []
             weights = []
             for index, operation in enumerate(self.selectable_operations):
-                if filter(operation):
+                if accept_op_filter(operation):
                     selected_operations.append(operation)
                     weights.append(all_weights[index])
         else:
@@ -141,7 +141,7 @@ class ExpressionGenerator:
         storage_layout: Optional[ValueStorageLayout],
         nesting_level: int = NESTING_LEVEL_ROOT,
     ) -> Optional[ExpressionWithArgs]:
-        def filter(operation: DbOperationOrFunction) -> bool:
+        def accept_op(operation: DbOperationOrFunction) -> bool:
             if operation.is_aggregation != use_aggregation:
                 return False
 
@@ -149,7 +149,7 @@ class ExpressionGenerator:
             # operations that might return a boolean value depending on the input.
             return operation.return_type_spec.type_category == DataTypeCategory.BOOLEAN
 
-        boolean_operation = self.pick_random_operation(use_aggregation, filter)
+        boolean_operation = self.pick_random_operation(use_aggregation, accept_op)
         return self.generate_expression(
             boolean_operation, storage_layout, nesting_level
         )
