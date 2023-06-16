@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 //
-// Portions of this file are derived from `timestamp.c` in the Postgres project.
-// The original source code was retrieved on June 1, 2023 from:
+// Portions of this file are derived from the PostgreSQL project. The original
+// source code was retrieved on June 1, 2023 from:
 //
 //     https://github.com/postgres/postgres/blob/REL_15_3/src/backend/utils/adt/timestamp.c
 //
-// The original source code is subject to the terms of the PostgreSQL license, a copy
-// of which can be found in the LICENSE file at the root of this repository.
+// The original source code is subject to the terms of the PostgreSQL license, a
+// copy of which can be found in the LICENSE file at the root of this
+// repository.
 
 //! Methods for checked timestamp operations.
 
