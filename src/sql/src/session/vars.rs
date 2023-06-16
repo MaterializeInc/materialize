@@ -966,7 +966,7 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
 // - Belong to `SystemVars`, _not_ `SessionVars`
 // - Default to false and must be explicitly enabled
 macro_rules! feature_flags {
-    ($(($name:expr, $feature_desc:literal)),+) => {
+    ($(($name:expr, $feature_desc:literal)),+ $(,)?) => {
         paste::paste!{
             $(
                 // Note that the ServerVar is not directly exported; we expect these to be
@@ -1096,7 +1096,8 @@ feature_flags!(
     (
         enable_within_timestamp_order_by_in_subscribe,
         "`WITHIN TIMESTAMP ORDER BY ..`"
-    )
+    ),
+    (enable_managed_clusters, "managed clusters"),
 );
 
 /// Represents the input to a variable.

@@ -108,13 +108,18 @@ impl<S> IngestionDescription<S> {
 }
 
 impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
-    /// Determines if `self` is compatible with another `IngestionDescription`, such that we can
-    /// support an `ALTER SOURCE`.
+    /// Determines if `self` is compatible with another `IngestionDescription`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// SOURCE`).
     pub fn alter_compatible(
         &self,
         id: GlobalId,
         other: &IngestionDescription<S>,
     ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
         let IngestionDescription {
             desc,
             source_imports,
@@ -143,8 +148,8 @@ impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
         ];
         for compatible in compatibility_checks {
             if !compatible {
-                tracing::info!(
-                    "IngestionDescription incompatible:\nself:\n{:?}\n\nother\n{:?}",
+                tracing::warn!(
+                    "IngestionDescription incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
@@ -1380,7 +1385,7 @@ impl UnplannedSourceEnvelope {
 }
 
 /// A connection to an external system
-pub trait SourceConnection: Clone {
+pub trait SourceConnection: Debug + Clone + PartialEq {
     /// The name of the external system (e.g kafka, postgres, etc).
     fn name(&self) -> &'static str;
 
@@ -1403,9 +1408,25 @@ pub trait SourceConnection: Clone {
     /// kinds of columns that this source offers without any further information.
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
 
-    /// Are the changes between `self` and `other` known to be a valid transition due to an `ALTER`?
-    fn alter_compatible(&self, id: GlobalId, _: &Self) -> Result<(), StorageError> {
-        Err(StorageError::InvalidAlterSource { id })
+    /// Determines if `self` is compatible with another `SourceConnection`, in
+    /// such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// SOURCE`).
+    ///
+    /// Note that the default implementation errors unless the two are equal. To
+    /// support any modifying transformations, you must specify the
+    /// implementation.
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            Ok(())
+        } else {
+            tracing::warn!(
+                "SourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(StorageError::InvalidAlterSource { id })
+        }
     }
 }
 
@@ -1767,7 +1788,13 @@ impl SourceDesc<GenericSourceConnection> {
         &self.envelope
     }
 
+    /// Determines if `self` is compatible with another `SourceDesc`, in such a
+    /// way that it is possible to turn `self` into `other` through a valid
+    /// series of transformations (e.g. no transformation or `ALTER SOURCE`).
     pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
         let Self {
             connection,
             encoding,
@@ -1787,8 +1814,8 @@ impl SourceDesc<GenericSourceConnection> {
 
         for compatible in compatibility_checks {
             if !compatible {
-                tracing::info!(
-                    "SourceDesc<GenericSourceConnection> incompatible:\nself:\n{:?}\n\nother\n{:?}",
+                tracing::warn!(
+                    "SourceDesc<GenericSourceConnection> incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
@@ -1889,6 +1916,9 @@ impl SourceConnection for GenericSourceConnection {
     }
 
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
         match (self, other) {
             (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
             (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
@@ -2005,6 +2035,10 @@ impl SourceConnection for PostgresSourceConnection {
     }
 
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
         let PostgresSourceConnection {
             connection_id,
             connection,
@@ -2031,8 +2065,8 @@ impl SourceConnection for PostgresSourceConnection {
 
         for compatible in compatibility_checks {
             if !compatible {
-                tracing::info!(
-                    "PostgresSourceConnection incompatible:\nself:\n{:?}\n\nother\n{:?}",
+                tracing::warn!(
+                    "PostgresSourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );

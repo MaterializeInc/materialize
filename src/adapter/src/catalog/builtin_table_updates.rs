@@ -50,8 +50,8 @@ use crate::catalog::builtin::{
     MZ_VIEWS,
 };
 use crate::catalog::{
-    AwsPrincipalContext, CatalogItem, CatalogState, Connection, DataSourceDesc, Database,
-    DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
+    AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
+    Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
     StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::session::Session;
@@ -185,6 +185,12 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
+        let (size, replication_factor) = match &cluster.config.variant {
+            ClusterVariant::Managed(config) => {
+                (Some(config.size.as_str()), Some(config.replication_factor))
+            }
+            ClusterVariant::Unmanaged => (None, None),
+        };
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row: Row::pack_slice(&[
@@ -192,6 +198,9 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&cluster.owner_id.to_string()),
                 privileges,
+                cluster.is_managed().into(),
+                size.into(),
+                replication_factor.into(),
             ]),
             diff,
         }

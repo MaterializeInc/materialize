@@ -64,6 +64,7 @@ message ClusterValue {
     GlobalId linked_object_id = 2;
     RoleId owner_id = 3;
     repeated MzAclItem privileges = 4;
+    ClusterConfig config = 5;
 }
 
 message ClusterIntrospectionSourceIndexKey {
@@ -263,6 +264,30 @@ message ReplicaId {
     uint64 value = 1;
 }
 
+message ReplicaLogging {
+    bool log_logging = 1;
+    Duration interval = 2;
+}
+
+message ReplicaMergeEffort {
+    uint32 effort = 1;
+}
+
+message ClusterConfig {
+    message ManagedCluster {
+        string size = 1;
+        uint32 replication_factor = 2;
+        repeated string availability_zones = 3;
+        ReplicaLogging logging = 4;
+        ReplicaMergeEffort idle_arrangement_merge_effort = 5;
+    }
+
+    oneof variant {
+        Empty unmanaged = 1;
+        ManagedCluster managed = 2;
+    }
+}
+
 message ReplicaConfig {
     message UnmanagedLocation {
         repeated string storagectl_addrs = 1;
@@ -278,21 +303,12 @@ message ReplicaConfig {
         bool az_user_specified = 3;
     }
 
-    message Logging {
-        bool log_logging = 1;
-        Duration interval = 2;
-    }
-
-    message MergeEffort {
-        uint32 effort = 1;
-    }
-
     oneof location {
         UnmanagedLocation unmanaged = 1;
         ManagedLocation managed = 2;
     }
-    Logging logging = 3;
-    MergeEffort idle_arrangement_merge_effort = 4;
+    ReplicaLogging logging = 3;
+    ReplicaMergeEffort idle_arrangement_merge_effort = 4;
 }
 
 message RoleId {
@@ -363,10 +379,6 @@ message DefaultPrivilegesKey {
 
 message DefaultPrivilegesValue {
     AclMode privileges = 1;
-}
-
-message SystemPrivilegesKey {
-    MzAclItem privileges = 1;
 }
 
 message AuditLogEventV1 {

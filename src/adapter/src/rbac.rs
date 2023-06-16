@@ -21,7 +21,7 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, SessionCatalog};
 use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
-    AbortTransactionPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
+    AbortTransactionPlan, AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
     AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
@@ -327,6 +327,7 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::Insert(_)
         | Plan::AlterClusterRename(_)
         | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterCluster(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)
         | Plan::AlterIndexResetOptions(_)
@@ -397,6 +398,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         }
         Plan::AlterClusterRename(_)
         | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterCluster(_)
         | Plan::CreateTable(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateConnection(_)
@@ -610,7 +612,10 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
             .unwrap_or_default(),
         // Do not need ownership of descendant objects.
         Plan::DropObjects(plan) => plan.referenced_ids.clone(),
-        Plan::AlterClusterRename(plan) => vec![ObjectId::Cluster(plan.id)],
+        Plan::AlterClusterRename(AlterClusterRenamePlan { id, .. })
+        | Plan::AlterCluster(AlterClusterPlan { id, .. }) => {
+            vec![ObjectId::Cluster(*id)]
+        }
         Plan::AlterClusterReplicaRename(plan) => {
             vec![ObjectId::ClusterReplica((plan.cluster_id, plan.replica_id))]
         }
@@ -1157,8 +1162,22 @@ fn generate_required_privileges(
                 }
             })
             .collect(),
-        Plan::AlterClusterRename(AlterClusterRenamePlan { .. })
-        | Plan::AlterClusterReplicaRename(AlterClusterReplicaRenamePlan { .. })
+        Plan::AlterClusterRename(AlterClusterRenamePlan {
+            id: _,
+            name: _,
+            to_name: _,
+        })
+        | Plan::AlterClusterReplicaRename(AlterClusterReplicaRenamePlan {
+            cluster_id: _,
+            replica_id: _,
+            name: _,
+            to_name: _,
+        })
+        | Plan::AlterCluster(AlterClusterPlan {
+            id: _,
+            name: _,
+            options: _,
+        })
         | Plan::CreateDatabase(CreateDatabasePlan {
             name: _,
             if_not_exists: _,
@@ -1169,7 +1188,7 @@ fn generate_required_privileges(
         })
         | Plan::CreateCluster(CreateClusterPlan {
             name: _,
-            replicas: _,
+            variant: _,
         })
         | Plan::DiscardTemp
         | Plan::DiscardAll

@@ -894,6 +894,7 @@ impl CatalogState {
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: PrivilegeMap,
+        config: ClusterConfig,
     ) {
         let mut log_indexes = BTreeMap::new();
         for (log, index_id) in introspection_source_indexes {
@@ -965,6 +966,7 @@ impl CatalogState {
                 replicas_by_id: BTreeMap::new(),
                 owner_id,
                 privileges,
+                config,
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
@@ -1821,6 +1823,7 @@ impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
 pub struct Cluster {
     pub name: String,
     pub id: ClusterId,
+    pub config: ClusterConfig,
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     pub linked_object_id: Option<GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
@@ -1844,6 +1847,10 @@ impl Cluster {
         } else {
             ClusterRole::User
         }
+    }
+
+    pub fn is_managed(&self) -> bool {
+        matches!(self.config.variant, ClusterVariant::Managed { .. })
     }
 }
 
@@ -3329,6 +3336,7 @@ impl Catalog {
             linked_object_id,
             owner_id,
             privileges,
+            config,
         } in clusters
         {
             let introspection_source_index_gids = catalog
@@ -3369,6 +3377,7 @@ impl Catalog {
                 all_indexes,
                 owner_id,
                 MzAclItem::group_by_grantee(privileges),
+                config,
             );
         }
 
@@ -4952,32 +4961,8 @@ impl Catalog {
                 availability_zone,
                 az_user_specified,
             } => {
+                self.ensure_valid_replica_size(allowed_sizes, &size)?;
                 let cluster_replica_sizes = &self.state.cluster_replica_sizes;
-
-                if !cluster_replica_sizes.0.contains_key(&size)
-                    || (!allowed_sizes.is_empty() && !allowed_sizes.contains(&size))
-                {
-                    let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
-
-                    if !allowed_sizes.is_empty() {
-                        let allowed_sizes = BTreeSet::<&String>::from_iter(allowed_sizes.iter());
-                        entries.retain(|(name, _)| allowed_sizes.contains(name));
-                    }
-
-                    entries.sort_by_key(
-                        |(
-                            _name,
-                            ReplicaAllocation {
-                                scale, cpu_limit, ..
-                            },
-                        )| (scale, cpu_limit),
-                    );
-
-                    return Err(AdapterError::InvalidClusterReplicaSize {
-                        size,
-                        expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
-                    });
-                }
 
                 ReplicaLocation::Managed(ManagedReplicaLocation {
                     allocation: cluster_replica_sizes
@@ -4992,6 +4977,41 @@ impl Catalog {
             }
         };
         Ok(location)
+    }
+
+    pub(crate) fn ensure_valid_replica_size(
+        &self,
+        allowed_sizes: &[String],
+        size: &String,
+    ) -> Result<(), AdapterError> {
+        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
+
+        if !cluster_replica_sizes.0.contains_key(size)
+            || (!allowed_sizes.is_empty() && !allowed_sizes.contains(size))
+        {
+            let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
+
+            if !allowed_sizes.is_empty() {
+                let allowed_sizes = BTreeSet::<&String>::from_iter(allowed_sizes.iter());
+                entries.retain(|(name, _)| allowed_sizes.contains(name));
+            }
+
+            entries.sort_by_key(
+                |(
+                    _name,
+                    ReplicaAllocation {
+                        scale, cpu_limit, ..
+                    },
+                )| (scale, cpu_limit),
+            );
+
+            Err(AdapterError::InvalidClusterReplicaSize {
+                size: size.to_owned(),
+                expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+            })
+        } else {
+            Ok(())
+        }
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
@@ -5598,6 +5618,7 @@ impl Catalog {
                     linked_object_id,
                     introspection_sources,
                     owner_id,
+                    config,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
@@ -5628,6 +5649,7 @@ impl Catalog {
                         &introspection_sources,
                         owner_id,
                         privileges.clone(),
+                        config.clone(),
                     )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5652,6 +5674,7 @@ impl Catalog {
                         introspection_sources,
                         owner_id,
                         MzAclItem::group_by_grantee(privileges),
+                        config,
                     );
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     if let Some(linked_object_id) = linked_object_id {
@@ -6638,6 +6661,14 @@ impl Catalog {
                     }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 },
+                Op::UpdateClusterConfig { id, name, config } => {
+                    builtin_table_updates.push(state.pack_cluster_update(&name, -1));
+                    let cluster = state.get_cluster_mut(id);
+                    cluster.config = config;
+                    tx.update_cluster(id, cluster)?;
+                    builtin_table_updates.push(state.pack_cluster_update(&name, 1));
+                    info!("update cluster {}", name);
+                }
                 Op::UpdateClusterReplicaStatus { event } => {
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
                         event.cluster_id,
@@ -7460,6 +7491,7 @@ pub enum Op {
         linked_object_id: Option<GlobalId>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
+        config: ClusterConfig,
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
@@ -7517,6 +7549,11 @@ pub enum Op {
         member_id: RoleId,
         grantor_id: RoleId,
     },
+    UpdateClusterConfig {
+        id: ClusterId,
+        name: String,
+        config: ClusterConfig,
+    },
     UpdateClusterReplicaStatus {
         event: ClusterEvent,
     },
@@ -7550,12 +7587,32 @@ pub enum SerializedCatalogItem {
     V1 { create_sql: String },
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterConfig {
+    pub variant: ClusterVariant,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterVariantManaged {
+    pub size: String,
+    pub availability_zones: Vec<String>,
+    pub logging: SerializedReplicaLogging,
+    pub idle_arrangement_merge_effort: Option<u32>,
+    pub replication_factor: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ClusterVariant {
+    Managed(ClusterVariantManaged),
+    Unmanaged,
+}
+
 /// Serialized (stored alongside the replica) logging configuration of
 /// a replica. Serialized variant of `ReplicaLogging`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SerializedReplicaLogging {
-    log_logging: bool,
-    interval: Option<Duration>,
+    pub(crate) log_logging: bool,
+    pub(crate) interval: Option<Duration>,
 }
 
 impl From<ReplicaLogging> for SerializedReplicaLogging {
@@ -8304,6 +8361,10 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 
     fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
+    }
+
+    fn is_managed(&self) -> bool {
+        self.is_managed()
     }
 }
 

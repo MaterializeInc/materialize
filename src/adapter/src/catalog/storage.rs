@@ -44,9 +44,9 @@ use crate::catalog::storage::stash::{
     DEPLOY_GENERATION, SYSTEM_PRIVILEGES_COLLECTION, USER_VERSION,
 };
 use crate::catalog::{
-    self, is_reserved_name, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleMembership,
-    SerializedCatalogItem, SerializedReplicaConfig, SerializedReplicaLocation,
-    SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
+    self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
+    SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
 };
 use crate::coord::timeline;
 
@@ -98,6 +98,10 @@ fn add_new_builtin_clusters_migration(
                 builtin_cluster.name,
                 &vec![],
                 builtin_cluster.privileges.clone(),
+                ClusterConfig {
+                    // TODO: Should builtin clusters be managed or unmanaged?
+                    variant: ClusterVariant::Unmanaged,
+                },
             )?;
         }
     }
@@ -379,6 +383,7 @@ impl Connection {
                 linked_object_id: v.linked_object_id,
                 owner_id: v.owner_id,
                 privileges: v.privileges,
+                config: v.config,
             })
             .collect::<Result<_, _>>()?;
 
@@ -1030,6 +1035,7 @@ impl<'a> Transaction<'a> {
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        config: ClusterConfig,
     ) -> Result<(), Error> {
         self.insert_cluster(
             cluster_id,
@@ -1038,6 +1044,7 @@ impl<'a> Transaction<'a> {
             introspection_source_indexes,
             owner_id,
             privileges,
+            config,
         )
     }
 
@@ -1048,6 +1055,7 @@ impl<'a> Transaction<'a> {
         cluster_name: &str,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         privileges: Vec<MzAclItem>,
+        config: ClusterConfig,
     ) -> Result<(), Error> {
         self.insert_cluster(
             cluster_id,
@@ -1056,6 +1064,7 @@ impl<'a> Transaction<'a> {
             introspection_source_indexes,
             MZ_SYSTEM_ROLE_ID,
             privileges,
+            config,
         )
     }
 
@@ -1067,6 +1076,7 @@ impl<'a> Transaction<'a> {
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        config: ClusterConfig,
     ) -> Result<(), Error> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
@@ -1075,6 +1085,7 @@ impl<'a> Transaction<'a> {
                 linked_object_id,
                 owner_id,
                 privileges,
+                config,
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -1509,6 +1520,7 @@ impl<'a> Transaction<'a> {
                     linked_object_id: cluster.linked_object_id(),
                     owner_id: cluster.owner_id,
                     privileges: MzAclItem::flatten(cluster.privileges()),
+                    config: cluster.config.clone(),
                 })
             } else {
                 None
@@ -1851,6 +1863,7 @@ pub struct Cluster {
     pub linked_object_id: Option<GlobalId>,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+    pub config: ClusterConfig,
 }
 
 pub struct ClusterReplica {
@@ -1915,6 +1928,7 @@ pub struct ClusterValue {
     linked_object_id: Option<GlobalId>,
     owner_id: RoleId,
     privileges: Vec<MzAclItem>,
+    config: ClusterConfig,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

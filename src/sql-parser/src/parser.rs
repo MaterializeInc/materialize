@@ -3117,8 +3117,54 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
+        let option = self.expect_one_of_keywords(&[
+            AVAILABILITY,
+            IDLE,
+            INTROSPECTION,
+            MANAGED,
+            REPLICAS,
+            REPLICATION,
+            SIZE,
+        ])?;
+        let name = match option {
+            AVAILABILITY => {
+                self.expect_keyword(ZONES)?;
+                ClusterOptionName::AvailabilityZones
+            }
+            IDLE => {
+                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
+                ClusterOptionName::IdleArrangementMergeEffort
+            }
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
+                DEBUGGING => ClusterOptionName::IntrospectionDebugging,
+                INTERVAL => ClusterOptionName::IntrospectionInterval,
+                _ => unreachable!(),
+            },
+            MANAGED => ClusterOptionName::Managed,
+            REPLICAS => ClusterOptionName::Replicas,
+            REPLICATION => {
+                self.expect_keyword(FACTOR)?;
+                ClusterOptionName::ReplicationFactor
+            }
+            SIZE => ClusterOptionName::Size,
+            _ => unreachable!(),
+        };
+        Ok(name)
+    }
+
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        self.expect_keyword(REPLICAS)?;
+        let name = self.parse_cluster_option_name()?;
+
+        if name == ClusterOptionName::Replicas {
+            return self.parse_cluster_option_replicas();
+        }
+
+        let value = self.parse_optional_option_value()?;
+        Ok(ClusterOption { name, value })
+    }
+
+    fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let replicas = if self.consume_token(&Token::RParen) {
             vec![]
@@ -3711,33 +3757,7 @@ impl<'a> Parser<'a> {
                     new_owner,
                 }))
             }
-            ObjectType::Cluster => {
-                let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedObjectName::Cluster(self.parse_identifier()?);
-                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
-                self.expect_keyword(TO)?;
-                match action {
-                    OWNER => {
-                        let new_owner = self.parse_identifier()?;
-                        Ok(Statement::AlterOwner(AlterOwnerStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            new_owner,
-                        }))
-                    }
-                    RENAME => {
-                        let to_item_name = self.parse_identifier()?;
-                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            to_item_name,
-                        }))
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            ObjectType::Cluster => self.parse_alter_cluster(object_type),
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
@@ -3794,6 +3814,60 @@ impl<'a> Parser<'a> {
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
             ),
+        }
+    }
+
+    fn parse_alter_cluster(
+        &mut self,
+        object_type: ObjectType,
+    ) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_identifier()?;
+        let action = self.expect_one_of_keywords(&[OWNER, RENAME, RESET, SET])?;
+        match action {
+            OWNER => {
+                self.expect_keyword(TO)?;
+                let new_owner = self.parse_identifier()?;
+                let name = UnresolvedObjectName::Cluster(name);
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+                let name = UnresolvedObjectName::Cluster(name);
+                Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    to_item_name,
+                }))
+            }
+            RESET => {
+                self.expect_token(&Token::LParen)?;
+                let names = self.parse_comma_separated(Parser::parse_cluster_option_name)?;
+                self.expect_token(&Token::RParen)?;
+                Ok(Statement::AlterCluster(AlterClusterStatement {
+                    if_exists,
+                    name,
+                    action: AlterClusterAction::ResetOptions(names),
+                }))
+            }
+            SET => {
+                self.expect_token(&Token::LParen)?;
+                let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
+                self.expect_token(&Token::RParen)?;
+                Ok(Statement::AlterCluster(AlterClusterStatement {
+                    if_exists,
+                    name,
+                    action: AlterClusterAction::SetOptions(options),
+                }))
+            }
+            _ => unreachable!(),
         }
     }
 

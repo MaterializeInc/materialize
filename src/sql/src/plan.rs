@@ -73,6 +73,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
+use crate::plan::with_options::OptionalInterval;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
@@ -120,6 +121,7 @@ pub enum Plan {
     CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
     Insert(InsertPlan),
+    AlterCluster(AlterClusterPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
@@ -156,6 +158,9 @@ impl Plan {
     /// [`PlanKind`].
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
+            StatementKind::AlterCluster => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
+            }
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
             StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
@@ -307,6 +312,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
             },
+            Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterIndexSetOptions(_) => "alter index",
@@ -413,7 +419,26 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateClusterPlan {
     pub name: String,
+    pub variant: CreateClusterVariant,
+}
+
+#[derive(Debug)]
+pub enum CreateClusterVariant {
+    Managed(CreateClusterManagedPlan),
+    Unmanaged(CreateClusterUnmanagedPlan),
+}
+
+#[derive(Debug)]
+pub struct CreateClusterUnmanagedPlan {
     pub replicas: Vec<(String, ReplicaConfig)>,
+}
+
+#[derive(Debug)]
+pub struct CreateClusterManagedPlan {
+    pub replication_factor: u32,
+    pub size: String,
+    pub availability_zones: Vec<String>,
+    pub compute: ComputeReplicaConfig,
 }
 
 #[derive(Debug)]
@@ -773,8 +798,8 @@ pub struct AlterIndexResetOptionsPlan {
 
 #[derive(Debug, Clone)]
 
-pub enum AlterOptionParameter {
-    Set(String),
+pub enum AlterOptionParameter<T = String> {
+    Set(T),
     Reset,
     Unchanged,
 }
@@ -789,6 +814,13 @@ pub struct AlterSinkPlan {
 pub struct AlterSourcePlan {
     pub id: GlobalId,
     pub size: AlterOptionParameter,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterPlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub options: PlanClusterOption,
 }
 
 #[derive(Debug)]
@@ -1144,6 +1176,33 @@ pub enum IndexOption {
     /// Configures the logical compaction window for an index. `None` disables
     /// logical compaction entirely.
     LogicalCompactionWindow(Option<Duration>),
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanClusterOption {
+    pub availability_zones: AlterOptionParameter<Vec<String>>,
+    pub idle_arrangement_merge_effort: AlterOptionParameter<u32>,
+    pub introspection_debugging: AlterOptionParameter<bool>,
+    pub introspection_interval: AlterOptionParameter<OptionalInterval>,
+    pub managed: AlterOptionParameter<bool>,
+    pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
+    pub replication_factor: AlterOptionParameter<u32>,
+    pub size: AlterOptionParameter,
+}
+
+impl Default for PlanClusterOption {
+    fn default() -> Self {
+        Self {
+            availability_zones: AlterOptionParameter::Unchanged,
+            idle_arrangement_merge_effort: AlterOptionParameter::Unchanged,
+            introspection_debugging: AlterOptionParameter::Unchanged,
+            introspection_interval: AlterOptionParameter::Unchanged,
+            managed: AlterOptionParameter::Unchanged,
+            replicas: AlterOptionParameter::Unchanged,
+            replication_factor: AlterOptionParameter::Unchanged,
+            size: AlterOptionParameter::Unchanged,
+        }
+    }
 }
 
 /// A vector of values to which parameter references should be bound.

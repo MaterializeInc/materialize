@@ -203,6 +203,7 @@ Local
 Log
 Logical
 Login
+Managed
 Map
 Marketing
 Materialize

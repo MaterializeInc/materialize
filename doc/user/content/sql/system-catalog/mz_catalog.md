@@ -75,12 +75,15 @@ Field               | Type      | Meaning
 
 The `mz_clusters` table contains a row for each cluster in the system.
 
-Field          | Type                 | Meaning
----------------|----------------------|--------
-`id`           | [`text`]             | Materialize's unique ID for the cluster.
-`name`         | [`text`]             | The name of the cluster.
-`owner_id`     | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
-`privileges`   | [`mz_aclitem array`] | The privileges belonging to the cluster.
+| Field                | Type                 | Meaning                                                                                                            |
+|----------------------|----------------------|--------------------------------------------------------------------------------------------------------------------|
+| `id`                 | [`text`]             | Materialize's unique ID for the cluster.                                                                           |
+| `name`               | [`text`]             | The name of the cluster.                                                                                           |
+| `owner_id`           | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles). |
+| `privileges`         | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                           |
+| `managed`            | [`boolean`]          | Whether the cluster has automatically managed replicas.                                                            |
+| `size`               | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. If the cluster is unmanaged, `NULL`.        |
+| `replication_factor` | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. If the cluster is unmanaged, `NULL`.     |
 
 ### `mz_columns`
 

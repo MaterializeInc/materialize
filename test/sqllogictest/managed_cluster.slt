@@ -1,0 +1,426 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Basic tests of the `CREATE CLUSTER` and `DROP CLUSTER` DDL statements.
+
+mode cockroach
+
+# Start from a pristine state
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_managed_clusters = true;
+----
+COMPLETE 0
+
+
+statement ok
+CREATE CLUSTER foo SIZE '1'
+
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
+ALTER CLUSTER foo.bar SET (SIZE '2')
+
+statement ok
+ALTER CLUSTER foo RESET (REPLICATION FACTOR)
+
+statement error db error: ERROR: SIZE has no default value
+ALTER CLUSTER foo RESET (SIZE)
+
+statement ok
+ALTER CLUSTER foo RESET (AVAILABILITY ZONES)
+
+statement ok
+ALTER CLUSTER foo RESET (INTROSPECTION DEBUGGING)
+
+statement ok
+ALTER CLUSTER foo RESET (INTROSPECTION INTERVAL)
+
+statement ok
+ALTER CLUSTER foo RESET (IDLE ARRANGEMENT MERGE EFFORT)
+
+statement ok
+DROP CLUSTER foo
+
+statement error db error: ERROR: Expected left parenthesis, found REPLICATION
+ALTER CLUSTER foo SET REPLICATION FACTOR 2
+
+statement error db error: ERROR: Expected left parenthesis, found REPLICATION
+ALTER CLUSTER foo RESET REPLICATION FACTOR
+
+statement error db error: ERROR: unknown cluster 'foo'
+ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters
+----
+s1  mz_system  false  NULL  NULL
+s2  mz_introspection  false  NULL  NULL
+u1  default  false  NULL  NULL
+
+
+query T rowsort
+SHOW CLUSTERS
+----
+mz_system
+mz_introspection
+default
+
+# Test invalid option combinations.
+
+statement error db error: ERROR: REPLICAS not supported for managed clusters
+CREATE CLUSTER baz REPLICAS (), MANAGED
+
+statement ok
+CREATE CLUSTER baz REPLICAS (), MANAGED = false
+
+statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+ALTER CLUSTER baz SET (REPLICATION FACTOR 2)
+
+statement error db error: ERROR: SIZE not supported for unmanaged clusters
+ALTER CLUSTER baz SET (SIZE '2')
+
+statement ok
+ALTER CLUSTER baz RESET (REPLICAS)
+
+statement error db error: ERROR: Cannot change REPLICATION FACTOR of unmanaged clusters
+ALTER CLUSTER baz RESET (REPLICATION FACTOR)
+
+statement error db error: ERROR: Cannot change SIZE of unmanaged clusters
+ALTER CLUSTER baz RESET (SIZE)
+
+statement error db error: ERROR: Cannot change AVAILABILITY ZONES of unmanaged clusters
+ALTER CLUSTER baz RESET (AVAILABILITY ZONES)
+
+statement error db error: ERROR: Cannot change INTROSPECTION DEGUBBING of unmanaged clusters
+ALTER CLUSTER baz RESET (INTROSPECTION DEBUGGING)
+
+statement error db error: ERROR: Cannot change INTROSPECTION INTERVAL of unmanaged clusters
+ALTER CLUSTER baz RESET (INTROSPECTION INTERVAL)
+
+statement error db error: ERROR: Cannot change IDLE ARRANGEMENT MERGE EFFORT of unmanaged clusters
+ALTER CLUSTER baz RESET (IDLE ARRANGEMENT MERGE EFFORT)
+
+statement error db error: ERROR: Missing SIZE for empty cluster
+ALTER CLUSTER baz SET (MANAGED)
+
+statement ok
+ALTER CLUSTER baz SET (MANAGED, SIZE '1')
+
+statement ok
+DROP CLUSTER baz
+
+statement error db error: ERROR: SIZE not supported for unmanaged clusters
+CREATE CLUSTER baz REPLICAS (), SIZE '1'
+
+statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+CREATE CLUSTER baz REPLICAS (), REPLICATION FACTOR 0
+
+statement error db error: ERROR: INTROSPECTION DEBUGGING not supported for unmanaged clusters
+CREATE CLUSTER baz REPLICAS (), INTROSPECTION DEBUGGING = true
+
+statement error db error: ERROR: INTROSPECTION INTERVAL not supported for unmanaged clusters
+CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+statement error db error: ERROR: unknown cluster replica size abc
+CREATE CLUSTER foo SIZE 'abc', REPLICATION FACTOR 3
+
+statement ok
+CREATE CLUSTER foo SIZE '1', REPLICATION FACTOR 3
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  1
+foo  r2  1
+foo  r3  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  true  3  1
+
+statement ok
+ALTER CLUSTER foo SET (MANAGED = false)
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  1
+foo  r2  1
+foo  r3  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  false  NULL  NULL
+
+statement error db error: ERROR: REPLICATION FACTOR 4 does not match number of replicas \(3\)
+ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 4)
+
+statement error db error: ERROR: Cluster replicas of size 1 do not match expected SIZE 2
+ALTER CLUSTER foo SET (MANAGED, SIZE '2')
+
+statement error db error: ERROR: Cluster replicas of size 1 do not match expected SIZE abc
+ALTER CLUSTER foo SET (MANAGED, SIZE abc)
+
+statement ok
+ALTER CLUSTER foo SET (MANAGED, SIZE '1')
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  1
+foo  r2  1
+foo  r3  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  true  3  1
+
+query TTT
+SELECT mz_clusters.name, mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id ORDER BY 1, 2
+----
+default  r1  u1
+foo  r1  u5
+foo  r2  u6
+foo  r3  u7
+mz_introspection  r1  u3
+mz_system  r1  u2
+
+statement error db error: ERROR: cannot modify managed cluster foo
+DROP CLUSTER REPLICA foo.r1
+
+statement error db error: ERROR: cannot modify managed cluster foo
+ALTER CLUSTER REPLICA foo.r2 RENAME TO bar
+
+statement ok
+ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  true  1  1
+
+statement ok
+ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
+
+statement error db error: ERROR: cannot create source in cluster with more than one replica
+CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  1
+foo  r2  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  true  2  1
+
+statement ok
+ALTER CLUSTER foo RESET (REPLICATION FACTOR)
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  true  1  1
+
+statement ok
+ALTER CLUSTER foo SET (SIZE '2')
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  2
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  true  1  2
+
+statement ok
+ALTER CLUSTER foo SET (SIZE '1', REPLICATION FACTOR 1)
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+foo  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTT rowsort
+SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
+----
+u5  foo  true  1  1
+
+statement error db error: ERROR: cannot modify managed cluster foo
+DROP CLUSTER REPLICA foo.r1
+
+statement ok
+ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
+
+statement error db error: ERROR: unknown cluster replica size invalid_size
+ALTER CLUSTER foo SET (SIZE invalid_size)
+
+statement ok
+DROP CLUSTER REPLICA IF EXISTS default.bar
+
+statement ok
+DROP CLUSTER REPLICA IF EXISTS bar.foo
+
+statement ok
+DROP CLUSTER REPLICA IF EXISTS default.foo
+
+statement error db error: ERROR: CLUSTER foo has no CLUSTER REPLICA named "r1"
+DROP CLUSTER REPLICA foo.r1
+
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+query TTTTTTT
+SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
+----
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+
+statement ok
+DROP CLUSTER foo CASCADE
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'))
+
+statement error db error: ERROR: Cannot convert unmanaged cluster to managed, non\-unique replica sizes: 1, 2
+ALTER CLUSTER foo SET (MANAGED)
+
+statement ok
+DROP CLUSTER foo CASCADE
+
+statement ok
+CREATE CLUSTER foo REPLICAS (c1 (SIZE '1'), r2 (SIZE '1'))
+
+statement error db error: ERROR: Cannot convert unmanaged cluster to managed, invalid replica names: c1
+ALTER CLUSTER foo SET (MANAGED)
+
+statement ok
+DROP CLUSTER foo CASCADE
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+
+statement ok
+ALTER CLUSTER foo RESET (MANAGED)
+
+statement ok
+DROP CLUSTER foo CASCADE
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+
+statement error db error: ERROR: Cluster replicas of size 1 do not match expected SIZE 2
+ALTER CLUSTER foo SET (MANAGED, SIZE '2')
+
+statement error db error: ERROR: REPLICATION FACTOR 1 does not match number of replicas \(2\)
+ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 1)
+
+statement ok
+ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 2)
+
+statement ok
+DROP CLUSTER foo CASCADE
+
+statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 99, limit: 5, current: 0\)
+CREATE CLUSTER foo SIZE '1', replication factor 99
+
+statement ok
+CREATE CLUSTER foo SIZE '1', replication factor 1
+
+statement error db error: ERROR: cluster 'foo' already exists
+CREATE CLUSTER foo SIZE '1', replication factor 1
+
+statement ok
+CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
+
+statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
+ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
+
+statement ok
+ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
+
+statement ok
+DROP CLUSTER foo CASCADE
+
+statement error db error: ERROR: unknown cluster replica size invalid_size
+CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_managed_clusters = false;
+----
+COMPLETE 0
+
+statement error db error: ERROR: managed clusters is not supported
+CREATE CLUSTER foo MANAGED, SIZE '1'
+
+statement ok
+CREATE CLUSTER foo REPLICAS ()
+
+statement error db error: ERROR: managed clusters is not supported
+ALTER CLUSTER foo RESET (MANAGED)
+
+statement error db error: ERROR: managed clusters is not supported
+ALTER CLUSTER foo SET (MANAGED)
+
+# Restore pristine server state
+reset-server
