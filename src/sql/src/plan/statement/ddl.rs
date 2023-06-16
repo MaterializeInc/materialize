@@ -30,11 +30,12 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterRoleStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
-    AlterSystemSetStatement, CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption,
-    CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement, SshConnectionOption,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
+    AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -102,17 +103,19 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
-    plan_utils, query, transform_ast, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
-    AlterOptionParameter, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig,
-    Table, Type, View,
+    plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
+    AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
+    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, QueryContext,
+    ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
+    View,
 };
 use crate::session::vars;
 
@@ -1449,7 +1452,7 @@ fn source_sink_cluster_config(
             }
 
             // We also don't allow more objects to be added to a cluster that is already
-            // linked to another object.
+            // linked to another object or managed.
             ensure_cluster_is_not_linked(scx, cluster.id())?;
 
             Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
@@ -2720,28 +2723,95 @@ pub fn describe_create_cluster(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(ClusterOption, (Replicas, Vec<ReplicaDefinition<Aug>>));
+generate_extracted_config!(
+    ClusterOption,
+    (AvailabilityZones, Vec<String>),
+    (IdleArrangementMergeEffort, u32),
+    (IntrospectionDebugging, bool),
+    (IntrospectionInterval, OptionalInterval),
+    (Managed, bool),
+    (Replicas, Vec<ReplicaDefinition<Aug>>),
+    (ReplicationFactor, u32),
+    (Size, String)
+);
 
 pub fn plan_create_cluster(
     scx: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let ClusterOptionExtracted { replicas, .. }: ClusterOptionExtracted = options.try_into()?;
-
-    let replica_defs = match replicas {
-        Some(replica_defs) => replica_defs,
-        None => sql_bail!("REPLICAS option is required"),
-    };
-
-    let mut replicas = vec![];
-    for ReplicaDefinition { name, options } in replica_defs {
-        replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
-    }
-
-    Ok(Plan::CreateCluster(CreateClusterPlan {
-        name: normalize::ident(name),
+    let ClusterOptionExtracted {
+        availability_zones,
+        idle_arrangement_merge_effort,
+        introspection_debugging,
+        introspection_interval,
+        managed,
         replicas,
-    }))
+        replication_factor,
+        seen: _,
+        size,
+    }: ClusterOptionExtracted = options.try_into()?;
+
+    let managed = managed.unwrap_or_else(|| replicas.is_none());
+
+    if managed {
+        scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
+
+        if replicas.is_some() {
+            sql_bail!("REPLICAS not supported for managed clusters");
+        }
+        let Some(size) = size else {
+            sql_bail!("SIZE must be specified for managed clusters");
+        };
+
+        let compute = plan_compute_replica_config(
+            introspection_interval,
+            introspection_debugging.unwrap_or(false),
+            idle_arrangement_merge_effort,
+        )?;
+
+        let replication_factor = replication_factor.unwrap_or(1);
+        let availability_zones = availability_zones.unwrap_or_default();
+        Ok(Plan::CreateCluster(CreateClusterPlan {
+            name: normalize::ident(name),
+            variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
+                replication_factor,
+                size,
+                availability_zones,
+                compute,
+            }),
+        }))
+    } else {
+        let Some(replica_defs) = replicas else {
+            sql_bail!("REPLICAS must be specified for unmanaged clusters");
+        };
+        if availability_zones.is_some() {
+            sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
+        }
+        if replication_factor.is_some() {
+            sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
+        }
+        if idle_arrangement_merge_effort.is_some() {
+            sql_bail!("IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters");
+        }
+        if introspection_debugging.is_some() {
+            sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
+        }
+        if introspection_interval.is_some() {
+            sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
+        }
+        if size.is_some() {
+            sql_bail!("SIZE not supported for unmanaged clusters");
+        }
+        let mut replicas = vec![];
+        for ReplicaDefinition { name, options } in replica_defs {
+            replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
+        }
+
+        Ok(Plan::CreateCluster(CreateClusterPlan {
+            name: normalize::ident(name),
+            variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
+        }))
+    }
 }
 
 const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
@@ -2782,23 +2852,11 @@ fn plan_replica_config(
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
-    let introspection_interval = introspection_interval
-        .map(|OptionalInterval(i)| i)
-        .unwrap_or(Some(DEFAULT_REPLICA_INTROSPECTION_INTERVAL));
-    let introspection = match introspection_interval {
-        Some(interval) => Some(ComputeReplicaIntrospectionConfig {
-            interval: interval.duration()?,
-            debugging: introspection_debugging,
-        }),
-        None if introspection_debugging => {
-            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
-        }
-        None => None,
-    };
-    let compute = ComputeReplicaConfig {
-        introspection,
+    let compute = plan_compute_replica_config(
+        introspection_interval,
+        introspection_debugging,
         idle_arrangement_merge_effort,
-    };
+    )?;
 
     match (
         size,
@@ -2884,6 +2942,31 @@ fn plan_replica_config(
     }
 }
 
+fn plan_compute_replica_config(
+    introspection_interval: Option<OptionalInterval>,
+    introspection_debugging: bool,
+    idle_arrangement_merge_effort: Option<u32>,
+) -> Result<ComputeReplicaConfig, PlanError> {
+    let introspection_interval = introspection_interval
+        .map(|OptionalInterval(i)| i)
+        .unwrap_or(Some(DEFAULT_REPLICA_INTROSPECTION_INTERVAL));
+    let introspection = match introspection_interval {
+        Some(interval) => Some(ComputeReplicaIntrospectionConfig {
+            interval: interval.duration()?,
+            debugging: introspection_debugging,
+        }),
+        None if introspection_debugging => {
+            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
+        }
+        None => None,
+    };
+    let compute = ComputeReplicaConfig {
+        introspection,
+        idle_arrangement_merge_effort,
+    };
+    Ok(compute)
+}
+
 pub fn describe_create_cluster_replica(
     _: &StatementContext,
     _: CreateClusterReplicaStatement<Aug>,
@@ -2908,6 +2991,7 @@ pub fn plan_create_cluster_replica(
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
+    ensure_cluster_is_not_managed(scx, cluster.id())?;
     Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
@@ -3615,6 +3699,7 @@ fn plan_drop_cluster_replica(
     let cluster = resolve_cluster_replica(scx, &name, if_exists)?;
     if let Some((cluster, _)) = &cluster {
         ensure_cluster_is_not_linked(scx, cluster.id())?;
+        ensure_cluster_is_not_managed(scx, cluster.id())?;
     }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
@@ -4011,6 +4096,147 @@ pub fn plan_alter_index_options(
     }
 }
 
+pub fn describe_alter_cluster_set_options(
+    _: &StatementContext,
+    _: AlterClusterStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_cluster(
+    scx: &StatementContext,
+    AlterClusterStatement {
+        name,
+        action,
+        if_exists,
+    }: AlterClusterStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
+
+    let cluster = match resolve_cluster(scx, &name, if_exists)? {
+        Some(entry) => entry,
+        None => {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Cluster,
+            }))
+        }
+    };
+
+    // Prevent changes to linked clusters.
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
+
+    let mut options: PlanClusterOption = Default::default();
+
+    match action {
+        AlterClusterAction::SetOptions(set_options) => {
+            let ClusterOptionExtracted {
+                availability_zones,
+                idle_arrangement_merge_effort,
+                introspection_debugging,
+                introspection_interval,
+                managed,
+                replicas: replica_defs,
+                replication_factor,
+                seen: _,
+                size,
+            }: ClusterOptionExtracted = set_options.try_into()?;
+
+            match managed.unwrap_or_else(|| cluster.is_managed()) {
+                true => {
+                    if replica_defs.is_some() {
+                        sql_bail!("REPLICAS not supported for managed clusters");
+                    }
+                    if let Some(replication_factor) = replication_factor {
+                        if is_storage_cluster(scx, cluster)
+                            && !cluster.bound_objects().is_empty()
+                            && replication_factor > 1
+                        {
+                            sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
+                        }
+                    }
+                }
+                false => {
+                    if availability_zones.is_some() {
+                        sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
+                    }
+                    if replication_factor.is_some() {
+                        sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
+                    }
+                    if idle_arrangement_merge_effort.is_some() {
+                        sql_bail!(
+                            "IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters"
+                        );
+                    }
+                    if introspection_debugging.is_some() {
+                        sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
+                    }
+                    if introspection_interval.is_some() {
+                        sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
+                    }
+                    if size.is_some() {
+                        sql_bail!("SIZE not supported for unmanaged clusters");
+                    }
+                }
+            }
+
+            let mut replicas = vec![];
+            for ReplicaDefinition { name, options } in
+                replica_defs.into_iter().flat_map(Vec::into_iter)
+            {
+                replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
+            }
+
+            if let Some(managed) = managed {
+                options.managed = AlterOptionParameter::Set(managed);
+            }
+            if let Some(replication_factor) = replication_factor {
+                options.replication_factor = AlterOptionParameter::Set(replication_factor);
+            }
+            if let Some(size) = size {
+                options.size = AlterOptionParameter::Set(size);
+            }
+            if let Some(availability_zones) = availability_zones {
+                options.availability_zones = AlterOptionParameter::Set(availability_zones);
+            }
+            if let Some(idle_arrangement_merge_effort) = idle_arrangement_merge_effort {
+                options.idle_arrangement_merge_effort =
+                    AlterOptionParameter::Set(idle_arrangement_merge_effort);
+            }
+            if let Some(introspection_debugging) = introspection_debugging {
+                options.introspection_debugging =
+                    AlterOptionParameter::Set(introspection_debugging);
+            }
+            if let Some(introspection_interval) = introspection_interval {
+                options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
+            }
+            if !replicas.is_empty() {
+                options.replicas = AlterOptionParameter::Set(replicas);
+            }
+        }
+        AlterClusterAction::ResetOptions(reset_options) => {
+            use AlterOptionParameter::Reset;
+            use ClusterOptionName::*;
+            for option in reset_options {
+                match option {
+                    AvailabilityZones => options.availability_zones = Reset,
+                    IntrospectionInterval => options.introspection_interval = Reset,
+                    IntrospectionDebugging => options.introspection_debugging = Reset,
+                    IdleArrangementMergeEffort => options.idle_arrangement_merge_effort = Reset,
+                    Managed => options.managed = Reset,
+                    Replicas => options.replicas = Reset,
+                    ReplicationFactor => options.replication_factor = Reset,
+                    Size => options.size = Reset,
+                }
+            }
+        }
+    }
+    Ok(Plan::AlterCluster(AlterClusterPlan {
+        id: cluster.id(),
+        name: cluster.name().to_string(),
+        options,
+    }))
+}
+
 pub fn describe_alter_object_rename(
     _: &StatementContext,
     _: AlterObjectRenameStatement,
@@ -4120,17 +4346,20 @@ pub fn plan_alter_cluster_replica_rename(
     if_exists: bool,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster, replica)) => Ok(Plan::AlterClusterReplicaRename(
-            AlterClusterReplicaRenamePlan {
-                cluster_id: cluster.id(),
-                replica_id: replica,
-                name: QualifiedReplica {
-                    cluster: cluster.name().into(),
-                    replica: name.replica,
+        Some((cluster, replica)) => {
+            ensure_cluster_is_not_managed(scx, cluster.id())?;
+            Ok(Plan::AlterClusterReplicaRename(
+                AlterClusterReplicaRenamePlan {
+                    cluster_id: cluster.id(),
+                    replica_id: replica,
+                    name: QualifiedReplica {
+                        cluster: cluster.name().into(),
+                        replica: name.replica,
+                    },
+                    to_name: normalize::ident(to_item_name),
                 },
-                to_name: normalize::ident(to_item_name),
-            },
-        )),
+            ))
+        }
         None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
     }
 }
@@ -4527,6 +4756,21 @@ fn ensure_cluster_is_not_linked(
         Err(PlanError::ModifyLinkedCluster {
             cluster_name,
             linked_object_name,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Returns an error if the given cluster is a managed cluster
+pub(crate) fn ensure_cluster_is_not_managed(
+    scx: &StatementContext,
+    cluster_id: ClusterId,
+) -> Result<(), PlanError> {
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    if cluster.is_managed() {
+        Err(PlanError::ManagedCluster {
+            cluster_name: cluster.name().to_string(),
         })
     } else {
         Ok(())

@@ -570,6 +570,9 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the privileges associated with the cluster.
     fn privileges(&self) -> &PrivilegeMap;
+
+    /// Returns true if this cluster is a managed cluster.
+    fn is_managed(&self) -> bool;
 }
 
 /// A cluster replica in a [`SessionCatalog`]

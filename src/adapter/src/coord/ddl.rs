@@ -993,6 +993,7 @@ impl Coordinator {
                 | Op::RenameItem { .. }
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
+                | Op::UpdateClusterConfig { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }

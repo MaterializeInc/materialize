@@ -162,6 +162,9 @@ pub enum PlanError {
         cluster_name: String,
         linked_object_name: String,
     },
+    ManagedCluster {
+        cluster_name: String,
+    },
     EmptyPublication(String),
     SubsourceNameConflict {
         name: UnresolvedItemName,
@@ -440,6 +443,7 @@ impl fmt::Display for PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
+            Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
             Self::SubsourceNameConflict { name, upstream_references } => {

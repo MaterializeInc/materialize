@@ -23,7 +23,8 @@ use crate::catalog::{
 use crate::names::{Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedRoleName, SchemaSpecifier};
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
-    resolve_cluster, resolve_cluster_replica, resolve_database, resolve_item, resolve_schema,
+    ensure_cluster_is_not_managed, resolve_cluster, resolve_cluster_replica, resolve_database,
+    resolve_item, resolve_schema,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
@@ -122,11 +123,14 @@ fn plan_alter_cluster_replica_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster, replica_id)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::ClusterReplica((cluster.id(), replica_id)),
-            object_type: ObjectType::ClusterReplica,
-            new_owner,
-        })),
+        Some((cluster, replica_id)) => {
+            ensure_cluster_is_not_managed(scx, cluster.id())?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::ClusterReplica((cluster.id(), replica_id)),
+                object_type: ObjectType::ClusterReplica,
+                new_owner,
+            }))
+        }
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::ClusterReplica,
         })),

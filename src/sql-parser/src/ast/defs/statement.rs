@@ -60,6 +60,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
+    AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
@@ -121,6 +122,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
+            Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
@@ -1179,14 +1181,37 @@ impl_display_t!(CreateTypeStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClusterOptionName {
+    /// The `AVAILABILITY ZONES [[=] '[' <values> ']' ]` option.
+    AvailabilityZones,
+    /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
+    IntrospectionInterval,
+    /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
+    IntrospectionDebugging,
+    /// The `IDLE ARRANGEMENT MERGE EFFORT [=] <value>` option.
+    IdleArrangementMergeEffort,
+    /// The `MANAGED` option.
+    Managed,
     /// The `REPLICAS` option.
     Replicas,
+    /// The `REPLICATION FACTOR` option.
+    ReplicationFactor,
+    /// The `SIZE` option.
+    Size,
 }
 
 impl AstDisplay for ClusterOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            ClusterOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
+            ClusterOptionName::IdleArrangementMergeEffort => {
+                f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
+            }
+            ClusterOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
+            ClusterOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
+            ClusterOptionName::Managed => f.write_str("MANAGED"),
             ClusterOptionName::Replicas => f.write_str("REPLICAS"),
+            ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
+            ClusterOptionName::Size => f.write_str("SIZE"),
         }
     }
 }
@@ -1248,6 +1273,47 @@ impl<T: AstInfo> AstDisplay for ReplicaDefinition<T> {
     }
 }
 impl_display_t!(ReplicaDefinition);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterClusterAction<T: AstInfo> {
+    SetOptions(Vec<ClusterOption<T>>),
+    ResetOptions(Vec<ClusterOptionName>),
+}
+
+/// `ALTER CLUSTER .. SET ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterClusterStatement<T: AstInfo> {
+    /// The `IF EXISTS` option.
+    pub if_exists: bool,
+    /// Name of the altered cluster.
+    pub name: Ident,
+    /// The action.
+    pub action: AlterClusterAction<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER CLUSTER ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ");
+        match &self.action {
+            AlterClusterAction::SetOptions(options) => {
+                f.write_str("SET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+            AlterClusterAction::ResetOptions(options) => {
+                f.write_str("RESET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display_t!(AlterClusterStatement);
 
 /// `CREATE CLUSTER REPLICA ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
