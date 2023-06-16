@@ -39,16 +39,16 @@ The typical uses of `mz_now()` are:
 
 <!-- This example also appears in temporal-filters -->
 It is common for real-time applications to be concerned with only a recent period of time.
-In this case, we will filter a table of events to include only those from the last 30 seconds.
+In this case, we will filter a table to only include only records from the last 30 seconds.
 
 ```sql
---Create a table of timestamped events.
+-- Create a table of timestamped events.
 CREATE TABLE events (
     content TEXT,
     event_ts TIMESTAMP
 );
 
---Create a view of events from the last 30 seconds.
+-- Create a view of events from the last 30 seconds.
 CREATE VIEW last_30_sec AS
 SELECT event_ts, content
 FROM events
@@ -61,32 +61,20 @@ Next, subscribe to the results of the view.
 COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_sec)) TO STDOUT;
 ```
 
-In a separate session, insert events.
+In a separate session, insert a record.
 
 ```sql
 INSERT INTO events VALUES (
     'hello',
     now()
 );
-INSERT INTO events VALUES (
-    'welcome',
-    now()
-);
-INSERT INTO events VALUES (
-    'goodbye',
-    now()
-);
 ```
 
-Back in the first session, watch the events expire as `mz_now()` after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
+Back in the first session, watch the record expire after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
 ```nofmt
 1686868190714   1       2023-06-15 22:29:50.711 hello
-1686868190876   1       2023-06-15 22:29:50.874 welcome
-1686868191236   1       2023-06-15 22:29:51.233 goodbye
 1686868220712   -1      2023-06-15 22:29:50.711 hello
-1686868220875   -1      2023-06-15 22:29:50.874 welcome
-1686868221234   -1      2023-06-15 22:29:51.233 goodbye
 ```
 
 You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
@@ -96,11 +84,12 @@ You can materialize the `last_30_sec` view by creating an index on it (results s
 If you haven't already done so in the previous example, create a table called `events` and add a few records.
 
 ```sql
---Create a table of timestamped events.
+-- Create a table of timestamped events.
 CREATE TABLE events (
     content TEXT,
     event_ts TIMESTAMP
 );
+-- Insert records
 INSERT INTO events VALUES (
     'hello',
     now()

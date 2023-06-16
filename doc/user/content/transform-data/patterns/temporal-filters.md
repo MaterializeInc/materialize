@@ -1,5 +1,5 @@
 ---
-title: "Temporal filters (sliding, hopping & tumbling windows)"
+title: "Temporal filters (time windows)"
 description: "Perform time-windowed computation over temporal data."
 aliases:
   - /guides/temporal-filters/
@@ -13,7 +13,7 @@ A "temporal filter" is a `WHERE` or `HAVING` clause which uses the [`mz_now`](/s
 This function returns Materialize's current virtual timestamp, which attempts to keep up with real time as data is processed.
 Applying a temporal filter reduces the working dataset, saving memory resources and focusing results on the recent past.
 
-Here is a typical temporal filter that considers records whose timestamp is within the last 5 minutes. We call this a **sliding window**.
+Here is a typical temporal filter that considers records whose timestamps are within the last 5 minutes.
 
 ```sql
 WHERE mz_now() <= event_ts + INTERVAL '5min'
@@ -42,9 +42,12 @@ You can only use `mz_now()` to establish a temporal filter under the following c
 
 ### Sliding Window
 
-<!-- This example also appears in temporal-filters -->
+<!-- This example also appears in now_and_mz_now -->
 It is common for real-time applications to be concerned with only a recent period of time.
-In this case, we will filter a table of events to include only those from the last 30 seconds.
+We call this a **sliding window**.
+Other systems use this term differently because they cannot achieve a continuously sliding window.
+
+In this case, we will filter a table to only include only records from the last 30 seconds.
 
 ```sql
 --Create a table of timestamped events.
@@ -53,7 +56,7 @@ CREATE TABLE events (
     event_ts TIMESTAMP
 );
 
---Create a view of events from the last 30 seconds.
+-- Create a view of events from the last 30 seconds.
 CREATE VIEW last_30_sec AS
 SELECT event_ts, content
 FROM events
@@ -66,312 +69,86 @@ Next, subscribe to the results of the view.
 COPY (SUBSCRIBE (SELECT ts, content FROM last_30_sec)) TO STDOUT;
 ```
 
-In a separate session, insert events.
+In a separate session, insert a record.
 
 ```sql
 INSERT INTO events VALUES (
     'hello',
     now()
 );
-INSERT INTO events VALUES (
-    'welcome',
-    now()
-);
-INSERT INTO events VALUES (
-    'goodbye',
-    now()
-);
 ```
 
-Back in the first session, watch the events expire as `mz_now()` after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
+Back in the first session, watch the record expire after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
 ```nofmt
 1686868190714   1       2023-06-15 22:29:50.711 hello
-1686868190876   1       2023-06-15 22:29:50.874 welcome
-1686868191236   1       2023-06-15 22:29:51.233 goodbye
 1686868220712   -1      2023-06-15 22:29:50.711 hello
-1686868220875   -1      2023-06-15 22:29:50.874 welcome
-1686868221234   -1      2023-06-15 22:29:51.233 goodbye
 ```
 
 You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
 
-### Periodically Emit Final Result of a Time Window
-
-
-
-## old
-
-The `SELECT` query below uses one value of `mz_now()` to filter out records inserted after or deleted before that value, which is filled in with the time at which the query executes.
-
-```sql
-SELECT count(*)
-FROM events
-WHERE mz_now() >= insert_ms
-  AND mz_now() < delete_ms;
-```
-
-The query counts `events` with `insert_ms` before or at the time represented by `mz_now()` and `delete_ms` after that time.
-
-We can create a materialized view of the same query:
-
-```sql
-CREATE MATERIALIZED VIEW active_events AS
-SELECT count(*)
-FROM events
-WHERE mz_now() >= insert_ms
-  AND mz_now() < delete_ms;
-```
-
-At each logical time, the view `active_events` contains exactly the results of the `SELECT` query above.
-As `mz_now()` moves forward in time, the events included change, newer events now meeting the time requirement and older events no longer doing so.
-You do not need to insert a deletion event and can rely on the query to maintain the result for you as time advances.
-
-## Windowing idioms
-
-Temporal filters allow you to implement several windowing idioms for data that comes with logical timestamps.
-The patterns discussed below are all instances of temporal filters. Each pattern is a generalization of the last.
-
-### Tumbling windows
-
-**Tumbling windows** are what we call windows when their duration equals their period (the amount of time before a new window begins). This creates fixed-size, contiguous, non-overlapping time intervals where each record belongs to exactly one interval.
-
-Here we specify a tumbling window with the duration and period `PERIOD_MS`:
-
-```sql
-CREATE MATERIALIZED VIEW tumbling AS
-SELECT content, insert_ms
-FROM events
--- The event should appear in only one interval of duration `PERIOD_MS`.
--- The interval begins here ...
-WHERE mz_now() >= PERIOD_MS * (insert_ms / PERIOD_MS)
--- ... and ends here.
-  AND mz_now() < PERIOD_MS * (1 + insert_ms / PERIOD_MS)
-```
-
-Tumbling windows are useful for maintaining constantly refreshed answers to questions like "How many orders did we receive during each hour of each day?"
-
-### Hopping windows
-
-**Hopping windows** are windows whose duration is an integer multiple of their period. This creates fixed-size windows that may overlap, with records belonging to multiple windows.
-
-{{< note >}}
-In some systems, these are called "sliding windows". Materialize reserves that term for a.
-{{< /note >}}
-
-Here we specify a hopping window that has the period `PERIOD_MS` and covers `INTERVALS` number of intervals:
-
-```sql
-CREATE MATERIALIZED VIEW hopping AS
-SELECT content, insert_ms
-FROM events
--- The event should appear in `INTERVALS` intervals each of width `PERIOD_MS`.
--- The interval begins here ...
-WHERE mz_now() >= PERIOD_MS * (insert_ms / PERIOD_MS)
--- ... and ends here.
-  AND mz_now() < INTERVALS * (PERIOD_MS + insert_ms / PERIOD_MS)
-```
-
-Note that when `INTERVALS` is one, this query is identical to the query above it.
-
-### Sliding windows
-
-{{< note >}}
-In some systems, "sliding windows" are used to mean windows whose duration is an integer multiple of their period.
-At Materialize, we call those "hopping windows" instead.
-{{< /note >}}
-
-**Sliding windows** are windows whose period approaches the limit of 0. This creates fixed-size windows that appear to slide continuously forward in time. Records may belong to more than one interval.
-
-Here we specify a sliding windows that has the duration `INTERVAL_MS`:
-
-```sql
-CREATE MATERIALIZED VIEW sliding AS
-SELECT content, insert_ms
-FROM events
--- The event should appear inside the interval that begins at
--- `insert_ms` and ends at  `insert_ms + INTERVAL_MS`.
--- The interval begins here ..
-WHERE mz_now() >= insert_ms
--- ... and ends here.
-  AND mz_now() < insert_ms + INTERVAL_MS
-```
-
-Sliding windows are useful for maintaining the answers to questions like "How many orders did we get in the past five minutes?"
-
-## Grace periods
-
-Obviously, a record must be present for it to pass a temporal filter.
-If a record is presented to Materialize at a time later than its `insert_ms` column (or the equivalent), it will only be included at the later time.
-
-Streaming data often arrives just a bit later than intended. You can account for this in the temporal filter by introducing a grace period, adding a fixed
-amount to each expression you compare to `mz_now()`.
-
-If you think your data may arrive up to ten seconds late, you could add a grace period of ten seconds to each time.
-This holds back the production of correct answers by ten seconds, but does not omit data up to ten seconds late.
-
-```sql
--- Use a grace period to allow for records as late as `GRACE_MS`.
-CREATE MATERIALIZED VIEW grace AS
-SELECT content, insert_ms, delete_ms
-FROM events
-WHERE mz_now() >= insert_ms + GRACE_MS
-  AND mz_now() < delete_ms + GRACE_MS;
-```
-
-Grace periods can be applied to any of the moving window idioms.
-
-## Example
-
-### Windowing
-
-<!-- This example also appears in now_and_mz_now -->
-
-For this example, you'll need to create a sample data source and create a materialized view from it for later reference.
-
-```sql
---Create a table of timestamped events.
-CREATE TABLE events (
-    content text,
-    insert_ms numeric,
-    delete_ms numeric
-);
-
---Create a materialized view of events valid at a given logical time.
-CREATE MATERIALIZED VIEW valid AS
-SELECT content, insert_ms, delete_ms
-FROM events
-WHERE mz_now() >= insert_ms
-  AND mz_now() < delete_ms;
-```
-
-Next, you'll populate the table with timestamp data.
-The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_now()`.
-
-```sql
-INSERT INTO events VALUES (
-    'hello',
-    extract(epoch from now()) * 1000,
-    (extract(epoch from now()) * 1000) + 100000
-);
-INSERT INTO events VALUES (
-    'welcome',
-    extract(epoch from now()) * 1000,
-    (extract(epoch from now()) * 1000) + 150000
-);
-INSERT INTO events VALUES (
-    'goodbye',
-    (extract(epoch from now()) * 1000),
-    (extract(epoch from now()) * 1000) + 200000
-);
-```
-
-Then, before 100,000 ms (or 1.67 minutes) elapse, run the following query to see all the records:
-
-```sql
-SELECT *, mz_now() FROM valid;
-```
-
-```nofmt
- content |   insert_ms   |   delete_ms   | mz_now
----------+---------------+---------------+----------------------
- hello   | 1620853325858 | 1620853425858 |        1620853337180
- goodbye | 1620853325862 | 1620853525862 |        1620853337180
- welcome | 1620853325860 | 1620853475860 |        1620853337180
-(3 rows)
-```
-
-If you run this query again after 1.67 minutes from the first insertion, you'll see only two results, because the first result no longer satisfies the predicate.
-
-### Bucketing
-
-It is common to use buckets to represent the time window where a row belongs. Materialize [date functions](/sql/functions/#date-and-time-func) will help us here. <br/>
-Let's continue with the last example:
-
-```sql
-CREATE MATERIALIZED VIEW valid_buckets AS
-SELECT
-  content,
-  insert_ms,
-  delete_ms,
-  -- Trunc timestamps to the minute and use them as buckets
-  DATE_TRUNC('minute', to_timestamp(insert_ms / 1000)) as insert_bucket,
-  DATE_TRUNC('minute', to_timestamp(delete_ms / 1000)) as delete_bucket
-FROM events
-WHERE mz_now() >= insert_ms
-  AND mz_now() < delete_ms;
-```
-
-Re-insert some rows to make sure there is data available, and run the following query to see all the records and their respective buckets:
-
-```sql
-SELECT * FROM valid_buckets;
-```
-
-```nofmt
- content |   insert_ms   |   delete_ms   |     insert_bucket      |     delete_bucket
----------+---------------+---------------+------------------------+------------------------
- goodbye | 1647551752960 | 1647551952960 | 2022-03-17 21:15:00+00 | 2022-03-17 21:19:00+00
- hello   | 1647551752687 | 1647551852687 | 2022-03-17 21:15:00+00 | 2022-03-17 21:17:00+00
- welcome | 1647551752694 | 1647551902694 | 2022-03-17 21:15:00+00 | 2022-03-17 21:18:00+00
-(3 rows)
-```
-
-You can then use these time buckets in aggregations:
-
-```sql
-SELECT
-  insert_bucket,
-  COUNT(1)
-FROM valid_buckets
-GROUP BY 1;
-```
-
-```nofmt
-     insert_bucket      | count
-------------------------+-------
- 2022-03-17 21:15:00+00 |     3
-(1 row)
-```
-
-For this case, querying and aggregating is relatively effortless;
-if the aggregation query were expensive, creating a materialized view doing the aggregation would make more sense.
-
-## Temporal filter pushdown
-
-{{< alpha />}}
-
-In the example above, all of the temporal queries we’ve written only return results based on recently-added events: for example, our sliding window query will only return events that were inserted within the last `INTERVAL_MS`. This is a very common pattern; it’s much more likely we’re interested in the last five minutes of data than in five minutes of data from a year ago!
-
-Materialize can "push down" filters that match this pattern all the way down to its storage layer, skipping over old data that’s not relevant to the query. For `SELECT` statements, this can substantially improve query latency. Temporal filters of materialized views can reduce the time it takes to start serving results after being created or after the cluster is restarted.
-
-For this optimization to apply to your query or view, two things need to be true:
-
-- The columns filtered should correlate with the insertion or update time of the row.
-
-  In the examples above, the values `insert_ms` and `delete_ms` in each event correlate with the time the event was inserted. Filters that reference these columns should reduce query latency.
-
-  However, the values in our `content` column are not
-  correlated with insertion time in any way, and filters
-  against `content` will probably not be pushed down.
-- Temporal filters that consist of arithmetic, date math, and comparisons are eligible for pushdown, including all the examples in this page.
-
-  However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](../../../sql/explain/#output-modifiers) to `EXPLAIN`.
-
-  For example:
-
+### Time to Live (TTL)
+
+The **time to live (TTL)** pattern helps to filter rows using expiration times.
+This example uses a `tasks` table and adds a time to live for each task.
+Materialize then helps perform actions according to each task's expiration time.
+
+1.  First, create a table:
+    ```sql
+      CREATE TABLE tasks (name TEXT, created_ts TIMESTAMP, ttl INTERVAL);
+    ```
+1.  Add some tasks to track:
+    ```sql
+      INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 minutes');
+      INSERT INTO tasks VALUES ('time_to_eat', now(), INTERVAL '1 hour');
+      INSERT INTO tasks VALUES ('security_block', now(), INTERVAL '1 day');
+    ```
+1. Create a view using a temporal filter **over the expiration time**. For our example, the expiration time represents the sum between the task's `created_ts` and its `ttl`.
+    ```sql
+      CREATE MATERIALIZED VIEW tracking_tasks AS
+      SELECT
+        name,
+        created_ts + ttl as expiration_time
+      FROM tasks
+      WHERE mz_now() < created_ts + ttl;
+    ```
+  The moment `mz_now()` crosses the expiration time of a record, it is removed from the result set.
+
+- Query the remaining time for a row:
   ```sql
-  EXPLAIN WITH(filter_pushdown)
-  SELECT count(*)
-  FROM events
-  WHERE mz_now() >= insert_ms
-  AND mz_now() < delete_ms;
-  ----
-  Explained Query:
-  [...]
-  Source materialize.public.events
-    filter=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
-    pushdown=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
+    SELECT expiration_time - now() AS remaining_ttl
+    FROM tracking_tasks
+    WHERE name = 'time_to_eat';
   ```
 
-  Both of the filters in our query appear in the `pushdown=` list at the bottom of the output, so our filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
+- Check if a particular row is still available:
+  ```sql
+  SELECT true
+  FROM tracking_tasks
+  WHERE name = 'security_block';
+  ```
+
+- Trigger an external process when a row expires:
+  ```sql
+    INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 seconds');
+    COPY( SUBSCRIBE tracking_tasks WITH (SNAPSHOT = false) ) TO STDOUT;
+
+  ```
+  ```nofmt
+  mz_timestamp | mz_diff | name       | expiration_time |
+  -------------|---------|------------|-----------------|
+  ...          | -1      | send_email | ...             | <-- Time to send the email!
+  ```
+
+### Periodically Emit Results
+
+Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column, and emit the result at the end of each window.
+Materialize [date functions](/sql/functions/#date-and-time-func) are helpful when bucketing records into time windows.
+
+First, create a table for the input records.
+
+```sql
+
+```
+
+
