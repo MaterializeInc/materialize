@@ -1,5 +1,5 @@
 ---
-title: "Tutorial: Manage users and roles"
+title: "Tutorial: Manage privileges in a non-production cluster"
 description: "Add users, create roles, and assign privileges in Materialize"
 menu:
   main:
@@ -37,23 +37,13 @@ Settings > Users.
 
 1. Click **Invite User** and fill in the user information.
 
-The **Organization Admin** and **Organization Member** roles refer to `SUPERUSER`
-privileges.
+The **Organization Admin** and **Organization Member** roles refer to
+Materialize console privileges. Select **Organization Member** for this
+example.
 
-## Step 2. Connect to Materialize
+# Step 2. Create a new role
 
-To manage roles, you need to connect to your Materialize instance with `psql` or
-other external tools.
-
-1. In the [Materialize UI](https://console.materialize.com/), go to the **Connect** screen.
-
-1. Create a new app password.
-
-    The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
-
-1. Copy the `psql` command or the **External tools** connection information.
-
-## Step 3. Create a new role
+1. In the Materialize UI, go to the **Connect** screen and copy the `psql` command or external tool information.
 
 1. Open a new terminal window, run the `psql` command or use the external tool connection information, and enter your app password.
 
