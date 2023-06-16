@@ -228,4 +228,3 @@ The strategy for this example is to put an initial temporal filter on the input 
     Press `Ctrl+C` to exit the `SUBSCRIBE` when you are finished playing.
 
 From here, you could create a [Kafka sink](/sql/create-sink/) and use Kafka Connect to archive the historical results to a data warehouse (ignoring Kafka tombstone records that represent retracted results).
-
