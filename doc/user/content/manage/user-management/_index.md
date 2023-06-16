@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     parent: manage
-    name: User management
+    name: Access control
     identifier: 'user-management'
     weight: 10
 ---
