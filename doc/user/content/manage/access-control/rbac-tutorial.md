@@ -3,7 +3,7 @@ title: "Tutorial: Manage privileges in a non-production cluster"
 description: "Add users, create roles, and assign privileges in Materialize"
 menu:
   main:
-    parent: access-control 
+    parent: access-control
     weight: 25
 ---
 
@@ -41,7 +41,7 @@ The **Organization Admin** and **Organization Member** roles refer to
 Materialize console privileges. Select **Organization Member** for this
 example.
 
-# Step 2. Create a new role
+## Step 2. Create a new role
 
 1. In the Materialize UI, go to the **Connect** screen and copy the `psql` command or external tool information.
 
@@ -90,7 +90,7 @@ example.
   * `CREATECLUSTER` allows the role to create Materialize clusters. This
     attribute is unique to the Materialize concept of clusters.
 
-## Step 4. Create example objects
+## Step 3. Create example objects
 
 Your `dev_role` has the default system-level permissions and needs object-level privileges. RBAC allows you to apply granular privileges to objects in the SQL hierarchy. Let's create some example objects in the system and determine what
 privileges the role needs.
@@ -126,7 +126,7 @@ You just created a set of objects. Your schema object belongs to
 the database. You can access the cluster from any database. The next
 step is to grant privileges to your role based on the role needs.
 
-## Step 5. Grant privileges to the role
+## Step 4. Grant privileges to the role
 
 In this example, let's say your `dev_role` needs the following permissions:
 
@@ -170,7 +170,7 @@ In this example, let's say your `dev_role` needs the following permissions:
    To have access to the objects within a cluster, you must also have the same
    level of access to the cluster itself.
 
-## Step 6. Assign the role to a user
+## Step 5. Assign the role to a user
 
 The `dev_role` now has the acceptable privileges it needs. Let's apply this role
 to a user in your Materialize organization.
@@ -199,7 +199,7 @@ to a user in your Materialize organization.
    privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges,
    which were assigned by the `u1` user.
 
-## Step 7. Create a second role
+## Step 6. Create a second role
 
 Next, you will create a new role with different privileges to other objects.
 Then you will apply those privileges to the `dev` role and alter or drop
@@ -225,7 +225,7 @@ privileges as needed.
    GRANT USAGE, CREATE ON DATABASE qa_db TO qa_role;
    ```
 
-## Step 8. Add inherited privileges
+## Step 7. Add inherited privileges
 
 Your `dev_role` also needs access to `qa_db`. You can apply these
 privileges individually or you can choose to grant the `dev_role` the same
@@ -259,7 +259,7 @@ permissions as the `qa_role`.
    the next section, you will edit role attributes for these roles and drop
    privileges.
 
-## Step 9. Revoke privileges and alter role attributes
+## Step 8. Revoke privileges and alter role attributes
 
 Your `dev_role` and `qa_role` have the same role attributes. You can alter or
 revoke certain attributes and privileges for each role, even if they are
