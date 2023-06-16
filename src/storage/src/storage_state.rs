@@ -843,9 +843,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // control flow from external command to this internal command.
                 self.storage_state.dropped_ids.extend(ids);
             }
-            InternalStorageCommand::UpdateConfiguration(pg, rocksdb) => {
-                self.storage_state.dataflow_parameters.update(pg, rocksdb)
-            }
+            InternalStorageCommand::UpdateConfiguration(pg, rocksdb, auto_spill_config) => self
+                .storage_state
+                .dataflow_parameters
+                .update(pg, rocksdb, auto_spill_config),
         }
     }
 
@@ -1157,6 +1158,7 @@ impl StorageState {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
                         params.pg_replication_timeouts,
                         params.upsert_rocksdb_tuning_config,
+                        params.upsert_auto_spill_config,
                     ))
                 }
             }

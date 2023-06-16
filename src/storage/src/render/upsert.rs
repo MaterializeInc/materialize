@@ -37,7 +37,8 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
-    AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState, UpsertStateBackend,
+    upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
+    UpsertStateBackend,
 };
 use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
@@ -161,8 +162,14 @@ where
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
+        let allow_auto_spill = dataflow_paramters.auto_spill_config.allow_spilling_to_disk;
+        let spill_threshold = dataflow_paramters
+            .auto_spill_config
+            .spill_to_disk_threshold_bytes;
+
         tracing::info!(
             ?tuning,
+            ?dataflow_paramters.auto_spill_config,
             "timely-{} rendering {} with rocksdb-backed upsert state",
             source_config.worker_id,
             source_config.id
@@ -174,21 +181,53 @@ where
 
         let env = instance_context.rocksdb_env.clone();
 
-        upsert_inner(
-            input,
-            upsert_envelope.key_indices,
-            resume_upper,
-            previous,
-            previous_token,
-            upsert_metrics,
-            source_config,
-            AutoSpillBackend::new(Some(RocksDBParams {
-                instance_path: rocksdb_dir,
-                env,
-                tuning_config: tuning,
-                metrics: rocksdb_metrics,
-            })),
-        )
+        if allow_auto_spill {
+            upsert_inner(
+                input,
+                upsert_envelope.key_indices,
+                resume_upper,
+                previous,
+                previous_token,
+                upsert_metrics,
+                source_config,
+                move || async move {
+                    AutoSpillBackend::new(
+                        RocksDBParams {
+                            instance_path: rocksdb_dir,
+                            env,
+                            tuning_config: tuning,
+                            metrics: rocksdb_metrics,
+                        },
+                        spill_threshold,
+                    )
+                },
+            )
+        } else {
+            upsert_inner(
+                input,
+                upsert_envelope.key_indices,
+                resume_upper,
+                previous,
+                previous_token,
+                upsert_metrics,
+                source_config,
+                move || async move {
+                    rocksdb::RocksDB::new(
+                        mz_rocksdb::RocksDBInstance::new(
+                            &rocksdb_dir,
+                            mz_rocksdb::InstanceOptions::defaults_with_env(env),
+                            tuning,
+                            rocksdb_metrics,
+                            // For now, just use the same config as the one used for
+                            // merging snapshots.
+                            upsert_bincode_opts(),
+                        )
+                        .await
+                        .unwrap(),
+                    )
+                },
+            )
+        }
     } else {
         tracing::info!(
             "timely-{} rendering {} with memory-backed upsert state",
@@ -203,12 +242,12 @@ where
             previous_token,
             upsert_metrics,
             source_config,
-            InMemoryHashMap::default(),
+            || async { InMemoryHashMap::default() },
         )
     }
 }
 
-fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, US>(
+fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
     mut key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -216,14 +255,16 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, US>(
     previous_token: Option<Rc<dyn Any>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
-    state: US,
+    state: F,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
 )
 where
     G::Timestamp: TotalOrder,
-    US: UpsertStateBackend + 'static,
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = US>,
+    US: UpsertStateBackend,
 {
     // Sort key indices to ensure we can construct the key by iterating over the datums of the row
     key_indices.sort_unstable();
@@ -259,7 +300,7 @@ where
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         let mut state = UpsertState::new(
-            state,
+            state().await,
             upsert_shared_metrics,
             upsert_metrics,
             source_config.source_statistics,

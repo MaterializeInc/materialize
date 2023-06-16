@@ -603,6 +603,24 @@ const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+/// Controls whether automatic spill to disk should be turned on when using `DISK`.
+const UPSERT_SOURCE_AUTO_SPILL_TO_DISK: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("upsert_source_auto_spill_to_disk"),
+    value: &false,
+    description: "Controls whether automatic spill to disk should be turned on when using `DISK`",
+    internal: true,
+};
+
+/// The upsert in memory state size threshold after which it will spill to disk.
+/// The default is 256 MB = 268435456 bytes
+const UPSERT_SOURCE_AUTO_SPILL_THRESHOLD_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("upsert_source_auto_spill_threshold_bytes"),
+    value: &268435456,
+    description:
+        "The upsert in-memory state size threshold in bytes after which it will spill to disk",
+    internal: true,
+};
+
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
 mod upsert_rocksdb {
     use std::str::FromStr;
@@ -1760,6 +1778,8 @@ impl SystemVars {
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&DISK_CLUSTER_REPLICAS_DEFAULT)
+            .with_var(&UPSERT_SOURCE_AUTO_SPILL_TO_DISK)
+            .with_var(&UPSERT_SOURCE_AUTO_SPILL_THRESHOLD_BYTES)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
@@ -2108,6 +2128,14 @@ impl SystemVars {
     /// Returns the `disk_cluster_replicas_default` configuration parameter.
     pub fn disk_cluster_replicas_default(&self) -> bool {
         *self.expect_value(&DISK_CLUSTER_REPLICAS_DEFAULT)
+    }
+
+    pub fn upsert_source_auto_spill_to_disk(&self) -> bool {
+        *self.expect_value(&UPSERT_SOURCE_AUTO_SPILL_TO_DISK)
+    }
+
+    pub fn upsert_source_auto_spill_threshold_bytes(&self) -> usize {
+        *self.expect_value(&UPSERT_SOURCE_AUTO_SPILL_THRESHOLD_BYTES)
     }
 
     pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb_types::config::CompactionStyle {

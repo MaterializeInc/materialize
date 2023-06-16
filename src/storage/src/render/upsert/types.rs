@@ -466,14 +466,16 @@ pub(crate) struct RocksDBParams {
 
 pub struct AutoSpillBackend {
     backend_type: BackendType,
-    rockdsdb_params: Option<RocksDBParams>,
+    rockdsdb_params: RocksDBParams,
+    auto_spill_threshold_bytes: usize,
 }
 
 impl AutoSpillBackend {
-    pub(crate) fn new(rockdsdb_params: Option<RocksDBParams>) -> Self {
+    pub(crate) fn new(rockdsdb_params: RocksDBParams, auto_spill_threshold_bytes: usize) -> Self {
         Self {
             backend_type: BackendType::InMemory(InMemoryHashMap::default()),
             rockdsdb_params,
+            auto_spill_threshold_bytes,
         }
     }
 
@@ -510,8 +512,12 @@ impl UpsertStateBackend for AutoSpillBackend {
             BackendType::InMemory(map) => {
                 let mut result = map.multi_put(puts).await;
                 if let Ok(result_status) = &mut result {
+                    let in_memory_size: usize = map
+                        .total_size
+                        .try_into()
+                        .expect("unexpected error while casting");
                     // TODO (mouli): Configure the size
-                    if map.total_size > 10 && self.rockdsdb_params.is_some() {
+                    if in_memory_size > self.auto_spill_threshold_bytes {
                         let new_puts = map.state.iter().map(|(k, v)| {
                             (
                                 k.clone(),
@@ -523,8 +529,7 @@ impl UpsertStateBackend for AutoSpillBackend {
                         });
 
                         let mut rocksdb_backend =
-                            AutoSpillBackend::init_rocksdb(self.rockdsdb_params.as_ref().unwrap())
-                                .await;
+                            AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
 
                         match rocksdb_backend.multi_put(new_puts).await {
                             Ok(puts_stats) => {
@@ -631,7 +636,7 @@ where
     /// Merge and consolidate the following updates into the state, during snapshotting.
     ///
     /// After an entire snapshot has been `merged`, all values must be in the correct state
-    /// (as determined by `StateValue::ensure_decoded`, and `merge_snapshot_chunk` must NOT
+    /// (as determined by `StateValue::ensure_decoded`), and `merge_snapshot_chunk` must NOT
     /// be called again.
     ///
     /// The `completed` boolean communicates whether or not this is the final chunk of updates
