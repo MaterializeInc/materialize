@@ -106,7 +106,7 @@ rustc-demangle = { opt-level = 3 }
 # debugger experience. This seems to be the right tradeoff for release builds:
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
-debug = 1
+debug = 2
 
 # IMPORTANT: when patching a dependency, you should only depend on "main",
 # "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
