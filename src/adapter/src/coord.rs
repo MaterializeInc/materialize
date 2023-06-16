@@ -97,6 +97,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
@@ -461,7 +462,7 @@ pub struct ReplicaMetadata {
 
 /// Metadata about an active connection.
 #[derive(Debug)]
-struct ConnMeta {
+pub struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
     /// cancellation requests. The coordinator sets the contained value to
     /// `Canceled::Canceled` whenever it receives a cancellation request that
@@ -481,6 +482,9 @@ struct ConnMeta {
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+
+    /// The authenticated role of the session, set once at session connection.
+    pub(crate) authenticated_role: RoleId,
 }
 
 #[derive(Debug)]
@@ -1584,6 +1588,10 @@ impl Coordinator {
         for meta in self.active_conns.values() {
             let _ = meta.notice_tx.send(notice.clone());
         }
+    }
+
+    pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
+        &self.active_conns
     }
 }
 

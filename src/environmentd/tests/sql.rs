@@ -3210,3 +3210,123 @@ fn test_max_connections() {
         })
         .collect_vec();
 }
+
+#[mz_ore::test]
+fn test_pg_cancel_backend() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET enable_ld_rbac_checks TO true")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO true")
+        .unwrap();
+
+    let mut client1 = server.connect(postgres::NoTls).unwrap();
+    let mut client2 = server.connect(postgres::NoTls).unwrap();
+
+    // Connect as another user who should not be able to cancel the query.
+    let mut client_user = server
+        .pg_config()
+        .user("other")
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let _ = client1.batch_execute("CREATE TABLE t (i INT)").unwrap();
+
+    // Start a thread to perform the cancel while the SUBSCRIBE is running in this thread.
+    let handle = thread::spawn(move || {
+        // Wait for the subscription to start.
+        let conn_id = Retry::default()
+            .retry(|_| {
+                let conn_id: String = client2
+                    .query_one(
+                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        &[],
+                    )?
+                    .get(0);
+                Ok::<_, postgres::Error>(conn_id)
+            })
+            .unwrap();
+
+        // The other user doesn't have permission to cancel.
+        assert_contains!(
+            client_user
+                .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+                .unwrap_err()
+                .to_string(),
+            r#"must be a member of "materialize""#
+        );
+
+        let found_conn: bool = client2
+            .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+            .unwrap()
+            .get(0);
+        assert!(found_conn);
+    });
+
+    let err = client1.query("SUBSCRIBE t", &[]).unwrap_err();
+    assert_contains!(err.to_string(), "canceling statement due to user request");
+
+    handle.join().unwrap();
+
+    assert_contains!(
+        client1
+            .query_one("SELECT * FROM (SELECT pg_cancel_backend(1))", &[])
+            .unwrap_err()
+            .to_string(),
+        "pg_cancel_backend in this position",
+    );
+
+    // Ensure cancelling oneself does anything besides panic. Currently it cancels itself.
+    let conn_id: i32 = client1
+        .query_one("SELECT pg_backend_pid()", &[])
+        .unwrap()
+        .get(0);
+    assert_contains!(
+        client1
+            .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+            .unwrap_err()
+            .to_string(),
+        "canceling statement due to user request",
+    );
+
+    // Test that canceling with a parameter is accepted by the planner. 99999 is
+    // an arbitrary connection ID that will not exist.
+    let found_conn: bool = client1
+        .query_one("SELECT pg_cancel_backend($1)", &[&99999_i32])
+        .unwrap()
+        .get(0);
+    assert!(!found_conn);
+    let found_conn: bool = client1
+        .query_one("SELECT pg_cancel_backend($1::int4)", &[&99999_i32])
+        .unwrap()
+        .get(0);
+    assert!(!found_conn);
+    let found_conn: bool = client1
+        .query_one("SELECT pg_cancel_backend($1 + 42)", &[&99999_i32])
+        .unwrap()
+        .get(0);
+    assert!(!found_conn);
+
+    // Cancelling in a transaction.
+    client1.batch_execute("BEGIN").unwrap();
+    assert_contains!(
+        client1
+            .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+            .unwrap_err()
+            .to_string(),
+        "canceling statement due to user request",
+    );
+    assert_contains!(
+        client1.batch_execute("SELECT 1").unwrap_err().to_string(),
+        "current transaction is aborted"
+    );
+}

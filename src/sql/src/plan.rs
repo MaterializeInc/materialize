@@ -68,6 +68,7 @@ pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
+pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
@@ -81,6 +82,7 @@ pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, Win
 pub use notice::PlanNotice;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
+pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::PlannedRoleAttributes;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
@@ -153,6 +155,7 @@ pub enum Plan {
     RevokePrivileges(RevokePrivilegesPlan),
     AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
+    SideEffectingFunc(SideEffectingFunc),
 }
 
 impl Plan {
@@ -228,7 +231,7 @@ impl Plan {
             StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
-            StatementKind::Select => vec![PlanKind::Peek],
+            StatementKind::Select => vec![PlanKind::Peek, PlanKind::SideEffectingFunc],
             StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
@@ -363,6 +366,7 @@ impl Plan {
             Plan::RevokePrivileges(_) => "revoke privilege",
             Plan::AlterDefaultPrivileges(_) => "alter default privileges",
             Plan::ReassignOwned(_) => "reassign owned",
+            Plan::SideEffectingFunc(_) => "side effecting func",
         }
     }
 }

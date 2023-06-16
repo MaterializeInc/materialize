@@ -32,6 +32,7 @@ use crate::plan::expr::{
 };
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
+use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
 use crate::session::vars;
@@ -868,8 +869,8 @@ impl From<ScalarBaseType> for ParamType {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ReturnType {
-    typ: Option<ParamType>,
-    is_set_of: bool,
+    pub typ: Option<ParamType>,
+    pub is_set_of: bool,
 }
 
 impl ReturnType {
@@ -1707,7 +1708,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         };
     }
 
-    builtins! {
+    let mut builtins = builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
         // SELECT oid, proname, proargtypes::regtype[]
@@ -3102,7 +3103,34 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "decode" => Scalar {
             params!(String, String) => BinaryFunc::Decode => Bytes, 1947;
         }
+    };
+
+    // Add side-effecting functions, which are defined in a separate module
+    // using a restricted set of function definition features (e.g., no
+    // overloads) to make them easier to plan.
+    for sef_builtin in PG_CATALOG_SEF_BUILTINS.values() {
+        builtins.insert(
+            sef_builtin.name,
+            Func::Scalar(vec![FuncImpl {
+                oid: sef_builtin.oid,
+                params: ParamList::Exact(
+                    sef_builtin
+                        .param_types
+                        .iter()
+                        .map(|t| ParamType::from(t.clone()))
+                        .collect(),
+                ),
+                return_type: ReturnType::scalar(ParamType::from(
+                    sef_builtin.return_type.scalar_type.clone(),
+                )),
+                op: Operation::variadic(|_ecx, _e| {
+                    bail_unsupported!(format!("{} in this position", sef_builtin.name))
+                }),
+            }]),
+        );
     }
+
+    builtins
 });
 
 pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {

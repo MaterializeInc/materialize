@@ -535,6 +535,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
+            SideEffectingFunc => vec![SendingRows],
         }
     }
 }

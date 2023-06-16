@@ -778,6 +778,11 @@
   - signature: 'pg_backend_pid() -> int'
     description: Returns the internal connection ID.
     unmaterializable: true
+  - signature: 'pg_cancel_backend(connection_id: int) -> bool'
+    description: >-
+      Cancels an in-progress query on the specified connection ID.
+      Returns whether the connection ID existed (not if it cancelled a query).
+    side_effecting: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
   - signature: 'pg_get_constraintdef(oid: oid[, pretty: bool]) -> text'
