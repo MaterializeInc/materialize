@@ -9,7 +9,7 @@ menu:
 
 {{< alpha />}}
 
-This guide walks you through creating a new user and managing roles in Materialize. By
+This tutorial walks you through creating a new user and managing roles in Materialize. By
 the end of this tutorial you will:
 
 * Invite a new user in the Materialize Console
@@ -28,7 +28,7 @@ production cluster.
 
 * Make sure you have `psql` or another client installed locally.
 
-* Make sure you have a [Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+* Make sure you have a [Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) and already have a password to connect with.
 
 ## Step 1. Invite a new user
 
@@ -136,7 +136,7 @@ You just created a set of objects. Your schema object belongs to
 the database. You can access the cluster from any database. The next
 step is to grant privileges to your role based on the role needs.
 
-## Step 5. Grant privileges to a role
+## Step 5. Grant privileges to the role
 
 In this example, let's say your `dev_role` needs the following permissions:
 
@@ -180,7 +180,7 @@ In this example, let's say your `dev_role` needs the following permissions:
    To have access to the objects within a cluster, you must also have the same
    level of access to the cluster itself.
 
-## Step 6. Assign a role to a user
+## Step 6. Assign the role to a user
 
 The `dev_role` now has the acceptable privileges it needs. Let's apply this role
 to a user in your Materialize organization.
@@ -235,7 +235,7 @@ privileges as needed.
    GRANT USAGE, CREATE ON DATABASE qa_db TO qa_role;
    ```
 
-## Step 8. Add inherited privileges to a role
+## Step 8. Add inherited privileges
 
 Your `dev_role` also needs access to `qa_db`. You can apply these
 privileges individually or you can choose to grant the `dev_role` the same

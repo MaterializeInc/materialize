@@ -1,5 +1,5 @@
 ---
-title: "Role based access control"
+title: "Role-based access control"
 description: "Manage roles, privileges, and other access control options in Materialize"
 disable_list: true
 menu:
