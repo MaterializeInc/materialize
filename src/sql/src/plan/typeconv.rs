@@ -91,7 +91,11 @@ impl<const N: usize> From<[UnaryFunc; N]> for CastTemplate {
 }
 
 /// Describes the context of a cast.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+///
+/// n.b. this type derived `Ord, PartialOrd` and the ordering of these values
+/// has semantics meaning; casts are only permitted when the caller's cast
+/// context is geq the ccx we store, which is the minimum required context.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum CastContext {
     /// Implicit casts are "no-brainer" casts that apply automatically in
     /// expressions. They are typically lossless, such as `ScalarType::Int32` to
@@ -105,6 +109,12 @@ pub enum CastContext {
     /// casting `ScalarType::Json` to `ScalarType::Int32`, and therefore they do
     /// not happen unless explicitly requested by the user with a cast operator.
     Explicit,
+    /// Coerced casts permit different behavior when a type is coerced from a
+    /// string literal vs. a value of type `pg_catalog::text`.
+    ///
+    /// The only call site that should pass this value in to this module is
+    /// string coercion.
+    Coerced,
 }
 
 /// The implementation of a cast.
@@ -769,11 +779,10 @@ fn get_cast(
     }
 
     let imp = VALID_CASTS.get(&(from.into(), to.into()))?;
-    let template = match (ccx, imp.context) {
-        (Explicit, Implicit) | (Explicit, Assignment) | (Explicit, Explicit) => Some(&imp.template),
-        (Assignment, Implicit) | (Assignment, Assignment) => Some(&imp.template),
-        (Implicit, Implicit) => Some(&imp.template),
-        _ => None,
+    let template = if ccx >= imp.context {
+        Some(&imp.template)
+    } else {
+        None
     };
     template.and_then(|template| (template.0)(ecx, ccx, from, to))
 }
@@ -929,7 +938,7 @@ pub fn plan_coerce<'a>(
             // (with either implicit or explicit semantics) via a separate call
             // to `plan_cast`.
             let coerce_to_base = &coerce_to.without_modifiers();
-            plan_cast(ecx, CastContext::Explicit, lit, coerce_to_base)?
+            plan_cast(ecx, CastContext::Coerced, lit, coerce_to_base)?
         }
 
         LiteralRecord(exprs) => {
