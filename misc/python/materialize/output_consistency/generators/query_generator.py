@@ -170,6 +170,7 @@ class QueryGenerator:
             query = QueryTemplate(
                 expect_error,
                 expression_chunk,
+                None,
                 storage_layout,
                 contains_aggregations,
                 row_selection,
@@ -199,6 +200,7 @@ class QueryGenerator:
                 QueryTemplate(
                     expression.is_expect_error,
                     [expression],
+                    None,
                     expression.storage_layout,
                     False,
                     row_selection,

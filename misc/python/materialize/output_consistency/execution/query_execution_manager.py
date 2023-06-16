@@ -210,6 +210,9 @@ class QueryExecutionManager:
         if args_count < 2:
             raise RuntimeError("Cannot split query")
 
+        # This code assumes that the query failed because of the SELECT expressions.
+        # However, it is also possible that the where condition was invalid.
+        # This is ignored as of now.
         arg_split_index = int(args_count / 2)
         query1_args = original_query_template.select_expressions[arg_split_index:]
         query2_args = original_query_template.select_expressions[:arg_split_index]
@@ -217,6 +220,7 @@ class QueryExecutionManager:
         new_query_template1 = QueryTemplate(
             False,
             query1_args,
+            original_query_template.where_expression,
             original_query_template.storage_layout,
             original_query_template.contains_aggregations,
             original_query_template.row_selection,
@@ -224,6 +228,7 @@ class QueryExecutionManager:
         new_query_template2 = QueryTemplate(
             False,
             query2_args,
+            original_query_template.where_expression,
             original_query_template.storage_layout,
             original_query_template.contains_aggregations,
             original_query_template.row_selection,

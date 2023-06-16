@@ -147,6 +147,8 @@ def _run_output_consistency_tests_internal(
         query_generator,
         output_comparator,
         sql_executor,
+        randomized_picker,
+        ignore_filter,
         output_printer,
     )
     test_runner.setup()

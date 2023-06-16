@@ -16,3 +16,4 @@ class ProbabilitySettings:
         self.horizontal_layout_when_aggregated = 0.1
         self.create_complex_expression = 0.2
         self.restrict_vertical_layout_to_2_or_3_rows = 0.8
+        self.generate_where_expression = 0.3

@@ -110,15 +110,47 @@ class ExpressionGenerator:
             types_with_values.append(data_type_with_values)
             self.types_with_values_by_category[category] = types_with_values
 
-    def pick_random_operation(self, include_aggregates: bool) -> DbOperationOrFunction:
-        weights = (
+    def pick_random_operation(
+        self,
+        include_aggregates: bool,
+        filter: Optional[Callable[[DbOperationOrFunction], bool]] = None,
+    ) -> DbOperationOrFunction:
+        all_weights = (
             self.operation_weights
             if include_aggregates
             else self.operation_weights_no_aggregates
         )
 
-        return self.randomized_picker.random_operation(
-            self.selectable_operations, weights
+        if filter:
+            selected_operations = []
+            weights = []
+            for index, operation in enumerate(self.selectable_operations):
+                if filter(operation):
+                    selected_operations.append(operation)
+                    weights.append(all_weights[index])
+        else:
+            selected_operations = self.selectable_operations
+            weights = all_weights
+
+        return self.randomized_picker.random_operation(selected_operations, weights)
+
+    def generate_boolean_expression(
+        self,
+        use_aggregation: bool,
+        storage_layout: Optional[ValueStorageLayout],
+        nesting_level: int = NESTING_LEVEL_ROOT,
+    ) -> Optional[ExpressionWithArgs]:
+        def filter(operation: DbOperationOrFunction) -> bool:
+            if operation.is_aggregation != use_aggregation:
+                return False
+
+            # Simplification: This will only include operations defined to return a boolean value but not generic
+            # operations that might return a boolean value depending on the input.
+            return operation.return_type_spec.type_category == DataTypeCategory.BOOLEAN
+
+        boolean_operation = self.pick_random_operation(use_aggregation, filter)
+        return self.generate_expression(
+            boolean_operation, storage_layout, nesting_level
         )
 
     def generate_expression(
