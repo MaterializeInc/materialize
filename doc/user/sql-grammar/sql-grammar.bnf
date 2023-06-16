@@ -1,4 +1,8 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+alter_cluster_set ::=
+  'ALTER' 'CLUSTER' name 'SET' '(' (cluster_option '=' value)* ')'
+alter_cluster_reset ::=
+  'ALTER' 'CLUSTER' name 'RESET' '(' (cluster_option_name)* ')'
 alter_connection ::=
   'ALTER' 'CONNECTION' 'IF EXISTS'? name 'ROTATE' 'KEYS'
 alter_default_privileges ::=
@@ -44,6 +48,8 @@ create_cluster ::=
   'CREATE' 'CLUSTER' name (
     'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
   )?
+create_managed_cluster ::=
+  'CREATE' 'CLUSTER' name '(' 'MANAGED' (',' cluster_option '=' value)* ')'
 cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=

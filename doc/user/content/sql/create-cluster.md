@@ -55,6 +55,33 @@ Clusters containing sources and sinks can have at most one replica.
 We plan to remove this restriction in a future version of Materialize.
 {{< /warning >}}
 
+## Managed and unmanaged clusters
+
+A managed cluster is one with a declared size and replication factor, where
+Materialize is responsible for ensuring the replica set matches the declared
+size and replication factor. The replicas of a managed cluster are visible in
+the system catalog, but cannot be directly modified by users.
+
+An unmanaged cluster requires you to manage replicas manually, by creating and
+dropping replicas to achieve the desired replication factor and replica size.
+The replicas of unmanaged clusters appear in the system catalog and can be
+modified by users.
+
+
+{{< warning >}}
+Managed clusters with sources and sinks only support a replication factor of zero or one.
+
+We plan to remove this restriction in a future version of Materialize.
+{{< /warning >}}
+
+## Syntax
+
+{{< diagram "create-managed-cluster.svg" >}}
+
+### Cluster options
+
+{{% cluster-options %}}
+
 ## Syntax
 
 {{< diagram "create-cluster.svg" >}}
@@ -102,6 +129,12 @@ Adding replicas to clusters | See [Cluster replica scaling](/sql/create-cluster#
 Create a cluster with two medium replicas:
 
 ```sql
+CREATE CLUSTER c1 SIZE = 'medium', REPLICATION FACTOR = 2;
+```
+
+Alternatively, the cluster can be created as an unmanaged cluster:
+
+```sql
 CREATE CLUSTER c1 REPLICAS (
     r1 (SIZE = 'medium'),
     r2 (SIZE = 'medium')
@@ -111,6 +144,12 @@ CREATE CLUSTER c1 REPLICAS (
 ### Introspection disabled
 
 Create a cluster with a single replica with introspection disabled:
+
+```sql
+CREATE CLUSTER c  SIZE = 'xsmall', INTROSPECTION INTERVAL = 0;
+```
+
+Alternatively, the cluster can be created as an unmanaged cluster:
 
 ```sql
 CREATE CLUSTER c REPLICAS (
@@ -125,6 +164,10 @@ that cluster replica.
 ### Empty
 
 Create a cluster with no replicas:
+
+```sql
+CREATE CLUSTER c1 SIZE 'xsmall', REPLICATION FACTOR 0;
+```
 
 ```sql
 CREATE CLUSTER c1 REPLICAS ();

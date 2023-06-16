@@ -1,0 +1,9 @@
+Field                               | Value      | Description
+------------------------------------|------------|-------------------------------------
+`MANAGED`                           | `bool`     | Is the cluster a managed cluster?
+`SIZE`                              | `text`     | The size of the cluster replicas. For valid sizes, see [cluster replica sizes](/sql/create-cluster-replica#sizes).
+`REPLICATION FACTOR`                | `text`     | The replication factor of the cluster. Can be 0 to disable computations.
+`AVAILABILITY ZONES`                | `text[]`   | If you want the cluster replicas to reside in specific availability zones. You must specify a list of [AWS availability zone IDs] in either `us-east-1` or `eu-west-1`, e.g. `use1-az1`. Note that we expect the zone's ID, rather than its name.
+`INTROSPECTION INTERVAL`            | `interval` | Default: `1s`. The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data.
+`INTROSPECTION DEBUGGING`           | `bool`     | Default: `false`. Whether to introspect the gathering of the introspection data.
+`IDLE ARRANGEMENT MERGE EFFORT`     | `integer`  | The amount of effort the replica should exert on compacting arrangements during idle periods. *This is an unstable option! It may be changed or removed at any time.*
