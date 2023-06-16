@@ -10,7 +10,7 @@ menu:
 ---
 
 A "temporal filter" is a `WHERE` or `HAVING` clause which uses the [`mz_now`](/sql/functions/now_and_mz_now) function.
-This function returns Materialize's current virtual timestamp, which attempts to keep up with real time as data is processed.
+This function returns Materialize's current virtual timestamp, which works to keep up with real time as data is processed.
 Applying a temporal filter reduces the working dataset, saving memory resources and focusing results on the recent past.
 
 Here is a typical temporal filter that considers records whose timestamps are within the last 5 minutes.
@@ -50,15 +50,17 @@ Consider the temporal filter for the most recent hour's worth of records.
 WHERE mz_now() <= event_ts + INTERVAL '1hr'
 ```
 
-Suppose the current value for `mz_now()` corresponds to `11:59:59`, and a record with a timestamp `11:00:01` arrives.
-Further suppose you query this collection at a virtual timestamp of `12:00:00`. According to the temporal filter, the record is included in your result set!
+Suppose a record with a timestamp `11:00:01` arrives "late" with a virtual timestamp of `11:59:59` and you query this collection at a virtual timestamp of `12:00:00`.
+According to the temporal filter, the record is included in your result set!
 In an ideal world, it would have been included for the whole hour, but as Materialize can't (yet?) tell the future, the record is only included once it arrives.
 Since the record arrived late, it only made its appearance for a brief moment before being retracted just after `12:00:01` virtual time.
 
 Let's say another record comes in with a timestamp of `11:00:01`, but `mz_now()` has marched forward to `12:00:02`.
 Unfortunately, this record does not pass the filter and is excluded from processing.
+It was too late to be included.
 
-All this to say, if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set. This is known as a **grace period**.
+All this to say, if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
+This is often referred to as a **grace period**.
 
 ## Examples
 
@@ -117,26 +119,30 @@ The **time to live (TTL)** pattern helps to filter rows using expiration times.
 This example uses a `tasks` table with a time to live for each task.
 Materialize then helps perform actions according to each task's expiration time.
 
-1.  First, create a table:
+1. First, create a table:
     ```sql
-      CREATE TABLE tasks (name TEXT, created_ts TIMESTAMP, ttl INTERVAL);
+    CREATE TABLE tasks (name TEXT, created_ts TIMESTAMP, ttl INTERVAL);
     ```
-1.  Add some tasks to track:
+
+1. Add some tasks to track:
     ```sql
-      INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 minutes');
-      INSERT INTO tasks VALUES ('time_to_eat', now(), INTERVAL '1 hour');
-      INSERT INTO tasks VALUES ('security_block', now(), INTERVAL '1 day');
+    INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 minutes');
+    INSERT INTO tasks VALUES ('time_to_eat', now(), INTERVAL '1 hour');
+    INSERT INTO tasks VALUES ('security_block', now(), INTERVAL '1 day');
     ```
+
 1. Create a view using a temporal filter **over the expiration time**. For our example, the expiration time represents the sum between the task's `created_ts` and its `ttl`.
     ```sql
-      CREATE MATERIALIZED VIEW tracking_tasks AS
-      SELECT
-        name,
-        created_ts + ttl as expiration_time
-      FROM tasks
-      WHERE mz_now() < created_ts + ttl;
+    CREATE MATERIALIZED VIEW tracking_tasks AS
+    SELECT
+      name,
+      created_ts + ttl as expiration_time
+    FROM tasks
+    WHERE mz_now() < created_ts + ttl;
     ```
-  The moment `mz_now()` crosses the expiration time of a record, it is removed from the result set.
+    The moment `mz_now()` crosses the expiration time of a record, it is removed from the result set.
+
+You can now:
 
 - Query the remaining time for a row:
   ```sql
@@ -168,7 +174,7 @@ Materialize then helps perform actions according to each task's expiration time.
 
 Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column, and emit a single result at the end of each window.
 Materialize [date functions](/sql/functions/#date-and-time-func) are helpful for use cases like this where you want to bucket records into time windows.
-The strategy for this example is to put an initial temporal filter on the input (say, 30 days) to bound it, use the [`date_bin` function](/sql/functions/date-bin) to bin records into 1 minute windows, use a second temporal filter to emit results at the end of the window, and finally apply a third temporal filter shorter than the first filter on the inputs (say, 7 days) to set how long results should persist in Materialize.
+The strategy for this example is to put an initial temporal filter on the input (say, 30 days) to bound it, use the [`date_bin` function](/sql/functions/date-bin) to bin records into 1 minute windows, use a second temporal filter to emit results at the end of the window, and finally apply a third temporal filter shorter than the first (say, 7 days) to set how long results should persist in Materialize.
 
 1. First, create a table for the input records.
     ```sql
@@ -195,7 +201,10 @@ The strategy for this example is to put an initial temporal filter on the input 
     ```sql
     CREATE MATERIALIZED VIEW output
         AS
-            SELECT id, count(id) AS count, window_end
+            SELECT
+              id,
+              count(id) AS count,
+              window_end
             FROM input_recent_bucketed
             WHERE
                 mz_now() >= window_end
@@ -203,7 +212,7 @@ The strategy for this example is to put an initial temporal filter on the input 
                 mz_now() < window_end + INTERVAL '7 days'
             GROUP BY window_end, id;
     ```
-    This final filter means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without this, records in the result set would receive strange updates as input records expire from the initial 30 day filter.
+    This `WHERE` clause means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without the latter constraint, records in the result set would receive strange updates as input records expire from the initial 30 day filter on the input records.
 1. Subscribe to the `output`.
     ```sql
     COPY (SUBSCRIBE (SELECT * FROM output)) TO STDOUT;
