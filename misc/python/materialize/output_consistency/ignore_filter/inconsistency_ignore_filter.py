@@ -218,14 +218,10 @@ class PreExecutionInconsistencyIgnoreFilter:
 
 class PostExecutionInconsistencyIgnoreFilter:
     def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
-        if error.query_execution.query_template.contains_aggregations:
-            return self.shall_ignore_error_involving_aggregation(error)
+        contains_aggregation = (
+            error.query_execution.query_template.contains_aggregations
+        )
 
-        return NoIgnore()
-
-    def shall_ignore_error_involving_aggregation(
-        self, error: ValidationError
-    ) -> IgnoreVerdict:
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
             outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
@@ -236,9 +232,18 @@ class PostExecutionInconsistencyIgnoreFilter:
                 EvaluationStrategyKey.CONSTANT_FOLDING
             ].successful
 
-            if not dfr_successful and ctf_successful:
+            dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
+
+            if contains_aggregation and dfr_fails_but_ctf_succeeds:
                 # see https://github.com/MaterializeInc/materialize/issues/19662
                 return YesIgnore("#19662")
+
+            if (
+                error.query_execution.query_template.where_expression is not None
+                and dfr_fails_but_ctf_succeeds
+            ):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return YesIgnore("#17189")
 
         if error.error_type == ValidationErrorType.ERROR_MISMATCH:
             query_template = error.query_execution.query_template
@@ -256,7 +261,9 @@ class PostExecutionInconsistencyIgnoreFilter:
                 return False
 
             for expression in query_template.select_expressions:
-                if expression.contains(is_function_taking_shortcut):
+                if contains_aggregation and expression.contains(
+                    is_function_taking_shortcut
+                ):
                     # see https://github.com/MaterializeInc/materialize/issues/17189
                     return YesIgnore("#17189")
 
