@@ -288,7 +288,13 @@ where
                     )
                 },
                 move || {
-                    DB::destroy(&RocksDBOptions::default(), instance_path_owned).unwrap();
+                    if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path_owned) {
+                        tracing::warn!(
+                            "failed to cleanup rocksdb dir on creation {}: {}",
+                            instance_path_owned.display(),
+                            e.display_with_causes(),
+                        );
+                    }
                 },
             )
             .await?;
