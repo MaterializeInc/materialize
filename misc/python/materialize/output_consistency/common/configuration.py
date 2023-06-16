@@ -6,9 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from materialize.output_consistency.common.probability_settings import (
-    ProbabilitySettings,
-)
 
 
 class ConsistencyTestConfiguration:
@@ -43,7 +40,6 @@ class ConsistencyTestConfiguration:
         self.max_iterations = max_iterations
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.skip_postgres_incompatible_types = skip_postgres_incompatible_types
-        self.probabilities = ProbabilitySettings()
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:

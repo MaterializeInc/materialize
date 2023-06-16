@@ -7,13 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-class ProbabilitySettings:
-    def __init__(
-        self,
-    ) -> None:
-        self.horizontal_layout_when_not_aggregated = 0.9
-        self.horizontal_layout_when_aggregated = 0.1
-        self.create_complex_expression = 0.2
-        self.restrict_vertical_layout_to_2_or_3_rows = 0.8
-        self.generate_where_expression = 0.3
+HORIZONTAL_LAYOUT_WHEN_NOT_AGGREGATED = 0.9
+HORIZONTAL_LAYOUT_WHEN_AGGREGATED = 0.1
+CREATE_COMPLEX_EXPRESSION = 0.2
+RESTRICT_VERTICAL_LAYOUT_TO_2_OR_3_ROWS = 0.8
+GENERATE_WHERE_EXPRESSION = 0.3

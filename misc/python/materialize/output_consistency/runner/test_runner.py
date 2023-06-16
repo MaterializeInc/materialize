@@ -10,6 +10,7 @@
 from datetime import datetime, timedelta
 from typing import List
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -146,7 +147,7 @@ class ConsistencyTestRunner:
 
     def _add_random_where_condition(self, query: QueryTemplate) -> None:
         if not self.randomized_picker.random_boolean(
-            self.config.probabilities.generate_where_expression
+            probability.GENERATE_WHERE_EXPRESSION
         ):
             return
 

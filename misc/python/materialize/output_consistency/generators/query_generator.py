@@ -9,6 +9,7 @@
 
 from typing import List, Optional
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -214,7 +215,7 @@ class QueryGenerator:
             return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
             if self.randomized_picker.random_boolean(
-                self.config.probabilities.restrict_vertical_layout_to_2_or_3_rows
+                probability.RESTRICT_VERTICAL_LAYOUT_TO_2_OR_3_ROWS
             ):
                 # With some probability, try to pick two or three rows
                 max_number_of_rows_to_select = self.randomized_picker.random_number(

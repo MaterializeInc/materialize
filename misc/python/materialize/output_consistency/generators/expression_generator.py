@@ -9,6 +9,7 @@
 
 from typing import Callable, Dict, List, Optional
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -186,7 +187,7 @@ class ExpressionGenerator:
             # expressions can only be compared in HORIZONTAL layout (because the row processing order of an
             # evaluation strategy is not defined).)
             if self.randomized_picker.random_boolean(
-                self.config.probabilities.horizontal_layout_when_not_aggregated
+                probability.HORIZONTAL_LAYOUT_WHEN_NOT_AGGREGATED
             ):
                 return ValueStorageLayout.HORIZONTAL
             else:
@@ -195,7 +196,7 @@ class ExpressionGenerator:
         # strongly prefer vertical storage for aggregations but allow some variance
 
         if self.randomized_picker.random_boolean(
-            self.config.probabilities.horizontal_layout_when_aggregated
+            probability.HORIZONTAL_LAYOUT_WHEN_AGGREGATED
         ):
             # Use horizontal layout in some cases
             return ValueStorageLayout.HORIZONTAL
@@ -266,7 +267,7 @@ class ExpressionGenerator:
         create_complex_arg = (
             arg_context.requires_aggregation()
             or self.randomized_picker.random_boolean(
-                self.config.probabilities.create_complex_expression
+                probability.CREATE_COMPLEX_EXPRESSION
             )
         )
 
