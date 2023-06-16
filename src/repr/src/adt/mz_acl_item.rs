@@ -299,30 +299,6 @@ impl MzAclItem {
     pub const fn binary_size() -> usize {
         RoleId::binary_size() + RoleId::binary_size() + size_of::<u64>()
     }
-
-    pub fn group_by_grantee(items: Vec<MzAclItem>) -> PrivilegeMap {
-        PrivilegeMap::new(
-            items
-                .into_iter()
-                .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
-                    accum
-                        .entry(mz_acl_item.grantee)
-                        .or_default()
-                        .push(mz_acl_item);
-                    accum
-                }),
-        )
-    }
-
-    pub fn flatten(items: &PrivilegeMap) -> Vec<MzAclItem> {
-        items
-            .0
-            .values()
-            .map(|items| items.into_iter())
-            .flatten()
-            .cloned()
-            .collect()
-    }
 }
 
 impl FromStr for MzAclItem {
@@ -394,10 +370,41 @@ impl PrivilegeMap {
         PrivilegeMap(privilege_map)
     }
 
+    pub fn group_by_grantee(items: Vec<MzAclItem>) -> PrivilegeMap {
+        PrivilegeMap::new(
+            items
+                .into_iter()
+                .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
+                    accum
+                        .entry(mz_acl_item.grantee)
+                        .or_default()
+                        .push(mz_acl_item);
+                    accum
+                }),
+        )
+    }
+
     pub fn all_values(&self) -> impl Iterator<Item = &MzAclItem> {
         self.0
             .values()
             .flat_map(|privileges| privileges.into_iter())
+    }
+
+    pub fn all_values_owned(&self) -> impl Iterator<Item = MzAclItem> + '_ {
+        self.all_values().cloned()
+    }
+
+    pub fn extend(&mut self, mz_acl_items: Vec<MzAclItem>) {
+        for mz_acl_item in mz_acl_items {
+            let privileges = self.0.entry(mz_acl_item.grantee).or_default();
+            if let Some(privilege) = privileges.iter_mut().find(|privilege| {
+                privilege.grantee == mz_acl_item.grantee && privilege.grantor == mz_acl_item.grantor
+            }) {
+                privilege.acl_mode |= mz_acl_item.acl_mode;
+            } else {
+                privileges.push(mz_acl_item);
+            }
+        }
     }
 }
 

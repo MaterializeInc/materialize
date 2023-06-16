@@ -537,6 +537,18 @@ impl Connection {
             .collect::<Result<_, _>>()?)
     }
 
+    /// Load the persisted system privileges.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+        Ok(SYSTEM_PRIVILEGES_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, _): (SystemPrivilegesKey, ())| k.privileges)
+            .collect::<Result<_, _>>()?)
+    }
+
     /// Load the persisted server configurations.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
@@ -1519,7 +1531,7 @@ impl<'a> Transaction<'a> {
                     name: cluster.name().to_string(),
                     linked_object_id: cluster.linked_object_id(),
                     owner_id: cluster.owner_id,
-                    privileges: MzAclItem::flatten(cluster.privileges()),
+                    privileges: cluster.privileges().all_values_owned().collect(),
                     config: cluster.config.clone(),
                 })
             } else {
@@ -1582,7 +1594,7 @@ impl<'a> Transaction<'a> {
                 Some(DatabaseValue {
                     name: database.name().to_string(),
                     owner_id: database.owner_id,
-                    privileges: MzAclItem::flatten(database.privileges()),
+                    privileges: database.privileges().all_values_owned().collect(),
                 })
             } else {
                 None
@@ -1614,7 +1626,7 @@ impl<'a> Transaction<'a> {
                     database_id,
                     name: schema.name().schema.clone(),
                     owner_id: schema.owner_id,
-                    privileges: MzAclItem::flatten(schema.privileges()),
+                    privileges: schema.privileges().all_values_owned().collect(),
                 })
             } else {
                 None

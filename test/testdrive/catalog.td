@@ -494,6 +494,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_system_privileges
 mz_tables
 mz_types
 mz_views
@@ -628,7 +629,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-46
+47
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

@@ -191,6 +191,7 @@ pub struct CatalogState {
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     default_privileges: DefaultPrivileges,
+    system_privileges: PrivilegeMap,
 }
 
 impl CatalogState {
@@ -226,6 +227,7 @@ impl CatalogState {
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
             default_privileges: Default::default(),
+            system_privileges: Default::default(),
         }
     }
 
@@ -3017,6 +3019,7 @@ impl Catalog {
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
                 default_privileges: DefaultPrivileges::default(),
+                system_privileges: PrivilegeMap::default(),
             },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
@@ -3042,7 +3045,7 @@ impl Catalog {
                     schemas_by_id: BTreeMap::new(),
                     schemas_by_name: BTreeMap::new(),
                     owner_id,
-                    privileges: MzAclItem::group_by_grantee(privileges),
+                    privileges: PrivilegeMap::group_by_grantee(privileges),
                 },
             );
             catalog
@@ -3092,7 +3095,7 @@ impl Catalog {
                     items: BTreeMap::new(),
                     functions: BTreeMap::new(),
                     owner_id,
-                    privileges: MzAclItem::group_by_grantee(privileges),
+                    privileges: PrivilegeMap::group_by_grantee(privileges),
                 },
             );
             schemas_by_name.insert(name.clone(), id);
@@ -3127,6 +3130,9 @@ impl Catalog {
                 .default_privileges
                 .grant(default_privilege_object, default_privilege);
         }
+
+        let system_privileges = catalog.storage().await.load_system_privileges().await?;
+        catalog.state.system_privileges.extend(system_privileges);
 
         catalog
             .load_system_configuration(
@@ -3199,7 +3205,7 @@ impl Catalog {
                                 has_storage_collection: false,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
+                            PrivilegeMap::group_by_grantee(vec![
                                 rbac::default_catalog_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ),
@@ -3229,7 +3235,7 @@ impl Catalog {
                                 is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
+                            PrivilegeMap::group_by_grantee(vec![
                                 rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Table),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Table,
@@ -3267,7 +3273,7 @@ impl Catalog {
                             name,
                             item,
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
+                            PrivilegeMap::group_by_grantee(vec![
                                 rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::View),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::View,
@@ -3314,7 +3320,7 @@ impl Catalog {
                                 is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
+                            PrivilegeMap::group_by_grantee(vec![
                                 rbac::default_catalog_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ),
@@ -3376,7 +3382,7 @@ impl Catalog {
                 linked_object_id,
                 all_indexes,
                 owner_id,
-                MzAclItem::group_by_grantee(privileges),
+                PrivilegeMap::group_by_grantee(privileges),
                 config,
             );
         }
@@ -3587,6 +3593,13 @@ impl Catalog {
                     1,
                 ));
             }
+        }
+        for system_privilege in catalog.state.system_privileges.all_values_owned() {
+            builtin_table_updates.push(
+                catalog
+                    .state
+                    .pack_system_privileges_update(system_privilege, 1),
+            );
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
@@ -3864,7 +3877,7 @@ impl Catalog {
                     depends_on: vec![],
                 }),
                 MZ_SYSTEM_ROLE_ID,
-                MzAclItem::group_by_grantee(vec![
+                PrivilegeMap::group_by_grantee(vec![
                     rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Type),
                     rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
                 ]),
@@ -4185,7 +4198,7 @@ impl Catalog {
                 &name,
                 serialized_item,
                 entry.owner_id,
-                MzAclItem::flatten(entry.privileges()),
+                entry.privileges().all_values_owned().collect(),
             )?;
         }
         tx.update_system_object_mappings(std::mem::take(
@@ -4304,7 +4317,7 @@ impl Catalog {
                 item.name,
                 catalog_item,
                 item.owner_id,
-                MzAclItem::group_by_grantee(item.privileges),
+                PrivilegeMap::group_by_grantee(item.privileges),
             );
         }
 
@@ -4807,7 +4820,7 @@ impl Catalog {
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 owner_id,
-                privileges: MzAclItem::group_by_grantee(vec![rbac::owner_privilege(
+                privileges: PrivilegeMap::group_by_grantee(vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Schema,
                     owner_id,
                 )]),
@@ -5466,7 +5479,7 @@ impl Catalog {
                             schemas_by_id: BTreeMap::new(),
                             schemas_by_name: BTreeMap::new(),
                             owner_id,
-                            privileges: MzAclItem::group_by_grantee(database_privileges),
+                            privileges: PrivilegeMap::group_by_grantee(database_privileges),
                         },
                     );
                     state
@@ -5497,7 +5510,7 @@ impl Catalog {
                         database_id,
                         DEFAULT_SCHEMA.to_string(),
                         owner_id,
-                        MzAclItem::group_by_grantee(schema_privileges),
+                        PrivilegeMap::group_by_grantee(schema_privileges),
                     )?;
                 }
                 Op::CreateSchema {
@@ -5563,7 +5576,7 @@ impl Catalog {
                         database_id,
                         schema_name,
                         owner_id,
-                        MzAclItem::group_by_grantee(privileges),
+                        PrivilegeMap::group_by_grantee(privileges),
                     )?;
                 }
                 Op::CreateRole {
@@ -5673,7 +5686,7 @@ impl Catalog {
                         linked_object_id,
                         introspection_sources,
                         owner_id,
-                        MzAclItem::group_by_grantee(privileges),
+                        PrivilegeMap::group_by_grantee(privileges),
                         config,
                     );
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
@@ -5880,7 +5893,7 @@ impl Catalog {
                         name,
                         item,
                         owner_id,
-                        MzAclItem::group_by_grantee(privileges),
+                        PrivilegeMap::group_by_grantee(privileges),
                     );
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
@@ -6850,7 +6863,7 @@ impl Catalog {
         new_owner: RoleId,
     ) {
         // TODO(jkosh44) Would be nice not to clone every privilege.
-        let mut flat_privileges = MzAclItem::flatten(privileges);
+        let mut flat_privileges: Vec<_> = privileges.all_values_owned().collect();
 
         let mut new_present = false;
         for privilege in flat_privileges.iter_mut() {
@@ -6901,7 +6914,7 @@ impl Catalog {
                 .collect();
         }
 
-        *privileges = MzAclItem::group_by_grantee(flat_privileges);
+        *privileges = PrivilegeMap::group_by_grantee(flat_privileges);
     }
 
     fn grant_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {

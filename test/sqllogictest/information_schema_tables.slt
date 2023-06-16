@@ -169,6 +169,10 @@ mz_storage_usage
 VIEW
 materialize
 mz_catalog
+mz_system_privileges
+BASE TABLE
+materialize
+mz_catalog
 mz_tables
 BASE TABLE
 materialize
