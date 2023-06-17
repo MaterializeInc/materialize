@@ -82,6 +82,9 @@ statement ok
 DROP ROLE foo
 
 statement ok
+DROP ROLE IF EXISTS foo, bar, foo
+
+statement ok
 CREATE ROLE bar
 
 query TT rowsort

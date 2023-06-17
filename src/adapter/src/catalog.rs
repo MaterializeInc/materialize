@@ -318,8 +318,10 @@ impl CatalogState {
                     ));
                 }
                 id @ ObjectId::Role(_) => {
-                    seen.insert(id.clone());
-                    dependents.push(id.clone());
+                    let unseen = seen.insert(id.clone());
+                    if unseen {
+                        dependents.push(id.clone());
+                    }
                 }
                 ObjectId::Item(id) => {
                     dependents.extend_from_slice(&self.item_dependents(*id, seen))
