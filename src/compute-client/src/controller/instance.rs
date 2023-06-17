@@ -32,6 +32,7 @@ use crate::controller::replica::{Replica, ReplicaConfig};
 use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
+use crate::metrics::UIntGauge;
 use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -140,7 +141,7 @@ pub(super) struct Instance<T> {
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
-    history: ComputeCommandHistory<T>,
+    history: ComputeCommandHistory<UIntGauge, T>,
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
     /// Ready compute controller responses to be delivered.
@@ -250,6 +251,7 @@ where
                 (*id, state)
             })
             .collect();
+        let history = ComputeCommandHistory::new(metrics.for_history());
 
         let mut instance = Self {
             build_info,
@@ -259,7 +261,7 @@ where
             log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
-            history: Default::default(),
+            history,
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
             envd_epoch,
