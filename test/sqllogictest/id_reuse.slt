@@ -31,6 +31,9 @@ statement ok
 DROP schema foo
 
 statement ok
+DROP SCHEMA IF EXISTS foo, bar
+
+statement ok
 CREATE schema bar
 
 query TT rowsort
