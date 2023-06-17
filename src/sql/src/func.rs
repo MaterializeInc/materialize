@@ -357,6 +357,7 @@ pub fn sql_impl(
             relation_type: &RelationType::empty(),
             allow_aggregates: false,
             allow_subqueries: true,
+            allow_parameters: true,
             allow_windows: false,
         };
 

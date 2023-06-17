@@ -525,6 +525,7 @@ pub fn plan_subscribe(
         relation_type: desc.typ(),
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_parameters: true,
         allow_windows: false,
     };
 
