@@ -179,7 +179,7 @@ Now that you've configured your database network and created an ingestion cluste
 
     ```sql
     CREATE SOURCE mz_source
-      IN CLUSTER ingest_aurora_postgres
+      IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
       FOR ALL TABLES;
     ```
