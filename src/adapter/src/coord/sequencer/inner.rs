@@ -1095,13 +1095,17 @@ impl Coordinator {
     pub(super) async fn sequence_drop_objects(
         &mut self,
         session: &mut Session,
-        plan: DropObjectsPlan,
+        DropObjectsPlan {
+            drop_ids,
+            object_type,
+            referenced_ids: _,
+        }: DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let DropOps {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        } = self.sequence_drop_common(session, drop_ids)?;
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -1117,7 +1121,7 @@ impl Coordinator {
                 name: session.vars().cluster().to_string(),
             });
         }
-        Ok(ExecuteResponse::DroppedObject(plan.object_type))
+        Ok(ExecuteResponse::DroppedObject(object_type))
     }
 
     fn validate_dropped_role_ownership(
