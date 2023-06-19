@@ -118,9 +118,11 @@ pub struct SourceStatusUpdate {
 
 To avoid sending this information on every tick of the storage worker's main processing loop, we will only send updates per some defined frequency (e.g. every 5 seconds). This is similar to how statistics reporting is currently implemented. Upon receiving a `StorageResponse::StatusUpdates` message, the storage controller will append the status updates to the appropriate managed collection. Writes to the backing persist shard will take place in a dedicated task, namely the one spawned by `mz_storage_client::controller::collection_mgmt::CollectionManager`.
 
-When dropping a replica, the storage controller will need to retrieve all source/sink dataflows that have been observed to be associated with the given storage instance. While this state is currently maintained in `mz_storage_client::controller::rehydration::RehydrationTask`, we can lift it up into `RehydrationStorageClient` in order for the storage controller to access it without duplicating the data. Upon dropping an instance, the storage controller can be sure that it won't receive any more `StorageResponse`'s from that instance. As a result, late status updates after an instance is dropped are guaranteed not to occur.
+There will be a couple of new statuses introduced, namely `paused` and `unknown`. A status of `paused` indicates that a source/sink cannot perform any computation because it has no available resources. A status of `unknown` indicates the channel in which responses are received from the storage replica is broken, therefore the controller has no way of receiving status updates.
 
-Immediately after the coordinator announces initialization is complete, the storage controller will be updated to look for any ingestion/export dataflows that belong to an instance with 0 replicas and set their status to `paused`. This should allow `environmentd` to correctly set the status for sources/sinks in scenarios where it crashes before it was able to write the `paused` status to persist.
+In order to set a status of `paused` for a source/sink, the storage controller will need to know the dataflow's backing replica at the time the replica is dropped. The mapping between observed sources/sinks currently exists in `mz_storage_client::controller::rehydration::RehydrationTask`, however we can lift it up into `RehydrationStorageClient` in order for the storage controller to access it without duplicating the data. Furthermore, to combat cases in which `environmentd` crashes before it can successfully write a `paused` status, the storage controller should write a status of `paused` for any dataflows that belong to an instance with 0 replicas immediately following coordinator initialization.
+
+Statuses of `unknown` can be written upon the response channel from the storage worker -> controller breaking. We can avoid continuously writing updates in scenarios where the worker is unhealthy for an extended period of time, we can maintain the last status for each source/sink in the storage controller and only write to persist if the status has changed.
 
 In order to support the future in which storage clusters may have multiple replicas, we will need to update the schemas for the `mz_{source|sink}_status_history` relations to include a `replica_id`. This is necessary for the reason that dropping a replica in a storage cluster with multiple replicas shouldn't set the status of a source, for example, to `paused`. Isolating status updates for a source/sink to a specific replica allows any derived relations such as `mz_{source|sink}_statuses` to make determinations based on all the replicas in the cluster.
 
@@ -132,7 +134,7 @@ The current test suite for verifying source/sink statuses should carry over, giv
 
 There is opportunity for the above work to be broken down into a couple of smaller chunks. The PRs involved may look like the following:
 
-1. Shift status writes to the storage controller
+1. Shift status writes to the storage controller and add functionality for observing new statuses
 2. Update `mz_{source|sink}_status_history` and any derived relations to account for a `replica_id`, which is necessary for multi-replica storage clusters
 
 ## Alternatives
