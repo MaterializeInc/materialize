@@ -65,7 +65,7 @@ use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateIndexStatement, CreateViewStatement, CteBlock, DropObjectsStatement, Ident,
+    CreateIndexStatement, CreateViewStatement, CteBlock, Distinct, DropObjectsStatement, Ident,
     IfExistsBehavior, ObjectType, OrderByExpr, Query, RawItemName, Select, SelectItem,
     SelectStatement, SetExpr, Statement as AstStatement, TableFactor, TableWithJoins,
     UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
@@ -1468,7 +1468,7 @@ impl RunnerInner {
                 let query_outcome = self.execute_query(sql, output, location.clone()).await?;
                 if is_select && self.auto_index_selects {
                     let view_outcome = self
-                        .execute_view(sql, num_attributes, output, location.clone())
+                        .execute_view(sql, None, output, location.clone())
                         .await?;
 
                     // We compare here the query-based and view-based outcomes.
@@ -1478,11 +1478,23 @@ impl RunnerInner {
                     if std::mem::discriminant::<Outcome>(&query_outcome)
                         != std::mem::discriminant::<Outcome>(&view_outcome)
                     {
-                        return Ok(Outcome::InconsistentViewOutcome {
-                            query_outcome: Box::new(query_outcome),
-                            view_outcome: Box::new(view_outcome),
-                            location: location.clone(),
-                        });
+                        // Before producing a failure outcome, we try to obtain a new
+                        // outcome for view-based execution exploiting analysis of the
+                        // number of attributes. This two-level strategy can avoid errors
+                        // produced by column ambiguity in the `SELECT`.
+                        let view_outcome = self
+                            .execute_view(sql, num_attributes, output, location.clone())
+                            .await?;
+
+                        if std::mem::discriminant::<Outcome>(&query_outcome)
+                            != std::mem::discriminant::<Outcome>(&view_outcome)
+                        {
+                            return Ok(Outcome::InconsistentViewOutcome {
+                                query_outcome: Box::new(query_outcome),
+                                view_outcome: Box::new(view_outcome),
+                                location: location.clone(),
+                            });
+                        }
                     }
                 }
                 Ok(query_outcome)
@@ -1902,8 +1914,31 @@ fn generate_view_sql(
     num_attributes: Option<usize>,
     expected_column_names: Option<Vec<ColumnName>>,
 ) -> (String, String, String, String) {
-    // We create a view for the select query and index it. Since
-    // one-shot SELECT statements may contain ambiguous column names,
+    // To create the view, re-parse the sql; note that we must find exactly
+    // one statement and it must be a `SELECT`.
+    // NOTE(vmarcos): Direct string manipulation was attempted while
+    // prototyping the code below, which avoids the extra parsing and
+    // data structure cloning. However, running DDL is so slow that
+    // it did not matter in terms of runtime. We can revisit this if
+    // DDL cost drops dramatically in the future.
+    let stmts = parser::parse_statements(sql).unwrap_or_default();
+    assert!(stmts.len() == 1);
+    let query = match &stmts[0] {
+        Statement::Select(stmt) => &stmt.query,
+        _ => unreachable!("This function should only be called for SELECTs"),
+    };
+
+    // Prior to creating the view, process the `ORDER BY` clause of
+    // the `SELECT` query, if any. Ordering is not preserved when a
+    // view includes an `ORDER BY` clause and must be re-enforced by
+    // an external `ORDER BY` clause when querying the view.
+    let (view_order_by, extra_columns, distinct) = if num_attributes.is_none() {
+        (query.order_by.clone(), vec![], None)
+    } else {
+        derive_order_by(&query.body, &query.order_by)
+    };
+
+    // Since one-shot SELECT statements may contain ambiguous column names,
     // we either use the expected column names, if that option was
     // provided, or else just rename the output schema of the view
     // using numerically increasing attribute names, whenever possible.
@@ -1919,33 +1954,43 @@ fn generate_view_sql(
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
     let name = UnresolvedItemName(vec![Ident::new(format!("v{}", view_uuid))]);
-    let columns = expected_column_names.map_or(
+    let projection = expected_column_names.map_or(
         num_attributes.map_or(vec![], |n| {
             (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
         }),
         |cols| cols.iter().map(|c| Ident::new(c.as_str())).collect(),
     );
+    let columns: Vec<Ident> = projection
+        .iter()
+        .cloned()
+        .chain(extra_columns.iter().map(|item| {
+            if let SelectItem::Expr {
+                expr: _,
+                alias: Some(ident),
+            } = item
+            {
+                ident.clone()
+            } else {
+                unreachable!("alias must be given for extra column")
+            }
+        }))
+        .collect();
 
-    // To create the view, re-parse the sql; note that we must find exactly
-    // one statement and it must be a `SELECT`.
-    // NOTE(vmarcos): Direct string manipulation was attempted while
-    // prototyping the code below, which avoids the extra parsing and
-    // data structure cloning. However, running DDL is so slow that
-    // it did not matter in terms of runtime. We can revisit this if
-    // DDL cost drops dramatically in the future.
-    let stmts = parser::parse_statements(sql).unwrap_or_default();
-    assert!(stmts.len() == 1);
-    let query = match &stmts[0] {
-        Statement::Select(stmt) => &stmt.query,
-        _ => unreachable!("This function should only be called for SELECTs"),
-    };
+    // Build a `CREATE VIEW` with the columns computed above.
+    let mut query = query.clone();
+    if extra_columns.len() > 0 {
+        match &mut query.body {
+            SetExpr::Select(stmt) => stmt.projection.extend(extra_columns.iter().cloned()),
+            _ => unimplemented!("cannot yet rewrite projections of nested queries"),
+        }
+    }
     let create_view = AstStatement::<Raw>::CreateView(CreateViewStatement {
         if_exists: IfExistsBehavior::Error,
         temporary: false,
         definition: ViewDefinition {
             name: name.clone(),
             columns: columns.clone(),
-            query: query.clone(),
+            query,
         },
     })
     .to_ast_string_stable();
@@ -1972,19 +2017,31 @@ fn generate_view_sql(
     })
     .to_ast_string_stable();
 
-    // Prior to querying the view, process the `ORDER BY` clause of
-    // the `SELECT` query, if any. Ordering is not preserved when a
-    // view includes an `ORDER BY` clause and must be re-enforced by
-    // an external `ORDER BY` clause when querying the view.
-    let view_order_by = derive_order_by(&query.body, &query.order_by);
+    // Assert if DISTINCT semantics are unchanged from view
+    let distinct_unneeded = extra_columns.len() == 0
+        || match distinct {
+            None | Some(Distinct::On(_)) => true,
+            Some(Distinct::EntireRow) => false,
+        };
+    let distinct = if distinct_unneeded { None } else { distinct };
 
-    // `SELECT * FROM {name} [ORDER BY <num_seq>]`
+    // `SELECT [* | {projection}] FROM {name} [ORDER BY {view_order_by}]`
     let view_sql = AstStatement::<Raw>::Select(SelectStatement {
         query: Query {
             ctes: CteBlock::Simple(vec![]),
             body: SetExpr::Select(Box::new(Select {
-                distinct: None,
-                projection: vec![SelectItem::Wildcard],
+                distinct,
+                projection: if projection.len() == 0 {
+                    vec![SelectItem::Wildcard]
+                } else {
+                    projection
+                        .iter()
+                        .map(|ident| SelectItem::Expr {
+                            expr: Expr::Identifier(vec![ident.clone()]),
+                            alias: None,
+                        })
+                        .collect()
+                },
                 from: vec![TableWithJoins {
                     relation: TableFactor::Table {
                         name: RawItemName::Name(name.clone()),
@@ -2022,28 +2079,42 @@ fn generate_view_sql(
 /// so we may end up deriving `None` for the number of attributes
 /// as a conservative approximation.
 fn derive_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
-    let Some(projection) = find_projection(body) else { return None };
+    let Some((projection, _)) = find_projection(body) else { return None };
     derive_num_attributes_from_projection(projection)
 }
 
 /// Analyzes a query's `ORDER BY` clause to derive an `ORDER BY`
-/// clause that is exclusively making numeric references. The
-/// rewritten `ORDER BY` clause is then usable when querying a
+/// clause that makes numeric references to any expressions in
+/// the projection and generated-attribute references to expressions
+/// that need to be added as extra columns to the projection list.
+/// The rewritten `ORDER BY` clause is then usable when querying a
 /// view that contains the same `SELECT` as the given query.
-fn derive_order_by(body: &SetExpr<Raw>, order_by: &Vec<OrderByExpr<Raw>>) -> Vec<OrderByExpr<Raw>> {
-    let Some(projection) = find_projection(body) else { return vec![] };
-    derive_order_by_from_projection(projection, order_by)
+/// This function returns both the rewritten `ORDER BY` clause
+/// as well as a list of extra columns that need to be added
+/// to the query's projection for the `ORDER BY` clause to
+/// succeed.
+fn derive_order_by(
+    body: &SetExpr<Raw>,
+    order_by: &Vec<OrderByExpr<Raw>>,
+) -> (
+    Vec<OrderByExpr<Raw>>,
+    Vec<SelectItem<Raw>>,
+    Option<Distinct<Raw>>,
+) {
+    let Some((projection, distinct)) = find_projection(body) else { return (vec![], vec![], None) };
+    let (view_order_by, extra_columns) = derive_order_by_from_projection(projection, order_by);
+    (view_order_by, extra_columns, distinct.clone())
 }
 
 /// Finds the projection list in a `SELECT` query body.
-fn find_projection(body: &SetExpr<Raw>) -> Option<&Vec<SelectItem<Raw>>> {
+fn find_projection(body: &SetExpr<Raw>) -> Option<(&Vec<SelectItem<Raw>>, &Option<Distinct<Raw>>)> {
     // Iterate to peel off the query body until the query's
     // projection list is found.
     let mut set_expr = body;
     loop {
         match set_expr {
             SetExpr::Select(select) => {
-                return Some(&select.projection);
+                return Some((&select.projection, &select.distinct));
             }
             SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
             SetExpr::Query(query) => set_expr = &query.body,
@@ -2078,8 +2149,9 @@ fn derive_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> O
 fn derive_order_by_from_projection(
     projection: &Vec<SelectItem<Raw>>,
     order_by: &Vec<OrderByExpr<Raw>>,
-) -> Vec<OrderByExpr<Raw>> {
+) -> (Vec<OrderByExpr<Raw>>, Vec<SelectItem<Raw>>) {
     let mut view_order_by: Vec<OrderByExpr<Raw>> = vec![];
+    let mut extra_columns: Vec<SelectItem<Raw>> = vec![];
     for order_by_expr in order_by.iter() {
         let query_expr = &order_by_expr.expr;
         let view_expr = match query_expr {
@@ -2100,8 +2172,15 @@ fn derive_order_by_from_projection(
                 }) {
                     Expr::Value(mz_sql_parser::ast::Value::Number((i + 1).to_string()))
                 } else {
-                    // Stop at prefix if we cannot match further.
-                    break;
+                    // If the expression is not found in the
+                    // projection, add extra column.
+                    let ident =
+                        Ident::new(format!("a{}", (projection.len() + extra_columns.len() + 1)));
+                    extra_columns.push(SelectItem::Expr {
+                        expr: query_expr.clone(),
+                        alias: Some(ident.clone()),
+                    });
+                    Expr::Identifier(vec![ident])
                 }
             }
         };
@@ -2111,7 +2190,7 @@ fn derive_order_by_from_projection(
             nulls_last: order_by_expr.nulls_last,
         });
     }
-    view_order_by
+    (view_order_by, extra_columns)
 }
 
 /// Returns extra statements to execute after `stmt` is executed.
@@ -2159,14 +2238,14 @@ fn test_generate_view_sql() {
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c")"#.to_string(),
-            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT "a", "b", "c" FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
         (("SELECT a, b, c FROM t1, t2", Some(3), None),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
-            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT "a1", "a2", "a3" FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
         // A case with ambiguity that is accepted by the function, illustrating that
@@ -2182,14 +2261,14 @@ fn test_generate_view_sql() {
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d") AS SELECT "a", "b", "b" + "d" AS "c", "a" + "b" AS "d" FROM "t1", "t2" ORDER BY "a", "c", "a" + "b""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d")"#.to_string(),
-            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, 3, 4"#.to_string(),
+            r#"SELECT "a", "b", "c", "d" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, 3, 4"#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
         (("((SELECT 1 AS a UNION SELECT 2 AS b) UNION SELECT 3 AS c) ORDER BY a", Some(1), None),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1") AS (SELECT 1 AS "a" UNION SELECT 2 AS "b") UNION SELECT 3 AS "c" ORDER BY "a""#.to_string(),
             r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1")"#.to_string(),
-            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
+            r#"SELECT "a1" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
         (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY 1", None, None),
@@ -2199,12 +2278,25 @@ fn test_generate_view_sql() {
             r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
-        // A case illustrating that we are not always able to rewrite `ORDER BY`.
         (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY a", None, None),
         (
             r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a") ORDER BY "a""#.to_string(),
             r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
-            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY "a""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, sum(b) AS a FROM t GROUP BY a, c ORDER BY a, c", Some(2), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "sum"("b") AS "a", "c" AS "a3" FROM "t" GROUP BY "a", "c" ORDER BY "a", "c""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, "a3""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, sum(b) AS a FROM t GROUP BY a, c ORDER BY c, a", Some(2), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "sum"("b") AS "a", "c" AS "a3" FROM "t" GROUP BY "a", "c" ORDER BY "c", "a""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY "a3", 1"#.to_string(),
             r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
         )),
     ];
