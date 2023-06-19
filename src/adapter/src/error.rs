@@ -344,6 +344,10 @@ impl AdapterError {
             _ => None,
         }
     }
+
+    pub fn internal<E: std::fmt::Display>(context: &str, e: E) -> AdapterError {
+        AdapterError::Internal(format!("{context}: {e}"))
+    }
 }
 
 impl fmt::Display for AdapterError {
