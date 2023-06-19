@@ -1934,7 +1934,7 @@ impl Coordinator {
                 &when,
                 cluster_id,
                 timeline_context.clone(),
-                None, // TODO(mgree): is this right?
+                None,
             )?
             .timestamp_context
             .antichain();
@@ -4119,16 +4119,27 @@ impl CachedStatisticsOracle {
         let mut cache = BTreeMap::new();
 
         for id in ids {
-            let stats = storage.snapshot_stats(*id, as_of.clone()).await?;
+            let stats = storage.snapshot_stats(*id, as_of.clone()).await;
 
-            if timely::PartialOrder::less_than(&stats.as_of, as_of) {
-                ::tracing::warn!(
-                    "stale statistics: statistics from {:?} are earlier than query at {as_of:?}",
-                    stats.as_of
-                );
+            match stats {
+                Ok(stats) => {
+                    if timely::PartialOrder::less_than(&stats.as_of, as_of) {
+                        ::tracing::warn!(
+                            "stale statistics: statistics from {:?} are earlier than query at {as_of:?}",
+                            stats.as_of
+                        );
+                    }
+
+                    cache.insert(*id, stats.num_updates);
+                }
+                Err(StorageError::IdentifierMissing(id)) => {
+                    debug_assert!(
+                        id.is_transient(),
+                        "only transient identifiers can be missing statistics"
+                    );
+                }
+                Err(e) => return Err(e),
             }
-
-            cache.insert(*id, stats.num_updates);
         }
 
         Ok(Self { cache })
