@@ -211,7 +211,7 @@ Schema registry URL [default: http://localhost:8081]
 
 ## Resource sharing and reuse across tests
 
-By default, `testdrive` will clean up the environment and Mz prior to running each test. In certain situations, two or more testdrive invocations need to run consequtively while being able to operate on the same database objects. The options below help to ensure successful cooperation.
+By default, `testdrive` will clean up the environment and Mz prior to running each test. In certain situations, two or more testdrive invocations need to run consecutively while being able to operate on the same database objects. The options below help to ensure successful cooperation.
 
 #### `--no-reset`
 
