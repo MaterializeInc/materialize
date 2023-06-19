@@ -58,7 +58,7 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
 use crate::client::{
-    CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
+    CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
 use crate::controller::command_wals::ProtoShardId;
@@ -300,7 +300,7 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
-    /// Create the sources described in the individual CreateSourceCommand commands.
+    /// Create the sources described in the individual RunIngestionCommand commands.
     ///
     /// Each command carries the source id, the source description, and any associated metadata
     /// needed to ingest the particular source.
@@ -316,6 +316,24 @@ pub trait StorageController: Debug + Send {
     async fn create_collections(
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError>;
+
+    /// Check that the collection associated with `id` can be altered to represent the given
+    /// `ingestion`.
+    ///
+    /// Note that this check is optimistic and its return of `Ok(())` does not guarantee that
+    /// subsequent calls to `alter_collection` are guaranteed to succeed.
+    fn check_alter_collection(
+        &mut self,
+        id: GlobalId,
+        desc: IngestionDescription,
+    ) -> Result<(), StorageError>;
+
+    /// Alter the identified collection to use the described ingestion.
+    async fn alter_collection(
+        &mut self,
+        id: GlobalId,
+        desc: IngestionDescription,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -620,22 +638,110 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
 
 /// A trait that is used to calculate safe _resumption frontiers_ for a source.
 ///
-/// Use [`ResumptionFrontierCalculator::initialize_state`] for creating an
-/// opaque state that you should keep around. Then repeatedly call
-/// [`ResumptionFrontierCalculator::calculate_resumption_frontier`] with the
-/// state to efficiently calculate an up-to-date frontier.
+/// Use [`CreateResumptionFrontierCalc::create_calc`] to create a [`ResumptionFrontierCalculator`].
+/// Then repeatedly call [`ResumptionFrontierCalculator::calculate_resumption_frontier`] to
+/// efficiently calculate an up-to-date frontier.
 #[async_trait]
-pub trait ResumptionFrontierCalculator<T> {
-    /// Opaque state that a `ResumptionFrontierCalculator` needs to repeatedly
-    /// (and efficiently) calculate a _resumption frontier_.
-    type State;
+pub trait CreateResumptionFrontierCalc<T: Timestamp + Lattice + Codec64> {
+    /// Creates a [`ResumptionFrontierCalculator`], which can be used to efficiently calculate a new
+    /// _resumption frontier_ when needed.
+    async fn create_calc(
+        &self,
+        client_cache: &PersistClientCache,
+    ) -> ResumptionFrontierCalculator<T>;
+}
 
-    /// Creates an opaque state type that can be used to efficiently calculate a
-    /// new _resumption frontier_ when needed.
-    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State;
+/// Holds both the [`WriteHandle`] and the last effective upper we want to use for that handle.
+///
+/// We use the term "effective upper" because we might want to "move the upper backward" so that the
+/// shard's upper appears to be the resumption frontier. This upper, then, is _not_ appropriate to
+/// use with [`WriteHandle::compare_and_append`] (i.e. it is not appropriate to use as the
+/// `expected_upper` argument), but is meant to be used in contexts where [`WriteHandle::append`] is
+/// appropriate.
+pub struct UpperState<T: Timestamp + Lattice + Codec64> {
+    handle: WriteHandle<SourceData, (), T, Diff>,
+    last_upper: Antichain<T>,
+}
 
-    /// Calculates a new, safe _resumption frontier_.
-    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
+impl<T: Timestamp + Lattice + Codec64> UpperState<T> {
+    pub fn new(handle: WriteHandle<SourceData, (), T, Diff>) -> Self {
+        UpperState {
+            handle,
+            last_upper: Antichain::from_elem(T::minimum()),
+        }
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> std::fmt::Debug for UpperState<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpperState")
+            .field("handle", &"<omitted>")
+            .field("last_upper", &self.last_upper)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+/// Provides convenience method to to efficiently calculate a new _resumption frontier_ from the
+/// shards desribed by its `upper_states.
+///
+/// For details about the resumption frontier calculation logic, see
+/// [`Self::calculate_resumption_frontier`]'s implementation.
+pub struct ResumptionFrontierCalculator<T: Timestamp + Lattice + Codec64> {
+    initial_frontier: Antichain<T>,
+    upper_states: BTreeMap<GlobalId, UpperState<T>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
+    pub fn new(
+        initial_frontier: Antichain<T>,
+        upper_states: BTreeMap<GlobalId, UpperState<T>>,
+    ) -> Self {
+        ResumptionFrontierCalculator {
+            initial_frontier,
+            upper_states,
+        }
+    }
+
+    /// Determine the resumption frontier of an ingestion comprised of the shards described by
+    /// `upper_states`.
+    pub async fn calculate_resumption_frontier(&mut self) -> Antichain<T> {
+        // Refresh all write handles' uppers.
+        for UpperState { handle, last_upper } in self.upper_states.values_mut() {
+            *last_upper = handle.fetch_recent_upper().await.clone();
+        }
+
+        let mut resume_upper = self.initial_frontier.clone();
+
+        // The resumption frontier is the min of (the stored initial frontier, all uppers).
+        for t in self
+            .upper_states
+            .values()
+            .map(|UpperState { last_upper, .. }| last_upper.elements())
+            .flatten()
+        {
+            resume_upper.insert(t.clone());
+        }
+
+        // Ensure no upper exceeds the resume upper; however, uppers are permitted to be below it;
+        // this is currently the same as setting each upper to the resume upper, but will, in the
+        // future, let us add collections whose uppers are beneath the resume upper.
+        for UpperState { last_upper, .. } in self.upper_states.values_mut() {
+            if PartialOrder::less_than(&resume_upper, last_upper) {
+                *last_upper = resume_upper.clone();
+            }
+        }
+
+        resume_upper
+    }
+
+    /// Get the most recent uppers of the shards used to generate the last resumption frontier.
+    pub fn get_uppers(&self) -> BTreeMap<GlobalId, Antichain<T>> {
+        self.upper_states
+            .iter()
+            .map(|(id, state)| (*id, state.last_upper.clone()))
+            .collect()
+    }
 }
 
 /// The subset of [`CollectionMetadata`] that must be durable stored.
@@ -891,6 +997,8 @@ pub enum StorageError {
     },
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
+    /// Response to an invalid/unsupported `ALTER SOURCE` command.
+    InvalidAlterSource { id: GlobalId },
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
@@ -912,6 +1020,7 @@ impl Error for StorageError {
             Self::ExportInstanceMissing { .. } => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
+            Self::InvalidAlterSource { .. } => None,
             Self::InvalidUsage(_) => None,
             Self::Generic(err) => err.source(),
         }
@@ -969,6 +1078,9 @@ impl fmt::Display for StorageError {
             // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
+            Self::InvalidAlterSource { id } => {
+                write!(f, "{id} cannot be altered in the requested way")
+            }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
@@ -1426,89 +1538,13 @@ where
             match &description.data_source {
                 DataSource::Ingestion(ingestion) => {
                     let storage_dependencies = description.get_storage_dependencies();
-                    let dependency_since =
-                        self.determine_collection_since_joins(&storage_dependencies)?;
 
-                    // Install read capability for all non-remap subsources on
-                    // remap collection.
-                    //
-                    // N.B. The "main" collection of the source is included in
-                    // `source_exports`.
-                    for id in ingestion.source_exports.keys() {
-                        let collection = self.collection(*id).expect("known to exist");
-
-                        // At the time of collection creation, we did not yet
-                        // have firm guarantees that the since of our
-                        // dependencies was not advanced beyond those of its
-                        // dependents, so we need to patch up the
-                        // implied_capability/since of the collction.
-                        //
-                        // TODO(aljoscha): This comes largely from the fact that
-                        // subsources are created with a `DataSource::Other`, so
-                        // we have no idea (at their creation time) that they
-                        // are a subsource, or that they are a subsource of a
-                        // source where they need a read hold on that
-                        // ingestion's remap collection.
-                        if timely::order::PartialOrder::less_than(
-                            &collection.implied_capability,
-                            &dependency_since,
-                        ) {
-                            assert!(
-                                timely::order::PartialOrder::less_than(
-                                    &dependency_since,
-                                    &collection.write_frontier
-                                ),
-                                "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
-                                collection.write_frontier,
-                                dependency_since,
-                            );
-                            mz_ore::soft_assert!(
-                                matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
-                                "subsources should not have external read holds installed until \
-                                their ingestion is created, but {:?} has read policy {:?}",
-                                id,
-                                collection.read_policy
-                            );
-
-                            // This patches up the implied_capability!
-                            self.set_read_policy(vec![(
-                                *id,
-                                ReadPolicy::NoPolicy {
-                                    initial_since: dependency_since.clone(),
-                                },
-                            )]);
-
-                            // We have to re-borrow.
-                            let collection = self.collection(*id).expect("known to exist");
-                            assert!(
-                                collection.implied_capability == dependency_since,
-                                "monkey patching the implied_capability to {:?} did not work, is still {:?}",
-                                dependency_since,
-                                collection.implied_capability,
-                            );
-                        }
-
-                        // Fill in the storage dependencies.
-                        let collection = self.collection_mut(*id).expect("known to exist");
-                        collection
-                            .storage_dependencies
-                            .extend(storage_dependencies.iter().cloned());
-
-                        assert!(
-                            !PartialOrder::less_than(
-                                &collection.read_capabilities.frontier(),
-                                &collection.implied_capability.borrow()
-                            ),
-                            "{id}: at this point, there can be no read holds for any time that is not \
-                            beyond the implied capability \
-                            but we have implied_capability {:?}, read_capabilities {:?}",
-                            collection.implied_capability,
-                            collection.read_capabilities,
-                        );
-
-                        let read_hold = collection.implied_capability.clone();
-                        self.install_read_capabilities(*id, &storage_dependencies, read_hold)?;
-                    }
+                    self.install_dependency_read_holds(
+                        // N.B. The "main" collection of the source is included in
+                        // `source_exports`.
+                        ingestion.source_exports.keys().cloned(),
+                        &storage_dependencies,
+                    )?;
                 }
                 DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
                     // No since to patch up and no read holds to install on
@@ -1527,72 +1563,24 @@ where
         for (id, description) in to_create {
             match description.data_source {
                 DataSource::Ingestion(ingestion) => {
-                    // Each ingestion is augmented with the collection metadata.
-                    let mut source_imports = BTreeMap::new();
-                    for (id, _) in ingestion.source_imports {
-                        // This _requires_ that the sub-source collection (with
-                        // `DataSource::Other`) was registered BEFORE we process this, the
-                        // top-level collection.
-                        let metadata = self.collection(id)?.collection_metadata.clone();
-                        source_imports.insert(id, metadata);
-                    }
-
-                    if let SourceEnvelope::Upsert(upsert) = &ingestion.desc.envelope {
-                        if upsert.disk && !self.state.scratch_directory_enabled {
-                            return Err(StorageError::InvalidUsage(
-                                "Attempting to render `ON DISK` source without a \
-                                configured scratch directory. This is a bug."
-                                    .into(),
-                            ));
-                        }
-                    }
-
-                    // The ingestion metadata is simply the collection metadata of the collection with
-                    // the associated ingestion
-                    let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
-
-                    let mut source_exports = BTreeMap::new();
-                    for (id, export) in ingestion.source_exports {
-                        // Note that these metadata's have been previously enriched with the
-                        // required `RelationDesc` for each sub-source above!
-                        let storage_metadata = self.collection(id)?.collection_metadata.clone();
-                        source_exports.insert(
-                            id,
-                            SourceExport {
-                                storage_metadata,
-                                output_index: export.output_index,
-                            },
-                        );
-                    }
-
-                    let desc = IngestionDescription {
-                        source_imports,
-                        source_exports,
-                        ingestion_metadata,
-                        // The rest of the fields are identical
-                        desc: ingestion.desc,
-                        instance_id: ingestion.instance_id,
-                        remap_collection_id: ingestion.remap_collection_id,
-                    };
-                    let mut state = desc.initialize_state(&self.persist).await;
-                    let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
+                    let description = self.enrich_ingestion(id, ingestion)?;
 
                     // Fetch the client for this ingestion's instance.
                     let client = self
                         .state
                         .clients
-                        .get_mut(&ingestion.instance_id)
+                        .get_mut(&description.instance_id)
                         .ok_or_else(|| StorageError::IngestionInstanceMissing {
-                            storage_instance_id: ingestion.instance_id,
+                            storage_instance_id: description.instance_id,
                             ingestion_id: id,
                         })?;
-                    let augmented_ingestion = CreateSourceCommand {
+                    let augmented_ingestion = RunIngestionCommand {
                         id,
-                        description: desc,
-                        resume_upper,
+                        description,
+                        update: false,
                     };
 
-                    client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
+                    client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
                     let prev = self.state.introspection_ids.insert(i, id);
@@ -1648,6 +1636,68 @@ where
                 DataSource::Progress | DataSource::Other => {}
             }
         }
+
+        Ok(())
+    }
+
+    fn check_alter_collection(
+        &mut self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<(), StorageError> {
+        self.check_alter_collection_inner(id, ingestion)
+    }
+
+    async fn alter_collection(
+        &mut self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<(), StorageError> {
+        self.check_alter_collection_inner(id, ingestion.clone())
+            .expect("error avoided by calling check_alter_collection first");
+
+        // Describe the ingestion in terms of collection metadata.
+        let description = self
+            .enrich_ingestion(id, ingestion.clone())
+            .expect("verified valid in check_alter_collection_inner");
+
+        let collection = self.collection_mut(id).expect("validated exists");
+
+        // Install new ingestion here rather than in `check_alter_collection_inner` because of
+        // mutability; making check_alter_collection_inner take a mutable reference is possible but
+        // renders the code even harder to reason about.
+        let new_source_exports = match &mut collection.description.data_source {
+            DataSource::Ingestion(active_ingestion) => {
+                let new_source_exports: Vec<_> = description
+                    .source_exports
+                    .keys()
+                    .filter(|id| !active_ingestion.source_exports.contains_key(id))
+                    .cloned()
+                    .collect();
+                *active_ingestion = ingestion;
+
+                new_source_exports
+            }
+            _ => unreachable!("verified collection refers to ingestion"),
+        };
+
+        let storage_dependencies = collection.description.get_storage_dependencies();
+
+        // Install read capability for all dependencies on new source exports.
+        self.install_dependency_read_holds(new_source_exports.into_iter(), &storage_dependencies)?;
+
+        // Fetch the client for this ingestion's instance.
+        let client = self
+            .state
+            .clients
+            .get_mut(&description.instance_id)
+            .expect("verified exists");
+
+        client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            id,
+            description,
+            update: true,
+        }]));
 
         Ok(())
     }
@@ -1990,10 +2040,7 @@ where
 
             let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
 
-            if timely::order::PartialOrder::less_equal(
-                &collection.implied_capability,
-                &new_read_capability,
-            ) {
+            if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                 let mut update = ChangeBatch::new();
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
                 std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
@@ -2025,10 +2072,7 @@ where
                     .read_policy
                     .frontier(collection.write_frontier.borrow());
 
-                if timely::order::PartialOrder::less_equal(
-                    &collection.implied_capability,
-                    &new_read_capability,
-                ) {
+                if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                     let mut update = ChangeBatch::new();
                     update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
                     std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
@@ -2053,10 +2097,7 @@ where
                     export.read_policy.frontier(export.write_frontier.borrow())
                 };
 
-                if timely::order::PartialOrder::less_equal(
-                    &export.read_capability,
-                    &new_read_capability,
-                ) {
+                if PartialOrder::less_equal(&export.read_capability, &new_read_capability) {
                     let mut update = ChangeBatch::new();
                     update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
                     std::mem::swap(&mut export.read_capability, &mut new_read_capability);
@@ -3077,6 +3118,198 @@ where
             self.clear_from_shard_finalization_register(finalized_shards)
                 .await;
         }
+    }
+
+    /// Determines if an `ALTER` is valid.
+    fn check_alter_collection_inner(
+        &self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<(), StorageError> {
+        // Check that the client exists.
+        self.state.clients.get(&ingestion.instance_id).ok_or(
+            StorageError::IngestionInstanceMissing {
+                storage_instance_id: ingestion.instance_id,
+                ingestion_id: id,
+            },
+        )?;
+
+        // Describe the ingestion in terms of collection metadata.
+        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
+
+        // Take a cloned copy of the description because we are going to treat it as a "scratch
+        // space".
+        let mut collection_description = self.collection(id)?.description.clone();
+
+        // Get the previous storage dependencies; we need these to understand if something has
+        // changed in what we depend upon.
+        let prev_storage_dependencies = collection_description.get_storage_dependencies();
+
+        // Check compatibility between current and new ingestions and install new ingestion in
+        // collection description.
+        match &mut collection_description.data_source {
+            DataSource::Ingestion(cur_ingestion) => {
+                let prev_ingestion = self.enrich_ingestion(id, cur_ingestion.clone())?;
+                prev_ingestion.alter_compatible(id, &described_ingestion)?;
+
+                *cur_ingestion = ingestion;
+            }
+            o => {
+                tracing::info!(
+                    "{id:?} inalterable because its data source is {:?} and not an ingestion",
+                    o
+                );
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        };
+
+        let new_storage_dependencies = collection_description.get_storage_dependencies();
+
+        if prev_storage_dependencies != new_storage_dependencies {
+            tracing::info!(
+                    "{id:?} inalterable because its storage dependencies have changed: were {:?} but are now {:?}",
+                    prev_storage_dependencies,
+                    new_storage_dependencies
+                );
+            return Err(StorageError::InvalidAlterSource { id });
+        }
+
+        Ok(())
+    }
+
+    /// On each element of `collections`, install a read hold on all of the `storage_dependencies`.
+    fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
+        &mut self,
+        collections: I,
+        storage_dependencies: &[GlobalId],
+    ) -> Result<(), StorageError> {
+        let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+        for id in collections {
+            let collection = self.collection(id).expect("known to exist");
+
+            // At the time of collection creation, we did not yet
+            // have firm guarantees that the since of our
+            // dependencies was not advanced beyond those of its
+            // dependents, so we need to patch up the
+            // implied_capability/since of the collction.
+            //
+            // TODO(aljoscha): This comes largely from the fact that
+            // subsources are created with a `DataSource::Other`, so
+            // we have no idea (at their creation time) that they
+            // are a subsource, or that they are a subsource of a
+            // source where they need a read hold on that
+            // ingestion's remap collection.
+            if PartialOrder::less_than(&collection.implied_capability, &dependency_since) {
+                assert!(
+                    PartialOrder::less_than(&dependency_since, &collection.write_frontier),
+                    "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
+                    collection.write_frontier,
+                    dependency_since,
+                );
+                mz_ore::soft_assert!(
+                    matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
+                    "subsources should not have external read holds installed until \
+                                    their ingestion is created, but {:?} has read policy {:?}",
+                    id,
+                    collection.read_policy
+                );
+
+                // This patches up the implied_capability!
+                self.set_read_policy(vec![(
+                    id,
+                    ReadPolicy::NoPolicy {
+                        initial_since: dependency_since.clone(),
+                    },
+                )]);
+
+                // We have to re-borrow.
+                let collection = self.collection(id).expect("known to exist");
+                assert!(
+                    collection.implied_capability == dependency_since,
+                    "monkey patching the implied_capability to {:?} did not work, is still {:?}",
+                    dependency_since,
+                    collection.implied_capability,
+                );
+            }
+
+            // Fill in the storage dependencies.
+            let collection = self.collection_mut(id).expect("known to exist");
+            collection
+                .storage_dependencies
+                .extend(storage_dependencies.iter().cloned());
+
+            assert!(
+                !PartialOrder::less_than(
+                    &collection.read_capabilities.frontier(),
+                    &collection.implied_capability.borrow()
+                ),
+                "{id}: at this point, there can be no read holds for any time that is not \
+                                beyond the implied capability \
+                                but we have implied_capability {:?}, read_capabilities {:?}",
+                collection.implied_capability,
+                collection.read_capabilities,
+            );
+
+            let read_hold = collection.implied_capability.clone();
+            self.install_read_capabilities(id, storage_dependencies, read_hold)?;
+        }
+
+        Ok(())
+    }
+
+    /// Converts an `IngestionDescription<()>` into `IngestionDescription<CollectionMetadata>`.
+    fn enrich_ingestion(
+        &self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<IngestionDescription<CollectionMetadata>, StorageError> {
+        // Each ingestion is augmented with the collection metadata.
+        let mut source_imports = BTreeMap::new();
+        for (id, _) in ingestion.source_imports {
+            // This _requires_ that the sub-source collection (with
+            // `DataSource::Other`) was registered BEFORE we process this, the
+            // top-level collection.
+            let metadata = self.collection(id)?.collection_metadata.clone();
+            source_imports.insert(id, metadata);
+        }
+
+        if let SourceEnvelope::Upsert(upsert) = &ingestion.desc.envelope {
+            if upsert.disk && !self.state.scratch_directory_enabled {
+                return Err(StorageError::InvalidUsage(
+                    "Attempting to render `ON DISK` source without a \
+                    configured scratch directory. This is a bug."
+                        .into(),
+                ));
+            }
+        }
+
+        // The ingestion metadata is simply the collection metadata of the collection with
+        // the associated ingestion
+        let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
+
+        let mut source_exports = BTreeMap::new();
+        for (id, export) in ingestion.source_exports {
+            // Note that these metadata's have been previously enriched with the
+            // required `RelationDesc` for each sub-source above!
+            let storage_metadata = self.collection(id)?.collection_metadata.clone();
+            source_exports.insert(
+                id,
+                SourceExport {
+                    storage_metadata,
+                    output_index: export.output_index,
+                },
+            );
+        }
+
+        Ok(IngestionDescription {
+            source_imports,
+            source_exports,
+            ingestion_metadata,
+            // The rest of the fields are identical
+            desc: ingestion.desc,
+            instance_id: ingestion.instance_id,
+            remap_collection_id: ingestion.remap_collection_id,
+        })
     }
 }
 

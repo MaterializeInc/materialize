@@ -40,7 +40,7 @@ bin/ci-builder run stable test/cloudtest/reset
 rm -f kubectl-*.log
 
 ci_collapsed_heading "kail: Start a new instance"
-bin/ci-builder run stable --detach --name "kail" kail --context kind-cloudtest --log-level info
+NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context kind-cloudtest --log-level info
 
 ci_uncollapsed_heading "cloudtest: Running \`bin/pytest ${run_args[*]}\`"
 bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log

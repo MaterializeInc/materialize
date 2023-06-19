@@ -53,7 +53,10 @@ use crate::ast::{
     ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
     StatementKind, TransactionAccessMode,
 };
-use crate::catalog::{CatalogType, IdReference, ObjectType, RoleAttributes};
+use crate::catalog::{
+    CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
+    RoleAttributes,
+};
 use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 
 pub(crate) mod error;
@@ -70,6 +73,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
+use crate::plan::with_options::OptionalInterval;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
@@ -117,6 +121,7 @@ pub enum Plan {
     CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
     Insert(InsertPlan),
+    AlterCluster(AlterClusterPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
@@ -144,6 +149,7 @@ pub enum Plan {
     RevokeRole(RevokeRolePlan),
     GrantPrivileges(GrantPrivilegesPlan),
     RevokePrivileges(RevokePrivilegesPlan),
+    AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
 }
 
@@ -152,8 +158,11 @@ impl Plan {
     /// [`PlanKind`].
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
+            StatementKind::AlterCluster => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
+            }
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
-            StatementKind::AlterDefaultPrivileges => vec![],
+            StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
                 PlanKind::AlterIndexSetOptions,
@@ -303,6 +312,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
             },
+            Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterIndexSetOptions(_) => "alter index",
@@ -349,6 +359,7 @@ impl Plan {
             Plan::RevokeRole(_) => "revoke role",
             Plan::GrantPrivileges(_) => "grant privilege",
             Plan::RevokePrivileges(_) => "revoke privilege",
+            Plan::AlterDefaultPrivileges(_) => "alter default privileges",
             Plan::ReassignOwned(_) => "reassign owned",
         }
     }
@@ -408,7 +419,26 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateClusterPlan {
     pub name: String,
+    pub variant: CreateClusterVariant,
+}
+
+#[derive(Debug)]
+pub enum CreateClusterVariant {
+    Managed(CreateClusterManagedPlan),
+    Unmanaged(CreateClusterUnmanagedPlan),
+}
+
+#[derive(Debug)]
+pub struct CreateClusterUnmanagedPlan {
     pub replicas: Vec<(String, ReplicaConfig)>,
+}
+
+#[derive(Debug)]
+pub struct CreateClusterManagedPlan {
+    pub replication_factor: u32,
+    pub size: String,
+    pub availability_zones: Vec<String>,
+    pub compute: ComputeReplicaConfig,
 }
 
 #[derive(Debug)]
@@ -603,7 +633,9 @@ pub struct DropOwnedPlan {
     /// All object IDs to drop.
     pub drop_ids: Vec<ObjectId>,
     /// The privileges to revoke.
-    pub revokes: Vec<(ObjectId, MzAclItem)>,
+    pub privilege_revokes: Vec<(ObjectId, MzAclItem)>,
+    /// The default privileges to revoke.
+    pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
 }
 
 #[derive(Debug)]
@@ -766,8 +798,8 @@ pub struct AlterIndexResetOptionsPlan {
 
 #[derive(Debug, Clone)]
 
-pub enum AlterOptionParameter {
-    Set(String),
+pub enum AlterOptionParameter<T = String> {
+    Set(T),
     Reset,
     Unchanged,
 }
@@ -782,6 +814,13 @@ pub struct AlterSinkPlan {
 pub struct AlterSourcePlan {
     pub id: GlobalId,
     pub size: AlterOptionParameter,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterPlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub options: PlanClusterOption,
 }
 
 #[derive(Debug)]
@@ -889,8 +928,8 @@ pub struct RaisePlan {
 
 #[derive(Debug)]
 pub struct GrantRolePlan {
-    /// The role that is gaining a member.
-    pub role_id: RoleId,
+    /// The roles that are gaining members.
+    pub role_ids: Vec<RoleId>,
     /// The roles that will be added to `role_id`.
     pub member_ids: Vec<RoleId>,
     /// The role that granted the membership.
@@ -899,8 +938,8 @@ pub struct GrantRolePlan {
 
 #[derive(Debug)]
 pub struct RevokeRolePlan {
-    /// The role that is losing a member.
-    pub role_id: RoleId,
+    /// The roles that are losing members.
+    pub role_ids: Vec<RoleId>,
     /// The roles that will be removed from `role_id`.
     pub member_ids: Vec<RoleId>,
     /// The role that revoked the membership.
@@ -931,6 +970,15 @@ pub struct RevokePrivilegesPlan {
     pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will have privileges revoked.
     pub revokees: Vec<RoleId>,
+}
+#[derive(Debug)]
+pub struct AlterDefaultPrivilegesPlan {
+    /// Description of objects that match this default privilege.
+    pub privilege_objects: Vec<DefaultPrivilegeObject>,
+    /// The privilege to be granted/revoked from the matching objects.
+    pub privilege_acl_items: Vec<DefaultPrivilegeAclItem>,
+    /// Whether this is a grant or revoke.
+    pub is_grant: bool,
 }
 
 #[derive(Debug)]
@@ -1128,6 +1176,33 @@ pub enum IndexOption {
     /// Configures the logical compaction window for an index. `None` disables
     /// logical compaction entirely.
     LogicalCompactionWindow(Option<Duration>),
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanClusterOption {
+    pub availability_zones: AlterOptionParameter<Vec<String>>,
+    pub idle_arrangement_merge_effort: AlterOptionParameter<u32>,
+    pub introspection_debugging: AlterOptionParameter<bool>,
+    pub introspection_interval: AlterOptionParameter<OptionalInterval>,
+    pub managed: AlterOptionParameter<bool>,
+    pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
+    pub replication_factor: AlterOptionParameter<u32>,
+    pub size: AlterOptionParameter,
+}
+
+impl Default for PlanClusterOption {
+    fn default() -> Self {
+        Self {
+            availability_zones: AlterOptionParameter::Unchanged,
+            idle_arrangement_merge_effort: AlterOptionParameter::Unchanged,
+            introspection_debugging: AlterOptionParameter::Unchanged,
+            introspection_interval: AlterOptionParameter::Unchanged,
+            managed: AlterOptionParameter::Unchanged,
+            replicas: AlterOptionParameter::Unchanged,
+            replication_factor: AlterOptionParameter::Unchanged,
+            size: AlterOptionParameter::Unchanged,
+        }
+    }
 }
 
 /// A vector of values to which parameter references should be bound.

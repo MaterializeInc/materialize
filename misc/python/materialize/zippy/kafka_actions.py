@@ -135,9 +135,9 @@ class Ingest(Action):
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.topic = random.choice(capabilities.get(TopicExists))
-        self.delta = random.randint(1, 100000)
-        # This gives 67% pads of up to 10 bytes, 25% of up to 100 bytes and outliers up to 1K bytes
-        self.pad = min(np.random.zipf(1.6, 1)[0], 1000) * random.choice(
+        self.delta = random.randint(1, 10000)
+        # This gives 67% pads of up to 10 bytes, 25% of up to 100 bytes and outliers up to 256 bytes
+        self.pad = min(np.random.zipf(1.6, 1)[0], 256) * random.choice(
             string.ascii_letters
         )
         super().__init__(capabilities)

@@ -22,6 +22,7 @@ ws-text
 ws-text
 {"query": "select NULL"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":[null]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -30,6 +31,7 @@ ws-text
 ws-binary
 {"query": "select 'binary'"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":["binary"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -38,9 +40,11 @@ ws-binary
 ws-text
 {"query": "select 1,2; values ('a'), ('b')"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?","?column?"]}
 {"type":"Row","payload":[1,2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["column1"]}
 {"type":"Row","payload":["a"]}
 {"type":"Row","payload":["b"]}
@@ -50,6 +54,7 @@ ws-text
 ws-text
 {"query": "SET application_name TO a"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"SET"}
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
 {"type":"ReadyForQuery","payload":"I"}
@@ -67,6 +72,7 @@ ws-text
 ws-text
 {"query": ";;select 1;"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -75,9 +81,11 @@ ws-text
 ws-text
 {"query": ";;select 1;; select 2;;"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -97,18 +105,21 @@ ws-text
 ws-text
 {"queries": [{"query": "select $1"}]}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT $1 requires 1","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": []}]}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT ($1)::int4 requires 1","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": ["2"]}]}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["int4"]}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -117,6 +128,7 @@ ws-text
 ws-text
 {"queries": [{"query": "select $1::int", "params": ["z"]}]}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"unable to decode parameter: invalid input syntax for type integer: invalid digit found in string: \"z\"","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
@@ -129,6 +141,7 @@ ws-text
 ws-text
 {"queries": [{"query": "select $1::int", "params": [null]}]}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["int4"]}
 {"type":"Row","payload":[null]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -139,7 +152,9 @@ ws-text
 ws-text
 {"query": "BEGIN; SELECT 1"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"BEGIN"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -150,6 +165,7 @@ ws-text
 ws-text
 {"query": "SET application_name TO b"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"SET"}
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"b"}}
 {"type":"ReadyForQuery","payload":"T"}
@@ -157,12 +173,14 @@ ws-text
 ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
@@ -170,14 +188,17 @@ ws-text
 ws-text
 {"query": "SELECT 2"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
 {"query": "ROLLBACK; SELECT 2"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"ROLLBACK"}
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["?column?"]}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -188,12 +209,14 @@ ws-text
 ws-text
 {"query": "BEGIN"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"BEGIN"}
 {"type":"ReadyForQuery","payload":"T"}
 
 ws-text
 {"query": "SET LOCAL application_name TO c"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"SET"}
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"c"}}
 {"type":"ReadyForQuery","payload":"T"}
@@ -201,6 +224,7 @@ ws-text
 ws-text
 {"query": "SHOW application_name"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["application_name"]}
 {"type":"Row","payload":["c"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -209,6 +233,7 @@ ws-text
 ws-text
 {"query": "COMMIT"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"COMMIT"}
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
 {"type":"ReadyForQuery","payload":"I"}
@@ -216,6 +241,7 @@ ws-text
 ws-text
 {"query": "SHOW application_name"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":["application_name"]}
 {"type":"Row","payload":["a"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
@@ -224,33 +250,39 @@ ws-text
 ws-text
 {"query": "SUBSCRIBE v"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"unknown catalog item 'v'","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "CREATE TABLE t (i INT)"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"CREATE TABLE"}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "INSERT INTO t VALUES (1), (2), (3), (4)"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"INSERT 0 4"}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "SUBSCRIBE (VALUES (1)); SELECT 1"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}
 {"type":"Rows","payload":["mz_timestamp","mz_diff","column1"]}
 {"type":"Row","payload":["18446744073709551615",1,1]}
 {"type":"CommandComplete","payload":"SUBSCRIBE"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"SUBSCRIBE in transactions must be the only read statement","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}
 {"type":"Rows","payload":["mz_timestamp","mz_diff","i"]}
 {"type":"Row","payload":["<TIMESTAMP>",1,1]}
 {"type":"Row","payload":["<TIMESTAMP>",1,2]}

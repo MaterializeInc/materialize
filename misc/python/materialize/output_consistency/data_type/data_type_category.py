@@ -17,12 +17,12 @@ class DataTypeCategory(Enum):
     """Suitable for all type (e.g., `NULLIF`). Allowed as input parameters but not as return type"""
     DYNAMIC = 20
     """Dynamic type, only allowed as return type. The actual type will be resolved based on the first input arg"""
-    DYNAMIC_ARRAY = 21
-    """Dynamic type, only allowed as return type. The actual type of the array will be resolved based on the first
-    input arg"""
+
     NUMERIC = 101
     BOOLEAN = 102
     TEXT = 103
     DATE_TIME = 104
 
     ENUM = 200
+
+    ARRAY = 300

@@ -178,6 +178,7 @@ case "$cmd" in
             --env NIGHTLY_CANARY_APP_PASSWORD
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
+            --env NO_COLOR
             --env PYPI_TOKEN
         )
 

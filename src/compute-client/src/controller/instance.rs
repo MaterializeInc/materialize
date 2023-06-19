@@ -18,6 +18,7 @@ use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_expr::RowSetFinishing;
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
@@ -31,6 +32,7 @@ use crate::controller::replica::{Replica, ReplicaConfig};
 use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
+use crate::metrics::UIntGauge;
 use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -139,7 +141,7 @@ pub(super) struct Instance<T> {
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
-    history: ComputeCommandHistory<T>,
+    history: ComputeCommandHistory<UIntGauge, T>,
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
     /// Ready compute controller responses to be delivered.
@@ -206,6 +208,29 @@ impl<T> Instance<T> {
             targeting.then_some(*id)
         })
     }
+
+    /// Refresh the controller state metrics for this instance.
+    ///
+    /// We could also do state metric updates directly in response to state changes, but that would
+    /// mean littering the code with metric update calls. Encapsulating state metric maintenance in
+    /// a single method is less noisy.
+    ///
+    /// This method is invoked by `ActiveComputeController::process`, which we expect to
+    /// be periodically called during normal operation.
+    pub(super) fn refresh_state_metrics(&self) {
+        self.metrics
+            .replica_count
+            .set(u64::cast_from(self.replicas.len()));
+        self.metrics
+            .collection_count
+            .set(u64::cast_from(self.collections.len()));
+        self.metrics
+            .peek_count
+            .set(u64::cast_from(self.peeks.len()));
+        self.metrics
+            .subscribe_count
+            .set(u64::cast_from(self.subscribes.len()));
+    }
 }
 
 impl<T> Instance<T>
@@ -226,6 +251,7 @@ where
                 (*id, state)
             })
             .collect();
+        let history = ComputeCommandHistory::new(metrics.for_history());
 
         let mut instance = Self {
             build_info,
@@ -235,7 +261,7 @@ where
             log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
-            history: Default::default(),
+            history,
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
             envd_epoch,

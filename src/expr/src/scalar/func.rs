@@ -6,6 +6,10 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+//
+// Portions of this file are derived from the PostgreSQL project. The original
+// source code is subject to the terms of the PostgreSQL license, a copy of
+// which can be found in the LICENSE file at the root of this repository.
 
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
@@ -1807,6 +1811,68 @@ fn date_trunc_interval<'a>(a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
     Ok(interval.into())
 }
 
+fn date_diff_timestamp<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
+    let unit = unit.unwrap_str();
+    let unit = unit
+        .parse()
+        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+
+    let a = a.unwrap_timestamp();
+    let b = b.unwrap_timestamp();
+    let diff = b.diff_as(&a, unit)?;
+
+    Ok(Datum::Int64(diff))
+}
+
+fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
+    let unit = unit.unwrap_str();
+    let unit = unit
+        .parse()
+        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+
+    let a = a.unwrap_timestamptz();
+    let b = b.unwrap_timestamptz();
+    let diff = b.diff_as(&a, unit)?;
+
+    Ok(Datum::Int64(diff))
+}
+
+fn date_diff_date<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
+    let unit = unit.unwrap_str();
+    let unit = unit
+        .parse()
+        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+
+    let a = a.unwrap_date();
+    let b = b.unwrap_date();
+
+    // Convert the Date into a timestamp so we can calculate age.
+    let a_ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
+    let b_ts = CheckedTimestamp::try_from(NaiveDate::from(b).and_hms_opt(0, 0, 0).unwrap())?;
+    let diff = b_ts.diff_as(&a_ts, unit)?;
+
+    Ok(Datum::Int64(diff))
+}
+
+fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
+    let unit = unit.unwrap_str();
+    let unit = unit
+        .parse()
+        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+
+    let a = a.unwrap_time();
+    let b = b.unwrap_time();
+
+    // Convert the Time into a timestamp so we can calculate age.
+    let a_ts =
+        CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(a))?;
+    let b_ts =
+        CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(b))?;
+    let diff = b_ts.diff_as(&a_ts, unit)?;
+
+    Ok(Datum::Int64(diff))
+}
+
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
 pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
     tz.parse()
@@ -1866,7 +1932,7 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     Ok(contains.into())
 }
 
-// transliteration from postgres/src/backend/utils/adt/misc.c
+// transliterated from postgres/src/backend/utils/adt/misc.c
 fn parse_ident<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -4488,7 +4554,8 @@ derive_unary!(
     MzAclItemGrantor,
     MzAclItemGrantee,
     MzAclItemPrivileges,
-    MzValidatePrivileges
+    MzValidatePrivileges,
+    QuoteIdent
 );
 
 impl UnaryFunc {
@@ -4888,6 +4955,7 @@ impl Arbitrary for UnaryFunc {
             MzAclItemGrantee::arbitrary().prop_map_into().boxed(),
             MzAclItemPrivileges::arbitrary().prop_map_into().boxed(),
             MzValidatePrivileges::arbitrary().prop_map_into().boxed(),
+            QuoteIdent::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -5239,6 +5307,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MzAclItemGrantee(_) => MzAclItemGrantee(()),
             UnaryFunc::MzAclItemPrivileges(_) => MzAclItemPrivileges(()),
             UnaryFunc::MzValidatePrivileges(_) => MzValidatePrivileges(()),
+            UnaryFunc::QuoteIdent(_) => QuoteIdent(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -5660,6 +5729,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MzAclItemGrantee(_) => Ok(impls::MzAclItemGrantee.into()),
                 MzAclItemPrivileges(_) => Ok(impls::MzAclItemPrivileges.into()),
                 MzValidatePrivileges(_) => Ok(impls::MzValidatePrivileges.into()),
+                QuoteIdent(_) => Ok(impls::QuoteIdent.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
@@ -7108,6 +7178,10 @@ pub enum VariadicFunc {
     ErrorIfNull,
     DateBinTimestamp,
     DateBinTimestampTz,
+    DateDiffTimestamp,
+    DateDiffTimestampTz,
+    DateDiffDate,
+    DateDiffTime,
     And,
     Or,
     RangeCreate {
@@ -7194,6 +7268,10 @@ impl VariadicFunc {
                 ds[1].unwrap_timestamptz(),
                 ds[2].unwrap_timestamptz(),
             ),
+            VariadicFunc::DateDiffTimestamp => date_diff_timestamp(ds[0], ds[1], ds[2]),
+            VariadicFunc::DateDiffTimestampTz => date_diff_timestamptz(ds[0], ds[1], ds[2]),
+            VariadicFunc::DateDiffDate => date_diff_date(ds[0], ds[1], ds[2]),
+            VariadicFunc::DateDiffTime => date_diff_time(ds[0], ds[1], ds[2]),
             VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
@@ -7207,12 +7285,12 @@ impl VariadicFunc {
             | VariadicFunc::Greatest
             | VariadicFunc::Least
             | VariadicFunc::Concat
-            | VariadicFunc::ConcatWs
             | VariadicFunc::And
             | VariadicFunc::Or => true,
 
             VariadicFunc::MakeTimestamp
             | VariadicFunc::PadLeading
+            | VariadicFunc::ConcatWs
             | VariadicFunc::Substr
             | VariadicFunc::Replace
             | VariadicFunc::Translate
@@ -7232,6 +7310,10 @@ impl VariadicFunc {
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::DateBinTimestamp
             | VariadicFunc::DateBinTimestampTz
+            | VariadicFunc::DateDiffTimestamp
+            | VariadicFunc::DateDiffTimestampTz
+            | VariadicFunc::DateDiffDate
+            | VariadicFunc::DateDiffTime
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::ArrayPosition
@@ -7304,6 +7386,10 @@ impl VariadicFunc {
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
             DateBinTimestamp => ScalarType::Timestamp.nullable(in_nullable),
             DateBinTimestampTz => ScalarType::TimestampTz.nullable(in_nullable),
+            DateDiffTimestamp => ScalarType::Int64.nullable(in_nullable),
+            DateDiffTimestampTz => ScalarType::Int64.nullable(in_nullable),
+            DateDiffDate => ScalarType::Int64.nullable(in_nullable),
+            DateDiffTime => ScalarType::Int64.nullable(in_nullable),
             And | Or => ScalarType::Bool.nullable(in_nullable),
             RangeCreate { elem_type } => ScalarType::Range {
                 element_type: Box::new(elem_type.clone()),
@@ -7370,6 +7456,10 @@ impl VariadicFunc {
             | ErrorIfNull
             | DateBinTimestamp
             | DateBinTimestampTz
+            | DateDiffTimestamp
+            | DateDiffTimestampTz
+            | DateDiffDate
+            | DateDiffTime
             | RangeCreate { .. }
             | And
             | Or
@@ -7472,7 +7562,11 @@ impl VariadicFunc {
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::Translate
             | VariadicFunc::ArrayPosition
-            | VariadicFunc::ArrayFill { .. } => false,
+            | VariadicFunc::ArrayFill { .. }
+            | VariadicFunc::DateDiffTimestamp
+            | VariadicFunc::DateDiffTimestampTz
+            | VariadicFunc::DateDiffDate
+            | VariadicFunc::DateDiffTime => false,
         }
     }
 }
@@ -7505,6 +7599,10 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ErrorIfNull => f.write_str("error_if_null"),
             VariadicFunc::DateBinTimestamp => f.write_str("timestamp_bin"),
             VariadicFunc::DateBinTimestampTz => f.write_str("timestamptz_bin"),
+            VariadicFunc::DateDiffTimestamp
+            | VariadicFunc::DateDiffTimestampTz
+            | VariadicFunc::DateDiffDate
+            | VariadicFunc::DateDiffTime => f.write_str("datediff"),
             VariadicFunc::And => f.write_str("AND"),
             VariadicFunc::Or => f.write_str("OR"),
             VariadicFunc::RangeCreate {
@@ -7574,6 +7672,10 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::ErrorIfNull).boxed(),
             Just(VariadicFunc::DateBinTimestamp).boxed(),
             Just(VariadicFunc::DateBinTimestampTz).boxed(),
+            Just(VariadicFunc::DateDiffTimestamp).boxed(),
+            Just(VariadicFunc::DateDiffTimestampTz).boxed(),
+            Just(VariadicFunc::DateDiffDate).boxed(),
+            Just(VariadicFunc::DateDiffTime).boxed(),
             Just(VariadicFunc::And).boxed(),
             Just(VariadicFunc::Or).boxed(),
             mz_repr::arb_range_type()
@@ -7620,6 +7722,10 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::ErrorIfNull => ErrorIfNull(()),
             VariadicFunc::DateBinTimestamp => DateBinTimestamp(()),
             VariadicFunc::DateBinTimestampTz => DateBinTimestampTz(()),
+            VariadicFunc::DateDiffTimestamp => DateDiffTimestamp(()),
+            VariadicFunc::DateDiffTimestampTz => DateDiffTimestampTz(()),
+            VariadicFunc::DateDiffDate => DateDiffDate(()),
+            VariadicFunc::DateDiffTime => DateDiffTime(()),
             VariadicFunc::And => And(()),
             VariadicFunc::Or => Or(()),
             VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
@@ -7671,6 +7777,10 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 ErrorIfNull(()) => Ok(VariadicFunc::ErrorIfNull),
                 DateBinTimestamp(()) => Ok(VariadicFunc::DateBinTimestamp),
                 DateBinTimestampTz(()) => Ok(VariadicFunc::DateBinTimestampTz),
+                DateDiffTimestamp(()) => Ok(VariadicFunc::DateDiffTimestamp),
+                DateDiffTimestampTz(()) => Ok(VariadicFunc::DateDiffTimestampTz),
+                DateDiffDate(()) => Ok(VariadicFunc::DateDiffDate),
+                DateDiffTime(()) => Ok(VariadicFunc::DateDiffTime),
                 And(()) => Ok(VariadicFunc::And),
                 Or(()) => Ok(VariadicFunc::Or),
                 RangeCreate(elem_type) => Ok(VariadicFunc::RangeCreate {

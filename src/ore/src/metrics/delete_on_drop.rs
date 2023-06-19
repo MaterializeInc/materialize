@@ -27,6 +27,7 @@
 //! * When using owned data (an extension over what Prometheus allows, which only lets you use
 //!   references to refer to labels), the created metric is also allowed to live for `'static`.
 
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -149,6 +150,10 @@ impl<'a> PromLabelsExt<'a> for BTreeMap<&'a str, &'a str> {
 ///
 /// It adds a method to create a concrete metric from the vector that gets removed from the vector
 /// when the concrete metric is dropped.
+///
+/// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
+/// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
+/// type.
 #[derive(Debug)]
 pub struct DeleteOnDropHistogram<'a, L>
 where
@@ -185,6 +190,15 @@ where
     }
 }
 
+impl<'a, L> Borrow<Histogram> for DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    fn borrow(&self) -> &Histogram {
+        &self.inner
+    }
+}
+
 impl<'a, L> Drop for DeleteOnDropHistogram<'a, L>
 where
     L: PromLabelsExt<'a>,
@@ -200,6 +214,10 @@ where
 ///
 /// It adds a method to create a concrete metric from the vector that gets removed from the vector
 /// when the concrete metric is dropped.
+///
+/// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
+/// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
+/// type.
 #[derive(Debug)]
 pub struct DeleteOnDropCounter<'a, P, L>
 where
@@ -235,6 +253,16 @@ where
 {
     type Target = GenericCounter<P>;
     fn deref(&self) -> &GenericCounter<P> {
+        &self.inner
+    }
+}
+
+impl<'a, P, L> Borrow<GenericCounter<P>> for DeleteOnDropCounter<'a, P, L>
+where
+    P: Atomic,
+    L: PromLabelsExt<'a>,
+{
+    fn borrow(&self) -> &GenericCounter<P> {
         &self.inner
     }
 }
@@ -301,6 +329,10 @@ impl HistogramVecExt for HistogramVec {
 }
 
 /// A [`GenericGauge`] wrapper that deletes its labels from the vec when it is dropped
+///
+/// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
+/// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
+/// type.
 #[derive(Debug)]
 pub struct DeleteOnDropGauge<'a, P, L>
 where
@@ -336,6 +368,16 @@ where
 {
     type Target = GenericGauge<P>;
     fn deref(&self) -> &GenericGauge<P> {
+        &self.inner
+    }
+}
+
+impl<'a, P, L> Borrow<GenericGauge<P>> for DeleteOnDropGauge<'a, P, L>
+where
+    P: Atomic,
+    L: PromLabelsExt<'a>,
+{
+    fn borrow(&self) -> &GenericGauge<P> {
         &self.inner
     }
 }

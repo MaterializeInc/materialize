@@ -40,19 +40,19 @@ use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
     CatalogTypeDetails, ObjectType, SessionCatalog,
 };
-use mz_sql::names::{ObjectId, QualifiedItemName};
+use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan,
-    ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption, InsertPlan, MaterializedView,
-    MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
-    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetTransactionPlan,
-    SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
-    UpdatePrivilege, VariableValue, View,
+    AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan,
+    DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
+    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
+    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
+    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -65,7 +65,6 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolic
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::{EmptyStatisticsOracle, Optimizer};
-use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
@@ -450,30 +449,6 @@ impl Coordinator {
         self.catalog_transact(Some(session), vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
-    }
-
-    // Utility function used by both `sequence_create_cluster` and
-    // `sequence_create_cluster_replica`. Chooses the availability zone for a
-    // replica arbitrarily based on some state (currently: the number of
-    // replicas of the given cluster per AZ).
-    //
-    // I put this in the `Coordinator`'s impl block in case we ever want to
-    // change the logic and make it depend on some other state, but for now it's
-    // a pure function of the `n_replicas_per_az` state.
-    pub(crate) fn choose_az<'a>(n_replicas_per_az: &'a BTreeMap<String, usize>) -> String {
-        let min = *n_replicas_per_az
-            .values()
-            .min()
-            .expect("Must have at least one availability zone");
-        let argmins = n_replicas_per_az
-            .iter()
-            .filter_map(|(k, v)| (*v == min).then_some(k))
-            .collect::<Vec<_>>();
-        let arbitrary_argmin = argmins
-            .choose(&mut rand::thread_rng())
-            .expect("Must have at least one value corresponding to `min`");
-
-        (*arbitrary_argmin).clone()
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1260,6 +1235,30 @@ impl Coordinator {
                 }
             }
         }
+        for (default_privilege_object, default_privilege_acl_items) in
+            self.catalog.default_privileges()
+        {
+            if let Some(role_name) = dropped_roles.get(&default_privilege_object.role_id) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!(
+                        "default privileges on {}S created by {}",
+                        default_privilege_object.object_type, role_name
+                    ));
+            }
+            for default_privilege_acl_item in default_privilege_acl_items {
+                if let Some(role_name) = dropped_roles.get(&default_privilege_acl_item.grantee) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
+                            "default privileges on {}S granted to {}",
+                            default_privilege_object.object_type, role_name
+                        ));
+                }
+            }
+        }
 
         if !dependent_objects.is_empty() {
             Err(AdapterError::DependentObject(dependent_objects))
@@ -1277,7 +1276,7 @@ impl Coordinator {
             self.catalog().ensure_not_reserved_role(role_id)?;
         }
 
-        let mut revokes = plan.revokes;
+        let mut privilege_revokes = plan.privilege_revokes;
 
         // Make sure this stays in sync with the beginning of `rbac::check_plan`.
         let session_catalog = self.catalog().for_session(session);
@@ -1287,7 +1286,7 @@ impl Coordinator {
             // Obtain all roles that the current session is a member of.
             let role_membership =
                 session_catalog.collect_role_membership(session.current_role_id());
-            let invalid_revokes: BTreeSet<_> = revokes
+            let invalid_revokes: BTreeSet<_> = privilege_revokes
                 .drain_filter_swapping(|(_, privilege)| {
                     !role_membership.contains(&privilege.grantor)
                 })
@@ -1299,21 +1298,30 @@ impl Coordinator {
             }
         }
 
-        let mut ops: Vec<_> = revokes
-            .into_iter()
-            .map(|(object_id, privilege)| catalog::Op::UpdatePrivilege {
+        let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
+            catalog::Op::UpdatePrivilege {
                 object_id,
                 privilege,
                 variant: UpdatePrivilegeVariant::Revoke,
-            })
-            .collect();
-
+            }
+        });
+        let default_privilege_revoke_ops = plan.default_privilege_revokes.into_iter().map(
+            |(privilege_object, privilege_acl_item)| catalog::Op::UpdateDefaultPrivilege {
+                privilege_object,
+                privilege_acl_item,
+                variant: UpdatePrivilegeVariant::Revoke,
+            },
+        );
         let DropOps {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
         } = self.sequence_drop_common(session, plan.drop_ids)?;
-        ops.extend(drop_ops);
+
+        let ops = privilege_revoke_ops
+            .chain(default_privilege_revoke_ops)
+            .chain(drop_ops.into_iter())
+            .collect();
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -1335,9 +1343,12 @@ impl Coordinator {
         session: &mut Session,
         ids: Vec<ObjectId>,
     ) -> Result<DropOps, AdapterError> {
-        let mut ops = Vec::new();
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
+        // Dropping either the group role or the member role of a role membership will trigger a
+        // revoke role. We use a Set for the revokes to avoid trying to attempt to revoke the same
+        // role membership twice.
+        let mut revokes = BTreeSet::new();
 
         let mut dropped_roles: BTreeMap<_, _> = ids
             .iter()
@@ -1360,15 +1371,15 @@ impl Coordinator {
             for dropped_role_id in
                 dropped_role_ids.intersection(&role.membership.map.keys().collect())
             {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id: **dropped_role_id,
-                    member_id: role.id(),
-                    grantor_id: *role
+                revokes.insert((
+                    **dropped_role_id,
+                    role.id(),
+                    *role
                         .membership
                         .map
                         .get(*dropped_role_id)
                         .expect("included in keys above"),
-                })
+                ));
             }
         }
 
@@ -1398,18 +1409,22 @@ impl Coordinator {
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
-                        ops.push(catalog::Op::RevokeRole {
-                            role_id: *group_id,
-                            member_id: *id,
-                            grantor_id: *grantor_id,
-                        });
+                        revokes.insert((*group_id, *id, *grantor_id));
                     }
                 }
                 _ => {}
             }
         }
 
-        ops.extend(ids.into_iter().map(catalog::Op::DropObject));
+        let ops = revokes
+            .into_iter()
+            .map(|(role_id, member_id, grantor_id)| catalog::Op::RevokeRole {
+                role_id,
+                member_id,
+                grantor_id,
+            })
+            .chain(ids.into_iter().map(catalog::Op::DropObject))
+            .collect();
 
         Ok(DropOps {
             ops,
@@ -1719,7 +1734,7 @@ impl Coordinator {
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_peek(
+    pub(super) async fn sequence_peek(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
@@ -3946,36 +3961,84 @@ impl Coordinator {
         res
     }
 
+    pub(super) async fn sequence_alter_default_privileges(
+        &mut self,
+        session: &mut Session,
+        AlterDefaultPrivilegesPlan {
+            privilege_objects,
+            privilege_acl_items,
+            is_grant,
+        }: AlterDefaultPrivilegesPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let mut ops = Vec::with_capacity(privilege_objects.len() * privilege_acl_items.len());
+        let variant = if is_grant {
+            UpdatePrivilegeVariant::Grant
+        } else {
+            UpdatePrivilegeVariant::Revoke
+        };
+        for privilege_object in &privilege_objects {
+            self.catalog()
+                .ensure_not_system_role(&privilege_object.role_id)?;
+            if let Some(database_id) = privilege_object.database_id {
+                self.catalog()
+                    .ensure_not_reserved_object(&database_id.into(), session.conn_id())?;
+            }
+            if let Some(schema_id) = privilege_object.schema_id {
+                let database_spec: ResolvedDatabaseSpecifier = privilege_object.database_id.into();
+                let schema_spec: SchemaSpecifier = schema_id.into();
+
+                self.catalog().ensure_not_reserved_object(
+                    &(database_spec, schema_spec).into(),
+                    session.conn_id(),
+                )?;
+            }
+            for privilege_acl_item in &privilege_acl_items {
+                self.catalog()
+                    .ensure_not_system_role(&privilege_acl_item.grantee)?;
+                ops.push(Op::UpdateDefaultPrivilege {
+                    privilege_object: privilege_object.clone(),
+                    privilege_acl_item: privilege_acl_item.clone(),
+                    variant,
+                })
+            }
+        }
+
+        self.catalog_transact(Some(session), ops).await?;
+        Ok(ExecuteResponse::AlteredDefaultPrivileges)
+    }
+
     pub(super) async fn sequence_grant_role(
         &mut self,
         session: &mut Session,
         GrantRolePlan {
-            role_id,
+            role_ids,
             member_ids,
             grantor_id,
         }: GrantRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
-        let mut ops = Vec::new();
-        for member_id in member_ids {
-            let member_membership: BTreeSet<_> =
-                catalog.get_role(&member_id).membership().keys().collect();
-            if member_membership.contains(&role_id) {
-                let role_name = catalog.get_role(&role_id).name().to_string();
-                let member_name = catalog.get_role(&member_id).name().to_string();
-                // We need this check so we don't accidentally return a success on a reserved role.
-                catalog.ensure_not_reserved_role(&member_id)?;
-                catalog.ensure_not_reserved_role(&role_id)?;
-                session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
-                    role_name,
-                    member_name,
-                });
-            } else {
-                ops.push(catalog::Op::GrantRole {
-                    role_id,
-                    member_id,
-                    grantor_id,
-                });
+        let mut ops = Vec::with_capacity(role_ids.len() * member_ids.len());
+        for role_id in role_ids {
+            for member_id in &member_ids {
+                let member_membership: BTreeSet<_> =
+                    catalog.get_role(member_id).membership().keys().collect();
+                if member_membership.contains(&role_id) {
+                    let role_name = catalog.get_role(&role_id).name().to_string();
+                    let member_name = catalog.get_role(member_id).name().to_string();
+                    // We need this check so we don't accidentally return a success on a reserved role.
+                    catalog.ensure_not_reserved_role(member_id)?;
+                    catalog.ensure_not_reserved_role(&role_id)?;
+                    session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
+                        role_name,
+                        member_name,
+                    });
+                } else {
+                    ops.push(catalog::Op::GrantRole {
+                        role_id,
+                        member_id: *member_id,
+                        grantor_id,
+                    });
+                }
             }
         }
 
@@ -3992,32 +4055,34 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         RevokeRolePlan {
-            role_id,
+            role_ids,
             member_ids,
             grantor_id,
         }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
-        let mut ops = Vec::new();
-        for member_id in member_ids {
-            let member_membership: BTreeSet<_> =
-                catalog.get_role(&member_id).membership().keys().collect();
-            if !member_membership.contains(&role_id) {
-                let role_name = catalog.get_role(&role_id).name().to_string();
-                let member_name = catalog.get_role(&member_id).name().to_string();
-                // We need this check so we don't accidentally return a success on a reserved role.
-                catalog.ensure_not_reserved_role(&member_id)?;
-                catalog.ensure_not_reserved_role(&role_id)?;
-                session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
-                    role_name,
-                    member_name,
-                });
-            } else {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id,
-                    member_id,
-                    grantor_id,
-                });
+        let mut ops = Vec::with_capacity(role_ids.len() * member_ids.len());
+        for role_id in role_ids {
+            for member_id in &member_ids {
+                let member_membership: BTreeSet<_> =
+                    catalog.get_role(member_id).membership().keys().collect();
+                if !member_membership.contains(&role_id) {
+                    let role_name = catalog.get_role(&role_id).name().to_string();
+                    let member_name = catalog.get_role(member_id).name().to_string();
+                    // We need this check so we don't accidentally return a success on a reserved role.
+                    catalog.ensure_not_reserved_role(member_id)?;
+                    catalog.ensure_not_reserved_role(&role_id)?;
+                    session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
+                        role_name,
+                        member_name,
+                    });
+                } else {
+                    ops.push(catalog::Op::RevokeRole {
+                        role_id,
+                        member_id: *member_id,
+                        grantor_id,
+                    });
+                }
             }
         }
 

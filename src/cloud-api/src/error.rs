@@ -90,4 +90,7 @@ pub enum Error {
     /// Indicates the URL is cannot-be-a-base.
     #[error("Error while manipulating URL. The URL is cannot-be-a-base.")]
     UrlBaseError,
+    /// Indicates that a timeout has been reached.
+    #[error("Timeout reached.")]
+    TimeoutError,
 }

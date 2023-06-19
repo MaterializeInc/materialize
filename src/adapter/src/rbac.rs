@@ -21,19 +21,19 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, SessionCatalog};
 use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
-    AbortTransactionPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
-    AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ClosePlan,
-    CommitTransactionPlan, CopyFromPlan, CopyRowsPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateSourcePlans, CreateTablePlan, CreateTypePlan, CreateViewPlan, DeallocatePlan,
-    DeclarePlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    GrantPrivilegesPlan, GrantRolePlan, InsertPlan, MutationKind, PeekPlan, Plan,
-    PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan, ReassignOwnedPlan,
-    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan, SetTransactionPlan,
-    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    AbortTransactionPlan, AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
+    AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ClosePlan, CommitTransactionPlan, CopyFromPlan, CopyRowsPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
+    MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
+    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
     StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
@@ -225,6 +225,25 @@ pub fn check_plan(
     role_memberships.insert(*current_role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
 
+    // Altering the default privileges for the PUBLIC role (aka ALL ROLES) will affect all roles
+    // that currently exist and roles that will exist in the future. It's impossible for an exising
+    // role to be a member of a role that doesn't exist yet, so no current role could possibly have
+    // the privileges required to alter default privileges for the PUBLIC role. Therefore we
+    // only superusers can alter default privileges for the PUBLIC role.
+    if let Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+        privilege_objects, ..
+    }) = &plan
+    {
+        if privilege_objects
+            .iter()
+            .any(|privilege_object| privilege_object.role_id.is_public())
+        {
+            return Err(AdapterError::Unauthorized(UnauthorizedError::Superuser {
+                action: "ALTER DEFAULT PRIVILEGES FOR ALL ROLES".to_string(),
+            }));
+        }
+    }
+
     Ok(())
 }
 
@@ -266,6 +285,12 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
             roles.push(*new_role);
             roles
         }
+        Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+            privilege_objects, ..
+        }) => privilege_objects
+            .iter()
+            .map(|privilege_object| privilege_object.role_id)
+            .collect(),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -302,6 +327,7 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::Insert(_)
         | Plan::AlterClusterRename(_)
         | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterCluster(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)
         | Plan::AlterIndexResetOptions(_)
@@ -372,6 +398,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         }
         Plan::AlterClusterRename(_)
         | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterCluster(_)
         | Plan::CreateTable(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateConnection(_)
@@ -423,6 +450,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::RotateKeys(_)
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
+        | Plan::AlterDefaultPrivileges(_)
         | Plan::ReassignOwned(_) => Vec::new(),
     }
 }
@@ -575,7 +603,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::DropOwned(_)
-        | Plan::ReassignOwned(_) => Vec::new(),
+        | Plan::ReassignOwned(_)
+        | Plan::AlterDefaultPrivileges(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -583,7 +612,10 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
             .unwrap_or_default(),
         // Do not need ownership of descendant objects.
         Plan::DropObjects(plan) => plan.referenced_ids.clone(),
-        Plan::AlterClusterRename(plan) => vec![ObjectId::Cluster(plan.id)],
+        Plan::AlterClusterRename(AlterClusterRenamePlan { id, .. })
+        | Plan::AlterCluster(AlterClusterPlan { id, .. }) => {
+            vec![ObjectId::Cluster(*id)]
+        }
         Plan::AlterClusterReplicaRename(plan) => {
             vec![ObjectId::ClusterReplica((plan.cluster_id, plan.replica_id))]
         }
@@ -1114,8 +1146,38 @@ fn generate_required_privileges(
             }
             privleges
         }
-        Plan::AlterClusterRename(AlterClusterRenamePlan { .. })
-        | Plan::AlterClusterReplicaRename(AlterClusterReplicaRenamePlan { .. })
+        Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+            privilege_objects,
+            privilege_acl_items: _,
+            is_grant: _,
+        }) => privilege_objects
+            .into_iter()
+            .filter_map(|privilege_object| {
+                if let (Some(database_id), Some(_)) =
+                    (privilege_object.database_id, privilege_object.schema_id)
+                {
+                    Some((database_id.into(), AclMode::USAGE, role_id))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Plan::AlterClusterRename(AlterClusterRenamePlan {
+            id: _,
+            name: _,
+            to_name: _,
+        })
+        | Plan::AlterClusterReplicaRename(AlterClusterReplicaRenamePlan {
+            cluster_id: _,
+            replica_id: _,
+            name: _,
+            to_name: _,
+        })
+        | Plan::AlterCluster(AlterClusterPlan {
+            id: _,
+            name: _,
+            options: _,
+        })
         | Plan::CreateDatabase(CreateDatabasePlan {
             name: _,
             if_not_exists: _,
@@ -1126,7 +1188,7 @@ fn generate_required_privileges(
         })
         | Plan::CreateCluster(CreateClusterPlan {
             name: _,
-            replicas: _,
+            variant: _,
         })
         | Plan::DiscardTemp
         | Plan::DiscardAll
@@ -1180,19 +1242,20 @@ fn generate_required_privileges(
         | Plan::Deallocate(DeallocatePlan { name: _ })
         | Plan::Raise(RaisePlan { severity: _ })
         | Plan::GrantRole(GrantRolePlan {
-            role_id: _,
+            role_ids: _,
             member_ids: _,
             grantor_id: _,
         })
         | Plan::RevokeRole(RevokeRolePlan {
-            role_id: _,
+            role_ids: _,
             member_ids: _,
             grantor_id: _,
         })
         | Plan::DropOwned(DropOwnedPlan {
             role_ids: _,
             drop_ids: _,
-            revokes: _,
+            privilege_revokes: _,
+            default_privilege_revokes: _,
         })
         | Plan::ReassignOwned(ReassignOwnedPlan {
             old_roles: _,

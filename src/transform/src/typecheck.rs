@@ -1239,7 +1239,8 @@ impl crate::Transform for Typecheck {
     }
 }
 
-fn columns_pretty<H>(cols: &[ColumnType], humanizer: &H) -> String
+/// Prints a type prettily with a given `ExprHumanizer`
+pub fn columns_pretty<H>(cols: &[ColumnType], humanizer: &H) -> String
 where
     H: ExprHumanizer,
 {
@@ -1339,9 +1340,42 @@ impl ColumnTypeDifference {
     }
 }
 
+/// Wrapper struct for a `Display` instance for `TypeError`s with a given `ExprHumanizer`
+#[allow(missing_debug_implementations)]
+pub struct TypeErrorHumanizer<'a, 'b, H>
+where
+    H: ExprHumanizer,
+{
+    err: &'a TypeError<'a>,
+    humanizer: &'b H,
+}
+
+impl<'a, 'b, H> TypeErrorHumanizer<'a, 'b, H>
+where
+    H: ExprHumanizer,
+{
+    /// Create a `Display`-shim struct for a given `TypeError`/`ExprHumanizer` pair
+    pub fn new(err: &'a TypeError, humanizer: &'b H) -> Self {
+        Self { err, humanizer }
+    }
+}
+
+impl<'a, 'b, H> std::fmt::Display for TypeErrorHumanizer<'a, 'b, H>
+where
+    H: ExprHumanizer,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.err.humanize(self.humanizer, f)
+    }
+}
+
 impl<'a> std::fmt::Display for TypeError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.humanize(&DummyHumanizer, f)
+        TypeErrorHumanizer {
+            err: self,
+            humanizer: &DummyHumanizer,
+        }
+        .fmt(f)
     }
 }
 
@@ -1472,11 +1506,14 @@ impl<'a> TypeError<'a> {
                 input_type,
             } => {
                 let col = order.column;
+                let num_cols = input_type.len();
+                let are = if num_cols == 1 { "is" } else { "are" };
+                let s = if num_cols == 1 { "" } else { "s" };
                 let input_type = columns_pretty(input_type, humanizer);
 
                 writeln!(
                     f,
-                    "TopK ordering {order} references invalid column {col} orderings\ncolumns: {input_type}")?
+                    "TopK ordering {order} references invalid column {col}\nthere {are} {num_cols} column{s}: {input_type}")?
             }
             BadLetRecBindings { source: _ } => {
                 writeln!(f, "LetRec ids and definitions don't line up")?

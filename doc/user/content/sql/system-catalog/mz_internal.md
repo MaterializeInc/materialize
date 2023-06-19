@@ -179,6 +179,17 @@ all database objects in the system.
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).  |
 | `referenced_object_id`  | [`text`]     | The ID of the referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
+### `mz_object_transitive_dependencies`
+
+The `mz_object_transitive_dependencies` table describes the transitive dependency structure between
+all database objects in the system.
+This table is the transitive closure of [`mz_object_dependencies`](#mz_object_dependencies).
+
+| Field                   | Type         | Meaning                                                                                                               |
+| ----------------------- | ------------ | --------                                                                                                              |
+| `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
+| `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+
 ### `mz_postgres_sources`
 
 The `mz_postgres_sources` table contains a row for each PostgreSQL source in the

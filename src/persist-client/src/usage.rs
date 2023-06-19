@@ -219,7 +219,7 @@ impl StorageUsageClient {
                     }
                 }
                 HollowBlobRef::Rollup(rollup) => {
-                    rollup_bytes += rollup.encoded_size_bytes.unwrap_or(0);
+                    rollup_bytes += rollup.encoded_size_bytes.unwrap_or(1);
                 }
             })
         }) {}

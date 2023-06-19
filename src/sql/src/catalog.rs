@@ -25,7 +25,7 @@ use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
@@ -232,6 +232,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Gets all cluster replicas.
     fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+
+    /// Gets all default privileges.
+    fn get_default_privileges(
+        &self,
+    ) -> Vec<(&DefaultPrivilegeObject, Vec<&DefaultPrivilegeAclItem>)>;
 
     /// Finds a name like `name` that is not already in use.
     ///
@@ -565,6 +570,9 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the privileges associated with the cluster.
     fn privileges(&self) -> &PrivilegeMap;
+
+    /// Returns true if this cluster is a managed cluster.
+    fn is_managed(&self) -> bool;
 }
 
 /// A cluster replica in a [`SessionCatalog`]
@@ -1288,6 +1296,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::View => ObjectType::View,
             mz_sql_parser::ast::ObjectType::MaterializedView => ObjectType::MaterializedView,
             mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
+            mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
             mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
             mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
@@ -1366,6 +1375,61 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
+        }
+    }
+}
+
+/// Specification for objects that will be affected by a default privilege.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DefaultPrivilegeObject {
+    /// The role id that created the object.
+    pub role_id: RoleId,
+    /// The database that the object is created in if Some, otherwise all databases.
+    pub database_id: Option<DatabaseId>,
+    /// The schema that the object is created in if Some, otherwise all databases.
+    pub schema_id: Option<SchemaId>,
+    /// The type of object.
+    pub object_type: ObjectType,
+}
+
+impl DefaultPrivilegeObject {
+    /// Creates a new [`DefaultPrivilegeObject`].
+    pub fn new(
+        role_id: RoleId,
+        database_id: Option<DatabaseId>,
+        schema_id: Option<SchemaId>,
+        object_type: ObjectType,
+    ) -> DefaultPrivilegeObject {
+        DefaultPrivilegeObject {
+            role_id,
+            database_id,
+            schema_id,
+            object_type,
+        }
+    }
+}
+
+/// Specification for the privileges that will be granted from default privileges.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DefaultPrivilegeAclItem {
+    /// The role that will receive the privileges.
+    pub grantee: RoleId,
+    /// The specific privileges granted.
+    pub acl_mode: AclMode,
+}
+
+impl DefaultPrivilegeAclItem {
+    /// Creates a new [`DefaultPrivilegeAclItem`].
+    pub fn new(grantee: RoleId, acl_mode: AclMode) -> DefaultPrivilegeAclItem {
+        DefaultPrivilegeAclItem { grantee, acl_mode }
+    }
+
+    /// Converts this [`DefaultPrivilegeAclItem`] into an [`MzAclItem`].
+    pub fn mz_acl_item(self, grantor: RoleId) -> MzAclItem {
+        MzAclItem {
+            grantee: self.grantee,
+            grantor,
+            acl_mode: self.acl_mode,
         }
     }
 }

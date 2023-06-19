@@ -20,6 +20,9 @@ use bitflags::bitflags;
 use columnation::{CloneRegion, Columnation};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
+use proptest::arbitrary::Arbitrary;
+use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::role_id::RoleId;
@@ -161,8 +164,20 @@ impl RustType<ProtoAclMode> for AclMode {
         })
     }
 }
+
 impl Columnation for AclMode {
     type InnerRegion = CloneRegion<AclMode>;
+}
+
+impl Arbitrary for AclMode {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<AclMode>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        proptest::bits::BitSetStrategy::masked(AclMode::all().bits)
+            .prop_map(|bits| AclMode::from_bits(bits).expect("invalid proptest implementation"))
+            .boxed()
+    }
 }
 
 /// A list of privileges granted to a role in Materialize.
@@ -171,7 +186,9 @@ impl Columnation for AclMode {
 /// because we don't use OID as persistent identifiers for roles.
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+)]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
     pub grantee: RoleId,

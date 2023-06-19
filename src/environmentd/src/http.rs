@@ -23,10 +23,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Query};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::{routing, Extension, Router};
+use axum::{routing, Extension, Json, Router};
 use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
@@ -42,11 +42,12 @@ use mz_ore::tracing::TracingHandle;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
+use tokio::sync::oneshot::error::TryRecvError;
 use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
@@ -187,10 +188,131 @@ pub struct InternalHttpConfig {
     pub tracing_handle: TracingHandle,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub promote_leader: oneshot::Sender<()>,
+    pub ready_to_promote: oneshot::Receiver<()>,
 }
 
 pub struct InternalHttpServer {
     router: Router,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LeaderStatusResponse {
+    pub status: LeaderStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LeaderStatus {
+    /// The current leader returns this. It shouldn't need to know that another instance is attempting to update it.
+    IsLeader,
+    /// The new pod should return this status until it is ready to become the leader, or it has determined that it cannot proceed.
+    Initializing,
+    /// Once we receive this status, we can tell it to become the leader and migrate the EIP.
+    ReadyToPromote,
+}
+
+#[derive(Debug)]
+pub enum LeaderState {
+    IsLeader,
+    Initializing {
+        // Invariant: promote_leader is Some in Initializing and ReadyToPromote: we need
+        // to be able to move them from one state to the other and to access it by value
+        // without the fiddly work of moving the state in and out of LeaderState mutex.
+        promote_leader: Option<oneshot::Sender<()>>,
+        ready_to_promote: oneshot::Receiver<()>,
+    },
+    ReadyToPromote {
+        // Same invariant as Initializing
+        promote_leader: Option<oneshot::Sender<()>>,
+    },
+}
+
+fn state_to_status(state: &LeaderState) -> LeaderStatus {
+    match state {
+        LeaderState::IsLeader => LeaderStatus::IsLeader,
+        LeaderState::Initializing { .. } => LeaderStatus::Initializing,
+        LeaderState::ReadyToPromote { .. } => LeaderStatus::ReadyToPromote,
+    }
+}
+
+pub async fn handle_leader_status(
+    State(state): State<Arc<Mutex<LeaderState>>>,
+) -> impl IntoResponse {
+    let mut leader_state = state.lock().expect("lock poisoned");
+    match &mut *leader_state {
+        LeaderState::IsLeader => (),
+        LeaderState::Initializing {
+            promote_leader,
+            ready_to_promote,
+        } => {
+            match ready_to_promote.try_recv() {
+                Ok(_) => {
+                    assert!(promote_leader.is_some(), "invariant");
+                    *leader_state = LeaderState::ReadyToPromote {
+                        promote_leader: promote_leader.take(),
+                    };
+                }
+                Err(TryRecvError::Empty) => {
+                    // Continue waiting.
+                }
+                Err(TryRecvError::Closed) => {
+                    *leader_state = LeaderState::IsLeader; // server has started, it is the leader now
+                }
+            }
+        }
+        LeaderState::ReadyToPromote { .. } => (),
+    }
+    let status = state_to_status(&leader_state);
+    drop(leader_state);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!(LeaderStatusResponse { status })),
+    )
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BecomeLeaderResponse {
+    pub result: BecomeLeaderResult,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BecomeLeaderResult {
+    Success, // 200 http status: also return this if we are already the leader
+    Failure {
+        // 500 http status if called when not `ReadyToPromote`.
+        message: String,
+    },
+}
+
+pub async fn handle_leader_promote(
+    State(state): State<Arc<Mutex<LeaderState>>>,
+) -> impl IntoResponse {
+    let mut leader_state = state.lock().expect("lock poisoned");
+
+    match &mut *leader_state {
+        LeaderState::IsLeader => (),
+        LeaderState::Initializing { .. } => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!(BecomeLeaderResult::Failure {
+                    message: "Not ready to promote, still initializing".into(),
+                })),
+            );
+        }
+        LeaderState::ReadyToPromote { promote_leader } => {
+            // even if send fails it means the server has started and we're already the leader
+            let _ = promote_leader.take().expect("invariant").send(());
+        }
+    }
+    // We're either already the leader or should be if we reach this.
+    *leader_state = LeaderState::IsLeader;
+    drop(leader_state);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!(BecomeLeaderResponse {
+            result: BecomeLeaderResult::Success,
+        })),
+    )
 }
 
 impl InternalHttpServer {
@@ -200,6 +322,8 @@ impl InternalHttpServer {
             tracing_handle,
             adapter_client_rx,
             active_connection_count,
+            promote_leader,
+            ready_to_promote,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let router = base_router(BaseRouterConfig { profiling: true })
@@ -251,7 +375,17 @@ impl InternalHttpServer {
             .layer(Extension(adapter_client_rx.shared()))
             .layer(Extension(active_connection_count));
 
-        InternalHttpServer { router }
+        let leader_router = Router::new()
+            .route("/api/leader/status", routing::get(handle_leader_status))
+            .route("/api/leader/promote", routing::post(handle_leader_promote))
+            .with_state(Arc::new(Mutex::new(LeaderState::Initializing {
+                promote_leader: Some(promote_leader),
+                ready_to_promote,
+            })));
+
+        InternalHttpServer {
+            router: router.merge(leader_router),
+        }
     }
 }
 

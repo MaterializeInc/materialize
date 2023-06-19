@@ -52,7 +52,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use mz_storage_client::controller::{CollectionMetadata, CreateResumptionFrontierCalc};
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
@@ -123,11 +123,13 @@ pub struct RawSourceCreationConfig {
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
     pub resume_upper: Antichain<mz_repr::Timestamp>,
-    /// The upper frontier this source should resume ingestion at in the source time domain. Since
-    /// every source has a different timestamp type we carry the timestamps of this frontier in an
-    /// encoded `Vec<Row>` form which will get decoded once we reach the connection specialized
-    /// functions.
-    pub source_resume_upper: Vec<Row>,
+    /// For each source export, the upper frontier this source should resume ingestion at in the
+    /// source time domain.
+    ///
+    /// Since every source has a different timestamp type we carry the timestamps of this frontier
+    /// in an encoded `Vec<Row>` form which will get decoded once we reach the connection
+    /// specialized functions.
+    pub source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
@@ -182,7 +184,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
-    R: ResumptionFrontierCalculator<mz_repr::Timestamp> + 'static,
+    R: CreateResumptionFrontierCalc<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
     let id = config.id;

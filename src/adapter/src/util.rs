@@ -325,7 +325,8 @@ impl ShouldHalt for StorageError {
             | StorageError::IngestionInstanceMissing { .. }
             | StorageError::ExportInstanceMissing { .. }
             | StorageError::Generic(_)
-            | StorageError::DataflowError(_) => false,
+            | StorageError::DataflowError(_)
+            | StorageError::InvalidAlterSource { .. } => false,
             StorageError::IOError(e) => e.should_halt(),
         }
     }

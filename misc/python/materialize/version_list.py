@@ -19,9 +19,16 @@ from materialize.util import MzVersion
 
 ROOT = Path(os.environ["MZ_ROOT"])
 
-INVALID_VERSIONS = [
-    MzVersion.parse_mz("v0.56.0"),  # not released on Docker
-]
+# not released on Docker
+INVALID_VERSIONS = {
+    MzVersion.parse_mz("v0.52.1"),
+    MzVersion.parse_mz("v0.55.6"),
+    MzVersion.parse_mz("v0.56.0"),
+    MzVersion.parse_mz("v0.57.1"),
+    MzVersion.parse_mz("v0.57.2"),
+    MzVersion.parse_mz("v0.57.5"),
+    MzVersion.parse_mz("v0.57.6"),
+}
 
 
 class VersionList:
@@ -65,14 +72,17 @@ class VersionsFromGit(VersionList):
     True
 
     >>> len(VersionsFromGit().patch_versions(minor_version=MzVersion.parse("0.52.0")))
-    5
+    4
 
     >>> min(VersionsFromGit().all_versions())
     MzVersion(major=0, minor=1, patch=0, prerelease='rc', build=None)
     """
 
     def __init__(self) -> None:
-        self.versions = [MzVersion.from_semver(t) for t in get_version_tags(fetch=True)]
+        self.versions = list(
+            {MzVersion.from_semver(t) for t in get_version_tags(fetch=True)}
+            - INVALID_VERSIONS
+        )
         self.versions.sort()
 
 
@@ -89,7 +99,7 @@ class VersionsFromDocs(VersionList):
     True
 
     >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse("0.52.0")))
-    5
+    4
 
     >>> min(VersionsFromDocs().all_versions())
     MzVersion(major=0, minor=27, patch=0, prerelease=None, build=None)

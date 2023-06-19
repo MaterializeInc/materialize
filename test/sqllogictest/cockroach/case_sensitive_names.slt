@@ -229,7 +229,7 @@ SHOW CREATE VIEW xv
 materialize.public.xv
 CREATE VIEW "materialize"."public"."xv" AS SELECT "x", "Y" FROM "materialize"."public"."foo"
 
-query error pgcode 42P01 relation "XV" does not exist
+query error unknown catalog item 'XV'
 SHOW CREATE VIEW "XV"
 
 statement ok
@@ -241,7 +241,7 @@ SHOW CREATE VIEW "YV"
 materialize.public.YV
 CREATE VIEW "materialize"."public"."YV" AS SELECT "x", "Y" FROM "materialize"."public"."foo"
 
-query error pgcode 42P01 relation "yv" does not exist
+query error unknown catalog item 'yv'
 SHOW CREATE VIEW YV
 
 mode cockroach

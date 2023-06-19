@@ -203,6 +203,7 @@ Local
 Log
 Logical
 Login
+Managed
 Map
 Marketing
 Materialize
@@ -341,6 +342,7 @@ Strict
 String
 Subscribe
 Subsource
+Subsources
 Substring
 Superuser
 System

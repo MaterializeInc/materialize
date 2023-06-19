@@ -11,13 +11,12 @@ import os
 import subprocess
 import time
 from datetime import datetime, timedelta
-from textwrap import dedent
-from typing import List, Optional
+from typing import Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import ROOT, mzbuild, ui
-from materialize.cloudtest.k8s import K8sResource
+from materialize import ROOT, mzbuild
+from materialize.cloudtest.app.application import Application
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
@@ -34,63 +33,6 @@ from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
 from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
 from materialize.cloudtest.wait import wait
-
-
-class Application:
-    resources: List[K8sResource]
-    images: List[str]
-    release_mode: bool
-    aws_region: Optional[str]
-
-    def __init__(self) -> None:
-        self.create()
-
-    def create(self) -> None:
-        self.acquire_images()
-        for resource in self.resources:
-            resource.create()
-
-    def coverage_mode(self) -> bool:
-        return ui.env_is_truthy("CI_COVERAGE_ENABLED")
-
-    def acquire_images(self) -> None:
-        repo = mzbuild.Repository(
-            ROOT, release_mode=self.release_mode, coverage=self.coverage_mode()
-        )
-        for image in self.images:
-            deps = repo.resolve_dependencies([repo.images[image]])
-            deps.acquire()
-            for dep in deps:
-                subprocess.check_call(
-                    [
-                        "kind",
-                        "load",
-                        "docker-image",
-                        "--name=cloudtest",
-                        dep.spec(),
-                    ]
-                )
-
-    def kubectl(self, *args: str) -> str:
-        try:
-            return subprocess.check_output(
-                ["kubectl", "--context", self.context(), *args], text=True
-            )
-        except subprocess.CalledProcessError as e:
-            print(
-                dedent(
-                    f"""
-                    cmd: {e.cmd}
-                    returncode: {e.returncode}
-                    stdout: {e.stdout}
-                    stderr: {e.stderr}
-                    """
-                )
-            )
-            raise e
-
-    def context(self) -> str:
-        return "kind-cloudtest"
 
 
 class MaterializeApplication(Application):
@@ -178,6 +120,24 @@ class MaterializeApplication(Application):
     def create(self) -> None:
         super().create()
         wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
+
+    def acquire_images(self) -> None:
+        repo = mzbuild.Repository(
+            ROOT, release_mode=self.release_mode, coverage=self.coverage_mode()
+        )
+        for image in self.images:
+            deps = repo.resolve_dependencies([repo.images[image]])
+            deps.acquire()
+            for dep in deps:
+                subprocess.check_call(
+                    [
+                        "kind",
+                        "load",
+                        "docker-image",
+                        "--name=cloudtest",
+                        dep.spec(),
+                    ]
+                )
 
     def wait_replicas(self) -> None:
         # NOTE[btv] - This will need to change if the order of

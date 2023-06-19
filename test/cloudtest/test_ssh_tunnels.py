@@ -9,7 +9,7 @@
 
 from textwrap import dedent
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.wait import wait
 
 

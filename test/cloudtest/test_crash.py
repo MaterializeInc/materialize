@@ -15,7 +15,7 @@ from typing import Tuple
 from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 

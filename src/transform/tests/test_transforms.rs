@@ -75,6 +75,7 @@
 
 use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
 use mz_repr::explain::ExplainConfig;
+use mz_transform::typecheck::TypeErrorHumanizer;
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
@@ -86,10 +87,40 @@ fn run_tests() {
             match test_case.directive.as_str() {
                 "define" => handle_define(&mut catalog, &test_case.input),
                 "apply" => handle_apply(&catalog, &test_case.input, &test_case.args),
+                "typecheck" => handle_typecheck(&catalog, &test_case.input, &test_case.args),
                 _ => format!("unknown directive: {}", test_case.directive),
             }
         })
     });
+}
+
+#[allow(clippy::disallowed_types)]
+fn handle_typecheck(
+    catalog: &TestCatalog,
+    input: &str,
+    _args: &std::collections::HashMap<String, Vec<String>>,
+) -> String {
+    // Parse the relation, returning early on parse error.
+    let relation = match try_parse_mir(catalog, input) {
+        Ok(relation) => relation,
+        Err(err) => return err,
+    };
+
+    // Apply the transformation, returning early on TransformError.
+    use mz_transform::typecheck::{columns_pretty, Typecheck};
+    let ctx = mz_transform::typecheck::empty_context();
+
+    let tc = Typecheck::new(std::rc::Rc::clone(&ctx));
+
+    let res = tc.typecheck(&relation, &ctx.borrow_mut());
+
+    match res {
+        Ok(typ) => format!("{}\n", columns_pretty(&typ, catalog).trim()),
+        Err(err) => format!(
+            "{}\n",
+            TypeErrorHumanizer::new(&err, catalog).to_string().trim(),
+        ),
+    }
 }
 
 #[allow(clippy::disallowed_types)]

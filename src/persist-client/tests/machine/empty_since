@@ -134,24 +134,24 @@ error: Since(Antichain { elements: [] })
 perform-maintenance
 ----
 v20 ok
-v21 ok
-v21 ok
-v21 ok
-v21 ok
-v21 ok
-v21 ok
-v21 ok
-v21 ok
-v22 ok
-v22 ok
-v22 ok
-v22 ok
-v22 ok
-v22 ok
-v22 ok
-v22 ok
-v22 ok
-v22 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
+v20 ok
 
 # Now compare_and_append to the empty antichain, closing the shard to writes as
 # well. Everything still works (for idempotence), but this replaces the shard
@@ -167,7 +167,7 @@ parts=1 len=1
 
 compare-and-append input=b3 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v24 []
+v22 []
 
 shard-desc
 ----
@@ -177,7 +177,7 @@ since=[] upper=[]
 # like GC can result in followup maintenance)
 perform-maintenance
 ----
-v25 ok
+v23 ok
 
 perform-maintenance
 ----
@@ -189,8 +189,8 @@ perform-maintenance
 
 consensus-scan from_seqno=v0
 ----
-seqno=v24 batches=
-seqno=v25 batches=
+seqno=v22 batches= rollups=v1
+seqno=v23 batches= rollups=v1,v22
 
 blob-scan-batches
 ----
@@ -215,11 +215,11 @@ error: Upper(Antichain { elements: [] })
 
 heartbeat-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v25 ok
+v23 ok
 
 expire-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v25 ok
+v23 ok
 
 # Perhaps counter-intuitively, we can "register" a new writer. This doesn't
 # actually register and produce a new SeqNo, but there's (intentionally) no
@@ -227,7 +227,7 @@ v25 ok
 # do all the above things the same with this writer.
 register-writer writer_id=w44444444-4444-4444-4444-444444444444
 ----
-v25 []
+v23 []
 
 compare-and-append input=b_inf writer_id=w44444444-4444-4444-4444-444444444444
 ----
@@ -235,11 +235,11 @@ error: Upper(Antichain { elements: [] })
 
 heartbeat-writer writer_id=w44444444-4444-4444-4444-444444444444
 ----
-v25 ok
+v23 ok
 
 expire-writer writer_id=w44444444-4444-4444-4444-444444444444
 ----
-v25 ok
+v23 ok
 
 # Similarly, downgrade_since, as well as all the other reader operations, works
 # for an existing reader. As an odd side effect, CaDS works even when the token
@@ -248,45 +248,45 @@ v25 ok
 # NB: Critically, none of these create a new seqno.
 downgrade-since since=4 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v25 []
+v23 []
 
 expire-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v25 ok
+v23 ok
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v25 0 []
+v23 0 []
 
 compare-and-downgrade-since expect_opaque=1 opaque=1 since=5 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v25 1 []
+v23 1 []
 
 expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v25 ok
+v23 ok
 
 # And ditto we can "register" both reader types and do the same ops.
 register-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v25 []
+v23 []
 
 downgrade-since since=4 reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v25 []
+v23 []
 
 expire-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v25 ok
+v23 ok
 
 register-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v25 []
+v23 []
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v25 0 []
+v23 0 []
 
 expire-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v25 ok
+v23 ok

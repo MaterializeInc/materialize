@@ -105,18 +105,32 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         }
     };
 
-    // Successful auth results in an initial ready message.
-    let _ = ws
-        .send(Message::Text(
-            serde_json::to_string(&WebSocketResponse::ReadyForQuery(
-                client.client.session().transaction_code().into(),
+    // Successful auth, send startup messages.
+    let mut msgs = Vec::new();
+    let session = client.client.session();
+    for var in session.vars().notify_set() {
+        msgs.push(WebSocketResponse::ParameterStatus(ParameterStatus {
+            name: var.name().to_string(),
+            value: var.value(),
+        }));
+    }
+    msgs.push(WebSocketResponse::BackendKeyData(BackendKeyData {
+        conn_id: session.conn_id().unhandled(),
+        secret_key: session.secret_key(),
+    }));
+    msgs.push(WebSocketResponse::ReadyForQuery(
+        session.transaction_code().into(),
+    ));
+    for msg in msgs {
+        let _ = ws
+            .send(Message::Text(
+                serde_json::to_string(&msg).expect("must serialize"),
             ))
-            .expect("must serialize"),
-        ))
-        .await;
+            .await;
+    }
 
     // Send any notices that might have been generated on startup.
-    let notices = client.client.session().drain_notices();
+    let notices = session.drain_notices();
     if let Err(err) = forward_notices(&mut ws, notices).await {
         debug!("failed to forward notices to WebSocket, {err:?}");
         return;
@@ -394,9 +408,11 @@ pub enum WebSocketResponse {
     Notice(Notice),
     Rows(Vec<String>),
     Row(Vec<serde_json::Value>),
+    CommandStarting(CommandStarting),
     CommandComplete(String),
     Error(SqlError),
     ParameterStatus(ParameterStatus),
+    BackendKeyData(BackendKeyData),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -419,6 +435,18 @@ impl Notice {
 pub struct ParameterStatus {
     name: String,
     value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackendKeyData {
+    conn_id: u32,
+    secret_key: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandStarting {
+    has_rows: bool,
+    is_streaming: bool,
 }
 
 /// Trait describing how to transmit a response to a client. HTTP clients
@@ -483,6 +511,21 @@ impl ResultSender for WebSocket {
             let msg = serde_json::to_string(&msg).expect("must serialize");
             Ok(ws.send(Message::Text(msg)).await?)
         }
+
+        let (has_rows, is_streaming) = match res {
+            StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Ok { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Rows { .. }) => (true, false),
+            StatementResult::Subscribe { .. } => (true, true),
+        };
+        send(
+            self,
+            WebSocketResponse::CommandStarting(CommandStarting {
+                has_rows,
+                is_streaming,
+            }),
+        )
+        .await?;
 
         let (is_err, msgs) = match res {
             StatementResult::SqlResult(SqlResult::Rows {
@@ -884,6 +927,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::Raised
         | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege
+        | ExecuteResponse::AlteredDefaultPrivileges
         | ExecuteResponse::RevokedRole
         | ExecuteResponse::StartedTransaction { .. }
         | ExecuteResponse::Updated(_)

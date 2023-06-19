@@ -10,6 +10,7 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -20,11 +21,11 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
+use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
@@ -50,7 +51,10 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 use uuid::Uuid;
 
-use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use crate::controller::{
+    CollectionMetadata, CreateResumptionFrontierCalc, ResumptionFrontierCalculator, StorageError,
+    UpperState,
+};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
@@ -103,6 +107,61 @@ impl<S> IngestionDescription<S> {
     }
 }
 
+impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
+    /// Determines if `self` is compatible with another `IngestionDescription`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// SOURCE`).
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &IngestionDescription<S>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        let IngestionDescription {
+            desc,
+            source_imports,
+            ingestion_metadata,
+            source_exports,
+            instance_id,
+            remap_collection_id,
+        } = self;
+
+        self.desc.alter_compatible(id, desc)?;
+
+        let compatibility_checks = [
+            source_imports == &other.source_imports,
+            ingestion_metadata == &other.ingestion_metadata,
+            source_exports
+                .iter()
+                .merge_join_by(&other.source_exports, |(l_key, _), (r_key, _)| {
+                    l_key.cmp(r_key)
+                })
+                .all(|r| match r {
+                    Both((_, l_val), (_, r_val)) => l_val == r_val,
+                    _ => true,
+                }),
+            instance_id == &other.instance_id,
+            remap_collection_id == &other.remap_collection_id,
+        ];
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "IngestionDescription incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceExport<S = ()> {
     /// The index of the exported output stream
@@ -112,15 +171,14 @@ pub struct SourceExport<S = ()> {
 }
 
 #[async_trait]
-impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+impl<T: Timestamp + Lattice + Codec64> CreateResumptionFrontierCalc<T>
     for IngestionDescription<CollectionMetadata>
 {
-    // A `WriteHandle` per used shard. Once we have source envelopes that keep additional shards we
-    // have to specialize this some more.
-    type State = Vec<WriteHandle<SourceData, (), T, Diff>>;
-
-    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State {
-        let mut handles = vec![];
+    async fn create_calc(
+        &self,
+        client_cache: &PersistClientCache,
+    ) -> ResumptionFrontierCalculator<T> {
+        let mut upper_states = BTreeMap::new();
         for (id, export) in self.source_exports.iter() {
             // Explicit destructuring to force a compile error when the metadata change
             let CollectionMetadata {
@@ -143,54 +201,10 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 )
                 .await
                 .unwrap();
-            handles.push(handle);
+            upper_states.insert(*id, UpperState::new(handle));
         }
 
-        let remap_relation_desc = self.desc.connection.timestamp_desc();
-
-        if let CollectionMetadata {
-            persist_location,
-            remap_shard: Some(remap_shard),
-            data_shard: _,
-            // The status shard only contains non-definite status updates
-            status_shard: _,
-            relation_desc: _,
-        } = &self.ingestion_metadata
-        {
-            let remap_handle = client_cache
-                .open(persist_location.clone())
-                .await
-                .expect("error creating persist client")
-                // TODO: Any way to plumb the GlobalId to this?
-                .open_writer::<SourceData, (), T, Diff>(
-                    *remap_shard,
-                    "resumption remap",
-                    Arc::new(remap_relation_desc),
-                    Arc::new(UnitSchema),
-                )
-                .await
-                .unwrap();
-            handles.push(remap_handle);
-        }
-
-        handles
-    }
-
-    async fn calculate_resumption_frontier(&self, handles: &mut Self::State) -> Antichain<T> {
-        // An ingestion can resume at the minimum of..
-        let mut resume_upper = Antichain::new();
-
-        // ..the upper frontier of each shard
-        for handle in handles {
-            handle.fetch_recent_upper().await;
-            for t in handle.upper().elements() {
-                resume_upper.insert(t.clone());
-            }
-        }
-
-        // ..the upper of an implied envelope state shard. Eventually this could become actual
-        // state shards and this section will be removed.
-        let envelope_upper = match self.desc.envelope {
+        let initial_frontier = match self.desc.envelope {
             // We can only resume with the None envelope, which is stateless,
             // or with the [Debezium] Upsert envelope, which is easy
             //   (re-ingest the last emitted state)
@@ -198,11 +212,8 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             // Otherwise re-ingest everything
             _ => Antichain::from_elem(T::minimum()),
         };
-        for t in envelope_upper {
-            resume_upper.insert(t);
-        }
 
-        resume_upper
+        ResumptionFrontierCalculator::new(initial_frontier, upper_states)
     }
 }
 
@@ -1374,7 +1385,7 @@ impl UnplannedSourceEnvelope {
 }
 
 /// A connection to an external system
-pub trait SourceConnection: Clone {
+pub trait SourceConnection: Debug + Clone + PartialEq {
     /// The name of the external system (e.g kafka, postgres, etc).
     fn name(&self) -> &'static str;
 
@@ -1396,6 +1407,27 @@ pub trait SourceConnection: Clone {
     /// The available metadata columns in the order specified by the user. This only identifies the
     /// kinds of columns that this source offers without any further information.
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
+
+    /// Determines if `self` is compatible with another `SourceConnection`, in
+    /// such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// SOURCE`).
+    ///
+    /// Note that the default implementation errors unless the two are equal. To
+    /// support any modifying transformations, you must specify the
+    /// implementation.
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            Ok(())
+        } else {
+            tracing::warn!(
+                "SourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(StorageError::InvalidAlterSource { id })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1755,6 +1787,45 @@ impl SourceDesc<GenericSourceConnection> {
     pub fn envelope(&self) -> &SourceEnvelope {
         &self.envelope
     }
+
+    /// Determines if `self` is compatible with another `SourceDesc`, in such a
+    /// way that it is possible to turn `self` into `other` through a valid
+    /// series of transformations (e.g. no transformation or `ALTER SOURCE`).
+    pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        let Self {
+            connection,
+            encoding,
+            envelope,
+            metadata_columns,
+            timestamp_interval,
+        } = &self;
+        connection.alter_compatible(id, &other.connection)?;
+
+        let compatibility_checks = [
+            connection == &other.connection,
+            encoding == &other.encoding,
+            envelope == &other.envelope,
+            metadata_columns == &other.metadata_columns,
+            timestamp_interval == &other.timestamp_interval,
+        ];
+
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SourceDesc<GenericSourceConnection> incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1841,6 +1912,21 @@ impl SourceConnection for GenericSourceConnection {
             Self::Postgres(conn) => conn.metadata_column_types(),
             Self::LoadGenerator(conn) => conn.metadata_column_types(),
             Self::TestScript(conn) => conn.metadata_column_types(),
+        }
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        match (self, other) {
+            (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
+            (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
+            (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
+                conn.alter_compatible(id, other)
+            }
+            (Self::TestScript(conn), Self::TestScript(other)) => conn.alter_compatible(id, other),
+            _ => Err(StorageError::InvalidAlterSource { id }),
         }
     }
 }
@@ -1946,6 +2032,50 @@ impl SourceConnection for PostgresSourceConnection {
 
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let PostgresSourceConnection {
+            connection_id,
+            connection,
+            table_casts,
+            publication,
+            publication_details,
+        } = self;
+
+        let compatibility_checks = [
+            connection_id == &other.connection_id,
+            connection == &other.connection,
+            table_casts
+                .iter()
+                .merge_join_by(&other.table_casts, |(l_key, _), (r_key, _)| {
+                    l_key.cmp(r_key)
+                })
+                .all(|r| match r {
+                    Both((_, l_val), (_, r_val)) => l_val == r_val,
+                    _ => true,
+                }),
+            publication == &other.publication,
+            publication_details == &other.publication_details,
+        ];
+
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "PostgresSourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
     }
 }
 

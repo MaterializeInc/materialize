@@ -95,7 +95,7 @@ use mz_ore::tracing::{
     TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, PersistParameters};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
@@ -111,6 +111,7 @@ use regex::Regex;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -138,6 +139,8 @@ pub struct Config {
     propagate_crashes: bool,
     enable_tracing: bool,
     bootstrap_role: Option<String>,
+    deploy_generation: Option<u64>,
+    waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
 }
 
 impl Default for Config {
@@ -157,6 +160,8 @@ impl Default for Config {
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
+            deploy_generation: None,
+            waiting_on_leader_promotion: None,
         }
     }
 }
@@ -241,6 +246,19 @@ impl Config {
         self.bootstrap_role = bootstrap_role;
         self
     }
+
+    pub fn with_deploy_generation(mut self, deploy_generation: Option<u64>) -> Self {
+        self.deploy_generation = deploy_generation;
+        self
+    }
+
+    pub fn with_waiting_on_leader_promotion(
+        mut self,
+        waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
+    ) -> Self {
+        self.waiting_on_leader_promotion = waiting_on_leader_promotion;
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
@@ -298,6 +316,10 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Tune down the number of connections to make this all work a little easier
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
+    // Stress persist more by writing rollups frequently
+    let mut persist_parameters = PersistParameters::default();
+    persist_parameters.rollup_threshold = Some(5);
+    persist_parameters.apply(&persist_cfg);
 
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
@@ -407,6 +429,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         launchdarkly_key_map: Default::default(),
         config_sync_loop_interval: None,
         bootstrap_role: config.bootstrap_role,
+        deploy_generation: config.deploy_generation,
+        waiting_on_leader_promotion: config.waiting_on_leader_promotion,
     }))?;
     let server = Server {
         inner,
@@ -716,10 +740,11 @@ pub fn wait_for_view_population(
     Ok(())
 }
 
+// Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.
 pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     options: BTreeMap<String, String>,
-) -> Result<(), anyhow::Error> {
+) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
     ws.write_message(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
@@ -729,6 +754,7 @@ pub fn auth_with_ws(
         .unwrap(),
     ))?;
     // Wait for initial ready response.
+    let mut msgs = Vec::new();
     loop {
         let resp = ws.read_message()?;
         match resp {
@@ -736,7 +762,9 @@ pub fn auth_with_ws(
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                 match msg {
                     WebSocketResponse::ReadyForQuery(_) => break,
-                    _ => {}
+                    msg => {
+                        msgs.push(msg);
+                    }
                 }
             }
             Message::Ping(_) => continue,
@@ -747,5 +775,5 @@ pub fn auth_with_ws(
             _ => panic!("unexpected response: {:?}", resp),
         }
     }
-    Ok(())
+    Ok(msgs)
 }

@@ -61,7 +61,7 @@ use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
+use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{CreateIndexStatement, RawItemName, Statement as AstStatement};
@@ -881,7 +881,10 @@ impl RunnerInner {
                 suppress_output: false,
                 environment_id: environment_id.to_string(),
                 secrets_dir: temp_dir.path().join("secrets"),
-                command_wrapper: vec![],
+                command_wrapper: config
+                    .orchestrator_process_wrapper
+                    .as_ref()
+                    .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
                 scratch_directory: None,
@@ -952,6 +955,8 @@ impl RunnerInner {
             launchdarkly_key_map: Default::default(),
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
+            deploy_generation: None,
+            waiting_on_leader_promotion: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1175,17 +1180,6 @@ impl RunnerInner {
             [statement] => statement,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
-        match statement {
-            Statement::CreateView { .. }
-            | Statement::Select { .. }
-            | Statement::Show(ShowStatement::ShowObjects(..)) => (),
-            _ => {
-                if output.is_err() {
-                    // We're not interested in testing our hacky handling of INSERT etc
-                    return Ok(Outcome::Success);
-                }
-            }
-        }
 
         match output {
             Ok(_) => {
@@ -1447,6 +1441,7 @@ pub struct RunConfig<'a> {
     pub auto_index_tables: bool,
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
+    pub orchestrator_process_wrapper: Option<String>,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

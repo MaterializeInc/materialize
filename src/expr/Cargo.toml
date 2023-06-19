@@ -31,8 +31,9 @@ md-5 = "0.10.5"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network"] }
 mz-pgrepr = { path = "../pgrepr" }
-mz-repr = { path = "../repr" }
 mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr" }
+mz-sql-parser = { path = "../sql-parser" }
 num = "0.4.0"
 num_enum = "0.5.7"
 ordered-float = { version = "3.4.0", features = ["serde"] }

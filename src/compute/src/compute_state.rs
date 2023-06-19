@@ -22,6 +22,7 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::UIntGauge;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Row, Timestamp};
@@ -77,7 +78,7 @@ pub struct ComputeState {
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
     /// History of commands received by this workers and all its peers.
-    pub command_history: ComputeCommandHistory,
+    pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
@@ -120,19 +121,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
+
         self.compute_state
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
-        self.compute_state.metrics.command_history_size.set(
-            u64::try_from(self.compute_state.command_history.len()).expect(
-                "The compute command history size must be non-negative and fit a 64-bit number",
-            ),
-        );
-        self.compute_state.metrics.dataflow_count_in_history.set(
-            u64::try_from(self.compute_state.command_history.dataflow_count()).expect(
-                "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
-            ),
-        );
+
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(logging) => self.handle_create_instance(logging),

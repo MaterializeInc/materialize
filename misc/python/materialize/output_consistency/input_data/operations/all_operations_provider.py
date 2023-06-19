@@ -25,6 +25,9 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 from materialize.output_consistency.input_data.operations.number_operations_provider import (
     NUMERIC_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.text_operations_provider import (
+    TEXT_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.trigonometric_operations_provider import (
     TRIGONOMETRIC_OPERATION_TYPES,
 )
@@ -38,5 +41,6 @@ ALL_OPERATION_TYPES: List[DbOperationOrFunction] = list(
         NUMERIC_OPERATION_TYPES,
         TRIGONOMETRIC_OPERATION_TYPES,
         DATE_TIME_OPERATION_TYPES,
+        TEXT_OPERATION_TYPES,
     )
 )

@@ -447,7 +447,8 @@ impl Coordinator {
                     }
 
                     // Statements below must by run singly (in Started).
-                    Statement::AlterConnection(_)
+                    Statement::AlterCluster(_)
+                    | Statement::AlterConnection(_)
                     | Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterSink(_)

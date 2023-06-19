@@ -20,6 +20,7 @@ from materialize.checks.create_index import *  # noqa: F401 F403
 from materialize.checks.create_table import *  # noqa: F401 F403
 from materialize.checks.databases import *  # noqa: F401 F403
 from materialize.checks.debezium import *  # noqa: F401 F403
+from materialize.checks.default_privileges import *  # noqa: F401 F403
 from materialize.checks.delete import *  # noqa: F401 F403
 from materialize.checks.drop_index import *  # noqa: F401 F403
 from materialize.checks.drop_table import *  # noqa: F401 F403
@@ -35,6 +36,7 @@ from materialize.checks.jsonb_type import *  # noqa: F401 F403
 from materialize.checks.kafka_formats import *  # noqa: F401 F403
 from materialize.checks.large_tables import *  # noqa: F401 F403
 from materialize.checks.like import *  # noqa: F401 F403
+from materialize.checks.managed_cluster import *  # noqa: F401 F403
 from materialize.checks.materialized_views import *  # noqa: F401 F403
 from materialize.checks.multiple_partitions import *  # noqa: F401 F403
 from materialize.checks.nested_types import *  # noqa: F401 F403

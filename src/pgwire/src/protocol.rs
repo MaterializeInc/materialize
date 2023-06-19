@@ -1423,7 +1423,8 @@ where
                 command_complete!()
             }
 
-            ExecuteResponse::AlteredIndexLogicalCompaction
+            ExecuteResponse::AlteredDefaultPrivileges
+            | ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
             | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration

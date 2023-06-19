@@ -2652,7 +2652,34 @@ fn plan_table_function_internal(
             let scope = Scope::from_source(scope_name.clone(), tf.column_names);
             (tf.expr, scope)
         }
-        _ => sql_bail!("{} is not a table function", name),
+        Func::Scalar(impls) => {
+            let expr = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
+            let output = expr.typ(
+                &qcx.outer_relation_types,
+                &RelationType::new(vec![]),
+                &qcx.scx.param_types.borrow(),
+            );
+
+            let relation = RelationType::new(vec![output]);
+
+            let function_ident = Ident::from(name.full_item_name().item.clone());
+            let column_name = normalize::column_name(function_ident);
+            let name = column_name.to_string();
+
+            let scope = Scope::from_source(scope_name.clone(), vec![column_name]);
+
+            (
+                HirRelationExpr::CallTable {
+                    func: mz_expr::TableFunc::TabletizedScalar { relation, name },
+                    exprs: vec![expr],
+                },
+                scope,
+            )
+        }
+        o => sql_bail!(
+            "{} functions are not supported in functions in FROM",
+            o.class()
+        ),
     };
 
     if with_ordinality {
@@ -2802,10 +2829,7 @@ fn invent_column_name(
                         .qcx
                         .scx
                         .catalog
-                        .resolve_schema(
-                            Some("materialize"),
-                            mz_repr::namespaces::MZ_INTERNAL_SCHEMA,
-                        )
+                        .resolve_schema(None, mz_repr::namespaces::MZ_INTERNAL_SCHEMA)
                         .expect("mz_internal schema must exist")
                         .id()
                 {

@@ -57,4 +57,4 @@ class DataValue(LeafExpression):
         return self.own_characteristics
 
     def __str__(self) -> str:
-        return f"{self.column_name} ({self.value})"
+        return f"{self.column_name} (={self.value})"

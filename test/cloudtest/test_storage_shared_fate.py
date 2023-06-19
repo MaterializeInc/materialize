@@ -11,7 +11,7 @@ import subprocess
 import time
 from textwrap import dedent
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 
 CLUSTER_SIZE = 8

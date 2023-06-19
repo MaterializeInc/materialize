@@ -247,26 +247,11 @@ t 1397
 t 1398
 t 1705
 
-# Tables have no subsources
-
 statement ok
-CREATE INDEX t_idx ON t(a);
+CREATE TABLE "#" ();
 
-statement ok
-CREATE MATERIALIZED VIEW t_mv AS SELECT * FROM t;
-
-query TTT
-SELECT * FROM mz_internal.mz_get_subsources('t');
+query T
+SELECT mz_internal.mz_global_id_to_name(id)
+FROM mz_internal.mz_resolve_object_name('"#"');
 ----
-
-query TTT
-SELECT * FROM mz_internal.mz_get_subsources('public.t');
-----
-
-query TTT
-SELECT * FROM mz_internal.mz_get_subsources('materialize.public.t');
-----
-
-query TTT
-SELECT * FROM mz_internal.mz_get_subsources(null);
-----
+materialize.public."#"

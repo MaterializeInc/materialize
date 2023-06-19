@@ -96,6 +96,8 @@ pub enum ErrorKind {
         role_name: String,
         member_name: String,
     },
+    #[error("cluster '{0}' is managed and cannot be directly modified")]
+    ManagedCluster(String),
 }
 
 impl Error {

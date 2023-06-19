@@ -392,6 +392,7 @@ impl Usage {
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
                 bootstrap_role: None,
             },
+            None,
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());

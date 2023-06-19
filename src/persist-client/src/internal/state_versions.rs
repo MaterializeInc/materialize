@@ -605,7 +605,7 @@ impl StateVersions {
         };
         let (applied, initial_state) = match empty_state
             .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_and_remove_rollups((rollup_seqno, &rollup), &[])
+                state.add_rollup((rollup_seqno, &rollup))
             }) {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {
@@ -786,18 +786,6 @@ pub struct UntypedStateVersionsIter<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
-    pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
-        self,
-    ) -> Result<TypedStateVersionsIter<K, V, T, D>, Box<CodecMismatch>> {
-        let state = self.state.check_codecs(&self.shard_id)?;
-        Ok(TypedStateVersionsIter::new(
-            self.cfg,
-            self.metrics,
-            state,
-            self.diffs,
-        ))
-    }
-
     pub(crate) fn check_ts_codec(self) -> Result<StateVersionsIter<T>, CodecMismatchT> {
         let key_codec = self.state.key_codec.clone();
         let val_codec = self.state.val_codec.clone();
@@ -919,58 +907,6 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             self.val_codec.clone(),
             self.diff_codec.clone(),
         )
-    }
-}
-
-/// An iterator over consecutive versions of [TypedState].
-pub struct TypedStateVersionsIter<K, V, T, D> {
-    cfg: PersistConfig,
-    metrics: Arc<Metrics>,
-    state: TypedState<K, V, T, D>,
-    diffs: Vec<VersionedData>,
-}
-
-impl<K, V, T: Timestamp + Lattice + Codec64, D> TypedStateVersionsIter<K, V, T, D> {
-    fn new(
-        cfg: PersistConfig,
-        metrics: Arc<Metrics>,
-        state: TypedState<K, V, T, D>,
-        // diffs is stored reversed so we can efficiently pop off the Vec.
-        mut diffs: Vec<VersionedData>,
-    ) -> Self {
-        assert!(diffs.first().map_or(true, |x| x.seqno == state.seqno));
-        diffs.reverse();
-        TypedStateVersionsIter {
-            cfg,
-            metrics,
-            state,
-            diffs,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.diffs.len()
-    }
-
-    /// Returns the SeqNo of the next state returned by `next`.
-    pub fn peek_seqno(&self) -> Option<SeqNo> {
-        self.diffs.last().map(|x| x.seqno)
-    }
-
-    pub fn next(&mut self) -> Option<&TypedState<K, V, T, D>> {
-        let diff = match self.diffs.pop() {
-            Some(x) => x,
-            None => return None,
-        };
-        let diff_seqno = diff.seqno;
-        self.state
-            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
-        assert_eq!(self.state.seqno, diff_seqno);
-        Some(&self.state)
-    }
-
-    pub fn state(&self) -> &TypedState<K, V, T, D> {
-        &self.state
     }
 }
 

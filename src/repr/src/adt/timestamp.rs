@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 //
-// Portions of this file are derived from `timestamp.c` in the Postgres project.
-// The original source code was retrieved on June 1, 2023 from:
+// Portions of this file are derived from the PostgreSQL project. The original
+// source code was retrieved on June 1, 2023 from:
 //
 //     https://github.com/postgres/postgres/blob/REL_15_3/src/backend/utils/adt/timestamp.c
 //
-// The original source code is subject to the terms of the PostgreSQL license, a copy
-// of which can be found in the LICENSE file at the root of this repository.
+// The original source code is subject to the terms of the PostgreSQL license, a
+// copy of which can be found in the LICENSE file at the root of this
+// repository.
 
 //! Methods for checked timestamp operations.
 
@@ -31,6 +32,7 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
+use crate::adt::datetime::DateTimePart;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
 use crate::chrono::ProtoNaiveDateTime;
@@ -516,6 +518,83 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
 
     pub fn checked_sub_signed(self, rhs: Duration) -> Option<T> {
         self.t.checked_sub_signed(rhs)
+    }
+
+    /// Returns the difference between `self` and the provided [`CheckedTimestamp`] as a number of
+    /// "unit"s.
+    ///
+    /// Note: used for `DATEDIFF(...)`, which isn't a Postgres function, but is in a number of
+    /// other databases.
+    pub fn diff_as(&self, other: &Self, unit: DateTimePart) -> Result<i64, TimestampError> {
+        const QUARTERS_PER_YEAR: i64 = 4;
+        const DAYS_PER_WEEK: i64 = 7;
+
+        fn diff_inner<U>(
+            a: &CheckedTimestamp<U>,
+            b: &CheckedTimestamp<U>,
+            unit: DateTimePart,
+        ) -> Option<i64>
+        where
+            U: TimestampLike,
+        {
+            match unit {
+                DateTimePart::Millennium => {
+                    i64::cast_from(a.millennium()).checked_sub(i64::cast_from(b.millennium()))
+                }
+                DateTimePart::Century => {
+                    i64::cast_from(a.century()).checked_sub(i64::cast_from(b.century()))
+                }
+                DateTimePart::Decade => {
+                    i64::cast_from(a.decade()).checked_sub(i64::cast_from(b.decade()))
+                }
+                DateTimePart::Year => {
+                    i64::cast_from(a.year()).checked_sub(i64::cast_from(b.year()))
+                }
+                DateTimePart::Quarter => {
+                    let years = i64::cast_from(a.year()).checked_sub(i64::cast_from(b.year()))?;
+                    let quarters = years.checked_mul(QUARTERS_PER_YEAR)?;
+                    #[allow(clippy::as_conversions)]
+                    let diff = (a.quarter() - b.quarter()) as i64;
+                    quarters.checked_add(diff)
+                }
+                DateTimePart::Month => {
+                    let years = i64::cast_from(a.year()).checked_sub(i64::cast_from(b.year()))?;
+                    let months = years.checked_mul(MONTHS_PER_YEAR)?;
+                    let diff = i64::cast_from(a.month()).checked_sub(i64::cast_from(b.month()))?;
+                    months.checked_add(diff)
+                }
+                DateTimePart::Week => {
+                    let diff = a.clone() - b.clone();
+                    diff.num_days().checked_div(DAYS_PER_WEEK)
+                }
+                DateTimePart::Day => {
+                    let diff = a.clone() - b.clone();
+                    Some(diff.num_days())
+                }
+                DateTimePart::Hour => {
+                    let diff = a.clone() - b.clone();
+                    Some(diff.num_hours())
+                }
+                DateTimePart::Minute => {
+                    let diff = a.clone() - b.clone();
+                    Some(diff.num_minutes())
+                }
+                DateTimePart::Second => {
+                    let diff = a.clone() - b.clone();
+                    Some(diff.num_seconds())
+                }
+                DateTimePart::Milliseconds => {
+                    let diff = a.clone() - b.clone();
+                    Some(diff.num_milliseconds())
+                }
+                DateTimePart::Microseconds => {
+                    let diff = a.clone() - b.clone();
+                    diff.num_microseconds()
+                }
+            }
+        }
+
+        diff_inner(self, other, unit).ok_or(TimestampError::OutOfRange)
     }
 
     /// Implementation was roughly ported from Postgres's `timestamp.c`.

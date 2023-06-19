@@ -26,10 +26,31 @@ After the snapshotting phase, Materialize starts ingesting change events from th
     (1 row)
     ```
 
-1. Going forward, you can verify that your new replica size is sufficient by checking the replica lag in your PostgreSQL database:
+1. Going forward, you can verify that your new replica size is sufficient as follows:
 
-    ```sql
-    SELECT extract(epoch from now() - pg_last_xact_replay_timestamp()) AS replica_lag;
-    ```
+    1. In Materialize, get the replication slot name associated with your PostgreSQL source from the [`mz_internal.mz_postgres_sources`](/sql/system-catalog/mz_internal/#mz_postgres_sources) table:
 
-    A high value can indicate that the source has fallen behind and that you might need to scale up your ingestion cluster.
+        ```sql
+        SELECT
+            d.name AS database_name,
+            n.name AS schema_name,
+            s.name AS source_name,
+            pgs.replication_slot
+        FROM
+            mz_sources AS s
+            JOIN mz_internal.mz_postgres_sources AS pgs ON s.id = pgs.id
+            JOIN mz_schemas AS n ON n.id = s.schema_id
+            JOIN mz_databases AS d ON d.id = n.database_id;
+        ```
+
+    1. In PostgreSQL, check the replication slot lag, using the replication slot name from the previous step:
+
+        ```sql
+        SELECT
+            pg_size_pretty(pg_current_wal_lsn() - confirmed_flush_lsn)
+            AS replication_lag_bytes
+        FROM pg_replication_slots
+        WHERE slot_name = '<slot_name>';
+        ```
+
+        The result of this query is the amount of data your PostgreSQL cluster must retain in its replication log because of this replication slot. Typically, this means Materialize has not yet communicated back to PostgreSQL that it has committed this data. A high value can indicate that the source has fallen behind and that you might need to scale up your ingestion cluster.

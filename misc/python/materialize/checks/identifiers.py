@@ -251,7 +251,7 @@ class Identifiers(Check):
 
     def validate(self) -> Testdrive:
         cmds = f"""
-        > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%';
+        > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name <> 'defpriv_db';
         materialize
         {dq(self.ident["db"])}
 

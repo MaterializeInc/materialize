@@ -71,14 +71,14 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *PR:* [${{ github.event.pull_request.title }}](${{ github.event.pull_request.url }})"
+                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
                   }
                 },
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *Author:* ${{ github.event.pull_request.user.name }} (${{ github.event.pull_request.user.login }})"
+                    "text": "• *Author:* <${{ github.event.pull_request.user.html_url }}|${{ github.event.pull_request.user.login }}>"
                   }
                 }
               ]

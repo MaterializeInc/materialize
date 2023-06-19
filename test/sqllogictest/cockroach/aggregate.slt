@@ -247,7 +247,7 @@ SELECT * FROM kv GROUP BY v, count(DISTINCT w)
 query error aggregate functions are not allowed in GROUP BY
 SELECT count(DISTINCT w) FROM kv GROUP BY 1
 
-query error Expected end of statement, found identifier
+query error aggregate functions are not allowed in RETURNING clause \(function pg_catalog.sum\)
 INSERT INTO kv (k, v) VALUES (99, 100) RETURNING sum(v)
 
 query error LIMIT must be an integer constant

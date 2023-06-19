@@ -1104,14 +1104,14 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Cluster
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS ()
 ----
-error: Expected REPLICAS, found WITH
+error: Expected one of AVAILABILITY or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found WITH
 CREATE CLUSTER cluster WITH REPLICAS ()
                        ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
-error: Expected REPLICAS, found identifier "badopt"
+error: Expected one of AVAILABILITY or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found identifier "badopt"
 CREATE CLUSTER cluster REPLICAS (), BADOPT
                                     ^
 
@@ -1156,6 +1156,195 @@ CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['123'], STORAGE ADDRES
 CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES = ('123'), STORAGE ADDRESSES = ('124'), COMPUTECTL ADDRESSES = ('host1:2400', 'host2:2400'), COMPUTE ADDRESSES = ('host1:2401', 'host2:2401'), WORKERS = '1'))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("123"))])) }, ReplicaOption { name: StorageAddresses, value: Some(Sequence([Value(String("124"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])) }] })
+
+parse-statement
+CREATE CLUSTER cluster SIZE '1'
+----
+CREATE CLUSTER cluster SIZE '1'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICATION FACTOR 1
+----
+CREATE CLUSTER cluster REPLICATION FACTOR 1
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster AVAILABILITY ZONES ('1')
+----
+CREATE CLUSTER cluster AVAILABILITY ZONES ('1')
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1"))])) }] })
+
+parse-statement
+CREATE CLUSTER cluster IDLE ARRANGEMENT MERGE EFFORT 1000
+----
+CREATE CLUSTER cluster IDLE ARRANGEMENT MERGE EFFORT 1000
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1000"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster MANAGED true
+----
+CREATE CLUSTER cluster MANAGED true
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
+CREATE CLUSTER cluster MANAGED
+----
+CREATE CLUSTER cluster MANAGED
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }] })
+
+parse-statement
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
+----
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster INTROSPECTION DEBUGGING true
+----
+CREATE CLUSTER cluster INTROSPECTION DEBUGGING true
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
+ALTER CLUSTER cluster SET (SIZE '1')
+----
+ALTER CLUSTER cluster SET (SIZE '1')
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Size, value: Some(Value(String("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER IF EXISTS cluster SET (MANAGED)
+----
+ALTER CLUSTER IF EXISTS cluster SET (MANAGED)
+=>
+AlterCluster(AlterClusterStatement { if_exists: true, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: None }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (REPLICATION FACTOR 1)
+----
+ALTER CLUSTER cluster SET (REPLICATION FACTOR 1)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('1', '2'))
+----
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('1', '2'))
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (IDLE ARRANGEMENT MERGE EFFORT 1000)
+----
+ALTER CLUSTER cluster SET (IDLE ARRANGEMENT MERGE EFFORT 1000)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1000"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (MANAGED true)
+----
+ALTER CLUSTER cluster SET (MANAGED true)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (MANAGED)
+----
+ALTER CLUSTER cluster SET (MANAGED)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: None }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL '1')
+----
+ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL '1')
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING true)
+----
+ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING true)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('a'), IDLE ARRANGEMENT MERGE EFFORT 1, INTROSPECTION INTERVAL 1, INTROSPECTION DEBUGGING 1, MANAGED, REPLICAS (), REPLICATION FACTOR 0, SIZE 1)
+----
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('a'), IDLE ARRANGEMENT MERGE EFFORT 1, INTROSPECTION INTERVAL 1, INTROSPECTION DEBUGGING 1, MANAGED, REPLICAS (), REPLICATION FACTOR 0, SIZE 1)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("a"))])) }, ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionInterval, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionDebugging, value: Some(Value(Number("1"))) }, ClusterOption { name: Managed, value: None }, ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }, ClusterOption { name: ReplicationFactor, value: Some(Value(Number("0"))) }, ClusterOption { name: Size, value: Some(Value(Number("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (SIZE)
+----
+ALTER CLUSTER cluster RESET (SIZE)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([Size]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (REPLICATION FACTOR)
+----
+ALTER CLUSTER cluster RESET (REPLICATION FACTOR)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([ReplicationFactor]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (REPLICAS)
+----
+ALTER CLUSTER cluster RESET (REPLICAS)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([Replicas]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES)
+----
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([AvailabilityZones]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (IDLE ARRANGEMENT MERGE EFFORT)
+----
+ALTER CLUSTER cluster RESET (IDLE ARRANGEMENT MERGE EFFORT)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([IdleArrangementMergeEffort]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (MANAGED)
+----
+ALTER CLUSTER cluster RESET (MANAGED)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([Managed]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (INTROSPECTION INTERVAL)
+----
+ALTER CLUSTER cluster RESET (INTROSPECTION INTERVAL)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([IntrospectionInterval]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (INTROSPECTION DEBUGGING)
+----
+ALTER CLUSTER cluster RESET (INTROSPECTION DEBUGGING)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([IntrospectionDebugging]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES, IDLE ARRANGEMENT MERGE EFFORT, INTROSPECTION INTERVAL, INTROSPECTION DEBUGGING, MANAGED, REPLICAS, REPLICATION FACTOR, SIZE)
+----
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES, IDLE ARRANGEMENT MERGE EFFORT, INTROSPECTION INTERVAL, INTROSPECTION DEBUGGING, MANAGED, REPLICAS, REPLICATION FACTOR, SIZE)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([AvailabilityZones, IdleArrangementMergeEffort, IntrospectionInterval, IntrospectionDebugging, Managed, Replicas, ReplicationFactor, Size]) })
 
 parse-statement
 CREATE CLUSTER REPLICA replica

@@ -986,12 +986,14 @@ impl Coordinator {
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::UpdatePrivilege { .. }
+                | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
                 | Op::RenameCluster { .. }
                 | Op::RenameClusterReplica { .. }
                 | Op::RenameItem { .. }
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
+                | Op::UpdateClusterConfig { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }

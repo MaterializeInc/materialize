@@ -49,7 +49,7 @@ v3 [1]
 # verify we have a new state that references the latest batch
 consensus-scan from_seqno=v3
 ----
-seqno=v3 batches=b0
+seqno=v3 batches=b0 rollups=v1
 
 # insert a second batch into state
 compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
@@ -59,31 +59,50 @@ v4 [2]
 # verify we have a new state that references both batches
 consensus-scan from_seqno=v3
 ----
-seqno=v3 batches=b0
-seqno=v4 batches=b0,b1
+seqno=v3 batches=b0 rollups=v1
+seqno=v4 batches=b0,b1 rollups=v1
 
-# run gc up to our latest seqno
+# run gc up to our latest seqno, but without introducing a new rollup.
+# gc should _not_ perform any work in this case.
 gc to_seqno=v4
 ----
-v5 ok
+v4 batch_parts=0 rollups=0 truncated= state_rollups=
 
-# verify that gc removed all seqno less than the latest. (NB: gc introduces a
-# seqno of its own to add a rollup)
+# verify that consensus has not changed
+consensus-scan from_seqno=v3
+----
+seqno=v3 batches=b0 rollups=v1
+seqno=v4 batches=b0,b1 rollups=v1
+
+# add a rollup
+write-rollup seqno=v4
+----
+v5
+
+# run gc up to our latest seqno. gc should truncate up to the latest rollup
+# and introduce its own seqno (to remove the older rollup from state)
+gc to_seqno=v5
+----
+v6 batch_parts=0 rollups=0 truncated=v4 state_rollups=v1
+
+# verify that gc removed all seqno less than the latest
 consensus-scan from_seqno=v0
 ----
-seqno=v4 batches=b0,b1
-seqno=v5 batches=b0,b1
+seqno=v4 batches=b0,b1 rollups=v1
+seqno=v5 batches=b0,b1 rollups=v1,v4
+seqno=v6 batches=b0,b1 rollups=v4
 
 # insert another batch
 compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v6 [3]
+v7 [3]
 
 consensus-scan from_seqno=v0
 ----
-seqno=v4 batches=b0,b1
-seqno=v5 batches=b0,b1
-seqno=v6 batches=b0,b1,b2
+seqno=v4 batches=b0,b1 rollups=v1
+seqno=v5 batches=b0,b1 rollups=v1,v4
+seqno=v6 batches=b0,b1 rollups=v4
+seqno=v7 batches=b0,b1,b2 rollups=v4
 
 # compact and merge b0 and b1 into b0_1
 compact output=b0_1 inputs=(b0,b1) lower=0 upper=2 since=0 writer_id=w11111111-1111-1111-1111-111111111111
@@ -92,28 +111,35 @@ parts=1 len=3
 
 apply-merge-res input=b0_1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v7 true
+v8 true
 
 # verify that we b0_1 has replaced b0 and b1 in latest state
 consensus-scan from_seqno=v0
 ----
-seqno=v4 batches=b0,b1
-seqno=v5 batches=b0,b1
-seqno=v6 batches=b0,b1,b2
-seqno=v7 batches=b0_1,b2
+seqno=v4 batches=b0,b1 rollups=v1
+seqno=v5 batches=b0,b1 rollups=v1,v4
+seqno=v6 batches=b0,b1 rollups=v4
+seqno=v7 batches=b0,b1,b2 rollups=v4
+seqno=v8 batches=b0_1,b2 rollups=v4
+
+# write a rollup that contains last seqno referencing b0 and b1
+write-rollup seqno=v7
+----
+v9
 
 # run gc to clear only the b0,b1 seqnos
-gc to_seqno=v6
+gc to_seqno=v9
 ----
-v8 ok
+v10 batch_parts=0 rollups=1 truncated=v7 state_rollups=v4
 
 consensus-scan from_seqno=v0
 ----
-seqno=v6 batches=b0,b1,b2
-seqno=v7 batches=b0_1,b2
-seqno=v8 batches=b0_1,b2
+seqno=v7 batches=b0,b1,b2 rollups=v4
+seqno=v8 batches=b0_1,b2 rollups=v4
+seqno=v9 batches=b0_1,b2 rollups=v4,v7
+seqno=v10 batches=b0_1,b2 rollups=v7
 
-# verify that b0 and b1 still exist, because they're referenced in seqno 6
+# verify that b0 and b1 still exist, because they're referenced in seqno 7
 fetch-batch input=b0
 ----
 <part 0>
@@ -129,16 +155,23 @@ k3 1 1
 <run 0>
 part 0
 
-# run gc to clear up to the latest state.
+# write a new rollup at v8 so we can GC v7 on our next call
+write-rollup seqno=v8
+----
+v11
+
 gc to_seqno=v8
 ----
-v9 ok
+v12 batch_parts=2 rollups=0 truncated=v8 state_rollups=v7
 
 # we should only have b0_1,b2 now
 consensus-scan from_seqno=v0
 ----
-seqno=v8 batches=b0_1,b2
-seqno=v9 batches=b0_1,b2
+seqno=v8 batches=b0_1,b2 rollups=v4
+seqno=v9 batches=b0_1,b2 rollups=v4,v7
+seqno=v10 batches=b0_1,b2 rollups=v7
+seqno=v11 batches=b0_1,b2 rollups=v7,v8
+seqno=v12 batches=b0_1,b2 rollups=v8
 
 # and b0 and b1 should no longer exist in the blob store, as no states still reference them
 fetch-batch input=b0

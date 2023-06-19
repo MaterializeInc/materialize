@@ -19,13 +19,13 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error Expected REPLICAS, found EOF
+statement error db error: ERROR: Expected one of AVAILABILITY or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found EOF
 CREATE CLUSTER foo
 
 statement ok
 CREATE CLUSTER foo REPLICAS ()
 
-statement error db error: ERROR: Expected one of OWNER or RENAME, found dot
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
 ALTER CLUSTER foo.bar RENAME TO bar
 
 statement ok
@@ -451,7 +451,7 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.foo
 
-query error CLUSTER foo has no CLUSTER REPLICA named foo
+query error CLUSTER foo has no CLUSTER REPLICA named "foo"
 DROP CLUSTER REPLICA default.size_1, foo.foo
 
 statement ok

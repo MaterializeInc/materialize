@@ -12,5 +12,5 @@ mode cockroach
 query error cannot show create for system object mz_internal.mz_dataflow_channels
 SHOW CREATE SOURCE mz_internal.mz_dataflow_channels
 
-query error system schema 'mz_internal.mz_dataflow_channels' cannot be modified
+query error "mz_internal.mz_dataflow_channels" is a view not a source
 ALTER SOURCE mz_internal.mz_dataflow_channels RENAME TO foo;

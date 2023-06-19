@@ -548,11 +548,12 @@ impl Stash {
                 .get(0);
             if !fence_exists {
                 if !matches!(self.txn_mode, TransactionMode::Writeable) {
-                    return Err(format!(
-                        "stash tables do not exist; will not create in {:?} mode",
-                        self.txn_mode
-                    )
-                    .into());
+                    return Err(StashError {
+                        inner: InternalStashError::StashNotWritable(format!(
+                            "stash tables do not exist; will not create in {:?} mode",
+                            self.txn_mode
+                        )),
+                    });
                 }
                 tx.batch_execute(SCHEMA).await?;
             }
@@ -782,6 +783,12 @@ impl Stash {
             &'a BTreeMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
+        // Use a function so we can instrument.
+        #[tracing::instrument(name = "stash::batch_execute", level = "debug", skip(client))]
+        async fn batch_execute(client: &Client, stmt: &str) -> Result<(), tokio_postgres::Error> {
+            client.batch_execute(stmt).await
+        }
+
         let reconnect = match &self.client {
             Some(client) => client.is_closed(),
             None => true,
@@ -799,8 +806,7 @@ impl Stash {
             TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
-        client
-            .batch_execute(tx_start)
+        batch_execute(client, tx_start)
             .await
             .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
@@ -851,7 +857,7 @@ impl Stash {
             });
         }
 
-        if let Err(_) = client.batch_execute(tx_end).await {
+        if let Err(_) = batch_execute(client, tx_end).await {
             return Err(TransactionError::Commit {
                 committed_if_version,
                 result: res,
@@ -941,6 +947,8 @@ impl Stash {
                             15 => upgrade::v15_to_v16::upgrade(&mut tx).await?,
                             16 => upgrade::v16_to_v17::upgrade(),
                             17 => upgrade::v17_to_v18::upgrade(&mut tx).await?,
+                            18 => upgrade::v18_to_v19::upgrade(&mut tx).await?,
+                            19 => upgrade::v19_to_v20::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),

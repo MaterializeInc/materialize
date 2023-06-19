@@ -1635,6 +1635,16 @@ impl Func {
             Func::ValueWindow(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
         }
     }
+
+    pub fn class(&self) -> &str {
+        match self {
+            Func::Scalar(..) => "scalar",
+            Func::Aggregate(..) => "aggregate",
+            Func::Table(..) => "table",
+            Func::ScalarWindow(..) => "window",
+            Func::ValueWindow(..) => "window",
+        }
+    }
 }
 
 /// Functions using this macro should be transformed/planned away before
@@ -2453,6 +2463,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float64, Float64) => BinaryFunc::Power => Float64, 1368;
             params!(Numeric, Numeric) => BinaryFunc::PowerNumeric => Numeric, 2169;
         },
+        "quote_ident" => Scalar {
+            params!(String) => UnaryFunc::QuoteIdent(func::QuoteIdent) => String, 1282;
+        },
         "radians" => Scalar {
             params!(Float64) => UnaryFunc::Radians(func::Radians) => Float64, 1609;
         },
@@ -3134,6 +3147,12 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
         },
+        "datediff" => Scalar {
+            params!(String, Timestamp, Timestamp) => VariadicFunc::DateDiffTimestamp => Int64, oid::FUNC_DATEDIFF_TIMESTAMP;
+            params!(String, TimestampTz, TimestampTz) => VariadicFunc::DateDiffTimestampTz => Int64, oid::FUNC_DATEDIFF_TIMESTAMPTZ;
+            params!(String, Date, Date) => VariadicFunc::DateDiffDate => Int64, oid::FUNC_DATEDIFF_DATE;
+            params!(String, Time, Time) => VariadicFunc::DateDiffTime => Int64, oid::FUNC_DATEDIFF_TIME;
+        },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                 if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
@@ -3329,25 +3348,6 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // message is the second argument.
             params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
         },
-        "mz_get_subsources" => Table {
-            params!(String) => sql_impl_table_func("
-                SELECT
-                    mz_internal.mz_global_id_to_name(d.object_id) AS source,
-                    mz_internal.mz_global_id_to_name(d.subsource) AS subsource,
-                    s.type AS type
-                FROM
-                    mz_sources AS s
-                    JOIN (
-                        SELECT object_id, referenced_object_id AS subsource
-                        FROM
-                        mz_internal.mz_object_dependencies AS d
-                            JOIN
-                            mz_internal.mz_resolve_object_name($1) AS g
-                            ON d.object_id = g.id
-                    ) AS d
-                    ON s.id = d.subsource
-            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_GET_SUBSOURCES;
-        },
         "mz_resolve_object_name" => Table {
             // This implementation is available primarily to drive the other, single-param
             // implementation.
@@ -3408,14 +3408,20 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 ELSE (
                     SELECT mz_internal.mz_error_if_null(
                         (
-                            SELECT DISTINCT concat(qual.d, qual.s, item.name)
+                            SELECT DISTINCT
+                                concat_ws(
+                                    '.',
+                                    qual.d,
+                                    qual.s,
+                                    pg_catalog.quote_ident(item.name)
+                                )
                             FROM
                                 mz_objects AS item
                             JOIN
                             (
                                 SELECT
-                                    d.name || '.' AS d,
-                                    s.name || '.' AS s,
+                                    pg_catalog.quote_ident(d.name) AS d,
+                                    pg_catalog.quote_ident(s.name) AS s,
                                     s.id AS schema_id
                                 FROM
                                     mz_schemas AS s
