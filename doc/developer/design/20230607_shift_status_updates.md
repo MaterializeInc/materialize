@@ -6,6 +6,7 @@
   - [Goals](#goals)
   - [Overview](#overview)
   - [Detailed description](#detailed-description)
+    - [Testing](#testing)
     - [Rollout strategy](#rollout-strategy)
   - [Alternatives](#alternatives)
   - [Open questions](#open-questions)
@@ -122,6 +123,10 @@ When dropping a replica, the storage controller will need to retrieve all source
 Immediately after the coordinator announces initialization is complete, the storage controller will be updated to look for any ingestion/export dataflows that belong to an instance with 0 replicas and set their status to `paused`. This should allow `environmentd` to correctly set the status for sources/sinks in scenarios where it crashes before it was able to write the `paused` status to persist.
 
 In order to support the future in which storage clusters may have multiple replicas, we will need to update the schemas for the `mz_{source|sink}_status_history` relations to include a `replica_id`. This is necessary for the reason that dropping a replica in a storage cluster with multiple replicas shouldn't set the status of a source, for example, to `paused`. Isolating status updates for a source/sink to a specific replica allows any derived relations such as `mz_{source|sink}_statuses` to make determinations based on all the replicas in the cluster.
+
+### Testing
+
+The current test suite for verifying source/sink statuses should carry over, given that there are no breaking changes to the status entries themselves. However, we should add new tests for the new `paused` status described above.
 
 ### Rollout strategy
 
