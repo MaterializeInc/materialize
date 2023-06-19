@@ -258,6 +258,7 @@ class S3UploadDebuginfo(PreImage):
                 s3.upload_fileobj(exe, self.bucket, exe_object_name)
             except NoCredentialsError:
                 print("Failed to find S3 credentials; not uploading build.")
+                return
             print(
                 f"Attempting to upload debug info to s3://{self.bucket}/{dbg_object_name}"
             )
