@@ -4133,10 +4133,7 @@ impl CachedStatisticsOracle {
                     cache.insert(*id, stats.num_updates);
                 }
                 Err(StorageError::IdentifierMissing(id)) => {
-                    debug_assert!(
-                        id.is_transient(),
-                        "only transient identifiers can be missing statistics"
-                    );
+                    ::tracing::debug!("no statistics for {id}")
                 }
                 Err(e) => return Err(e),
             }
