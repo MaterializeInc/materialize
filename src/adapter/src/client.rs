@@ -349,8 +349,8 @@ impl SessionClient {
     /// - `Some(n > 1)`: InTransactionImplicit
     /// - `Some(0)`: no change
     pub fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), AdapterError> {
-        let mut session = self.session.take().expect("session invariant violated");
         let now = self.now_datetime();
+        let session = self.session.as_mut().expect("session invariant violated");
         let result = match implicit {
             None => session.start_transaction(now, None, None),
             Some(stmts) => {
@@ -358,7 +358,6 @@ impl SessionClient {
                 Ok(())
             }
         };
-        self.session = Some(session);
         result
     }
 
@@ -485,7 +484,7 @@ impl SessionClient {
             // - execute reports success of dataflow execution
             match cmd {
                 Command::Declare { .. } => typ = Some("declare"),
-                Command::Execute { .. } | Command::ExecuteInner { .. } => typ = Some("execute"),
+                Command::Execute { .. } => typ = Some("execute"),
                 Command::Startup { .. }
                 | Command::Prepare { .. }
                 | Command::VerifyPreparedStatement { .. }

@@ -23,7 +23,7 @@ use mz_sql::ast::Statement;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Level};
+use tracing::{event, warn, Instrument, Level};
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
@@ -54,6 +54,14 @@ impl Coordinator {
                 self.message_create_source_statement_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
+            Message::Execute {
+                portal_name,
+                ctx,
+                span,
+            } => {
+                let span = tracing::debug_span!(parent: &span, "message (execute)");
+                self.handle_execute(portal_name, ctx).instrument(span).await;
+            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
@@ -378,7 +386,7 @@ impl Coordinator {
 
         let (subsource_stmts, stmt) = match result {
             Ok(ok) => ok,
-            Err(e) => return ctx.retire(Err(e), self),
+            Err(e) => return ctx.retire(Err(e)),
         };
 
         let mut plans: Vec<CreateSourcePlans> = vec![];
@@ -389,7 +397,7 @@ impl Coordinator {
             let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
             let source_id = match self.catalog_mut().allocate_user_id().await {
                 Ok(id) => id,
-                Err(e) => return ctx.retire(Err(e.into()), self),
+                Err(e) => return ctx.retire(Err(e.into())),
             };
             let plan = match self.plan_statement(
                 ctx.session_mut(),
@@ -400,7 +408,7 @@ impl Coordinator {
                 Ok(_) => {
                     unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
                 }
-                Err(e) => return ctx.retire(Err(e), self),
+                Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
             plans.push((source_id, plan, depends_on).into());
@@ -410,12 +418,12 @@ impl Coordinator {
         // plan it too
         let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
             Ok(ok) => ok,
-            Err(e) => return ctx.retire(Err(e.into()), self),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
         let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
         let source_id = match self.catalog_mut().allocate_user_id().await {
             Ok(id) => id,
-            Err(e) => return ctx.retire(Err(e.into()), self),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
         let plan =
             match self.plan_statement(ctx.session_mut(), Statement::CreateSource(stmt), &params) {
@@ -423,7 +431,7 @@ impl Coordinator {
                 Ok(_) => {
                     unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
                 }
-                Err(e) => return ctx.retire(Err(e), self),
+                Err(e) => return ctx.retire(Err(e)),
             };
         plans.push((source_id, plan, depends_on).into());
 
@@ -473,7 +481,7 @@ impl Coordinator {
                     // Kafka topic) they need to clean up.
                 }
                 if let Some(ctx) = ctx {
-                    ctx.retire(Ok(ExecuteResponse::CreatedSink), self);
+                    ctx.retire(Ok(ExecuteResponse::CreatedSink));
                 }
             }
             Err(e) => {
@@ -499,7 +507,7 @@ impl Coordinator {
                     .storage
                     .cancel_prepare_export(create_export_token);
                 if let Some(ctx) = ctx {
-                    ctx.retire(Err(e), self);
+                    ctx.retire(Err(e));
                 }
             }
         }
@@ -605,7 +613,7 @@ impl Coordinator {
                 .unwrap_or_terminate("unable to confirm leadership");
             for ready_txn in ready_txns {
                 if let Some((ctx, result)) = ready_txn.finish() {
-                    ctx.retire(result, self);
+                    ctx.retire(result);
                 }
             }
         }
@@ -642,7 +650,7 @@ impl Coordinator {
 
         if let Err(err) = validity.check(self.catalog()) {
             let ctx = real_time_recency_context.take_context();
-            ctx.retire(Err(err), self);
+            ctx.retire(Err(err));
             return;
         }
 
@@ -662,7 +670,7 @@ impl Coordinator {
                     id_bundle,
                     Some(real_time_recency_ts),
                 );
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             RealTimeRecencyContext::Peek {
                 ctx,

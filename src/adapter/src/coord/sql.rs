@@ -46,7 +46,7 @@ impl Coordinator {
         mz_ore::task::spawn(|| "coord::declare", async move {
             let result = Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, param_types)
                 .map(|()| ExecuteResponse::DeclaredCursor);
-            ctx.retire_async(result);
+            ctx.retire(result);
         });
     }
 

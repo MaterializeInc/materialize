@@ -30,7 +30,7 @@ use tokio::sync::{oneshot, watch};
 
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::{ExecuteContext, ExecuteContextExtra};
+use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::util::Transmittable;
@@ -63,13 +63,6 @@ pub enum Command {
         name: String,
         session: Session,
         tx: oneshot::Sender<Response<()>>,
-    },
-
-    // ExecuteInner is like Execute, but its context has already been allocated.
-    ExecuteInner {
-        portal_name: String,
-        ctx: ExecuteContext,
-        span: tracing::Span,
     },
 
     Execute {
@@ -139,7 +132,6 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::ExecuteInner { ctx, .. } => Some(ctx.session()),
             Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
@@ -157,7 +149,6 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::ExecuteInner { ctx, .. } => Some(ctx.session_mut()),
             Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
         }
     }

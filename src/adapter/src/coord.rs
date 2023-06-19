@@ -209,6 +209,14 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PeekValidity,
     },
+
+    // Like Command::Execute, but its context has already been allocated.
+    Execute {
+        portal_name: String,
+        ctx: ExecuteContext,
+        span: tracing::Span,
+    },
+
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -591,7 +599,7 @@ impl PendingReadTxn {
 /// command execution.  `ExecuteContextExtra::Default` is guaranteed
 /// to produce a value that will cause the coordinator to do nothing, and
 /// is intended for use by code that invokes the execution processing flow
-/// (i.e., `sequence_plan`) without actually being a statement execution
+/// (i.e., `sequence_plan`) without actually being a statement execution.
 // Currently nothing; planned to be data related to statement logging
 // at some point in the future.
 #[derive(Debug, Default)]
@@ -673,31 +681,8 @@ impl ExecuteContext {
         (tx, internal_cmd_tx, session, extra)
     }
 
-    /// Retire the execution, with access to the coordinator.
-    ///
-    /// Since the caller provides us with exclusive access to the coordinator, we are
-    /// able to perform whatever action necessary synchronously on the main coordinator task.
-    ///
-    /// If you find yourself in a context where you don't have exclusive access to the coordinator,
-    /// use `retire_aysnc` instead.
-    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>, coord: &mut Coordinator) {
-        let Self {
-            tx,
-            internal_cmd_tx: _,
-            session,
-            extra,
-        } = self;
-        tx.send(result, session);
-        coord.retire_execute(extra);
-    }
-
-    /// Retire the execution, _without_ access to the coordinator.
-    ///
-    /// This function is intended for when statement execution ends on a task that
-    /// does not have exclusive access to the coordinator. Because the coordinator may need to
-    /// perform some per-statement logging or cleanup work, this function sends a message to the
-    /// coordinator informing it that the statement execution is being retired.
-    pub fn retire_async(self, result: Result<ExecuteResponse, AdapterError>) {
+    /// Retire the execution, by sending a message to the coordinator.
+    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
         let Self {
             tx,
             internal_cmd_tx,

@@ -103,10 +103,10 @@ use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanatio
 /// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
 macro_rules! return_if_err {
-    ($this:expr, $expr:expr, $ctx:expr) => {
+    ($expr:expr, $ctx:expr) => {
         match $expr {
             Ok(v) => v,
-            Err(e) => return $ctx.retire(Err(e.into()), $this),
+            Err(e) => return $ctx.retire(Err(e.into())),
         }
     };
 }
@@ -606,12 +606,11 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = return_if_err!(self, self.catalog_mut().allocate_user_id().await, ctx);
-        let oid = return_if_err!(self, self.catalog_mut().allocate_oid(), ctx);
+        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let oid = return_if_err!(self.catalog_mut().allocate_oid(), ctx);
 
         let mut ops = vec![];
         let cluster_id = return_if_err!(
-            self,
             self.create_linked_cluster_ops(
                 id,
                 &name,
@@ -684,11 +683,11 @@ impl Coordinator {
                         name: name.item,
                         ty: "sink",
                     });
-                ctx.retire(Ok(ExecuteResponse::CreatedSink), self);
+                ctx.retire(Ok(ExecuteResponse::CreatedSink));
                 return;
             }
             Err(e) => {
-                ctx.retire(Err(e), self);
+                ctx.retire(Err(e));
                 return;
             }
         }
@@ -696,7 +695,6 @@ impl Coordinator {
         self.maybe_create_linked_cluster(id).await;
 
         let create_export_token = return_if_err!(
-            self,
             self.controller
                 .storage
                 .prepare_export(id, catalog_sink.from),
@@ -1697,7 +1695,7 @@ impl Coordinator {
             ExecuteResponse::from(r)
         });
 
-        ctx.retire(response, self);
+        ctx.retire(response);
     }
 
     fn sequence_end_transaction_inner(
@@ -1772,26 +1770,20 @@ impl Coordinator {
             // if we move any stages off thread.
             if let Some(validity) = stage.validity() {
                 if let Err(err) = validity.check(self.catalog()) {
-                    ctx.retire(Err(err), self);
+                    ctx.retire(Err(err));
                     return;
                 }
             }
 
             (ctx, stage) = match stage {
                 PeekStage::Validate(stage) => {
-                    let next = return_if_err!(
-                        self,
-                        self.peek_stage_validate(ctx.session_mut(), stage),
-                        ctx
-                    );
+                    let next =
+                        return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
                     (ctx, PeekStage::Optimize(next))
                 }
                 PeekStage::Optimize(stage) => {
-                    let next = return_if_err!(
-                        self,
-                        self.peek_stage_optimize(ctx.session_mut(), stage),
-                        ctx
-                    );
+                    let next =
+                        return_if_err!(self.peek_stage_optimize(ctx.session_mut(), stage), ctx);
                     (ctx, PeekStage::Timestamp(next))
                 }
                 PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
@@ -1800,7 +1792,7 @@ impl Coordinator {
                 },
                 PeekStage::Finish(stage) => {
                     let res = self.peek_stage_finish(ctx.session_mut(), stage).await;
-                    ctx.retire(res, self);
+                    ctx.retire(res);
                     return;
                 }
             }
@@ -2489,7 +2481,7 @@ impl Coordinator {
             ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
             _ => {
                 let result = self.sequence_explain_plan(ctx.session_mut(), plan, target_cluster);
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
         }
     }
@@ -2748,7 +2740,6 @@ impl Coordinator {
 
     fn sequence_explain_timestamp_begin(&mut self, mut ctx: ExecuteContext, plan: ExplainPlan) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self,
             self.sequence_explain_timestamp_begin_inner(ctx.session(), plan),
             ctx
         );
@@ -2794,7 +2785,7 @@ impl Coordinator {
                     id_bundle,
                     None,
                 );
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
         }
     }
@@ -2995,7 +2986,7 @@ impl Coordinator {
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
         } else {
-            return_if_err!(self, self.view_optimizer.optimize(plan.values), ctx)
+            return_if_err!(self.view_optimizer.optimize(plan.values), ctx)
         };
 
         match optimized_mir.into_inner() {
@@ -3008,7 +2999,7 @@ impl Coordinator {
                         plan.id,
                         selection,
                     );
-                    ctx.retire_async(result);
+                    ctx.retire(result);
                 });
             }
             // All non-constant values must be planned as read-then-writes.
@@ -3023,23 +3014,17 @@ impl Coordinator {
                         .expect("desc called on table")
                         .arity(),
                     None => {
-                        ctx.retire(
-                            Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                                plan.id.to_string(),
-                            ))),
-                            self,
-                        );
+                        ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
+                            plan.id.to_string(),
+                        ))));
                         return;
                     }
                 };
 
                 if selection.contains_temporal() {
-                    ctx.retire(
-                        Err(AdapterError::Unsupported(
-                            "calls to mz_now in write statements",
-                        )),
-                        self,
-                    );
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "calls to mz_now in write statements",
+                    )));
                     return;
                 }
 
@@ -3135,7 +3120,7 @@ impl Coordinator {
                             values.into_inner(),
                         )
                     });
-            ctx.retire_async(result);
+            ctx.retire(result);
         });
     }
 
@@ -3170,12 +3155,9 @@ impl Coordinator {
                 .expect("desc called on table")
                 .into_owned(),
             None => {
-                ctx.retire(
-                    Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                        id.to_string(),
-                    ))),
-                    self,
-                );
+                ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
+                    id.to_string(),
+                ))));
                 return;
             }
         };
@@ -3217,7 +3199,7 @@ impl Coordinator {
 
         for id in selection.depends_on() {
             if !validate_read_dependencies(self.catalog(), &id) {
-                ctx.retire(Err(AdapterError::InvalidTableMutationSelection), self);
+                ctx.retire(Err(AdapterError::InvalidTableMutationSelection));
                 return;
             }
         }
@@ -3258,7 +3240,7 @@ impl Coordinator {
                 }) => {
                     let ctx =
                         ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
-                    ctx.retire_async(Err(e));
+                    ctx.retire(Err(e));
                     return;
                 }
                 // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
@@ -3349,7 +3331,7 @@ impl Coordinator {
                     }
                 }
                 resp @ ExecuteResponse::Canceled => {
-                    ctx.retire_async(Ok(resp));
+                    ctx.retire(Ok(resp));
                     return;
                 }
                 resp => Err(AdapterError::Unstructured(anyhow!(
@@ -3450,10 +3432,10 @@ impl Coordinator {
                             max_result_size,
                         },
                     );
-                    ctx.retire_async(result);
+                    ctx.retire(result);
                 }
                 Err(e) => {
-                    ctx.retire_async(Err(e));
+                    ctx.retire(Err(e));
                 }
             }
         });

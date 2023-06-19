@@ -24,7 +24,7 @@ use mz_sql::plan::{
 };
 use tracing::{event, Level};
 
-use crate::command::{Command, ExecuteResponse};
+use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
@@ -69,10 +69,10 @@ impl Coordinator {
         if let Err(e) =
             introspection::user_privilege_hack(&session_catalog, ctx.session(), &plan, &depends_on)
         {
-            return ctx.retire(Err(e), self);
+            return ctx.retire(Err(e));
         }
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
-            return ctx.retire(Err(e), self);
+            return ctx.retire(Err(e));
         }
 
         // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
@@ -92,17 +92,16 @@ impl Coordinator {
             target_cluster_id,
             &depends_on,
         ) {
-            return ctx.retire(Err(e), self);
+            return ctx.retire(Err(e));
         }
 
         match plan {
             Plan::CreateSource(plan) => {
-                let source_id =
-                    return_if_err!(self, self.catalog_mut().allocate_user_id().await, ctx);
+                let source_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
                 let result = self
                     .sequence_create_source(ctx.session_mut(), vec![(source_id, plan, depends_on)])
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateSources(plans) => {
                 assert!(depends_on.is_empty(), "each plan has separate depends_on");
@@ -111,48 +110,48 @@ impl Coordinator {
                     .map(|plan| (plan.source_id, plan.plan, plan.depends_on))
                     .collect();
                 let result = self.sequence_create_source(ctx.session_mut(), plans).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateConnection(plan) => {
                 let result = self
                     .sequence_create_connection(ctx.session_mut(), plan, depends_on)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateDatabase(plan) => {
                 let result = self.sequence_create_database(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateSchema(plan) => {
                 let result = self.sequence_create_schema(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateRole(plan) => {
                 let result = self.sequence_create_role(ctx.session(), plan).await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
                 }
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateCluster(plan) => {
                 let result = self.sequence_create_cluster(ctx.session(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateClusterReplica(plan) => {
                 let result = self
                     .sequence_create_cluster_replica(ctx.session(), plan)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateTable(plan) => {
                 let result = self
                     .sequence_create_table(ctx.session_mut(), plan, depends_on)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateSecret(plan) => {
                 let result = self.sequence_create_secret(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateSink(plan) => {
                 self.sequence_create_sink(ctx, plan, depends_on).await;
@@ -161,56 +160,56 @@ impl Coordinator {
                 let result = self
                     .sequence_create_view(ctx.session_mut(), plan, depends_on)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateMaterializedView(plan) => {
                 let result = self
                     .sequence_create_materialized_view(ctx.session_mut(), plan)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateIndex(plan) => {
                 let result = self
                     .sequence_create_index(ctx.session_mut(), plan, depends_on)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::CreateType(plan) => {
                 let result = self
                     .sequence_create_type(ctx.session(), plan, depends_on)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::DropObjects(plan) => {
                 let result = self.sequence_drop_objects(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::DropOwned(plan) => {
                 let result = self.sequence_drop_owned(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::EmptyQuery => {
-                ctx.retire(Ok(ExecuteResponse::EmptyQuery), self);
+                ctx.retire(Ok(ExecuteResponse::EmptyQuery));
             }
             Plan::ShowAllVariables => {
                 let result = self.sequence_show_all_variables(ctx.session());
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::ShowVariable(plan) => {
                 let result = self.sequence_show_variable(ctx.session(), plan);
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::SetVariable(plan) => {
                 let result = self.sequence_set_variable(ctx.session_mut(), plan);
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::ResetVariable(plan) => {
                 let result = self.sequence_reset_variable(ctx.session_mut(), plan);
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::SetTransaction(plan) => {
                 let result = self.sequence_set_transaction(ctx.session_mut(), plan);
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::StartTransaction(plan) => {
                 if matches!(
@@ -225,7 +224,7 @@ impl Coordinator {
                     plan.access,
                     plan.isolation_level,
                 );
-                ctx.retire(result.map(|_| ExecuteResponse::StartedTransaction), self)
+                ctx.retire(result.map(|_| ExecuteResponse::StartedTransaction))
             }
             Plan::CommitTransaction(CommitTransactionPlan {
                 ref transaction_type,
@@ -255,10 +254,10 @@ impl Coordinator {
                 let result = self
                     .sequence_subscribe(ctx.session_mut(), plan, depends_on, target_cluster)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::ShowCreate(plan) => {
-                ctx.retire(Ok(send_immediate_rows(vec![plan.row])), self);
+                ctx.retire(Ok(send_immediate_rows(vec![plan.row])));
             }
             Plan::CopyFrom(plan) => {
                 let (tx, _, session, ctx_extra) = ctx.into_parts();
@@ -285,71 +284,72 @@ impl Coordinator {
                 self.sequence_read_then_write(ctx, plan).await;
             }
             Plan::AlterNoop(plan) => {
-                ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)), self);
+                ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
             }
             Plan::AlterCluster(plan) => {
-                tx.send(self.sequence_alter_cluster(&session, plan).await, session);
+                let result = self.sequence_alter_cluster(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterClusterRename(plan) => {
                 let result = self
                     .sequence_alter_cluster_rename(ctx.session(), plan)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterClusterReplicaRename(plan) => {
                 let result = self
                     .sequence_alter_cluster_replica_rename(ctx.session(), plan)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterItemRename(plan) => {
                 let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterIndexSetOptions(plan) => {
                 let result = self.sequence_alter_index_set_options(plan);
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterIndexResetOptions(plan) => {
                 let result = self.sequence_alter_index_reset_options(plan);
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterRole(plan) => {
                 let result = self.sequence_alter_role(ctx.session(), plan).await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
                 }
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterSecret(plan) => {
                 let result = self.sequence_alter_secret(ctx.session(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterSink(plan) => {
                 let result = self.sequence_alter_sink(ctx.session(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterSource(plan) => {
                 let result = self.sequence_alter_source(ctx.session(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterSystemSet(plan) => {
                 let result = self.sequence_alter_system_set(ctx.session(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterSystemReset(plan) => {
                 let result = self.sequence_alter_system_reset(ctx.session(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterSystemResetAll(plan) => {
                 let result = self
                     .sequence_alter_system_reset_all(ctx.session(), plan)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(ctx.session()).await;
-                ctx.retire(Ok(ExecuteResponse::DiscardedTemp), self);
+                ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
@@ -367,7 +367,7 @@ impl Coordinator {
                         "DISCARD ALL".into(),
                     ))
                 };
-                ctx.retire(ret, self);
+                ctx.retire(ret);
             }
             Plan::Declare(plan) => {
                 let param_types = vec![];
@@ -378,20 +378,17 @@ impl Coordinator {
                 count,
                 timeout,
             }) => {
-                ctx.retire(
-                    Ok(ExecuteResponse::Fetch {
-                        name,
-                        count,
-                        timeout,
-                    }),
-                    self,
-                );
+                ctx.retire(Ok(ExecuteResponse::Fetch {
+                    name,
+                    count,
+                    timeout,
+                }));
             }
             Plan::Close(plan) => {
                 if ctx.session_mut().remove_portal(&plan.name) {
-                    ctx.retire(Ok(ExecuteResponse::ClosedCursor), self);
+                    ctx.retire(Ok(ExecuteResponse::ClosedCursor));
                 } else {
-                    ctx.retire(Err(AdapterError::UnknownCursor(plan.name)), self);
+                    ctx.retire(Err(AdapterError::UnknownCursor(plan.name)));
                 }
             }
             Plan::Prepare(plan) => {
@@ -400,7 +397,7 @@ impl Coordinator {
                     .get_prepared_statement_unverified(&plan.name)
                     .is_some()
                 {
-                    ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)), self);
+                    ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                 } else {
                     ctx.session_mut().set_prepared_statement(
                         plan.name,
@@ -410,79 +407,78 @@ impl Coordinator {
                             self.catalog().transient_revision(),
                         ),
                     );
-                    ctx.retire(Ok(ExecuteResponse::Prepare), self);
+                    ctx.retire(Ok(ExecuteResponse::Prepare));
                 }
             }
             Plan::Execute(plan) => {
                 match self.sequence_execute(ctx.session_mut(), plan) {
                     Ok(portal_name) => {
                         self.internal_cmd_tx
-                            .send(Message::Command(Command::ExecuteInner {
+                            .send(Message::Execute {
                                 portal_name,
                                 ctx,
                                 span: tracing::Span::none(),
-                            }))
+                            })
                             .expect("sending to self.internal_cmd_tx cannot fail");
                     }
-                    Err(err) => ctx.retire(Err(err), self),
+                    Err(err) => ctx.retire(Err(err)),
                 };
             }
             Plan::Deallocate(plan) => match plan.name {
                 Some(name) => {
                     if ctx.session_mut().remove_prepared_statement(&name) {
-                        ctx.retire(Ok(ExecuteResponse::Deallocate { all: false }), self);
+                        ctx.retire(Ok(ExecuteResponse::Deallocate { all: false }));
                     } else {
-                        ctx.retire(Err(AdapterError::UnknownPreparedStatement(name)), self);
+                        ctx.retire(Err(AdapterError::UnknownPreparedStatement(name)));
                     }
                 }
                 None => {
                     ctx.session_mut().remove_all_prepared_statements();
-                    ctx.retire(Ok(ExecuteResponse::Deallocate { all: true }), self);
+                    ctx.retire(Ok(ExecuteResponse::Deallocate { all: true }));
                 }
             },
             Plan::Raise(RaisePlan { severity }) => {
                 ctx.session()
                     .add_notice(AdapterNotice::UserRequested { severity });
-                ctx.retire(Ok(ExecuteResponse::Raised), self);
+                ctx.retire(Ok(ExecuteResponse::Raised));
             }
             Plan::RotateKeys(RotateKeysPlan { id }) => {
                 let result = self.sequence_rotate_keys(ctx.session(), id).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::GrantPrivileges(plan) => {
                 let result = self
                     .sequence_grant_privileges(ctx.session_mut(), plan)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::RevokePrivileges(plan) => {
                 let result = self
                     .sequence_revoke_privileges(ctx.session_mut(), plan)
                     .await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterDefaultPrivileges(plan) => {
-                tx.send(
-                    self.sequence_alter_default_privileges(&mut session, plan)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_alter_default_privileges(ctx.session_mut(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::GrantRole(plan) => {
                 let result = self.sequence_grant_role(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::RevokeRole(plan) => {
                 let result = self.sequence_revoke_role(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::AlterOwner(plan) => {
                 let result = self.sequence_alter_owner(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
             Plan::ReassignOwned(plan) => {
                 let result = self.sequence_reassign_owned(ctx.session_mut(), plan).await;
-                ctx.retire(result, self);
+                ctx.retire(result);
             }
         }
     }

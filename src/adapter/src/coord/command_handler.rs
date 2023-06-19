@@ -65,9 +65,6 @@ impl Coordinator {
             Command::Prepare { tx, session, .. } => send(tx, session, e),
             Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
-            Command::ExecuteInner { ctx, .. } => {
-                ctx.retire(Err(e), self);
-            }
             Command::Commit { tx, session, .. } => send(tx, session, e),
             Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
             Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
@@ -99,15 +96,6 @@ impl Coordinator {
                 // Note: We purposefully do not use a ClientTransmitter here because startup
                 // handles errors and cleanup of sessions itself.
                 self.handle_startup(session, cancel_tx, tx).await;
-            }
-
-            Command::ExecuteInner {
-                portal_name,
-                ctx,
-                span,
-            } => {
-                let span = tracing::debug_span!(parent: &span, "message_command (execute inner)");
-                self.handle_execute(portal_name, ctx).instrument(span).await;
             }
 
             Command::Execute {
@@ -362,7 +350,7 @@ impl Coordinator {
 
     /// Handles an execute command.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn handle_execute(&mut self, portal_name: String, mut ctx: ExecuteContext) {
+    pub(crate) async fn handle_execute(&mut self, portal_name: String, mut ctx: ExecuteContext) {
         if ctx.session().vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
                 .context()
@@ -377,7 +365,7 @@ impl Coordinator {
         }
 
         if let Err(err) = self.verify_portal(ctx.session_mut(), &portal_name) {
-            return ctx.retire(Err(err), self);
+            return ctx.retire(Err(err));
         }
 
         let portal = ctx
@@ -387,7 +375,7 @@ impl Coordinator {
 
         let stmt = match &portal.stmt {
             Some(stmt) => stmt.clone(),
-            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery), self),
+            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
         };
 
         let session_type = metrics::session_type_label_value(ctx.session().user());
@@ -447,12 +435,9 @@ impl Coordinator {
                     // it, it will always result in nothing happening, since all portals will be
                     // immediately closed. Users don't know this detail, so this error helps them
                     // understand what's going wrong. Postgres does this too.
-                    return ctx.retire(
-                        Err(AdapterError::OperationRequiresTransaction(
-                            "DECLARE CURSOR".into(),
-                        )),
-                        self,
-                    );
+                    return ctx.retire(Err(AdapterError::OperationRequiresTransaction(
+                        "DECLARE CURSOR".into(),
+                    )));
                 }
 
                 // TODO(mjibson): The current code causes DDL statements (well, any statement
@@ -551,12 +536,9 @@ impl Coordinator {
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ReassignOwned(_) => {
-                        return ctx.retire(
-                            Err(AdapterError::OperationProhibitsTransaction(
-                                stmt.to_string(),
-                            )),
-                            self,
-                        )
+                        return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
+                            stmt.to_string(),
+                        )))
                     }
                 }
             }
@@ -567,7 +549,7 @@ impl Coordinator {
         let original_stmt = stmt.clone();
         let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
-            Err(e) => return ctx.retire(Err(e.into()), self),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
         let depends_on = depends_on.into_iter().collect();
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
@@ -610,15 +592,14 @@ impl Coordinator {
 
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
             // automatically as part of purification
-            Statement::CreateSubsource(_) => ctx.retire(
-                Err(AdapterError::Unsupported("CREATE SUBSOURCE statements")),
-                self,
-            ),
+            Statement::CreateSubsource(_) => ctx.retire(Err(AdapterError::Unsupported(
+                "CREATE SUBSOURCE statements",
+            ))),
 
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session_mut(), stmt, &params) {
                 Ok(plan) => self.sequence_plan(ctx, plan, depends_on).await,
-                Err(e) => ctx.retire(Err(e), self),
+                Err(e) => ctx.retire(Err(e)),
             },
         }
     }
@@ -722,16 +703,12 @@ impl Coordinator {
                 maybe_ctx = Some(ctx);
             }
 
-            // Work around lifetime issues (we can't use `conn_meta`
-            // after we've borrowed `self` mutably to call `retire_execute`.)
-            let cancel_tx = Arc::clone(&conn_meta.cancel_tx);
-
             if let Some(ctx) = maybe_ctx {
-                ctx.retire(Ok(ExecuteResponse::Canceled), self);
+                ctx.retire(Ok(ExecuteResponse::Canceled));
             }
 
             // Inform the target session (if it asks) about the cancellation.
-            let _ = cancel_tx.send(Canceled::Canceled);
+            let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
             for PendingPeek {
                 sender: rows_tx,

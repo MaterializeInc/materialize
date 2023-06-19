@@ -357,7 +357,7 @@ impl Coordinator {
         self.apply_local_write(timestamp).await;
         for response in responses {
             let (ctx, result) = response.finalize();
-            ctx.retire(result, self);
+            ctx.retire(result);
         }
 
         // Advancing timelines will update all timeline read holds, and update the read timestamps
