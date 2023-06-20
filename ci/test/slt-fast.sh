@@ -161,7 +161,27 @@ tests=(
 
 tests_with_views=(
     test/sqllogictest/aggregates.slt
+    test/sqllogictest/array_subquery.slt
+    test/sqllogictest/order_by.slt
+    test/sqllogictest/topk.slt
+    test/sqllogictest/unsigned_int.slt
+    test/sqllogictest/with_mutually_recursive.slt
+    test/sqllogictest/cockroach/distinct_on.slt
+    test/sqllogictest/cockroach/subquery_correlated.slt
 )
+
+# Exclude tests_with_views from tests
+for f in "${tests_with_views[@]}"; do
+    tests=("${tests[@]/$f}")
+done
+# Remove empty entries from tests, since
+# sqllogictests emits failures on them.
+for f in "${tests[@]}"; do
+    if [ -n "$f" ]; then
+        temp+=( "$f" )
+    fi
+done
+tests=("${temp[@]}")
 
 sqllogictest -v "${tests[@]}" "$@"
 
