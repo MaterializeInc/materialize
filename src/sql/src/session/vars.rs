@@ -925,6 +925,15 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub const ENABLE_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_cardinality_estimates"),
+    value: &true,
+    description:
+        "User facing session boolean flag indicating whether to use cardinality estimates \
+    when planning optimizing queries (Materialize).",
+    internal: false,
+};
+
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
@@ -1189,6 +1198,7 @@ impl SessionVars {
             .with_var(&EMIT_TRACE_ID_NOTICE)
             .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&ENABLE_SESSION_RBAC_CHECKS)
+            .with_var(&ENABLE_CARDINALITY_ESTIMATES)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1547,6 +1557,11 @@ impl SessionVars {
     /// Returns the value of `enable_session_rbac_checks` configuration parameter.
     pub fn enable_session_rbac_checks(&self) -> bool {
         *self.expect_value(&ENABLE_SESSION_RBAC_CHECKS)
+    }
+
+    /// Returns the value of `enable_cardinality_estimates` configuration parameter.
+    pub fn enable_cardinality_estimates(&self) -> bool {
+        *self.expect_value(&ENABLE_CARDINALITY_ESTIMATES)
     }
 
     /// Returns the value of `is_superuser` configuration parameter.

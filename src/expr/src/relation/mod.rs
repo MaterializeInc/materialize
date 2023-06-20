@@ -2757,10 +2757,10 @@ impl JoinInputCharacteristics {
         input: usize,
     ) -> Self {
         Self {
-            cardinality: cardinality.map(std::cmp::Reverse),
             unique_key,
             key_length,
             arranged,
+            cardinality: cardinality.map(std::cmp::Reverse),
             filters,
             input: std::cmp::Reverse(input),
         }

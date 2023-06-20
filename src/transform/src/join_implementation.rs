@@ -228,13 +228,12 @@ impl JoinImplementation {
                     if have_stats_for_all_inputs {
                         let estimate = c.evaluate(&fill_in_estimates);
                         let rounded = estimate.round();
-                        println!("cardinality estimate: {c} ~> {estimate} rounds to {rounded}");
-                        usize::cast_from(
+                        Some(usize::cast_from(
                             u64::try_cast_from(rounded)
                                 .expect("positive and representable cardinality estimate"),
-                        )
+                        ))
                     } else {
-                        c.order()
+                        None
                     }
                 })
                 .collect::<Vec<_>>();
@@ -503,7 +502,7 @@ mod delta_queries {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
-        cardinalities: &[usize],
+        cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
@@ -607,7 +606,7 @@ mod differential {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
-        cardinalities: &[usize],
+        cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
@@ -632,6 +631,15 @@ mod differential {
                 filters,
                 input_mapper,
             );
+
+            for (idx, c) in cardinalities.iter().enumerate() {
+                println!("index {idx} has cardinality {c:?}");
+            }
+
+            for (order_idx, order) in orders.iter().enumerate() {
+                let (jic, expr, index) = order.get(0).expect("first");
+                println!("order #{order_idx} has {jic:?} for index {index}\n{expr:?}\n");
+            }
 
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
@@ -890,7 +898,7 @@ fn optimize_orders(
     equivalences: &[Vec<MirScalarExpr>], // join equivalences: inside a Vec, the exprs are equivalent
     available: &[Vec<Vec<MirScalarExpr>>], // available arrangements per input
     unique_keys: &[Vec<Vec<usize>>],     // unique keys per input
-    cardinalities: &[usize],             // cardinalities of input relations
+    cardinalities: &[Option<usize>],     // cardinalities of input relations
     filters: &[FilterCharacteristics],   // filter characteristics per input
     input_mapper: &JoinInputMapper,      // join helper
 ) -> Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>> {
@@ -913,7 +921,7 @@ struct Orderer<'a> {
     equivalences: &'a [Vec<MirScalarExpr>],
     arrangements: &'a [Vec<Vec<MirScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
-    cardinalities: &'a [usize],
+    cardinalities: &'a [Option<usize>],
     filters: &'a [FilterCharacteristics],
     input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
@@ -933,7 +941,7 @@ impl<'a> Orderer<'a> {
         equivalences: &'a [Vec<MirScalarExpr>],
         arrangements: &'a [Vec<Vec<MirScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
-        cardinalities: &'a [usize],
+        cardinalities: &'a [Option<usize>],
         filters: &'a [FilterCharacteristics],
         input_mapper: &'a JoinInputMapper,
     ) -> Self {
@@ -997,10 +1005,10 @@ impl<'a> Orderer<'a> {
         for index in 0..self.equivalences.len() {
             self.equivalences_active[index] = false;
         }
-
         // Introduce cross joins as a possibility.
         for input in 0..self.inputs {
-            let cardinality = Some(self.cardinalities[input]);
+            let cardinality = self.cardinalities[input];
+
             let is_unique = self.unique_keys[input].iter().any(|cols| cols.is_empty());
             if let Some(pos) = self.arrangements[input]
                 .iter()
@@ -1057,7 +1065,7 @@ impl<'a> Orderer<'a> {
         // We start with some default values:
         let mut start_tuple = (
             JoinInputCharacteristics::new(
-                Some(self.cardinalities[start]),
+                self.cardinalities[start],
                 false,
                 0,
                 false,
@@ -1082,7 +1090,7 @@ impl<'a> Orderer<'a> {
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
-                let cardinality = Some(self.cardinalities[*second]);
+                let cardinality = self.cardinalities[start];
                 let is_unique = self.unique_keys[start].iter().any(|cols| {
                     cols.iter()
                         .all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
@@ -1156,6 +1164,8 @@ impl<'a> Orderer<'a> {
                         //   query better.
                         if let Some(rel) = rels.next() {
                             if rels.next().is_none() {
+                                println!("ordering {expr:?}");
+
                                 let expr = self.input_mapper.map_expr_to_local(expr.clone());
 
                                 // Update bound columns.
@@ -1182,7 +1192,7 @@ impl<'a> Orderer<'a> {
                                             let is_unique = self.unique_arrangement[rel][pos];
                                             self.priority_queue.push((
                                                 JoinInputCharacteristics::new(
-                                                    Some(self.cardinalities[rel]),
+                                                    self.cardinalities[rel],
                                                     is_unique,
                                                     key.len(),
                                                     true,
@@ -1202,7 +1212,7 @@ impl<'a> Orderer<'a> {
                                 });
                                 self.priority_queue.push((
                                     JoinInputCharacteristics::new(
-                                        Some(self.cardinalities[rel]),
+                                        self.cardinalities[rel],
                                         is_unique,
                                         self.bound[rel].len(),
                                         false,

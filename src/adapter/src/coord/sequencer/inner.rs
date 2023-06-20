@@ -1958,7 +1958,7 @@ impl Coordinator {
         mz_transform::optimize_dataflow(
             &mut dataflow,
             &builder.index_oracle(),
-            self.statistics_oracle(&source_ids, query_as_of)
+            self.statistics_oracle(session, &source_ids, query_as_of)
                 .await?
                 .as_ref(),
         )?;
@@ -2739,7 +2739,7 @@ impl Coordinator {
 
         // Load cardinality statistics.
         let stats = self
-            .statistics_oracle(&source_ids, query_as_of.clone())
+            .statistics_oracle(session, &source_ids, query_as_of.clone())
             .await?;
 
         // Execute the `optimize/global` stage.
@@ -4217,9 +4217,14 @@ impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
 impl Coordinator {
     async fn statistics_oracle(
         &self,
+        session: &Session,
         source_ids: &BTreeSet<GlobalId>,
         query_as_of: Antichain<Timestamp>,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
+        if !session.vars().enable_cardinality_estimates() {
+            return Ok(Box::new(EmptyStatisticsOracle));
+        }
+
         let cached_stats = mz_ore::future::timeout(
             OPTIMIZER_MAX_STATS_WAIT,
             CachedStatisticsOracle::new(source_ids, &query_as_of, self.controller.storage.as_ref()),
