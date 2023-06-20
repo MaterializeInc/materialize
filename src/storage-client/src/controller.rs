@@ -1538,12 +1538,32 @@ where
             match &description.data_source {
                 DataSource::Ingestion(ingestion) => {
                     let storage_dependencies = description.get_storage_dependencies();
+                    let dependency_since =
+                        self.determine_collection_since_joins(&storage_dependencies)?;
+
+                    // Advance all new exports' sinces to their dependency since
+                    // if they're new and the remap shard is not.
+                    if *dependency_since != [T::minimum()] {
+                        let new_exports: Vec<_> = ingestion
+                            .source_exports
+                            .keys()
+                            .filter(|id| {
+                                let collection = self.collection(**id).expect("known to exist");
+                                *collection.implied_capability == [T::minimum()]
+                                    && *collection.write_frontier == [T::minimum()]
+                            })
+                            .cloned()
+                            .collect();
+                        self.advance_uninitialized_collection_since(new_exports, &dependency_since)
+                            .await;
+                    }
 
                     self.install_dependency_read_holds(
                         // N.B. The "main" collection of the source is included in
                         // `source_exports`.
                         ingestion.source_exports.keys().cloned(),
                         &storage_dependencies,
+                        dependency_since,
                     )?;
                 }
                 DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
@@ -1662,12 +1682,9 @@ where
             .expect("verified valid in check_alter_collection_inner");
 
         let collection = self.collection_mut(id).expect("validated exists");
-
-        // Install new ingestion here rather than in `check_alter_collection_inner` because of
-        // mutability; making check_alter_collection_inner take a mutable reference is possible but
-        // renders the code even harder to reason about.
         let new_source_exports = match &mut collection.description.data_source {
             DataSource::Ingestion(active_ingestion) => {
+                // Determine which IDs we're adding.
                 let new_source_exports: Vec<_> = description
                     .source_exports
                     .keys()
@@ -1681,10 +1698,25 @@ where
             _ => unreachable!("verified collection refers to ingestion"),
         };
 
+        // Assess dependency since, which we have to fast-forward this
+        // collection's since to.
         let storage_dependencies = collection.description.get_storage_dependencies();
+        let dependency_since = self.determine_collection_since_joins(&storage_dependencies)?;
 
-        // Install read capability for all dependencies on new source exports.
-        self.install_dependency_read_holds(new_source_exports.into_iter(), &storage_dependencies)?;
+        // Advance all new exports' sinces to their dependency since.
+        self.advance_uninitialized_collection_since(
+            new_source_exports.iter().cloned(),
+            &dependency_since,
+        )
+        .await;
+
+        // Install read capability for all dependencies on new source exports,
+        // which we can do now that we've fast-forwarded their sinces.
+        self.install_dependency_read_holds(
+            new_source_exports.into_iter(),
+            &storage_dependencies,
+            dependency_since,
+        )?;
 
         // Fetch the client for this ingestion's instance.
         let client = self
@@ -2532,7 +2564,7 @@ where
     /// The outer error is a potentially recoverable internal error, while the
     /// inner error is appropriate to return to the adapter.
     fn determine_collection_since_joins(
-        &mut self,
+        &self,
         collections: &[GlobalId],
     ) -> Result<Antichain<T>, StorageError> {
         let mut joined_since = Antichain::from_elem(T::minimum());
@@ -3177,13 +3209,83 @@ where
         Ok(())
     }
 
+    /// If a collection has not yet been used, advance its since to `since` as
+    /// if it had been initialized wtih that value.
+    ///
+    /// # Panics
+    /// The identified collection's:
+    /// - Since or upper is not the minimum antichain
+    /// - Read policy is not `ReadPolicy::NoPolicy(f)`, where `f` is the minimum
+    ///   antichain.
+    async fn advance_uninitialized_collection_since<I: IntoIterator<Item = GlobalId>>(
+        &mut self,
+        ids: I,
+        since: &Antichain<T>,
+    ) {
+        let mut policies = vec![];
+        for id in ids {
+            let collection = self.collection_mut(id).expect("validated exists");
+            assert_eq!(
+                *collection.implied_capability,
+                [T::minimum()],
+                "new subsource export {} since not at minimum",
+                id
+            );
+            assert_eq!(
+                *collection.write_frontier,
+                [T::minimum()],
+                "new subsource export {} upper not at minimum",
+                id
+            );
+
+            assert!(
+                match &collection.read_policy {
+                    ReadPolicy::NoPolicy { initial_since } => **initial_since == [T::minimum()],
+                    _ => false,
+                },
+                "subsource unexpectedly initialiazed with {:?}",
+                collection.read_policy
+            );
+
+            let persist_location = collection.collection_metadata.persist_location.clone();
+            let key_schema = collection.collection_metadata.relation_desc.clone();
+            let shard_id = collection.collection_metadata.data_shard;
+
+            // Downgrade the shard to the desired since.
+            let persist_client = self.persist.open(persist_location).await.unwrap();
+
+            let mut read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
+                .open_leased_reader(
+                    shard_id,
+                    &format!("fixing up since of new subsource {}", id),
+                    Arc::new(key_schema),
+                    Arc::new(UnitSchema),
+                )
+                .await
+                .expect("invalid persist usage");
+
+            read_handle.downgrade_since(since).await;
+
+            policies.push((
+                id,
+                ReadPolicy::NoPolicy {
+                    initial_since: since.clone(),
+                },
+            ));
+        }
+
+        // Fast-forward our implied capabilities and read frontiers as if the
+        // collection had been initialized with this since.
+        self.set_read_policy(policies);
+    }
+
     /// On each element of `collections`, install a read hold on all of the `storage_dependencies`.
     fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
         &mut self,
         collections: I,
         storage_dependencies: &[GlobalId],
+        dependency_since: Antichain<T>,
     ) -> Result<(), StorageError> {
-        let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
         for id in collections {
             let collection = self.collection(id).expect("known to exist");
 
