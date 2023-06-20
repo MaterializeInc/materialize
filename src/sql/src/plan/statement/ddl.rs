@@ -667,6 +667,7 @@ pub fn plan_create_source(
                     },
                     allow_aggregates: false,
                     allow_subqueries: false,
+                    allow_parameters: false,
                     allow_windows: false,
                 };
 

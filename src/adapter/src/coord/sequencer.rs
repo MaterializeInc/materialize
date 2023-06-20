@@ -86,6 +86,7 @@ impl Coordinator {
             .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
+            self,
             &session_catalog,
             ctx.session(),
             &plan,
@@ -255,6 +256,9 @@ impl Coordinator {
                     .sequence_subscribe(ctx.session_mut(), plan, depends_on, target_cluster)
                     .await;
                 ctx.retire(result);
+            }
+            Plan::SideEffectingFunc(plan) => {
+                ctx.retire(self.sequence_side_effecting_func(plan));
             }
             Plan::ShowCreate(plan) => {
                 ctx.retire(Ok(send_immediate_rows(vec![plan.row])));

@@ -25,6 +25,25 @@ one-off [`SELECT`](/sql/select) statements.
 
 Unmaterializable functions are marked as such in the table below.
 
+### Side-effecting functions
+
+Several functions in Materialize are **side-effecting** because their evaluation
+changes system state. For example, the `pg_cancel_backend` function allows
+canceling a query running on another connection.
+
+Materialize offers only limited support for these functions. They may be called
+only at the top level of a `SELECT` statement, like so:
+
+```sql
+SELECT side_effecting_function(arg, ...);
+```
+
+You cannot manipulate or alias the function call expression, call multiple
+side-effecting functions in the same `SELECT` statement, nor add any additional
+clauses to the `SELECT` statement (e.g., `FROM`, `WHERE`).
+
+Side-effecting functions are marked as such in the table below.
+
 {{< fnlist >}}
 
 ## Operators

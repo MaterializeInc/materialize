@@ -34,16 +34,17 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
+use crate::normalize;
 use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
+use crate::plan::{self, side_effecting_func};
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
 };
 use crate::session::vars;
-use crate::{normalize, plan};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -164,6 +165,10 @@ pub fn describe_select(
     scx: &StatementContext,
     stmt: SelectStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
+    if let Some(desc) = side_effecting_func::describe_select_if_side_effecting(scx, &stmt)? {
+        return Ok(StatementDesc::new(Some(desc)));
+    }
+
     let query::PlannedQuery { desc, .. } =
         query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot(scx.pcx()?))?;
     Ok(StatementDesc::new(Some(desc)))
@@ -171,14 +176,23 @@ pub fn describe_select(
 
 pub fn plan_select(
     scx: &StatementContext,
-    SelectStatement { query, as_of }: SelectStatement<Aug>,
+    select: SelectStatement<Aug>,
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
+    if let Some(f) = side_effecting_func::plan_select_if_side_effecting(scx, &select, params)? {
+        return Ok(Plan::SideEffectingFunc(f));
+    }
+
     let query::PlannedQuery {
         expr, finishing, ..
-    } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
-    let when = query::plan_as_of(scx, as_of)?;
+    } = plan_query(
+        scx,
+        select.query,
+        params,
+        QueryLifetime::OneShot(scx.pcx()?),
+    )?;
+    let when = query::plan_as_of(scx, select.as_of)?;
     Ok(Plan::Peek(PeekPlan {
         source: expr,
         when,
@@ -525,6 +539,7 @@ pub fn plan_subscribe(
         relation_type: desc.typ(),
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_parameters: true,
         allow_windows: false,
     };
 

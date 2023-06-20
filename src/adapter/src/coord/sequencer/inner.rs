@@ -51,8 +51,8 @@ use mz_sql::plan::{
     DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
     InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
     ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
-    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
+    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -1727,6 +1727,26 @@ impl Coordinator {
         }
 
         Ok((None, None))
+    }
+
+    pub(super) fn sequence_side_effecting_func(
+        &mut self,
+        plan: SideEffectingFunc,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        match plan {
+            SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let res = if let Some((id_handle, _conn_meta)) =
+                    self.active_conns.get_key_value(&connection_id)
+                {
+                    // check_plan already verified role membership.
+                    self.handle_privileged_cancel(id_handle.clone());
+                    Datum::True
+                } else {
+                    Datum::False
+                };
+                Ok(send_immediate_rows(vec![Row::pack_slice(&[res])]))
+            }
+        }
     }
 
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
