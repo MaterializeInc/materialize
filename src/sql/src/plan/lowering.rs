@@ -1041,15 +1041,18 @@ impl HirScalarExpr {
                 }
 
                 get_inner.let_in_fallible(id_gen, |_id_gen, get_inner| {
-                    let to_reduce = get_inner;
-                    let input_type = to_reduce.typ();
+                    let input_type = get_inner.typ();
+
+                    // Original columns of the relation
                     let fields = input_type
                         .column_types
                         .iter()
                         .take(input_arity)
                         .map(|t| (ColumnName::from("?column?"), t.clone()))
                         .collect_vec();
-                    let agg_input = mz_expr::MirScalarExpr::CallVariadic {
+
+                    // Original row made into a record
+                    let original_row_record = mz_expr::MirScalarExpr::CallVariadic {
                         func: mz_expr::VariadicFunc::RecordCreate {
                             field_names: fields.iter().map(|(name, _)| name.clone()).collect_vec(),
                         },
@@ -1057,15 +1060,16 @@ impl HirScalarExpr {
                             .map(|column| mz_expr::MirScalarExpr::Column(column))
                             .collect_vec(),
                     };
-                    let record_type = ScalarType::Record {
+                    let original_row_record_type = ScalarType::Record {
                         fields,
                         custom_id: None,
                     };
+
                     let agg_input = mz_expr::MirScalarExpr::CallVariadic {
                         func: mz_expr::VariadicFunc::ListCreate {
-                            elem_type: record_type.clone(),
+                            elem_type: original_row_record_type.clone(),
                         },
-                        exprs: vec![agg_input],
+                        exprs: vec![original_row_record],
                     };
                     let mut agg_input = vec![agg_input];
                     agg_input.extend(order_by.clone());
@@ -1076,7 +1080,7 @@ impl HirScalarExpr {
                         exprs: agg_input,
                     };
                     let list_type = ScalarType::List {
-                        element_type: Box::new(record_type),
+                        element_type: Box::new(original_row_record_type),
                         custom_id: None,
                     };
                     let agg_input_type = ScalarType::Record {
@@ -1086,12 +1090,14 @@ impl HirScalarExpr {
                         custom_id: None,
                     }
                     .nullable(false);
+
                     let aggregate = mz_expr::AggregateExpr {
                         func: mir_aggr_func,
                         expr: agg_input,
                         distinct: false,
                     };
-                    let mut reduce = to_reduce
+
+                    let mut reduce = get_inner
                         .reduce(group_key.clone(), vec![aggregate.clone()], None)
                         .flat_map(
                             mz_expr::TableFunc::UnnestList {
@@ -1106,7 +1112,7 @@ impl HirScalarExpr {
                         );
                     let record_col = reduce.arity() - 1;
 
-                    // Unpack the record
+                    // Unpack the record output by the window function
                     for c in 0..input_arity {
                         reduce =
                             reduce
@@ -1158,18 +1164,6 @@ impl HirScalarExpr {
                     .map(|o| o.applied_to(id_gen, col_map, cte_map, &mut get_inner, subquery_map))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                // Compute the encoded args for all rows
-                let mir_encoded_args = hir_encoded_args.applied_to(
-                    id_gen,
-                    col_map,
-                    cte_map,
-                    &mut get_inner,
-                    subquery_map,
-                )?;
-                let mir_encoded_args_type = mir_encoded_args
-                    .typ(&get_inner.typ().column_types)
-                    .scalar_type;
-
                 // Record input arity here so that any group_keys that need to mutate get_inner
                 // don't add those columns to the aggregate input.
                 let input_arity = get_inner.typ().arity();
@@ -1194,9 +1188,8 @@ impl HirScalarExpr {
                     }
                 }
 
-                get_inner.let_in_fallible(id_gen, |_id_gen, get_inner| {
-                    let to_reduce = get_inner;
-                    let input_type = to_reduce.typ();
+                get_inner.let_in_fallible(id_gen, |id_gen, mut get_inner| {
+                    let input_type = get_inner.typ();
 
                     // Original columns of the relation
                     let fields = input_type
@@ -1219,6 +1212,18 @@ impl HirScalarExpr {
                         fields,
                         custom_id: None,
                     };
+
+                    // Compute the encoded args for all rows
+                    let mir_encoded_args = hir_encoded_args.applied_to(
+                        id_gen,
+                        col_map,
+                        cte_map,
+                        &mut get_inner,
+                        subquery_map,
+                    )?;
+                    let mir_encoded_args_type = mir_encoded_args
+                        .typ(&get_inner.typ().column_types)
+                        .scalar_type;
 
                     // Build a new record with the original row in a record in a list + the encoded args in a record
                     let fn_input_record_fields = [original_row_record_type, mir_encoded_args_type]
@@ -1270,7 +1275,7 @@ impl HirScalarExpr {
                     // The input is [((OriginalRow, EncodedArgs), OrderByExprs...)]
                     // The output of the aggregation function should be a list of tuples that has
                     // the result in the first position, and the original row in the second position
-                    let mut reduce = to_reduce
+                    let mut reduce = get_inner
                         .reduce(group_key.clone(), vec![aggregate.clone()], None)
                         .flat_map(
                             mz_expr::TableFunc::UnnestList {
