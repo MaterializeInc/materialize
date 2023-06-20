@@ -561,28 +561,31 @@ impl ValueWindowExpr {
         self.func.output_type(self.args.typ(outers, inner, params))
     }
 
-    pub fn into_expr(self) -> mz_expr::AggregateFunc {
-        match self.func {
-            // Lag and Lead are fundamentally the same function, just with opposite directions
-            ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
-                order_by: self.order_by,
-                lag_lead: mz_expr::LagLeadType::Lag,
-                ignore_nulls: self.ignore_nulls,
+    pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
+        (
+            self.args,
+            match self.func {
+                // Lag and Lead are fundamentally the same function, just with opposite directions
+                ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
+                    order_by: self.order_by,
+                    lag_lead: mz_expr::LagLeadType::Lag,
+                    ignore_nulls: self.ignore_nulls,
+                },
+                ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
+                    order_by: self.order_by,
+                    lag_lead: mz_expr::LagLeadType::Lead,
+                    ignore_nulls: self.ignore_nulls,
+                },
+                ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
+                    order_by: self.order_by,
+                    window_frame: self.window_frame,
+                },
+                ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
+                    order_by: self.order_by,
+                    window_frame: self.window_frame,
+                },
             },
-            ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
-                order_by: self.order_by,
-                lag_lead: mz_expr::LagLeadType::Lead,
-                ignore_nulls: self.ignore_nulls,
-            },
-            ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
-                order_by: self.order_by,
-                window_frame: self.window_frame,
-            },
-            ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
-                order_by: self.order_by,
-                window_frame: self.window_frame,
-            },
-        }
+        )
     }
 }
 
