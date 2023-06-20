@@ -440,6 +440,7 @@ impl ErrorResponse {
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::WARNING,
             AdapterNotice::PlanNotice(plan) => match plan {
                 PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
+                PlanNotice::KeyNotEnforced { .. } => SqlState::WARNING,
             },
         };
         ErrorResponse {
@@ -609,6 +610,7 @@ impl Severity {
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
             AdapterNotice::PlanNotice(notice) => match notice {
                 PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
+                PlanNotice::KeyNotEnforced { .. } => Severity::Warning,
             },
         }
     }
