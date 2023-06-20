@@ -382,11 +382,11 @@ impl fmt::Display for HirScalarExpr {
                 // This is close to the SQL syntax, but we are adding some [] to make it easier to
                 // read.
                 write!(f, " over (")?;
-                if !expr.partition.is_empty() {
+                if !expr.partition_by.is_empty() {
                     write!(
                         f,
                         "partition by [{}] ",
-                        separated(", ", expr.partition.iter())
+                        separated(", ", expr.partition_by.iter())
                     )?;
                 }
                 write!(f, "order by [{}]", separated(", ", order_by.iter()))?;
