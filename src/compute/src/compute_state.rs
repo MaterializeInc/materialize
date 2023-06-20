@@ -23,7 +23,6 @@ use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, Subsc
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Row, Timestamp};
