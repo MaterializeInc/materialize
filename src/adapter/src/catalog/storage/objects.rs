@@ -11,7 +11,7 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
-use crate::catalog::storage::{DefaultPrivilegesKey, DefaultPrivilegesValue};
+use crate::catalog::storage::{DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey};
 use crate::catalog::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership, SerializedCatalogItem,
     SerializedRole,
@@ -710,6 +710,22 @@ impl RustType<proto::DefaultPrivilegesValue> for DefaultPrivilegesValue {
             privileges: proto
                 .privileges
                 .into_rust_if_some("DefaultPrivilegesValue::privileges")?,
+        })
+    }
+}
+
+impl RustType<proto::SystemPrivilegesKey> for SystemPrivilegesKey {
+    fn into_proto(&self) -> proto::SystemPrivilegesKey {
+        proto::SystemPrivilegesKey {
+            privileges: Some(self.privileges.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::SystemPrivilegesKey) -> Result<Self, TryFromProtoError> {
+        Ok(SystemPrivilegesKey {
+            privileges: proto
+                .privileges
+                .into_rust_if_some("SystemPrivilegesKey::privileges")?,
         })
     }
 }
