@@ -7291,6 +7291,7 @@ impl Catalog {
                     }
                 }
             },
+            finalize_shards: self.system_config().enable_storage_shard_finalization(),
         }
     }
 
