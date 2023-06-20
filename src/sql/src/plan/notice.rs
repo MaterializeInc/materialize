@@ -18,7 +18,8 @@
 
 use std::fmt;
 
-use mz_ore::str::StrExt;
+use mz_ore::str::{separated, StrExt};
+use mz_repr::ColumnName;
 
 use crate::catalog::ObjectType;
 
@@ -32,12 +33,29 @@ pub enum PlanNotice {
         name: String,
         object_type: ObjectType,
     },
+    KeyNotEnforced {
+        key: Vec<ColumnName>,
+        name: String,
+    },
 }
 
 impl PlanNotice {
     /// Reports additional details about the notice, if any are available.
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            PlanNotice::KeyNotEnforced { key, name } => {
+                let details = format!(
+                    "Materialize could not validate that the specified upsert envelope key ({}) \
+                    is a unique key of the underlying relation {}. If this key is not unique, \
+                    the sink might produce multiple updates for the same key at the same time, \
+                    which may confuse downstream consumers.",
+                    separated(", ", key.iter().map(|c| c.as_str().quoted())),
+                    name.quoted()
+                );
+                Some(details)
+            }
+            _ => None,
+        }
     }
 
     /// Reports a hint for the user about how the notice could be addressed.
@@ -56,6 +74,9 @@ impl fmt::Display for PlanNotice {
                     object_type,
                     name.quoted()
                 )
+            }
+            PlanNotice::KeyNotEnforced { .. } => {
+                write!(f, "upsert key not validated to be unique")
             }
         }
     }
