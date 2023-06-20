@@ -14,7 +14,7 @@
 
 ## Associated
 
-- [#18795](https://github.com/MaterializeInc/materialize/issues/18795)
+- [#20036](https://github.com/MaterializeInc/materialize/issues/20036)
 
 <!--
 Note: Feel free to add or remove sections as needed. However, most design
