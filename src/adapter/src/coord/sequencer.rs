@@ -290,11 +290,8 @@ impl Coordinator {
             Plan::ReadThenWrite(plan) => {
                 self.sequence_read_then_write(tx, session, plan).await;
             }
-            Plan::AlterNoop(plan) => {
-                tx.send(
-                    Ok(ExecuteResponse::AlteredObject(plan.object_type)),
-                    session,
-                );
+            Plan::AlterNoop(mz_sql::plan::AlterNoopPlan { object_type }) => {
+                tx.send(Ok(ExecuteResponse::AlteredObject(object_type)), session);
             }
             Plan::AlterCluster(plan) => {
                 tx.send(self.sequence_alter_cluster(&session, plan).await, session);

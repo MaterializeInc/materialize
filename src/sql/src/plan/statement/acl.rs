@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 
 use itertools::Itertools;
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::ast::{Ident, QualifiedReplica, UnresolvedDatabaseName};
 use crate::catalog::{
@@ -29,7 +30,7 @@ use crate::plan::statement::ddl::{
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     AlterDefaultPrivilegesPlan, AlterNoopPlan, AlterOwnerPlan, GrantPrivilegesPlan, GrantRolePlan,
-    Plan, ReassignOwnedPlan, RevokePrivilegesPlan, RevokeRolePlan, UpdatePrivilege,
+    Plan, PlanNotice, ReassignOwnedPlan, RevokePrivilegesPlan, RevokeRolePlan, UpdatePrivilege,
 };
 use crate::session::user::SYSTEM_USER;
 use mz_ore::str::StrExt;
@@ -110,9 +111,15 @@ fn plan_alter_cluster_owner(
             object_type: ObjectType::Cluster,
             new_owner,
         })),
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::Cluster,
-        })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type: ObjectType::Cluster,
+            });
+            Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Cluster,
+            }))
+        }
     }
 }
 
@@ -131,9 +138,16 @@ fn plan_alter_cluster_replica_owner(
                 new_owner,
             }))
         }
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::ClusterReplica,
-        })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type: ObjectType::ClusterReplica,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::ClusterReplica,
+            }))
+        }
     }
 }
 
@@ -149,9 +163,16 @@ fn plan_alter_database_owner(
             object_type: ObjectType::Database,
             new_owner,
         })),
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::Database,
-        })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type: ObjectType::Database,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Database,
+            }))
+        }
     }
 }
 
@@ -177,9 +198,16 @@ fn plan_alter_schema_owner(
                 new_owner,
             }))
         }
-        None => Ok(Plan::AlterNoop(AlterNoopPlan {
-            object_type: ObjectType::Database,
-        })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type: ObjectType::Schema,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Schema,
+            }))
+        }
     }
 }
 
@@ -190,7 +218,7 @@ fn plan_alter_item_owner(
     name: UnresolvedItemName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
-    match resolve_item(scx, name, if_exists)? {
+    match resolve_item(scx, name.clone(), if_exists)? {
         Some(item) => {
             if item.id().is_system() {
                 sql_bail!(
@@ -221,7 +249,14 @@ fn plan_alter_item_owner(
                 new_owner,
             }))
         }
-        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
     }
 }
 

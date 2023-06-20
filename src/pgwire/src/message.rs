@@ -15,7 +15,7 @@ use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
-use mz_sql::plan::PlanError;
+use mz_sql::plan::{PlanError, PlanNotice};
 use mz_sql::session::vars::{ClientSeverity as AdapterClientSeverity, VarError};
 use postgres::error::SqlState;
 
@@ -438,6 +438,9 @@ impl ErrorResponse {
             AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
             AdapterNotice::CannotRevoke { .. } => SqlState::WARNING,
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::WARNING,
+            AdapterNotice::PlanNotice(plan) => match plan {
+                PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
+            },
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -604,6 +607,9 @@ impl Severity {
             AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
             AdapterNotice::CannotRevoke { .. } => Severity::Warning,
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
+            AdapterNotice::PlanNotice(notice) => match notice {
+                PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
+            },
         }
     }
 }

@@ -113,7 +113,7 @@ use crate::plan::{
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, QueryContext,
+    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
     ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
     View,
 };
@@ -3526,10 +3526,10 @@ pub fn plan_create_connection(
 fn plan_drop_database(
     scx: &StatementContext,
     if_exists: bool,
-    name: UnresolvedDatabaseName,
+    name: &UnresolvedDatabaseName,
     cascade: bool,
 ) -> Result<Option<DatabaseId>, PlanError> {
-    Ok(match resolve_database(scx, &name, if_exists)? {
+    Ok(match resolve_database(scx, name, if_exists)? {
         Some(database) => {
             if !cascade && database.has_schemas() {
                 sql_bail!(
@@ -3551,7 +3551,7 @@ pub fn describe_drop_objects(
 }
 
 pub fn plan_drop_objects(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     DropObjectsStatement {
         object_type,
         if_exists,
@@ -3568,7 +3568,7 @@ pub fn plan_drop_objects(
 
     let mut referenced_ids = Vec::new();
     for name in names {
-        let id = match name {
+        let id = match &name {
             UnresolvedObjectName::Cluster(name) => {
                 plan_drop_cluster(scx, if_exists, name, cascade)?.map(ObjectId::Cluster)
             }
@@ -3585,11 +3585,16 @@ pub fn plan_drop_objects(
                 plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
             }
             UnresolvedObjectName::Item(name) => {
-                plan_drop_item(scx, object_type, if_exists, name, cascade)?.map(ObjectId::Item)
+                plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
+                    .map(ObjectId::Item)
             }
         };
-        if let Some(id) = id {
-            referenced_ids.push(id);
+        match id {
+            Some(id) => referenced_ids.push(id),
+            None => scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            }),
         }
     }
     let drop_ids = scx.catalog.object_dependents(&referenced_ids);
@@ -3604,7 +3609,7 @@ pub fn plan_drop_objects(
 fn plan_drop_schema(
     scx: &StatementContext,
     if_exists: bool,
-    name: UnresolvedSchemaName,
+    name: &UnresolvedSchemaName,
     cascade: bool,
 ) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
     Ok(match resolve_schema(scx, name.clone(), if_exists)? {
@@ -3634,7 +3639,7 @@ fn plan_drop_schema(
 fn plan_drop_role(
     scx: &StatementContext,
     if_exists: bool,
-    name: Ident,
+    name: &Ident,
 ) -> Result<Option<RoleId>, PlanError> {
     match scx.catalog.resolve_role(name.as_str()) {
         Ok(role) => {
@@ -3655,11 +3660,7 @@ fn plan_drop_role(
             }
             Ok(Some(role.id()))
         }
-        Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating that the
-            // role does not exist.
-            Ok(None)
-        }
+        Err(_) if if_exists => Ok(None),
         Err(e) => Err(e.into()),
     }
 }
@@ -3667,10 +3668,10 @@ fn plan_drop_role(
 fn plan_drop_cluster(
     scx: &StatementContext,
     if_exists: bool,
-    name: Ident,
+    name: &Ident,
     cascade: bool,
 ) -> Result<Option<ClusterId>, PlanError> {
-    Ok(match resolve_cluster(scx, &name, if_exists)? {
+    Ok(match resolve_cluster(scx, name, if_exists)? {
         Some(cluster) => {
             if !cascade && !cluster.bound_objects().is_empty() {
                 sql_bail!("cannot drop cluster with active objects");
@@ -3694,9 +3695,9 @@ fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> b
 fn plan_drop_cluster_replica(
     scx: &StatementContext,
     if_exists: bool,
-    name: QualifiedReplica,
+    name: &QualifiedReplica,
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
-    let cluster = resolve_cluster_replica(scx, &name, if_exists)?;
+    let cluster = resolve_cluster_replica(scx, name, if_exists)?;
     if let Some((cluster, _)) = &cluster {
         ensure_cluster_is_not_linked(scx, cluster.id())?;
         ensure_cluster_is_not_managed(scx, cluster.id())?;
@@ -4052,7 +4053,7 @@ fn plan_index_options(
 }
 
 pub fn plan_alter_index_options(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     AlterIndexStatement {
         index_name,
         if_exists,
@@ -4063,8 +4064,11 @@ pub fn plan_alter_index_options(
     let entry = match scx.catalog.resolve_item(&index_name) {
         Ok(index) => index,
         Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating this index does not
-            // exist.
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: index_name.to_string(),
+                object_type: ObjectType::Index,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Index,
             }));
@@ -4104,7 +4108,7 @@ pub fn describe_alter_cluster_set_options(
 }
 
 pub fn plan_alter_cluster(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     AlterClusterStatement {
         name,
         action,
@@ -4116,9 +4120,14 @@ pub fn plan_alter_cluster(
     let cluster = match resolve_cluster(scx, &name, if_exists)? {
         Some(entry) => entry,
         None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type: ObjectType::Cluster,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Cluster,
-            }))
+            }));
         }
     };
 
@@ -4245,7 +4254,7 @@ pub fn describe_alter_object_rename(
 }
 
 pub fn plan_alter_object_rename(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     AlterObjectRenameStatement {
         name,
         object_type,
@@ -4279,13 +4288,13 @@ pub fn plan_alter_object_rename(
 }
 
 pub fn plan_alter_item_rename(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     object_type: ObjectType,
     name: UnresolvedItemName,
     to_item_name: Ident,
     if_exists: bool,
 ) -> Result<Plan, PlanError> {
-    match resolve_item(scx, name, if_exists)? {
+    match resolve_item(scx, name.clone(), if_exists)? {
         Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
@@ -4317,12 +4326,19 @@ pub fn plan_alter_item_rename(
                 object_type,
             }))
         }
-        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
     }
 }
 
 pub fn plan_alter_cluster_rename(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     object_type: ObjectType,
     name: Ident,
     to_name: Ident,
@@ -4334,12 +4350,19 @@ pub fn plan_alter_cluster_rename(
             name: entry.name().to_string(),
             to_name: ident(to_name),
         })),
-        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
     }
 }
 
 pub fn plan_alter_cluster_replica_rename(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     object_type: ObjectType,
     name: QualifiedReplica,
     to_item_name: Ident,
@@ -4360,7 +4383,14 @@ pub fn plan_alter_cluster_replica_rename(
                 },
             ))
         }
-        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
     }
 }
 
@@ -4372,7 +4402,7 @@ pub fn describe_alter_secret_options(
 }
 
 pub fn plan_alter_secret(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterSecretStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let AlterSecretStatement {
@@ -4384,8 +4414,11 @@ pub fn plan_alter_secret(
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(secret) => secret,
         Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating this secret does not
-            // exist.
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_string(),
+                object_type: ObjectType::Secret,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Secret,
             }));
@@ -4413,7 +4446,7 @@ pub fn describe_alter_sink(
 }
 
 pub fn plan_alter_sink(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let AlterSinkStatement {
@@ -4426,6 +4459,11 @@ pub fn plan_alter_sink(
     let entry = match scx.catalog.resolve_item(&sink_name) {
         Ok(sink) => sink,
         Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: sink_name.to_string(),
+                object_type: ObjectType::Sink,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Sink,
             }));
@@ -4490,7 +4528,7 @@ pub fn describe_alter_connection(
 }
 
 pub fn plan_alter_source(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let AlterSourceStatement {
@@ -4502,6 +4540,11 @@ pub fn plan_alter_source(
     let entry = match scx.catalog.resolve_item(&source_name) {
         Ok(source) => source,
         Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: source_name.to_string(),
+                object_type: ObjectType::Source,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Source,
             }));
@@ -4619,7 +4662,7 @@ pub fn plan_alter_system_reset_all(
 }
 
 pub fn plan_alter_connection(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterConnectionStatement,
 ) -> Result<Plan, PlanError> {
     let AlterConnectionStatement { name, if_exists } = stmt;
@@ -4627,6 +4670,11 @@ pub fn plan_alter_connection(
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(connection) => connection,
         Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_string(),
+                object_type: ObjectType::Connection,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Connection,
             }));
@@ -4671,8 +4719,6 @@ pub(crate) fn resolve_cluster<'a>(
 ) -> Result<Option<&'a dyn CatalogCluster<'a>>, PlanError> {
     match scx.resolve_cluster(Some(name)) {
         Ok(cluster) => Ok(Some(cluster)),
-        // TODO(benesch): generate a notice indicating that the
-        // cluster does not exist.
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e),
     }
@@ -4686,8 +4732,6 @@ pub(crate) fn resolve_cluster_replica<'a>(
     match scx.resolve_cluster(Some(&name.cluster)) {
         Ok(cluster) => match cluster.replica_ids().get(name.replica.as_str()) {
             Some(replica_id) => Ok(Some((cluster, *replica_id))),
-            // TODO(benesch): generate a notice indicating that the
-            // replica does not exist.
             None if if_exists => Ok(None),
             None => Err(sql_err!(
                 "CLUSTER {} has no CLUSTER REPLICA named {}",
@@ -4695,8 +4739,6 @@ pub(crate) fn resolve_cluster_replica<'a>(
                 name.replica.as_str().quoted(),
             )),
         },
-        // TODO(benesch): generate a notice indicating that the
-        // cluster does not exist.
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e),
     }
@@ -4709,8 +4751,6 @@ pub(crate) fn resolve_database<'a>(
 ) -> Result<Option<&'a dyn CatalogDatabase>, PlanError> {
     match scx.resolve_database(name) {
         Ok(database) => Ok(Some(database)),
-        // TODO(benesch): generate a notice indicating that the
-        // cluster does not exist.
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e),
     }
@@ -4723,8 +4763,6 @@ pub(crate) fn resolve_schema<'a>(
 ) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
     match scx.resolve_schema(name) {
         Ok(schema) => Ok(Some((schema.database().clone(), schema.id().clone()))),
-        // TODO(benesch/jkosh44): generate a notice indicating that the
-        // schema does not exist.
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e),
     }
@@ -4738,7 +4776,6 @@ pub(crate) fn resolve_item<'a>(
     let name = normalize::unresolved_item_name(name)?;
     match scx.catalog.resolve_item(&name) {
         Ok(item) => Ok(Some(item)),
-        // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e.into()),
     }
