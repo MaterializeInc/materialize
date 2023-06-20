@@ -301,9 +301,13 @@ fn test_timestamp_selection() {
                 }
                 "determine" => {
                     let det: Determine = serde_json::from_str(&tc.input).unwrap();
-                    let session = Session::dummy()
-                        .start_transaction(mz_ore::now::to_datetime(0), None, Some(isolation))
-                        .0;
+                    let mut session = Session::dummy();
+                    let _ = session.start_transaction(
+                        mz_ore::now::to_datetime(0),
+                        None,
+                        Some(isolation),
+                    );
+
                     let ts = f
                         .determine_timestamp_for(
                             &catalog,

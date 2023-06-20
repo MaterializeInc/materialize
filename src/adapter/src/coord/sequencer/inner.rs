@@ -84,9 +84,9 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
 };
 use crate::coord::{
-    peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, PendingTxnResponse,
-    RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
+    peek, Coordinator, ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
+    PeekStageTimestamp, PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
     DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
@@ -103,10 +103,10 @@ use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanatio
 /// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
 macro_rules! return_if_err {
-    ($expr:expr, $tx:expr, $session:expr) => {
+    ($expr:expr, $ctx:expr) => {
         match $expr {
             Ok(v) => v,
-            Err(e) => return $tx.send(Err(e.into()), $session),
+            Err(e) => return $ctx.retire(Err(e.into())),
         }
     };
 }
@@ -590,13 +590,12 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     pub(super) async fn sequence_create_sink(
         &mut self,
-        session: Session,
+        ctx: ExecuteContext,
         plan: CreateSinkPlan,
         depends_on: Vec<GlobalId>,
-        tx: ClientTransmitter<ExecuteResponse>,
     ) {
         let CreateSinkPlan {
             name,
@@ -607,15 +606,20 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, tx, session);
-        let oid = return_if_err!(self.catalog_mut().allocate_oid(), tx, session);
+        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let oid = return_if_err!(self.catalog_mut().allocate_oid(), ctx);
 
         let mut ops = vec![];
         let cluster_id = return_if_err!(
-            self.create_linked_cluster_ops(id, &name, &plan_cluster_config, &mut ops, &session)
-                .await,
-            tx,
-            session
+            self.create_linked_cluster_ops(
+                id,
+                &name,
+                &plan_cluster_config,
+                &mut ops,
+                ctx.session()
+            )
+            .await,
+            ctx
         );
 
         // Knowing that we're only handling kafka sinks here helps us simplify.
@@ -646,14 +650,14 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         });
 
         let from = self.catalog().get_entry(&catalog_sink.from);
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
         let result = self
-            .catalog_transact_with(Some(&session), ops, move |txn| {
+            .catalog_transact_with(Some(ctx.session()), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
                     .storage
@@ -674,15 +678,16 @@ impl Coordinator {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "sink",
-                });
-                tx.send(Ok(ExecuteResponse::CreatedSink), session);
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: name.item,
+                        ty: "sink",
+                    });
+                ctx.retire(Ok(ExecuteResponse::CreatedSink));
                 return;
             }
             Err(e) => {
-                tx.send(Err(e), session);
+                ctx.retire(Err(e));
                 return;
             }
         }
@@ -693,8 +698,7 @@ impl Coordinator {
             self.controller
                 .storage
                 .prepare_export(id, catalog_sink.from),
-            tx,
-            session
+            ctx
         );
 
         // Now we're ready to create the sink connection. Arrange to notify the
@@ -708,7 +712,7 @@ impl Coordinator {
                 // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
                 let result =
                     internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
-                        session_and_tx: Some((session, tx)),
+                        ctx: Some(ctx),
                         id,
                         oid,
                         create_export_token,
@@ -1629,13 +1633,12 @@ impl Coordinator {
 
     pub(super) fn sequence_end_transaction(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         mut action: EndTransactionAction,
     ) {
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
-            (&action, session.transaction())
+            (&action, ctx.session().transaction())
         {
             action = EndTransactionAction::Rollback;
         }
@@ -1648,7 +1651,7 @@ impl Coordinator {
             }),
         };
 
-        let result = self.sequence_end_transaction_inner(&mut session, action);
+        let result = self.sequence_end_transaction_inner(ctx.session_mut(), action);
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
@@ -1659,24 +1662,22 @@ impl Coordinator {
                     writes,
                     write_lock_guard,
                     pending_txn: PendingTxn {
-                        client_transmitter: tx,
+                        ctx,
                         response,
-                        session,
                         action,
                     },
                 });
                 return;
             }
             Ok((Some(TransactionOps::Peeks(timestamp_context)), _))
-                if session.vars().transaction_isolation()
+                if ctx.session().vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
                     .send(PendingReadTxn::Read {
                         txn: PendingTxn {
-                            client_transmitter: tx,
+                            ctx,
                             response,
-                            session,
                             action,
                         },
                         timestamp_context,
@@ -1687,14 +1688,14 @@ impl Coordinator {
             Ok((_, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
-        let changed = session.vars_mut().end_transaction(action);
+        let changed = ctx.session_mut().vars_mut().end_transaction(action);
         // Append any parameters that changed to the response.
         let response = response.map(|mut r| {
             r.extend_params(changed);
             ExecuteResponse::from(r)
         });
 
-        tx.send(response, session);
+        ctx.retire(response);
     }
 
     fn sequence_end_transaction_inner(
@@ -1739,16 +1740,14 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(super) async fn sequence_peek(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        ctx: ExecuteContext,
         plan: PeekPlan,
         target_cluster: TargetCluster,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
         self.sequence_peek_stage(
-            tx,
-            session,
+            ctx,
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
@@ -1760,8 +1759,7 @@ impl Coordinator {
     /// Processes as many peek stages as possible.
     pub(crate) async fn sequence_peek_stage(
         &mut self,
-        mut tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         mut stage: PeekStage,
     ) {
         // Process the current stage and allow for processing the next.
@@ -1772,31 +1770,29 @@ impl Coordinator {
             // if we move any stages off thread.
             if let Some(validity) = stage.validity() {
                 if let Err(err) = validity.check(self.catalog()) {
-                    tx.send(Err(err), session);
+                    ctx.retire(Err(err));
                     return;
                 }
             }
 
-            (tx, session, stage) = match stage {
+            (ctx, stage) = match stage {
                 PeekStage::Validate(stage) => {
                     let next =
-                        return_if_err!(self.peek_stage_validate(&mut session, stage), tx, session);
-                    (tx, session, PeekStage::Optimize(next))
+                        return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
+                    (ctx, PeekStage::Optimize(next))
                 }
                 PeekStage::Optimize(stage) => {
                     let next =
-                        return_if_err!(self.peek_stage_optimize(&session, stage), tx, session);
-                    (tx, session, PeekStage::Timestamp(next))
+                        return_if_err!(self.peek_stage_optimize(ctx.session_mut(), stage), ctx);
+                    (ctx, PeekStage::Timestamp(next))
                 }
-                PeekStage::Timestamp(stage) => {
-                    match self.peek_stage_timestamp(tx, session, stage) {
-                        Some((tx, session, next)) => (tx, session, PeekStage::Finish(next)),
-                        None => return,
-                    }
-                }
+                PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
+                    Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
+                    None => return,
+                },
                 PeekStage::Finish(stage) => {
-                    let res = self.peek_stage_finish(&mut session, stage).await;
-                    tx.send(res, session);
+                    let res = self.peek_stage_finish(ctx.session_mut(), stage).await;
+                    ctx.retire(res);
                     return;
                 }
             }
@@ -1962,8 +1958,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_timestamp(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        ctx: ExecuteContext,
         PeekStageTimestamp {
             validity,
             dataflow,
@@ -1980,19 +1975,18 @@ impl Coordinator {
             key,
             typ,
         }: PeekStageTimestamp,
-    ) -> Option<(ClientTransmitter<ExecuteResponse>, Session, PeekStageFinish)> {
-        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+    ) -> Option<(ExecuteContext, PeekStageFinish)> {
+        match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id().clone();
+                let conn_id = ctx.session().conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
                     conn_id.clone(),
                     RealTimeRecencyContext::Peek {
-                        tx,
+                        ctx,
                         finishing,
                         copy_to,
                         dataflow,
-                        session,
                         cluster_id,
                         when,
                         target_replica,
@@ -2020,8 +2014,7 @@ impl Coordinator {
                 None
             }
             None => Some((
-                tx,
-                session,
+                ctx,
                 PeekStageFinish {
                     validity,
                     finishing,
@@ -2480,17 +2473,16 @@ impl Coordinator {
 
     pub(super) fn sequence_explain(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         plan: ExplainPlan,
         target_cluster: TargetCluster,
     ) {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(tx, session, plan),
-            _ => tx.send(
-                self.sequence_explain_plan(&mut session, plan, target_cluster),
-                session,
-            ),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
+            _ => {
+                let result = self.sequence_explain_plan(ctx.session_mut(), plan, target_cluster);
+                ctx.retire(result);
+            }
         }
     }
 
@@ -2746,18 +2738,12 @@ impl Coordinator {
         Ok(send_immediate_rows(rows))
     }
 
-    fn sequence_explain_timestamp_begin(
-        &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
-        plan: ExplainPlan,
-    ) {
+    fn sequence_explain_timestamp_begin(&mut self, mut ctx: ExecuteContext, plan: ExplainPlan) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self.sequence_explain_timestamp_begin_inner(&session, plan),
-            tx,
-            session
+            self.sequence_explain_timestamp_begin_inner(ctx.session(), plan),
+            ctx
         );
-        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+        match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
                 let validity = PeekValidity {
                     transient_revision: self.catalog().transient_revision(),
@@ -2766,12 +2752,11 @@ impl Coordinator {
                     replica_id: None,
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id().clone();
+                let conn_id = ctx.session().conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
                     conn_id.clone(),
                     RealTimeRecencyContext::ExplainTimestamp {
-                        tx,
-                        session,
+                        ctx,
                         format,
                         cluster_id,
                         optimized_plan,
@@ -2791,17 +2776,17 @@ impl Coordinator {
                     }
                 });
             }
-            None => tx.send(
-                self.sequence_explain_timestamp_finish_inner(
-                    &mut session,
+            None => {
+                let result = self.sequence_explain_timestamp_finish_inner(
+                    ctx.session_mut(),
                     format,
                     cluster_id,
                     optimized_plan,
                     id_bundle,
                     None,
-                ),
-                session,
-            ),
+                );
+                ctx.retire(result);
+            }
         }
     }
 
@@ -2995,28 +2980,26 @@ impl Coordinator {
         })
     }
 
-    pub(super) async fn sequence_insert(
-        &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
-        plan: InsertPlan,
-    ) {
+    pub(super) async fn sequence_insert(&mut self, mut ctx: ExecuteContext, plan: InsertPlan) {
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
         } else {
-            return_if_err!(self.view_optimizer.optimize(plan.values), tx, session)
+            return_if_err!(self.view_optimizer.optimize(plan.values), ctx)
         };
 
         match optimized_mir.into_inner() {
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
-                    tx.send(
-                        Self::sequence_insert_constant(&catalog, &mut session, plan.id, selection),
-                        session,
-                    )
+                    let result = Self::sequence_insert_constant(
+                        &catalog,
+                        ctx.session_mut(),
+                        plan.id,
+                        selection,
+                    );
+                    ctx.retire(result);
                 });
             }
             // All non-constant values must be planned as read-then-writes.
@@ -3026,28 +3009,22 @@ impl Coordinator {
                         .desc(
                             &self
                                 .catalog()
-                                .resolve_full_name(table.name(), Some(session.conn_id())),
+                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
                         )
                         .expect("desc called on table")
                         .arity(),
                     None => {
-                        tx.send(
-                            Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                                plan.id.to_string(),
-                            ))),
-                            session,
-                        );
+                        ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
+                            plan.id.to_string(),
+                        ))));
                         return;
                     }
                 };
 
                 if selection.contains_temporal() {
-                    tx.send(
-                        Err(AdapterError::Unsupported(
-                            "calls to mz_now in write statements",
-                        )),
-                        session,
-                    );
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "calls to mz_now in write statements",
+                    )));
                     return;
                 }
 
@@ -3067,7 +3044,7 @@ impl Coordinator {
                     returning: plan.returning,
                 };
 
-                self.sequence_read_then_write(tx, session, read_then_write_plan)
+                self.sequence_read_then_write(ctx, read_then_write_plan)
                     .await;
             }
         }
@@ -3117,17 +3094,16 @@ impl Coordinator {
 
     pub(super) fn sequence_copy_rows(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         id: GlobalId,
         columns: Vec<usize>,
         rows: Vec<Row>,
     ) {
         let catalog = self.owned_catalog();
         mz_ore::task::spawn(|| "coord::sequence_copy_rows", async move {
-            let conn_catalog = catalog.for_session(&session);
-            let res: Result<_, AdapterError> =
-                mz_sql::plan::plan_copy_from(session.pcx(), &conn_catalog, id, columns, rows)
+            let conn_catalog = catalog.for_session(ctx.session());
+            let result: Result<_, AdapterError> =
+                mz_sql::plan::plan_copy_from(ctx.session().pcx(), &conn_catalog, id, columns, rows)
                     .err_into()
                     .and_then(|values| values.lower().err_into())
                     .and_then(|values| {
@@ -3139,12 +3115,12 @@ impl Coordinator {
                         // Copied rows must always be constants.
                         Self::sequence_insert_constant(
                             &catalog,
-                            &mut session,
+                            ctx.session_mut(),
                             id,
                             values.into_inner(),
                         )
                     });
-            tx.send(res, session);
+            ctx.retire(result);
         });
     }
 
@@ -3154,11 +3130,10 @@ impl Coordinator {
     // serializability violation could occur.
     pub(super) async fn sequence_read_then_write(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         plan: ReadThenWritePlan,
     ) {
-        guard_write_critical_section!(self, tx, session, Plan::ReadThenWrite(plan));
+        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan));
 
         let ReadThenWritePlan {
             id,
@@ -3175,17 +3150,14 @@ impl Coordinator {
                 .desc(
                     &self
                         .catalog()
-                        .resolve_full_name(table.name(), Some(session.conn_id())),
+                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
                 )
                 .expect("desc called on table")
                 .into_owned(),
             None => {
-                tx.send(
-                    Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                        id.to_string(),
-                    ))),
-                    session,
-                );
+                ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
+                    id.to_string(),
+                ))));
                 return;
             }
         };
@@ -3227,16 +3199,22 @@ impl Coordinator {
 
         for id in selection.depends_on() {
             if !validate_read_dependencies(self.catalog(), &id) {
-                tx.send(Err(AdapterError::InvalidTableMutationSelection), session);
+                ctx.retire(Err(AdapterError::InvalidTableMutationSelection));
                 return;
             }
         }
 
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
-        self.sequence_peek(
+        let (tx, _, session, extra) = ctx.into_parts();
+        let peek_ctx = ExecuteContext::from_parts(
             peek_client_tx,
+            self.internal_cmd_tx.clone(),
             session,
+            Default::default(),
+        );
+        self.sequence_peek(
+            peek_ctx,
             PeekPlan {
                 source: selection,
                 when: QueryWhen::Freshest,
@@ -3251,7 +3229,7 @@ impl Coordinator {
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         let max_result_size = self.catalog().system_config().max_result_size();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
-            let (peek_response, mut session) = match peek_rx.await {
+            let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
                     result: Ok(resp),
                     session,
@@ -3259,11 +3237,17 @@ impl Coordinator {
                 Ok(Response {
                     result: Err(e),
                     session,
-                }) => return tx.send(Err(e), session),
+                }) => {
+                    let ctx =
+                        ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+                    ctx.retire(Err(e));
+                    return;
+                }
                 // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
                 Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
             };
-            let timeout_dur = *session.vars().statement_timeout();
+            let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+            let timeout_dur = *ctx.session().vars().statement_timeout();
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
@@ -3337,7 +3321,7 @@ impl Coordinator {
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
                             let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
-                                conn_id: session.conn_id().clone(),
+                                conn_id: ctx.session().conn_id().clone(),
                             });
                             if let Err(e) = result {
                                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -3346,7 +3330,10 @@ impl Coordinator {
                         }
                     }
                 }
-                resp @ ExecuteResponse::Canceled => return tx.send(Ok(resp), session),
+                resp @ ExecuteResponse::Canceled => {
+                    ctx.retire(Ok(resp));
+                    return;
+                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),
@@ -3398,7 +3385,7 @@ impl Coordinator {
 
             // We need to clear out the timestamp context so the write doesn't fail due to a
             // read only transaction.
-            let timestamp_context = session.take_transaction_timestamp_context();
+            let timestamp_context = ctx.session_mut().take_transaction_timestamp_context();
             // No matter what isolation level the client is using, we must linearize this
             // read. The write will be performed right after this, as part of a single
             // transaction, so the write must have a timestamp greater than or equal to the
@@ -3435,22 +3422,20 @@ impl Coordinator {
 
             match diffs {
                 Ok(diffs) => {
-                    tx.send(
-                        Self::sequence_send_diffs(
-                            &mut session,
-                            SendDiffsPlan {
-                                id,
-                                updates: diffs,
-                                kind,
-                                returning: returning_rows,
-                                max_result_size,
-                            },
-                        ),
-                        session,
+                    let result = Self::sequence_send_diffs(
+                        ctx.session_mut(),
+                        SendDiffsPlan {
+                            id,
+                            updates: diffs,
+                            kind,
+                            returning: returning_rows,
+                            max_result_size,
+                        },
                     );
+                    ctx.retire(result);
                 }
                 Err(e) => {
-                    tx.send(Err(e), session);
+                    ctx.retire(Err(e));
                 }
             }
         });

@@ -34,6 +34,7 @@ use crate::command::{
     Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse, Response,
     StartupResponse,
 };
+use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
@@ -348,13 +349,15 @@ impl SessionClient {
     /// - `Some(n > 1)`: InTransactionImplicit
     /// - `Some(0)`: no change
     pub fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), AdapterError> {
-        let session = self.session.take().expect("session invariant violated");
         let now = self.now_datetime();
-        let (session, result) = match implicit {
+        let session = self.session.as_mut().expect("session invariant violated");
+        let result = match implicit {
             None => session.start_transaction(now, None, None),
-            Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
+            Some(stmts) => {
+                session.start_transaction_implicit(now, stmts);
+                Ok(())
+            }
         };
-        self.session = Some(session);
         result
     }
 
@@ -394,6 +397,7 @@ impl SessionClient {
         id: GlobalId,
         columns: Vec<usize>,
         rows: Vec<Row>,
+        ctx_extra: ExecuteContextExtra,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.send(|tx, session| Command::CopyRows {
             id,
@@ -401,6 +405,7 @@ impl SessionClient {
             rows,
             session,
             tx,
+            ctx_extra,
         })
         .await
     }
