@@ -1401,8 +1401,7 @@ fn check_object_privileges(
             .expect("only object types with privileges will generate required privileges");
         let role_privileges = role_membership
             .iter()
-            .filter_map(|role_id| object_privileges.0.get(role_id))
-            .flat_map(|mz_acl_items| mz_acl_items.iter())
+            .flat_map(|role_id| object_privileges.get_acl_items_for_grantee(role_id))
             .map(|mz_acl_item| mz_acl_item.acl_mode)
             .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
         if !role_privileges.contains(acl_mode) {
