@@ -145,13 +145,6 @@ serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
 vte = { git = "https://github.com/MaterializeInc/vte", rev = "45670c47cebd7af050def2f80a307bdeec7caba3" }
 
-# Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
-# release.
-prost = { git = "https://github.com/MaterializeInc/prost" }
-prost-build = { git = "https://github.com/MaterializeInc/prost" }
-prost-derive = { git = "https://github.com/MaterializeInc/prost" }
-prost-types = { git = "https://github.com/MaterializeInc/prost" }
-
 # Waiting on https://github.com/hyperium/tonic/pull/1398.
 tonic-build = { git = "https://github.com/MaterializeInc/tonic" }
 
