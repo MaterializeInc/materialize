@@ -3114,7 +3114,7 @@ impl Catalog {
         }
 
         let system_privileges = catalog.storage().await.load_system_privileges().await?;
-        catalog.state.system_privileges.extend(system_privileges);
+        catalog.state.system_privileges.grant_all(system_privileges);
 
         catalog
             .load_system_configuration(
