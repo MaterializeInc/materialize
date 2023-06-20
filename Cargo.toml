@@ -99,13 +99,14 @@ object = { opt-level = 3 }
 rustc-demangle = { opt-level = 3 }
 
 [profile.release]
-# Emit only the line info tables, not full debug info, in release builds, to
-# substantially reduce the size of the debug info. Line info tables are enough
-# to correctly symbolicate a backtrace, but do not produce an ideal interactive
-# debugger experience. This seems to be the right tradeoff for release builds:
-# it's unlikely we're going to get interactive access to a debugger in
-# production installations, but we still want useful crash reports.
-debug = 1
+# Emit full debug info, allowing us to easily analyze core dumps from
+# staging (and, in an emergency, also prod).
+#
+# This does not negatively impact the sizes of the main binaries
+# (clusterd and environmentd), since we split the debuginfo from those
+# and ship it separately to an s3 bucket before building their
+# docker containers.
+debug = 2
 
 # IMPORTANT: when patching a dependency, you should only depend on "main",
 # "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a

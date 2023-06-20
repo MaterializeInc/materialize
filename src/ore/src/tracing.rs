@@ -34,6 +34,7 @@ use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::{global, KeyValue};
+use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::{Event, Level, Subscriber};
@@ -389,6 +390,7 @@ where
                 attach_stacktrace: true,
                 release: Some(config.build_version.into()),
                 environment: sentry_config.environment.map(Into::into),
+                integrations: vec![Arc::new(DebugImagesIntegration::new())],
                 ..Default::default()
             },
         ));

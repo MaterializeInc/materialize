@@ -1047,16 +1047,20 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         } else {
                             stale_ingestions.remove(&ingestion.id);
 
-                            let running =
-                                self.storage_state.ingestions.get(&ingestion.id).is_some();
+                            let running_ingestion =
+                                self.storage_state.ingestions.get(&ingestion.id);
 
                             // Ingestion statements are only considered updates if they are
                             // currently running.
-                            ingestion.update = running;
+                            ingestion.update = running_ingestion.is_some();
 
-                            // We only keep the most recent version of the ingestion, which is why
-                            // these commands are run in reverse.
+                            // We keep only:
+                            // - The most recent version of the ingestion, which
+                            //   is why these commands are run in reverse.
+                            // - Ingestions whose descriptions are not exactly
+                            //   those that are currently running.
                             seen_most_recent_ingestion.insert(ingestion.id)
+                                && running_ingestion != Some(&ingestion.description)
                         }
                     })
                 }

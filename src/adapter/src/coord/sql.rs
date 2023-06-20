@@ -30,12 +30,8 @@ impl Coordinator {
         params: &mz_sql::plan::Params,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(
-            Some(pcx),
-            &self.catalog().for_session(session),
-            stmt,
-            params,
-        )?;
+        let catalog = self.catalog().for_session(session);
+        let plan = mz_sql::plan::plan(Some(pcx), &catalog, stmt, params)?;
         Ok(plan)
     }
 

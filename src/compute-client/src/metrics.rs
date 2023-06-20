@@ -9,6 +9,7 @@
 
 //! Metrics for the compute controller components
 
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 use mz_ore::cast::CastFrom;
@@ -21,11 +22,11 @@ use mz_service::codec::StatsCollector;
 use prometheus::core::AtomicU64;
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
-use crate::protocol::command::ProtoComputeCommand;
+use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::ProtoComputeResponse;
 
 type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
-type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
+pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 
 /// Compute controller metrics
 #[derive(Debug, Clone)]
@@ -43,6 +44,10 @@ pub struct ComputeControllerMetrics {
     subscribe_count: UIntGaugeVec,
     command_queue_size: UIntGaugeVec,
     response_queue_size: UIntGaugeVec,
+
+    // command history
+    history_command_count: UIntGaugeVec,
+    history_dataflow_count: UIntGaugeVec,
 }
 
 impl ComputeControllerMetrics {
@@ -98,6 +103,16 @@ impl ComputeControllerMetrics {
                 help: "The size of the compute response queue.",
                 var_labels: ["instance_id", "replica_id"],
             )),
+            history_command_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_history_command_count",
+                help: "The number of commands in the controller's command history.",
+                var_labels: ["instance_id", "command_type"],
+            )),
+            history_dataflow_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_history_dataflow_count",
+                help: "The number of dataflows in the controller's command history.",
+                var_labels: ["instance_id"],
+            )),
         }
     }
 
@@ -108,7 +123,14 @@ impl ComputeControllerMetrics {
             .collection_count
             .get_delete_on_drop_gauge(labels.clone());
         let peek_count = self.peek_count.get_delete_on_drop_gauge(labels.clone());
-        let subscribe_count = self.subscribe_count.get_delete_on_drop_gauge(labels);
+        let subscribe_count = self
+            .subscribe_count
+            .get_delete_on_drop_gauge(labels.clone());
+        let history_command_count = CommandMetrics::build(|typ| {
+            let labels = labels.iter().cloned().chain([typ.into()]).collect();
+            self.history_command_count.get_delete_on_drop_gauge(labels)
+        });
+        let history_dataflow_count = self.history_dataflow_count.get_delete_on_drop_gauge(labels);
 
         InstanceMetrics {
             instance_id,
@@ -117,6 +139,8 @@ impl ComputeControllerMetrics {
             collection_count,
             peek_count,
             subscribe_count,
+            history_command_count,
+            history_dataflow_count,
         }
     }
 }
@@ -131,6 +155,8 @@ pub struct InstanceMetrics {
     pub collection_count: UIntGauge,
     pub peek_count: UIntGauge,
     pub subscribe_count: UIntGauge,
+    pub history_command_count: CommandMetrics<UIntGauge>,
+    pub history_dataflow_count: UIntGauge,
 }
 
 impl InstanceMetrics {
@@ -189,6 +215,25 @@ impl InstanceMetrics {
             }),
         }
     }
+
+    pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
+        let labels = vec![self.instance_id.to_string()];
+        let command_counts = CommandMetrics::build(|typ| {
+            let labels = labels.iter().cloned().chain([typ.into()]).collect();
+            self.metrics
+                .history_command_count
+                .get_delete_on_drop_gauge(labels)
+        });
+        let dataflow_count = self
+            .metrics
+            .history_dataflow_count
+            .get_delete_on_drop_gauge(labels);
+
+        HistoryMetrics {
+            command_counts,
+            dataflow_count,
+        }
+    }
 }
 
 /// Per-replica metrics.
@@ -229,7 +274,7 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 
 /// Metrics keyed by `ComputeCommand` type.
 #[derive(Debug)]
-struct CommandMetrics<M> {
+pub struct CommandMetrics<M> {
     create_timely: M,
     create_instance: M,
     create_dataflows: M,
@@ -241,7 +286,7 @@ struct CommandMetrics<M> {
 }
 
 impl<M> CommandMetrics<M> {
-    fn build<F>(build_metric: F) -> Self
+    pub fn build<F>(build_metric: F) -> Self
     where
         F: Fn(&str) -> M,
     {
@@ -254,6 +299,35 @@ impl<M> CommandMetrics<M> {
             cancel_peeks: build_metric("cancel_peeks"),
             initialization_complete: build_metric("initialization_complete"),
             update_configuration: build_metric("update_configuration"),
+        }
+    }
+
+    fn for_all<F>(&self, f: F)
+    where
+        F: Fn(&M),
+    {
+        f(&self.create_timely);
+        f(&self.create_instance);
+        f(&self.initialization_complete);
+        f(&self.update_configuration);
+        f(&self.create_dataflows);
+        f(&self.allow_compaction);
+        f(&self.peek);
+        f(&self.cancel_peeks);
+    }
+
+    pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
+        use ComputeCommand::*;
+
+        match command {
+            CreateTimely { .. } => &self.create_timely,
+            CreateInstance(_) => &self.create_instance,
+            InitializationComplete => &self.initialization_complete,
+            UpdateConfiguration(_) => &self.update_configuration,
+            CreateDataflows(_) => &self.create_dataflows,
+            AllowCompaction(_) => &self.allow_compaction,
+            Peek(_) => &self.peek,
+            CancelPeeks { .. } => &self.cancel_peeks,
         }
     }
 
@@ -301,5 +375,25 @@ impl<M> ResponseMetrics<M> {
             PeekResponse(_) => &self.peek_response,
             SubscribeResponse(_) => &self.subscribe_response,
         }
+    }
+}
+
+/// Metrics tracked by the command history.
+#[derive(Debug)]
+pub struct HistoryMetrics<G> {
+    /// Metrics tracking command counts.
+    pub command_counts: CommandMetrics<G>,
+    /// Metric tracking the dataflow count.
+    pub dataflow_count: G,
+}
+
+impl<G> HistoryMetrics<G>
+where
+    G: Borrow<mz_ore::metrics::UIntGauge>,
+{
+    /// Reset all tracked counts to 0.
+    pub fn reset(&self) {
+        self.command_counts.for_all(|m| m.borrow().set(0));
+        self.dataflow_count.borrow().set(0);
     }
 }

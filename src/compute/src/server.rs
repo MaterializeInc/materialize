@@ -386,6 +386,9 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
+                let command_history =
+                    ComputeCommandHistory::new(self.compute_metrics.for_history());
+
                 self.compute_state = Some(ComputeState {
                     traces: TraceManager::new(
                         self.trace_metrics.clone(),
@@ -400,7 +403,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     dropped_collections: Vec::new(),
                     compute_logger: None,
                     persist_clients: Arc::clone(&self.persist_clients),
-                    command_history: ComputeCommandHistory::default(),
+                    command_history,
                     max_result_size: u32::MAX,
                     dataflow_max_inflight_bytes: usize::MAX,
                     linear_join_impl: Default::default(),
@@ -697,21 +700,12 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history = ComputeCommandHistory::default();
+            let mut command_history =
+                ComputeCommandHistory::new(self.compute_metrics.for_history());
             for command in new_commands.iter() {
                 command_history.push(command.clone(), &compute_state.pending_peeks);
             }
             compute_state.command_history = command_history;
-            compute_state.metrics.command_history_size.set(
-                u64::try_from(compute_state.command_history.len()).expect(
-                    "The compute command history size must be non-negative and fit a 64-bit number",
-                ),
-            );
-            compute_state.metrics.dataflow_count_in_history.set(
-                u64::try_from(compute_state.command_history.dataflow_count()).expect(
-                    "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
-                ),
-            );
         }
         Ok(())
     }
