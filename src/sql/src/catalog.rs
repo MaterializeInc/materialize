@@ -281,6 +281,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the [`PrivilegeMap`] of the object.
     fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap>;
 
+    /// Returns the privileges that `role_id` has on the system.
+    fn get_system_privileges(&self, role_id: &RoleId) -> AclMode;
+
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear

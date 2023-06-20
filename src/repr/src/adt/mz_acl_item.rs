@@ -407,6 +407,13 @@ impl PrivilegeMap {
         self.all_values().cloned()
     }
 
+    /// Get all privileges that have been granted to `grantee`.
+    pub fn get_all_privileges_for_grantee(&self, grantee: &RoleId) -> AclMode {
+        self.get_acl_items_for_grantee(grantee)
+            .map(|mz_acl_item| mz_acl_item.acl_mode)
+            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode))
+    }
+
     /// Adds an [`MzAclItem`] to this map.
     pub fn grant(&mut self, privilege: MzAclItem) {
         let grantee_privileges = self.0.entry(privilege.grantee).or_default();

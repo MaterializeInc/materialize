@@ -55,31 +55,31 @@ simple conn=joe,user=joe
 CREATE ROLE bar;
 ----
 db error: ERROR: permission denied to create role
-DETAIL: You must have the CREATEROLE attribute to create role
+DETAIL: You must have the CREATEROLE system privilege to create role
 
 simple conn=joe,user=joe
 ALTER ROLE foo NOCREATECLUSTER;
 ----
 db error: ERROR: permission denied to alter role
-DETAIL: You must have the CREATEROLE attribute to alter role
+DETAIL: You must have the CREATEROLE system privilege to alter role
 
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
 db error: ERROR: permission denied to drop roles
-DETAIL: You must have the CREATEROLE attribute to drop roles
+DETAIL: You must have the CREATEROLE system privilege to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
 ----
 db error: ERROR: permission denied to create database
-DETAIL: You must have the CREATEDB attribute to create database
+DETAIL: You must have the CREATEDB system privilege to create database
 
 simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 ----
 db error: ERROR: permission denied to create cluster
-DETAIL: You must have the CREATECLUSTER attribute to create cluster
+DETAIL: You must have the CREATECLUSTER system privilege to create cluster
 
 # CREATEROLE NOCREATEDB NOCREATECLUSTER
 
@@ -107,13 +107,13 @@ simple conn=joe,user=joe
 CREATE DATABASE foo;
 ----
 db error: ERROR: permission denied to create database
-DETAIL: You must have the CREATEDB attribute to create database
+DETAIL: You must have the CREATEDB system privilege to create database
 
 simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 ----
 db error: ERROR: permission denied to create cluster
-DETAIL: You must have the CREATECLUSTER attribute to create cluster
+DETAIL: You must have the CREATECLUSTER system privilege to create cluster
 
 simple conn=mz_system,user=mz_system
 DROP ROLE bar;
@@ -136,19 +136,19 @@ simple conn=joe,user=joe
 CREATE ROLE bar;
 ----
 db error: ERROR: permission denied to create role
-DETAIL: You must have the CREATEROLE attribute to create role
+DETAIL: You must have the CREATEROLE system privilege to create role
 
 simple conn=joe,user=joe
 ALTER ROLE foo NOCREATECLUSTER;
 ----
 db error: ERROR: permission denied to alter role
-DETAIL: You must have the CREATEROLE attribute to alter role
+DETAIL: You must have the CREATEROLE system privilege to alter role
 
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
 db error: ERROR: permission denied to drop roles
-DETAIL: You must have the CREATEROLE attribute to drop roles
+DETAIL: You must have the CREATEROLE system privilege to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
@@ -159,7 +159,7 @@ simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 ----
 db error: ERROR: permission denied to create cluster
-DETAIL: You must have the CREATECLUSTER attribute to create cluster
+DETAIL: You must have the CREATECLUSTER system privilege to create cluster
 
 simple conn=mz_system,user=mz_system
 DROP DATABASE foo;
@@ -177,25 +177,25 @@ simple conn=joe,user=joe
 CREATE ROLE bar;
 ----
 db error: ERROR: permission denied to create role
-DETAIL: You must have the CREATEROLE attribute to create role
+DETAIL: You must have the CREATEROLE system privilege to create role
 
 simple conn=joe,user=joe
 ALTER ROLE foo NOCREATECLUSTER;
 ----
 db error: ERROR: permission denied to alter role
-DETAIL: You must have the CREATEROLE attribute to alter role
+DETAIL: You must have the CREATEROLE system privilege to alter role
 
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
 db error: ERROR: permission denied to drop roles
-DETAIL: You must have the CREATEROLE attribute to drop roles
+DETAIL: You must have the CREATEROLE system privilege to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
 ----
 db error: ERROR: permission denied to create database
-DETAIL: You must have the CREATEDB attribute to create database
+DETAIL: You must have the CREATEDB system privilege to create database
 
 simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
@@ -238,7 +238,7 @@ simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 ----
 db error: ERROR: permission denied to create cluster
-DETAIL: You must have the CREATECLUSTER attribute to create cluster
+DETAIL: You must have the CREATECLUSTER system privilege to create cluster
 
 simple conn=mz_system,user=mz_system
 DROP ROLE bar;
@@ -281,7 +281,7 @@ simple conn=joe,user=joe
 CREATE DATABASE foo;
 ----
 db error: ERROR: permission denied to create database
-DETAIL: You must have the CREATEDB attribute to create database
+DETAIL: You must have the CREATEDB system privilege to create database
 
 simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
@@ -314,19 +314,19 @@ simple conn=joe,user=joe
 CREATE ROLE bar;
 ----
 db error: ERROR: permission denied to create role
-DETAIL: You must have the CREATEROLE attribute to create role
+DETAIL: You must have the CREATEROLE system privilege to create role
 
 simple conn=joe,user=joe
 ALTER ROLE foo NOCREATECLUSTER;
 ----
 db error: ERROR: permission denied to alter role
-DETAIL: You must have the CREATEROLE attribute to alter role
+DETAIL: You must have the CREATEROLE system privilege to alter role
 
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
 db error: ERROR: permission denied to drop roles
-DETAIL: You must have the CREATEROLE attribute to drop roles
+DETAIL: You must have the CREATEROLE system privilege to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
@@ -470,31 +470,31 @@ simple conn=joe,user=joe
 CREATE ROLE bar;
 ----
 db error: ERROR: permission denied to create role
-DETAIL: You must have the CREATEROLE attribute to create role
+DETAIL: You must have the CREATEROLE system privilege to create role
 
 simple conn=joe,user=joe
 ALTER ROLE foo NOCREATECLUSTER;
 ----
 db error: ERROR: permission denied to alter role
-DETAIL: You must have the CREATEROLE attribute to alter role
+DETAIL: You must have the CREATEROLE system privilege to alter role
 
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
 db error: ERROR: permission denied to drop roles
-DETAIL: You must have the CREATEROLE attribute to drop roles
+DETAIL: You must have the CREATEROLE system privilege to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
 ----
 db error: ERROR: permission denied to create database
-DETAIL: You must have the CREATEDB attribute to create database
+DETAIL: You must have the CREATEDB system privilege to create database
 
 simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 ----
 db error: ERROR: permission denied to create cluster
-DETAIL: You must have the CREATECLUSTER attribute to create cluster
+DETAIL: You must have the CREATECLUSTER system privilege to create cluster
 
 ## Grandparent
 
@@ -517,31 +517,31 @@ simple conn=joe,user=joe
 CREATE ROLE bar;
 ----
 db error: ERROR: permission denied to create role
-DETAIL: You must have the CREATEROLE attribute to create role
+DETAIL: You must have the CREATEROLE system privilege to create role
 
 simple conn=joe,user=joe
 ALTER ROLE foo NOCREATECLUSTER;
 ----
 db error: ERROR: permission denied to alter role
-DETAIL: You must have the CREATEROLE attribute to alter role
+DETAIL: You must have the CREATEROLE system privilege to alter role
 
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
 db error: ERROR: permission denied to drop roles
-DETAIL: You must have the CREATEROLE attribute to drop roles
+DETAIL: You must have the CREATEROLE system privilege to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
 ----
 db error: ERROR: permission denied to create database
-DETAIL: You must have the CREATEDB attribute to create database
+DETAIL: You must have the CREATEDB system privilege to create database
 
 simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 ----
 db error: ERROR: permission denied to create cluster
-DETAIL: You must have the CREATECLUSTER attribute to create cluster
+DETAIL: You must have the CREATECLUSTER system privilege to create cluster
 
 # Check if INHERIT works
 
@@ -566,7 +566,7 @@ simple conn=joe,user=joe
 CREATE SOURCE src FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 db error: ERROR: permission denied to create source
-DETAIL: You must have the CREATECLUSTER attribute to create source
+DETAIL: You must have the CREATECLUSTER system privilege to create source
 
 simple conn=mz_system,user=mz_system
 ALTER ROLE joe CREATECLUSTER;
@@ -596,37 +596,37 @@ simple conn=joe,user=joe
 CREATE ROLE bar CREATEDB
 ----
 db error: ERROR: permission denied to create role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to create role with attribute CREATEDB
+DETAIL: You must have the CREATEDB system privilege to create role with attribute CREATEDB
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATEDB
 ----
 db error: ERROR: permission denied to alter role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to alter role with attribute CREATEDB
+DETAIL: You must have the CREATEDB system privilege to alter role with attribute CREATEDB
 
 simple conn=joe,user=joe
 CREATE ROLE bar CREATECLUSTER
 ----
 db error: ERROR: permission denied to create role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to create role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER system privilege to create role with attribute CREATECLUSTER
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATECLUSTER
 ----
 db error: ERROR: permission denied to alter role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to alter role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER system privilege to alter role with attribute CREATECLUSTER
 
 simple conn=joe,user=joe
 CREATE ROLE bar CREATEDB CREATECLUSTER
 ----
 db error: ERROR: permission denied to create role with attributes CREATEDB, CREATECLUSTER
-DETAIL: You must have the CREATEDB, CREATECLUSTER attributes to create role with attributes CREATEDB, CREATECLUSTER
+DETAIL: You must have the CREATEDB, CREATECLUSTER system privileges to create role with attributes CREATEDB, CREATECLUSTER
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATEDB CREATECLUSTER
 ----
 db error: ERROR: permission denied to alter role with attributes CREATEDB, CREATECLUSTER
-DETAIL: You must have the CREATEDB, CREATECLUSTER attributes to alter role with attributes CREATEDB, CREATECLUSTER
+DETAIL: You must have the CREATEDB, CREATECLUSTER system privileges to alter role with attributes CREATEDB, CREATECLUSTER
 
 ## CREATEDB NOCREATECLUSTER
 
@@ -654,25 +654,25 @@ simple conn=joe,user=joe
 CREATE ROLE bar CREATECLUSTER
 ----
 db error: ERROR: permission denied to create role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to create role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER system privilege to create role with attribute CREATECLUSTER
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATECLUSTER
 ----
 db error: ERROR: permission denied to alter role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to alter role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER system privilege to alter role with attribute CREATECLUSTER
 
 simple conn=joe,user=joe
 CREATE ROLE bar CREATEDB CREATECLUSTER
 ----
 db error: ERROR: permission denied to create role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to create role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER system privilege to create role with attribute CREATECLUSTER
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATEDB CREATECLUSTER
 ----
 db error: ERROR: permission denied to alter role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to alter role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER system privilege to alter role with attribute CREATECLUSTER
 
 ## NOCREATEDB CREATECLUSTER
 
@@ -685,13 +685,13 @@ simple conn=joe,user=joe
 CREATE ROLE bar CREATEDB
 ----
 db error: ERROR: permission denied to create role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to create role with attribute CREATEDB
+DETAIL: You must have the CREATEDB system privilege to create role with attribute CREATEDB
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATEDB
 ----
 db error: ERROR: permission denied to alter role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to alter role with attribute CREATEDB
+DETAIL: You must have the CREATEDB system privilege to alter role with attribute CREATEDB
 
 simple conn=joe,user=joe
 CREATE ROLE bar CREATECLUSTER
@@ -712,13 +712,13 @@ simple conn=joe,user=joe
 CREATE ROLE bar CREATEDB CREATECLUSTER
 ----
 db error: ERROR: permission denied to create role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to create role with attribute CREATEDB
+DETAIL: You must have the CREATEDB system privilege to create role with attribute CREATEDB
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATEDB CREATECLUSTER
 ----
 db error: ERROR: permission denied to alter role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to alter role with attribute CREATEDB
+DETAIL: You must have the CREATEDB system privilege to alter role with attribute CREATEDB
 
 ## CREATEDB CREATECLUSTER
 

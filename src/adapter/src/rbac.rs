@@ -18,7 +18,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, SessionCatalog};
+use mz_sql::catalog::{CatalogItemType, CatalogRole, ObjectType, RoleAttributes, SessionCatalog};
 use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
     AbortTransactionPlan, AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
@@ -54,11 +54,11 @@ pub enum UnauthorizedError {
     /// The action can only be performed by a superuser.
     #[error("permission denied to {action}")]
     Superuser { action: String },
-    /// The action requires a specific attribute.
+    /// The action requires a specific system privilege.
     #[error("permission denied to {action}")]
-    Attribute {
+    SystemPrivilege {
         action: String,
-        attributes: Vec<Attribute>,
+        system_privileges: Vec<SystemPrivilege>,
     },
     /// The action requires ownership of an object.
     #[error("must be owner of {}", objects.iter().map(|(object_type, object_name)| format!("{object_type} {object_name}")).join(", "))]
@@ -88,10 +88,13 @@ impl UnauthorizedError {
             UnauthorizedError::Superuser { action } => {
                 Some(format!("You must be a superuser to {}", action))
             }
-            UnauthorizedError::Attribute { action, attributes } => Some(format!(
-                "You must have the {} attribute{} to {}",
-                attributes.iter().join(", "),
-                if attributes.len() > 1 { "s" } else { "" },
+            UnauthorizedError::SystemPrivilege {
+                action,
+                system_privileges,
+            } => Some(format!(
+                "You must have the {} system privilege{} to {}",
+                system_privileges.iter().join(", "),
+                if system_privileges.len() > 1 { "s" } else { "" },
                 action
             )),
             UnauthorizedError::MzSystem { .. } => {
@@ -200,14 +203,16 @@ pub fn check_plan(
         ));
     }
 
-    // Validate that the current session has the required attributes to execute the provided plan.
-    // Note: role attributes are not inherited by role membership.
-    let required_attributes = generate_required_plan_attribute(plan);
-    let unheld_attributes: Vec<_> = required_attributes
-        .into_iter()
-        .filter(|attribute| !attribute.check_role(current_role_id, catalog))
-        .collect();
-    attribute_err(unheld_attributes, plan)?;
+    // Validate that the current session has the required system privileges or attributes to
+    // execute the provided plan.
+    let required_system_privileges = generate_required_system_privileges(plan);
+    check_system_privileges(
+        required_system_privileges,
+        current_role_id,
+        &role_membership,
+        catalog,
+        plan,
+    )?;
 
     // Validate that the current session has the required object ownership to execute the provided
     // plan.
@@ -369,33 +374,33 @@ pub fn generate_required_role_membership(
     }
 }
 
-/// Generates the attributes required to execute a given plan.
-fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
+/// Generates the system privileges required to execute a given plan.
+fn generate_required_system_privileges(plan: &Plan) -> Vec<SystemPrivilege> {
     match plan {
-        Plan::CreateDatabase(_) => vec![Attribute::CreateDB],
-        Plan::CreateCluster(_) => vec![Attribute::CreateCluster],
+        Plan::CreateDatabase(_) => vec![SystemPrivilege::CreateDB],
+        Plan::CreateCluster(_) => vec![SystemPrivilege::CreateCluster],
         Plan::CreateRole(CreateRolePlan { attributes, .. }) => {
-            let mut attributes = Attribute::from_role_attributes(attributes);
-            if !attributes.contains(&Attribute::CreateRole) {
-                attributes.push(Attribute::CreateRole);
+            let mut system_privileges = SystemPrivilege::from_role_attributes(attributes);
+            if !system_privileges.contains(&SystemPrivilege::CreateRole) {
+                system_privileges.push(SystemPrivilege::CreateRole);
             }
-            attributes
+            system_privileges
         }
         Plan::AlterRole(AlterRolePlan { attributes, .. }) => {
-            let mut attributes = Attribute::from_planned_role_attributes(attributes);
-            if !attributes.contains(&Attribute::CreateRole) {
-                attributes.push(Attribute::CreateRole);
+            let mut system_privileges = SystemPrivilege::from_planned_role_attributes(attributes);
+            if !system_privileges.contains(&SystemPrivilege::CreateRole) {
+                system_privileges.push(SystemPrivilege::CreateRole);
             }
-            attributes
+            system_privileges
         }
-        Plan::GrantRole(_) | Plan::RevokeRole(_) => vec![Attribute::CreateRole],
+        Plan::GrantRole(_) | Plan::RevokeRole(_) => vec![SystemPrivilege::CreateRole],
         Plan::DropObjects(plan) if plan.object_type == ObjectType::Role => {
-            vec![Attribute::CreateRole]
+            vec![SystemPrivilege::CreateRole]
         }
         Plan::CreateSource(CreateSourcePlan { cluster_config, .. })
         | Plan::CreateSink(CreateSinkPlan { cluster_config, .. }) => {
             if cluster_config.cluster_id().is_none() {
-                vec![Attribute::CreateCluster]
+                vec![SystemPrivilege::CreateCluster]
             } else {
                 Vec::new()
             }
@@ -405,7 +410,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
                 .iter()
                 .any(|plan| plan.plan.cluster_config.cluster_id().is_none())
             {
-                vec![Attribute::CreateCluster]
+                vec![SystemPrivilege::CreateCluster]
             } else {
                 Vec::new()
             }
@@ -470,11 +475,9 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
     }
 }
 
-/// Attributes that allow a role to execute certain plans.
-///
-/// Note: This is a subset of all role attributes used for privilege checks.
+/// System Privileges that allow a role to execute certain plans.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Attribute {
+pub enum SystemPrivilege {
     /// Allows creating, altering, and dropping roles.
     CreateRole,
     /// Allows creating databases.
@@ -483,89 +486,134 @@ pub enum Attribute {
     CreateCluster,
 }
 
-impl Attribute {
-    /// Reports whether a role has the privilege granted by the attribute.
-    fn check_role(&self, role_id: &RoleId, catalog: &impl SessionCatalog) -> bool {
-        let role = catalog.get_role(role_id);
+impl SystemPrivilege {
+    /// Reports whether a role has the system privilege via an equivalent role attribute.
+    fn check_role_attribute(&self, role: &dyn CatalogRole) -> bool {
         match self {
-            Attribute::CreateRole => role.create_role(),
-            Attribute::CreateDB => role.create_db(),
-            Attribute::CreateCluster => role.create_cluster(),
+            SystemPrivilege::CreateRole => role.create_role(),
+            SystemPrivilege::CreateDB => role.create_db(),
+            SystemPrivilege::CreateCluster => role.create_cluster(),
         }
     }
 
+    /// Returns a Vec of [`Self`] that are equivalent to the passed in [`RoleAttributes`].
     fn from_role_attributes(role_attributes: &RoleAttributes) -> Vec<Self> {
         let mut attributes = Vec::new();
         if role_attributes.create_role {
-            attributes.push(Attribute::CreateRole);
+            attributes.push(SystemPrivilege::CreateRole);
         }
         if role_attributes.create_db {
-            attributes.push(Attribute::CreateDB);
+            attributes.push(SystemPrivilege::CreateDB);
         }
         if role_attributes.create_cluster {
-            attributes.push(Attribute::CreateCluster);
+            attributes.push(SystemPrivilege::CreateCluster);
         }
         attributes
     }
 
+    /// Returns a Vec of [`Self`] that are equivalent to the passed in [`PlannedRoleAttributes`].
     fn from_planned_role_attributes(planned_role_attributes: &PlannedRoleAttributes) -> Vec<Self> {
         let mut attributes = Vec::new();
         if let Some(true) = planned_role_attributes.create_role {
-            attributes.push(Attribute::CreateRole);
+            attributes.push(SystemPrivilege::CreateRole);
         }
         if let Some(true) = planned_role_attributes.create_db {
-            attributes.push(Attribute::CreateDB);
+            attributes.push(SystemPrivilege::CreateDB);
         }
         if let Some(true) = planned_role_attributes.create_cluster {
-            attributes.push(Attribute::CreateCluster);
+            attributes.push(SystemPrivilege::CreateCluster);
         }
         attributes
     }
 }
 
-impl fmt::Display for Attribute {
+impl fmt::Display for SystemPrivilege {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Attribute::CreateRole => f.write_str("CREATEROLE"),
-            Attribute::CreateDB => f.write_str("CREATEDB"),
-            Attribute::CreateCluster => f.write_str("CREATECLUSTER"),
+            SystemPrivilege::CreateRole => f.write_str("CREATEROLE"),
+            SystemPrivilege::CreateDB => f.write_str("CREATEDB"),
+            SystemPrivilege::CreateCluster => f.write_str("CREATECLUSTER"),
         }
     }
 }
 
-fn attribute_err(unheld_attributes: Vec<Attribute>, plan: &Plan) -> Result<(), UnauthorizedError> {
-    if unheld_attributes.is_empty() {
+impl From<&SystemPrivilege> for AclMode {
+    fn from(attribute: &SystemPrivilege) -> Self {
+        match attribute {
+            SystemPrivilege::CreateRole => AclMode::CREATE_ROLE,
+            SystemPrivilege::CreateDB => AclMode::CREATE_DB,
+            SystemPrivilege::CreateCluster => AclMode::CREATE_CLUSTER,
+        }
+    }
+}
+
+// Note: role attributes are not inherited by role membership, but system privileges are.
+fn check_system_privileges(
+    required_system_privileges: Vec<SystemPrivilege>,
+    role_id: &RoleId,
+    role_membership: &BTreeSet<RoleId>,
+    catalog: &impl SessionCatalog,
+    plan: &Plan,
+) -> Result<(), UnauthorizedError> {
+    let role = catalog.get_role(role_id);
+    let held_system_privileges = role_membership
+        .iter()
+        .map(|role_id| catalog.get_system_privileges(role_id))
+        .fold(AclMode::empty(), |accum, system_privilege| {
+            accum.union(system_privilege)
+        });
+    let unheld_system_privileges: Vec<_> = required_system_privileges
+        .into_iter()
+        .filter(|system_privilege| {
+            let system_privilege_acl_mode: AclMode = system_privilege.into();
+            !held_system_privileges.contains(system_privilege_acl_mode)
+                && !system_privilege.check_role_attribute(role)
+        })
+        .collect();
+    system_privilege_err(unheld_system_privileges, plan)
+}
+
+fn system_privilege_err(
+    unheld_system_privileges: Vec<SystemPrivilege>,
+    plan: &Plan,
+) -> Result<(), UnauthorizedError> {
+    if unheld_system_privileges.is_empty() {
         return Ok(());
     }
 
     let mut action = plan.name().to_string();
     // If the plan is `CREATE ROLE` or `ALTER ROLE` then add some more details about the
     // attributes being granted.
-    let attributes: Vec<_> = if let Plan::CreateRole(CreateRolePlan { attributes, .. }) = plan {
-        Attribute::from_role_attributes(attributes)
-            .into_iter()
-            .filter(|attribute| unheld_attributes.contains(attribute))
-            .collect()
-    } else if let Plan::AlterRole(AlterRolePlan { attributes, .. }) = plan {
-        Attribute::from_planned_role_attributes(attributes)
-            .into_iter()
-            .filter(|attribute| unheld_attributes.contains(attribute))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    if !attributes.is_empty() {
+    let attribute_privileges: Vec<_> =
+        if let Plan::CreateRole(CreateRolePlan { attributes, .. }) = plan {
+            SystemPrivilege::from_role_attributes(attributes)
+                .into_iter()
+                .filter(|system_privilege| unheld_system_privileges.contains(system_privilege))
+                .collect()
+        } else if let Plan::AlterRole(AlterRolePlan { attributes, .. }) = plan {
+            SystemPrivilege::from_planned_role_attributes(attributes)
+                .into_iter()
+                .filter(|system_privilege| unheld_system_privileges.contains(system_privilege))
+                .collect()
+        } else {
+            Vec::new()
+        };
+    if !attribute_privileges.is_empty() {
         action = format!(
             "{} with attribute{} {}",
             action,
-            if attributes.len() > 1 { "s" } else { "" },
-            attributes.iter().join(", ")
+            if attribute_privileges.len() > 1 {
+                "s"
+            } else {
+                ""
+            },
+            attribute_privileges.iter().join(", ")
         );
     }
 
-    Err(UnauthorizedError::Attribute {
+    Err(UnauthorizedError::SystemPrivilege {
         action,
-        attributes: unheld_attributes,
+        system_privileges: unheld_system_privileges,
     })
 }
 

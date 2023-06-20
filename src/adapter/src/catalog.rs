@@ -8140,6 +8140,11 @@ impl SessionCatalog for ConnCatalog<'_> {
             ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
         }
     }
+    fn get_system_privileges(&self, role_id: &RoleId) -> AclMode {
+        self.state()
+            .system_privileges
+            .get_all_privileges_for_grantee(role_id)
+    }
 
     fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
