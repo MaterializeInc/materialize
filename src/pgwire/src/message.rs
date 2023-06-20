@@ -420,7 +420,10 @@ impl ErrorResponse {
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
             }
-            AdapterNotice::UserRequested { .. } => SqlState::WARNING,
+            AdapterNotice::UserRequested { code, .. } => match code {
+                Some(code) => SqlState::from_code(code),
+                None => SqlState::WARNING,
+            },
             AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
@@ -584,7 +587,7 @@ impl Severity {
             AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
             AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
-            AdapterNotice::UserRequested { severity } => match severity {
+            AdapterNotice::UserRequested { severity, .. } => match severity {
                 NoticeSeverity::Debug => Severity::Debug,
                 NoticeSeverity::Info => Severity::Info,
                 NoticeSeverity::Log => Severity::Log,

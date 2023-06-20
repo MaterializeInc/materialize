@@ -437,9 +437,18 @@ impl Coordinator {
                     ctx.retire(Ok(ExecuteResponse::Deallocate { all: true }));
                 }
             },
-            Plan::Raise(RaisePlan { severity }) => {
-                ctx.session()
-                    .add_notice(AdapterNotice::UserRequested { severity });
+            Plan::Raise(RaisePlan {
+                severity,
+                code,
+                detail,
+                hint,
+            }) => {
+                ctx.session().add_notice(AdapterNotice::UserRequested {
+                    severity,
+                    code,
+                    detail,
+                    hint,
+                });
                 ctx.retire(Ok(ExecuteResponse::Raised));
             }
             Plan::RotateKeys(RotateKeysPlan { id }) => {

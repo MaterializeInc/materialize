@@ -52,6 +52,9 @@ pub enum AdapterNotice {
     ExplicitTransactionControlInImplicitTransaction,
     UserRequested {
         severity: NoticeSeverity,
+        code: Option<String>,
+        detail: Option<String>,
+        hint: Option<String>,
     },
     ClusterReplicaStatusChanged {
         cluster: String,
@@ -114,6 +117,7 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::UserRequested { detail, .. } => detail.clone(),
             _ => None,
         }
     }
@@ -136,6 +140,7 @@ impl AdapterNotice {
             AdapterNotice::RbacSystemDisabled => Some("To enable RBAC please reach out to support with a request to turn RBAC on.".into()),
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
             AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
+            AdapterNotice::UserRequested { hint, .. } => hint.clone(),
             _ => None
         }
     }
@@ -175,7 +180,7 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
                 write!(f, "there is no transaction in progress")
             }
-            AdapterNotice::UserRequested { severity } => {
+            AdapterNotice::UserRequested { severity, .. } => {
                 write!(f, "raised a test {}", severity.to_string().to_lowercase())
             }
             AdapterNotice::ClusterReplicaStatusChanged {

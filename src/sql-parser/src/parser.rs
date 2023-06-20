@@ -6229,8 +6229,25 @@ impl<'a> Parser<'a> {
             Some(_) => unreachable!(),
             None => self.expected(self.peek_pos(), "severity level", self.peek_token())?,
         };
+        let code = self
+            .parse_keyword(CODE)
+            .then(|| self.parse_literal_string())
+            .transpose()?;
+        let detail = self
+            .parse_keyword(DETAIL)
+            .then(|| self.parse_literal_string())
+            .transpose()?;
+        let hint = self
+            .parse_keyword(HINT)
+            .then(|| self.parse_literal_string())
+            .transpose()?;
 
-        Ok(Statement::Raise(RaiseStatement { severity }))
+        Ok(Statement::Raise(RaiseStatement {
+            severity,
+            code,
+            detail,
+            hint,
+        }))
     }
 
     /// Parse a `GRANT` statement, assuming that the `GRANT` token
