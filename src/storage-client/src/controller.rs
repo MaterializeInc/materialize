@@ -2143,7 +2143,9 @@ where
                     .await
                     .expect("stash operation must succeed");
 
-                self.finalize_shards().await;
+                // TODO: Disabled in a patch release for incident-51. We should
+                // add a feature flag for this in the future.
+                // self.finalize_shards().await;
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
