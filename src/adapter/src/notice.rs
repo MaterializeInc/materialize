@@ -112,7 +112,10 @@ pub enum AdapterNotice {
 impl AdapterNotice {
     /// Reports additional details about the notice, if any are available.
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            AdapterNotice::PlanNotice(notice) => notice.detail(),
+            _ => None,
+        }
     }
 
     /// Reports a hint for the user about how the notice could be addressed.
@@ -133,7 +136,6 @@ impl AdapterNotice {
             AdapterNotice::RbacSystemDisabled => Some("To enable RBAC please reach out to support with a request to turn RBAC on.".into()),
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
             AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
-            AdapterNotice::PlanNotice(notice) => notice.detail(),
             _ => None
         }
     }
