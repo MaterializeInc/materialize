@@ -58,7 +58,6 @@ use mz_storage_client::types::sources::{
 };
 use prost::Message;
 use regex::Regex;
-use tracing::warn;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -2062,15 +2061,16 @@ pub fn plan_create_sink(
                     desc.typ().keys.iter().any(|key_columns| {
                         key_columns.iter().all(|column| indices.contains(column))
                     });
-                if key.not_enforced && envelope == SinkEnvelope::Upsert {
-                    // TODO: We should report a warning notice back to the user via the pgwire
-                    // protocol. See https://github.com/MaterializeInc/materialize/issues/9333.
-                    warn!(
-                        "Verification of upsert key disabled for sink '{}' via 'NOT ENFORCED'. This is potentially dangerous and can lead to crashing materialize when the specified key is not in fact a unique key of the sinked view.",
-                        name
-                    );
-                } else if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                    return Err(invalid_upsert_key_err(&desc, &key_columns));
+
+                if !is_valid_key && envelope == SinkEnvelope::Upsert {
+                    if key.not_enforced {
+                        scx.catalog.add_notice(PlanNotice::KeyNotEnforced {
+                            key: key_columns.clone(),
+                            name: name.item.clone(),
+                        })
+                    } else {
+                        return Err(invalid_upsert_key_err(&desc, &key_columns));
+                    }
                 }
                 Some(indices)
             } else {

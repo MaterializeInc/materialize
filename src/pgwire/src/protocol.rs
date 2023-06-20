@@ -19,7 +19,9 @@ use itertools::izip;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
-use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
+use mz_adapter::{
+    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
+};
 use mz_frontegg_auth::{Authentication as FronteggAuthentication, Claims};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -1397,10 +1399,12 @@ where
                 id,
                 columns,
                 params,
+                ctx_extra,
             } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.copy_from(id, columns, params, row_desc).await
+                self.copy_from(id, columns, params, row_desc, ctx_extra)
+                    .await
             }
             ExecuteResponse::TransactionCommitted { params }
             | ExecuteResponse::TransactionRolledBack { params } => {
@@ -1768,6 +1772,7 @@ where
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
+        ctx_extra: ExecuteContextExtra,
     ) -> Result<State, io::Error> {
         let typ = row_desc.typ();
         let column_formats = vec![mz_pgrepr::Format::Text; typ.column_types.len()];
@@ -1831,7 +1836,11 @@ where
 
             let count = rows.len();
 
-            if let Err(e) = self.adapter_client.insert_rows(id, columns, rows).await {
+            if let Err(e) = self
+                .adapter_client
+                .insert_rows(id, columns, rows, ctx_extra)
+                .await
+            {
                 return self
                     .error(ErrorResponse::from_adapter_error(Severity::Error, e))
                     .await;

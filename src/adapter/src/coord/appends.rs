@@ -26,8 +26,8 @@ use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
 use crate::coord::{Coordinator, Message, PendingTxn};
 use crate::session::{Session, WriteOp};
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
-use crate::ExecuteResponse;
+use crate::util::{CompletedClientTransmitter, ResultExt};
+use crate::ExecuteContext;
 
 /// An operation that is deferred while waiting for a lock.
 #[derive(Debug)]
@@ -42,8 +42,7 @@ pub(crate) enum Deferred {
 #[derivative(Debug)]
 pub(crate) struct DeferredPlan {
     #[derivative(Debug = "ignore")]
-    pub tx: ClientTransmitter<ExecuteResponse>,
-    pub session: Session,
+    pub ctx: ExecuteContext,
     pub plan: Plan,
 }
 
@@ -117,12 +116,14 @@ impl PendingWriteTxn {
 /// deferring work.
 #[macro_export]
 macro_rules! guard_write_critical_section {
-    ($coord:expr, $tx:expr, $session:expr, $plan_to_defer: expr) => {
-        if !$session.has_write_lock() {
-            if $coord.try_grant_session_write_lock(&mut $session).is_err() {
+    ($coord:expr, $ctx:expr, $plan_to_defer: expr) => {
+        if !$ctx.session().has_write_lock() {
+            if $coord
+                .try_grant_session_write_lock($ctx.session_mut())
+                .is_err()
+            {
                 $coord.defer_write(Deferred::Plan(DeferredPlan {
-                    tx: $tx,
-                    session: $session,
+                    ctx: $ctx,
                     plan: $plan_to_defer,
                 }));
                 return;
@@ -252,9 +253,8 @@ impl Coordinator {
                     write_lock_guard: _,
                     pending_txn:
                         PendingTxn {
-                            client_transmitter,
+                            ctx,
                             response,
-                            session,
                             action,
                         },
                 } => {
@@ -268,12 +268,7 @@ impl Coordinator {
                             appends.entry(id).or_default().extend(rows);
                         }
                     }
-                    responses.push(CompletedClientTransmitter::new(
-                        client_transmitter,
-                        response,
-                        session,
-                        action,
-                    ));
+                    responses.push(CompletedClientTransmitter::new(ctx, response, action));
                 }
                 PendingWriteTxn::System { updates, .. } => {
                     for update in updates {
@@ -356,12 +351,13 @@ impl Coordinator {
     pub(crate) async fn group_commit_apply(
         &mut self,
         timestamp: Timestamp,
-        responses: Vec<CompletedClientTransmitter<ExecuteResponse>>,
+        responses: Vec<CompletedClientTransmitter>,
         _write_lock_guard: Option<OwnedMutexGuard<()>>,
     ) {
         self.apply_local_write(timestamp).await;
         for response in responses {
-            response.send();
+            let (ctx, result) = response.finalize();
+            ctx.retire(result);
         }
 
         // Advancing timelines will update all timeline read holds, and update the read timestamps
@@ -421,7 +417,7 @@ impl Coordinator {
     /// return after calling it.
     pub(crate) fn defer_write(&mut self, deferred: Deferred) {
         let id = match &deferred {
-            Deferred::Plan(plan) => plan.session.conn_id().to_string(),
+            Deferred::Plan(plan) => plan.ctx.session().conn_id().to_string(),
             Deferred::GroupCommit => "group_commit".to_string(),
         };
         self.write_lock_wait_group.push_back(deferred);

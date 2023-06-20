@@ -43,15 +43,48 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::{catalog, metrics, rbac};
+use crate::{catalog, metrics, rbac, ExecuteContext};
+
+use super::ExecuteContextExtra;
 
 impl Coordinator {
+    pub(crate) fn retire_execute(&mut self, _data: ExecuteContextExtra) {
+        // Do nothing, for now.
+        // In the future this is where we will log that statement execution finished.
+    }
+    fn send_error(&mut self, cmd: Command, e: AdapterError) {
+        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
+            let _ = tx.send(Response::<T> {
+                result: Err(e),
+                session,
+            });
+        }
+        match cmd {
+            Command::Startup { tx, session, .. } => send(tx, session, e),
+            Command::Declare { tx, session, .. } => send(tx, session, e),
+            Command::Prepare { tx, session, .. } => send(tx, session, e),
+            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
+            Command::Execute { tx, session, .. } => send(tx, session, e),
+            Command::Commit { tx, session, .. } => send(tx, session, e),
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
+            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
+            Command::CopyRows { tx, session, .. } => send(tx, session, e),
+            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::Terminate { tx, session, .. } => {
+                if let Some(tx) = tx {
+                    send(tx, session, e)
+                }
+            }
+        }
+    }
+
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session_mut() {
             session.apply_external_metadata_updates();
         }
         if let Err(e) = rbac::check_command(self.catalog(), &cmd) {
-            cmd.send_error(e.into());
+            self.send_error(cmd, e.into());
             return;
         }
         match cmd {
@@ -72,11 +105,15 @@ impl Coordinator {
                 span,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let ctx = ExecuteContext::from_parts(
+                    tx,
+                    self.internal_cmd_tx.clone(),
+                    session,
+                    ExecuteContextExtra,
+                );
 
                 let span = tracing::debug_span!(parent: &span, "message_command (execute)");
-                self.handle_execute(portal_name, session, tx)
-                    .instrument(span)
-                    .await;
+                self.handle_execute(portal_name, ctx).instrument(span).await;
             }
 
             Command::Declare {
@@ -87,7 +124,13 @@ impl Coordinator {
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.declare(tx, session, name, stmt, param_types);
+                let ctx = ExecuteContext::from_parts(
+                    tx,
+                    self.internal_cmd_tx.clone(),
+                    session,
+                    Default::default(),
+                );
+                self.declare(ctx, name, stmt, param_types);
             }
 
             Command::Prepare {
@@ -123,10 +166,16 @@ impl Coordinator {
                 rows,
                 session,
                 tx,
+                ctx_extra,
             } => {
-                self.sequence_plan(
+                let ctx = ExecuteContext::from_parts(
                     ClientTransmitter::new(tx, self.internal_cmd_tx.clone()),
+                    self.internal_cmd_tx.clone(),
                     session,
+                    ctx_extra,
+                );
+                self.sequence_plan(
+                    ctx,
                     Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
                     Vec::new(),
                 )
@@ -182,6 +231,16 @@ impl Coordinator {
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                // We reach here not through a statement execution, but from the
+                // "commit" pgwire command. Thus, we just generate a default statement
+                // execution context (once statement logging is implemented, this will cause nothing to be logged
+                // when the execution finishes.)
+                let ctx = ExecuteContext::from_parts(
+                    tx,
+                    self.internal_cmd_tx.clone(),
+                    session,
+                    Default::default(),
+                );
                 let plan = match action {
                     EndTransactionAction::Commit => {
                         Plan::CommitTransaction(CommitTransactionPlan {
@@ -194,7 +253,7 @@ impl Coordinator {
                         })
                     }
                 };
-                self.sequence_plan(tx, session, plan, Vec::new()).await;
+                self.sequence_plan(ctx, plan, Vec::new()).await;
             }
 
             Command::VerifyPreparedStatement {
@@ -291,39 +350,35 @@ impl Coordinator {
 
     /// Handles an execute command.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn handle_execute(
-        &mut self,
-        portal_name: String,
-        mut session: Session,
-        tx: ClientTransmitter<ExecuteResponse>,
-    ) {
-        if session.vars().emit_trace_id_notice() {
+    pub(crate) async fn handle_execute(&mut self, portal_name: String, mut ctx: ExecuteContext) {
+        if ctx.session().vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
                 .context()
                 .span()
                 .span_context()
                 .clone();
             if span_context.is_valid() {
-                session.add_notice(AdapterNotice::QueryTrace {
+                ctx.session().add_notice(AdapterNotice::QueryTrace {
                     trace_id: span_context.trace_id(),
                 });
             }
         }
 
-        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
-            return tx.send(Err(err), session);
+        if let Err(err) = self.verify_portal(ctx.session_mut(), &portal_name) {
+            return ctx.retire(Err(err));
         }
 
-        let portal = session
+        let portal = ctx
+            .session()
             .get_portal_unverified(&portal_name)
             .expect("known to exist");
 
         let stmt = match &portal.stmt {
             Some(stmt) => stmt.clone(),
-            None => return tx.send(Ok(ExecuteResponse::EmptyQuery), session),
+            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
         };
 
-        let session_type = metrics::session_type_label_value(session.user());
+        let session_type = metrics::session_type_label_value(ctx.session().user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
         self.metrics
             .query_total
@@ -347,20 +402,19 @@ impl Coordinator {
         }
 
         let params = portal.parameters.clone();
-        self.handle_execute_inner(stmt, params, session, tx).await
+        self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[tracing::instrument(level = "trace", skip(self, tx, session))]
+    #[tracing::instrument(level = "trace", skip(self, ctx))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Statement<Raw>,
         params: Params,
-        mut session: Session,
-        tx: ClientTransmitter<ExecuteResponse>,
+        mut ctx: ExecuteContext,
     ) {
         // Verify that this statement type can be executed in the current
         // transaction state.
-        match session.transaction() {
+        match ctx.session().transaction() {
             // By this point we should be in a running transaction.
             TransactionStatus::Default => unreachable!(),
 
@@ -381,12 +435,9 @@ impl Coordinator {
                     // it, it will always result in nothing happening, since all portals will be
                     // immediately closed. Users don't know this detail, so this error helps them
                     // understand what's going wrong. Postgres does this too.
-                    return tx.send(
-                        Err(AdapterError::OperationRequiresTransaction(
-                            "DECLARE CURSOR".into(),
-                        )),
-                        session,
-                    );
+                    return ctx.retire(Err(AdapterError::OperationRequiresTransaction(
+                        "DECLARE CURSOR".into(),
+                    )));
                 }
 
                 // TODO(mjibson): The current code causes DDL statements (well, any statement
@@ -485,23 +536,20 @@ impl Coordinator {
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ReassignOwned(_) => {
-                        return tx.send(
-                            Err(AdapterError::OperationProhibitsTransaction(
-                                stmt.to_string(),
-                            )),
-                            session,
-                        )
+                        return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
+                            stmt.to_string(),
+                        )))
                     }
                 }
             }
         }
 
         let catalog = self.catalog();
-        let catalog = catalog.for_session(&session);
+        let catalog = catalog.for_session(ctx.session());
         let original_stmt = stmt.clone();
         let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
         let depends_on = depends_on.into_iter().collect();
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
@@ -515,7 +563,7 @@ impl Coordinator {
             // coordinator thread of control.
             Statement::CreateSource(stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id().clone();
+                let conn_id = ctx.session().conn_id().clone();
                 let purify_fut = mz_sql::pure::purify_create_source(
                     Box::new(catalog.into_owned()),
                     self.now(),
@@ -528,8 +576,7 @@ impl Coordinator {
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
                         CreateSourceStatementReady {
-                            session,
-                            tx,
+                            ctx,
                             result,
                             params,
                             depends_on,
@@ -545,15 +592,14 @@ impl Coordinator {
 
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
             // automatically as part of purification
-            Statement::CreateSubsource(_) => tx.send(
-                Err(AdapterError::Unsupported("CREATE SUBSOURCE statements")),
-                session,
-            ),
+            Statement::CreateSubsource(_) => ctx.retire(Err(AdapterError::Unsupported(
+                "CREATE SUBSOURCE statements",
+            ))),
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(&mut session, stmt, &params) {
-                Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
-                Err(e) => tx.send(Err(e), session),
+            _ => match self.plan_statement(ctx.session_mut(), stmt, &params) {
+                Ok(plan) => self.sequence_plan(ctx, plan, depends_on).await,
+                Err(e) => ctx.retire(Err(e)),
             },
         }
     }
@@ -621,23 +667,19 @@ impl Coordinator {
     fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // Cancel pending writes. There is at most one pending write per session.
+            let mut maybe_ctx = None;
             if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
                 matches!(pending_write_txn, PendingWriteTxn::User {
-                    pending_txn: PendingTxn { session, .. },
+                    pending_txn: PendingTxn { ctx, .. },
                     ..
-                } if *session.conn_id() == conn_id)
+                } if *ctx.session().conn_id() == conn_id)
             }) {
                 if let PendingWriteTxn::User {
-                    pending_txn:
-                        PendingTxn {
-                            client_transmitter,
-                            session,
-                            ..
-                        },
+                    pending_txn: PendingTxn { ctx, .. },
                     ..
                 } = self.pending_writes.remove(idx)
                 {
-                    let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                    maybe_ctx = Some(ctx);
                 }
             }
 
@@ -645,11 +687,11 @@ impl Coordinator {
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
-                .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.session.conn_id() == conn_id))
+                .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
             {
                 let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
                 if let Deferred::Plan(ready) = ready {
-                    ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
+                    maybe_ctx = Some(ready.ctx);
                 }
             }
 
@@ -657,8 +699,12 @@ impl Coordinator {
             if let Some(real_time_recency_context) =
                 self.pending_real_time_recency_timestamp.remove(&conn_id)
             {
-                let (tx, session) = real_time_recency_context.take_tx_and_session();
-                tx.send(Ok(ExecuteResponse::Canceled), session);
+                let ctx = real_time_recency_context.take_context();
+                maybe_ctx = Some(ctx);
+            }
+
+            if let Some(ctx) = maybe_ctx {
+                ctx.retire(Ok(ExecuteResponse::Canceled));
             }
 
             // Inform the target session (if it asks) about the cancellation.

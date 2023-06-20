@@ -23,7 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};

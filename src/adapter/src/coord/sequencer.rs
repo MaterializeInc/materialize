@@ -24,14 +24,14 @@ use mz_sql::plan::{
 };
 use tracing::{event, Level};
 
-use crate::command::{Command, ExecuteResponse};
+use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::rbac;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
-use crate::util::{send_immediate_rows, ClientTransmitter};
+use crate::util::send_immediate_rows;
+use crate::{rbac, ExecuteContext};
 
 // DO NOT make this visible in anyway, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -56,55 +56,52 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
-        mut tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
-        tx.set_allowed(responses);
+        ctx.tx_mut().set_allowed(responses);
 
-        let session_catalog = self.catalog.for_session(&session);
+        let session_catalog = self.catalog.for_session(ctx.session());
 
         if let Err(e) =
-            introspection::user_privilege_hack(&session_catalog, &session, &plan, &depends_on)
+            introspection::user_privilege_hack(&session_catalog, ctx.session(), &plan, &depends_on)
         {
-            return tx.send(Err(e), session);
+            return ctx.retire(Err(e));
         }
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
-            return tx.send(Err(e), session);
+            return ctx.retire(Err(e));
         }
 
         // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
         // session var is set, then we automatically run the query on the mz_introspection cluster.
         let target_cluster =
-            introspection::auto_run_on_introspection(&self.catalog, &session, &plan);
+            introspection::auto_run_on_introspection(&self.catalog, ctx.session(), &plan);
         let target_cluster_id = self
             .catalog()
-            .resolve_target_cluster(target_cluster, &session)
+            .resolve_target_cluster(target_cluster, ctx.session())
             .ok()
             .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
             &session_catalog,
-            &session,
+            ctx.session(),
             &plan,
             target_cluster_id,
             &depends_on,
         ) {
-            return tx.send(Err(e), session);
+            return ctx.retire(Err(e));
         }
 
         match plan {
             Plan::CreateSource(plan) => {
-                let source_id =
-                    return_if_err!(self.catalog_mut().allocate_user_id().await, tx, session);
-                tx.send(
-                    self.sequence_create_source(&mut session, vec![(source_id, plan, depends_on)])
-                        .await,
-                    session,
-                );
+                let source_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+                let result = self
+                    .sequence_create_source(ctx.session_mut(), vec![(source_id, plan, depends_on)])
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateSources(plans) => {
                 assert!(depends_on.is_empty(), "each plan has separate depends_on");
@@ -112,127 +109,122 @@ impl Coordinator {
                     .into_iter()
                     .map(|plan| (plan.source_id, plan.plan, plan.depends_on))
                     .collect();
-                tx.send(
-                    self.sequence_create_source(&mut session, plans).await,
-                    session,
-                );
+                let result = self.sequence_create_source(ctx.session_mut(), plans).await;
+                ctx.retire(result);
             }
             Plan::CreateConnection(plan) => {
-                tx.send(
-                    self.sequence_create_connection(&mut session, plan, depends_on)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_create_connection(ctx.session_mut(), plan, depends_on)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateDatabase(plan) => {
-                tx.send(
-                    self.sequence_create_database(&mut session, plan).await,
-                    session,
-                );
+                let result = self.sequence_create_database(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::CreateSchema(plan) => {
-                tx.send(
-                    self.sequence_create_schema(&mut session, plan).await,
-                    session,
-                );
+                let result = self.sequence_create_schema(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::CreateRole(plan) => {
-                let res = self.sequence_create_role(&session, plan).await;
-                if res.is_ok() {
-                    self.maybe_send_rbac_notice(&session);
+                let result = self.sequence_create_role(ctx.session(), plan).await;
+                if result.is_ok() {
+                    self.maybe_send_rbac_notice(ctx.session());
                 }
-                tx.send(res, session);
+                ctx.retire(result);
             }
             Plan::CreateCluster(plan) => {
-                tx.send(self.sequence_create_cluster(&session, plan).await, session);
+                let result = self.sequence_create_cluster(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::CreateClusterReplica(plan) => {
-                tx.send(
-                    self.sequence_create_cluster_replica(&session, plan).await,
-                    session,
-                );
+                let result = self
+                    .sequence_create_cluster_replica(ctx.session(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateTable(plan) => {
-                tx.send(
-                    self.sequence_create_table(&mut session, plan, depends_on)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_create_table(ctx.session_mut(), plan, depends_on)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateSecret(plan) => {
-                tx.send(
-                    self.sequence_create_secret(&mut session, plan).await,
-                    session,
-                );
+                let result = self.sequence_create_secret(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, plan, depends_on, tx)
-                    .await;
+                self.sequence_create_sink(ctx, plan, depends_on).await;
             }
             Plan::CreateView(plan) => {
-                tx.send(
-                    self.sequence_create_view(&mut session, plan, depends_on)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_create_view(ctx.session_mut(), plan, depends_on)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateMaterializedView(plan) => {
-                tx.send(
-                    self.sequence_create_materialized_view(&mut session, plan)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_create_materialized_view(ctx.session_mut(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateIndex(plan) => {
-                tx.send(
-                    self.sequence_create_index(&mut session, plan, depends_on)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_create_index(ctx.session_mut(), plan, depends_on)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateType(plan) => {
-                tx.send(
-                    self.sequence_create_type(&session, plan, depends_on).await,
-                    session,
-                );
+                let result = self
+                    .sequence_create_type(ctx.session(), plan, depends_on)
+                    .await;
+                ctx.retire(result);
             }
             Plan::DropObjects(plan) => {
-                tx.send(
-                    self.sequence_drop_objects(&mut session, plan).await,
-                    session,
-                );
+                let result = self.sequence_drop_objects(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::DropOwned(plan) => {
-                tx.send(self.sequence_drop_owned(&mut session, plan).await, session);
+                let result = self.sequence_drop_owned(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::EmptyQuery => {
-                tx.send(Ok(ExecuteResponse::EmptyQuery), session);
+                ctx.retire(Ok(ExecuteResponse::EmptyQuery));
             }
             Plan::ShowAllVariables => {
-                tx.send(self.sequence_show_all_variables(&session), session);
+                let result = self.sequence_show_all_variables(ctx.session());
+                ctx.retire(result);
             }
             Plan::ShowVariable(plan) => {
-                tx.send(self.sequence_show_variable(&session, plan), session);
+                let result = self.sequence_show_variable(ctx.session(), plan);
+                ctx.retire(result);
             }
             Plan::SetVariable(plan) => {
-                tx.send(self.sequence_set_variable(&mut session, plan), session);
+                let result = self.sequence_set_variable(ctx.session_mut(), plan);
+                ctx.retire(result);
             }
             Plan::ResetVariable(plan) => {
-                tx.send(self.sequence_reset_variable(&mut session, plan), session);
+                let result = self.sequence_reset_variable(ctx.session_mut(), plan);
+                ctx.retire(result);
             }
             Plan::SetTransaction(plan) => {
-                tx.send(self.sequence_set_transaction(&mut session, plan), session);
+                let result = self.sequence_set_transaction(ctx.session_mut(), plan);
+                ctx.retire(result);
             }
             Plan::StartTransaction(plan) => {
-                if matches!(session.transaction(), TransactionStatus::InTransaction(_)) {
-                    session.add_notice(AdapterNotice::ExistingTransactionInProgress);
+                if matches!(
+                    ctx.session().transaction(),
+                    TransactionStatus::InTransaction(_)
+                ) {
+                    ctx.session()
+                        .add_notice(AdapterNotice::ExistingTransactionInProgress);
                 }
-                let (session, result) = session.start_transaction(
+                let result = ctx.session_mut().start_transaction(
                     self.now_datetime(),
                     plan.access,
                     plan.isolation_level,
                 );
-                tx.send(result.map(|_| ExecuteResponse::StartedTransaction), session)
+                ctx.retire(result.map(|_| ExecuteResponse::StartedTransaction))
             }
             Plan::CommitTransaction(CommitTransactionPlan {
                 ref transaction_type,
@@ -245,174 +237,169 @@ impl Coordinator {
                     Plan::AbortTransaction(_) => EndTransactionAction::Rollback,
                     _ => unreachable!(),
                 };
-                if session.transaction().is_implicit() && !transaction_type.is_implicit() {
+                if ctx.session().transaction().is_implicit() && !transaction_type.is_implicit() {
                     // In Postgres, if a user sends a COMMIT or ROLLBACK in an
                     // implicit transaction, a warning is sent warning them.
                     // (The transaction is still closed and a new implicit
                     // transaction started, though.)
-                    session
+                    ctx.session()
                         .add_notice(AdapterNotice::ExplicitTransactionControlInImplicitTransaction);
                 }
-                self.sequence_end_transaction(tx, session, action);
+                self.sequence_end_transaction(ctx, action);
             }
             Plan::Peek(plan) => {
-                self.sequence_peek(tx, session, plan, target_cluster).await;
+                self.sequence_peek(ctx, plan, target_cluster).await;
             }
             Plan::Subscribe(plan) => {
-                tx.send(
-                    self.sequence_subscribe(&mut session, plan, depends_on, target_cluster)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_subscribe(ctx.session_mut(), plan, depends_on, target_cluster)
+                    .await;
+                ctx.retire(result);
             }
             Plan::ShowCreate(plan) => {
-                tx.send(Ok(send_immediate_rows(vec![plan.row])), session);
+                ctx.retire(Ok(send_immediate_rows(vec![plan.row])));
             }
             Plan::CopyFrom(plan) => {
+                let (tx, _, session, ctx_extra) = ctx.into_parts();
                 tx.send(
                     Ok(ExecuteResponse::CopyFrom {
                         id: plan.id,
                         columns: plan.columns,
                         params: plan.params,
+                        ctx_extra,
                     }),
                     session,
                 );
             }
             Plan::CopyRows(CopyRowsPlan { id, columns, rows }) => {
-                self.sequence_copy_rows(tx, session, id, columns, rows);
+                self.sequence_copy_rows(ctx, id, columns, rows);
             }
             Plan::Explain(plan) => {
-                self.sequence_explain(tx, session, plan, target_cluster);
+                self.sequence_explain(ctx, plan, target_cluster);
             }
             Plan::Insert(plan) => {
-                self.sequence_insert(tx, session, plan).await;
+                self.sequence_insert(ctx, plan).await;
             }
             Plan::ReadThenWrite(plan) => {
-                self.sequence_read_then_write(tx, session, plan).await;
+                self.sequence_read_then_write(ctx, plan).await;
             }
-            Plan::AlterNoop(mz_sql::plan::AlterNoopPlan { object_type }) => {
-                tx.send(Ok(ExecuteResponse::AlteredObject(object_type)), session);
+            Plan::AlterNoop(plan) => {
+                ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
             }
             Plan::AlterCluster(plan) => {
-                tx.send(self.sequence_alter_cluster(&session, plan).await, session);
+                let result = self.sequence_alter_cluster(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterClusterRename(plan) => {
-                tx.send(
-                    self.sequence_alter_cluster_rename(&session, plan).await,
-                    session,
-                );
+                let result = self
+                    .sequence_alter_cluster_rename(ctx.session(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::AlterClusterReplicaRename(plan) => {
-                tx.send(
-                    self.sequence_alter_cluster_replica_rename(&session, plan)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_alter_cluster_replica_rename(ctx.session(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::AlterItemRename(plan) => {
-                tx.send(
-                    self.sequence_alter_item_rename(&session, plan).await,
-                    session,
-                );
+                let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterIndexSetOptions(plan) => {
-                tx.send(self.sequence_alter_index_set_options(plan), session);
+                let result = self.sequence_alter_index_set_options(plan);
+                ctx.retire(result);
             }
             Plan::AlterIndexResetOptions(plan) => {
-                tx.send(self.sequence_alter_index_reset_options(plan), session);
+                let result = self.sequence_alter_index_reset_options(plan);
+                ctx.retire(result);
             }
             Plan::AlterRole(plan) => {
-                let res = self.sequence_alter_role(&session, plan).await;
-                if res.is_ok() {
-                    self.maybe_send_rbac_notice(&session);
+                let result = self.sequence_alter_role(ctx.session(), plan).await;
+                if result.is_ok() {
+                    self.maybe_send_rbac_notice(ctx.session());
                 }
-                tx.send(res, session);
+                ctx.retire(result);
             }
             Plan::AlterSecret(plan) => {
-                tx.send(self.sequence_alter_secret(&session, plan).await, session);
+                let result = self.sequence_alter_secret(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterSink(plan) => {
-                tx.send(self.sequence_alter_sink(&session, plan).await, session);
+                let result = self.sequence_alter_sink(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterSource(plan) => {
-                tx.send(self.sequence_alter_source(&session, plan).await, session);
+                let result = self.sequence_alter_source(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterSystemSet(plan) => {
-                tx.send(
-                    self.sequence_alter_system_set(&session, plan).await,
-                    session,
-                );
+                let result = self.sequence_alter_system_set(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterSystemReset(plan) => {
-                tx.send(
-                    self.sequence_alter_system_reset(&session, plan).await,
-                    session,
-                );
+                let result = self.sequence_alter_system_reset(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterSystemResetAll(plan) => {
-                tx.send(
-                    self.sequence_alter_system_reset_all(&session, plan).await,
-                    session,
-                );
+                let result = self
+                    .sequence_alter_system_reset_all(ctx.session(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(&session).await;
-                tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
+                self.drop_temp_items(ctx.session()).await;
+                ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
             }
             Plan::DiscardAll => {
-                let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(&session).await;
+                let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
+                    self.drop_temp_items(ctx.session()).await;
                     let conn_meta = self
                         .active_conns
-                        .get_mut(session.conn_id())
+                        .get_mut(ctx.session().conn_id())
                         .expect("must exist for active session");
                     let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
                     self.drop_compute_sinks(drop_sinks);
-                    session.reset();
+                    ctx.session_mut().reset();
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(AdapterError::OperationProhibitsTransaction(
                         "DISCARD ALL".into(),
                     ))
                 };
-                tx.send(ret, session);
+                ctx.retire(ret);
             }
             Plan::Declare(plan) => {
                 let param_types = vec![];
-                self.declare(tx, session, plan.name, plan.stmt, param_types);
+                self.declare(ctx, plan.name, plan.stmt, param_types);
             }
             Plan::Fetch(FetchPlan {
                 name,
                 count,
                 timeout,
             }) => {
-                tx.send(
-                    Ok(ExecuteResponse::Fetch {
-                        name,
-                        count,
-                        timeout,
-                    }),
-                    session,
-                );
+                ctx.retire(Ok(ExecuteResponse::Fetch {
+                    name,
+                    count,
+                    timeout,
+                }));
             }
             Plan::Close(plan) => {
-                if session.remove_portal(&plan.name) {
-                    tx.send(Ok(ExecuteResponse::ClosedCursor), session);
+                if ctx.session_mut().remove_portal(&plan.name) {
+                    ctx.retire(Ok(ExecuteResponse::ClosedCursor));
                 } else {
-                    tx.send(Err(AdapterError::UnknownCursor(plan.name)), session);
+                    ctx.retire(Err(AdapterError::UnknownCursor(plan.name)));
                 }
             }
             Plan::Prepare(plan) => {
-                if session
+                if ctx
+                    .session()
                     .get_prepared_statement_unverified(&plan.name)
                     .is_some()
                 {
-                    tx.send(
-                        Err(AdapterError::PreparedStatementExists(plan.name)),
-                        session,
-                    );
+                    ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                 } else {
-                    session.set_prepared_statement(
+                    ctx.session_mut().set_prepared_statement(
                         plan.name,
                         PreparedStatement::new(
                             Some(plan.stmt),
@@ -420,77 +407,78 @@ impl Coordinator {
                             self.catalog().transient_revision(),
                         ),
                     );
-                    tx.send(Ok(ExecuteResponse::Prepare), session);
+                    ctx.retire(Ok(ExecuteResponse::Prepare));
                 }
             }
             Plan::Execute(plan) => {
-                match self.sequence_execute(&mut session, plan) {
+                match self.sequence_execute(ctx.session_mut(), plan) {
                     Ok(portal_name) => {
                         self.internal_cmd_tx
-                            .send(Message::Command(Command::Execute {
+                            .send(Message::Execute {
                                 portal_name,
-                                session,
-                                tx: tx.take(),
+                                ctx,
                                 span: tracing::Span::none(),
-                            }))
+                            })
                             .expect("sending to self.internal_cmd_tx cannot fail");
                     }
-                    Err(err) => tx.send(Err(err), session),
+                    Err(err) => ctx.retire(Err(err)),
                 };
             }
             Plan::Deallocate(plan) => match plan.name {
                 Some(name) => {
-                    if session.remove_prepared_statement(&name) {
-                        tx.send(Ok(ExecuteResponse::Deallocate { all: false }), session);
+                    if ctx.session_mut().remove_prepared_statement(&name) {
+                        ctx.retire(Ok(ExecuteResponse::Deallocate { all: false }));
                     } else {
-                        tx.send(Err(AdapterError::UnknownPreparedStatement(name)), session);
+                        ctx.retire(Err(AdapterError::UnknownPreparedStatement(name)));
                     }
                 }
                 None => {
-                    session.remove_all_prepared_statements();
-                    tx.send(Ok(ExecuteResponse::Deallocate { all: true }), session);
+                    ctx.session_mut().remove_all_prepared_statements();
+                    ctx.retire(Ok(ExecuteResponse::Deallocate { all: true }));
                 }
             },
             Plan::Raise(RaisePlan { severity }) => {
-                session.add_notice(AdapterNotice::UserRequested { severity });
-                tx.send(Ok(ExecuteResponse::Raised), session);
+                ctx.session()
+                    .add_notice(AdapterNotice::UserRequested { severity });
+                ctx.retire(Ok(ExecuteResponse::Raised));
             }
             Plan::RotateKeys(RotateKeysPlan { id }) => {
-                tx.send(self.sequence_rotate_keys(&session, id).await, session);
+                let result = self.sequence_rotate_keys(ctx.session(), id).await;
+                ctx.retire(result);
             }
             Plan::GrantPrivileges(plan) => {
-                tx.send(
-                    self.sequence_grant_privileges(&mut session, plan).await,
-                    session,
-                );
+                let result = self
+                    .sequence_grant_privileges(ctx.session_mut(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::RevokePrivileges(plan) => {
-                tx.send(
-                    self.sequence_revoke_privileges(&mut session, plan).await,
-                    session,
-                );
+                let result = self
+                    .sequence_revoke_privileges(ctx.session_mut(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::AlterDefaultPrivileges(plan) => {
-                tx.send(
-                    self.sequence_alter_default_privileges(&mut session, plan)
-                        .await,
-                    session,
-                );
+                let result = self
+                    .sequence_alter_default_privileges(ctx.session_mut(), plan)
+                    .await;
+                ctx.retire(result);
             }
             Plan::GrantRole(plan) => {
-                tx.send(self.sequence_grant_role(&mut session, plan).await, session);
+                let result = self.sequence_grant_role(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::RevokeRole(plan) => {
-                tx.send(self.sequence_revoke_role(&mut session, plan).await, session);
+                let result = self.sequence_revoke_role(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterOwner(plan) => {
-                tx.send(self.sequence_alter_owner(&mut session, plan).await, session);
+                let result = self.sequence_alter_owner(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
             Plan::ReassignOwned(plan) => {
-                tx.send(
-                    self.sequence_reassign_owned(&mut session, plan).await,
-                    session,
-                );
+                let result = self.sequence_reassign_owned(ctx.session_mut(), plan).await;
+                ctx.retire(result);
             }
         }
     }

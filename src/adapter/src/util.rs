@@ -33,7 +33,7 @@ use crate::command::{Command, Response};
 use crate::coord::{Message, PendingTxnResponse};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
-use crate::{ExecuteResponse, PeekResponseUnary};
+use crate::{ExecuteContext, ExecuteResponse, PeekResponseUnary};
 
 /// Handles responding to clients.
 #[derive(Debug)]
@@ -132,33 +132,33 @@ impl Transmittable for () {
 
 /// `ClientTransmitter` with a response to send.
 #[derive(Debug)]
-pub struct CompletedClientTransmitter<T: Transmittable> {
-    client_transmitter: ClientTransmitter<T>,
+pub struct CompletedClientTransmitter {
+    ctx: ExecuteContext,
     response: Result<PendingTxnResponse, AdapterError>,
-    session: Session,
     action: EndTransactionAction,
 }
 
-impl CompletedClientTransmitter<ExecuteResponse> {
+impl CompletedClientTransmitter {
     /// Creates a new completed client transmitter.
     pub fn new(
-        client_transmitter: ClientTransmitter<ExecuteResponse>,
+        ctx: ExecuteContext,
         response: Result<PendingTxnResponse, AdapterError>,
-        session: Session,
         action: EndTransactionAction,
     ) -> Self {
         CompletedClientTransmitter {
-            client_transmitter,
+            ctx,
             response,
-            session,
             action,
         }
     }
 
-    /// Transmits `result` to the client, returning ownership of the session
-    /// `session` as well.
-    pub fn send(mut self) {
-        let changed = self.session.vars_mut().end_transaction(self.action);
+    /// Returns the execute context to be finalized, and the result to send it.
+    pub fn finalize(mut self) -> (ExecuteContext, Result<ExecuteResponse, AdapterError>) {
+        let changed = self
+            .ctx
+            .session_mut()
+            .vars_mut()
+            .end_transaction(self.action);
 
         // Append any parameters that changed to the response.
         let response = self.response.map(|mut r| {
@@ -166,7 +166,7 @@ impl CompletedClientTransmitter<ExecuteResponse> {
             ExecuteResponse::from(r)
         });
 
-        self.client_transmitter.send(response, self.session);
+        (self.ctx, response)
     }
 }
 
