@@ -192,7 +192,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         /// Timestamp of the writes in the group commit.
         T,
         /// Clients waiting on responses from the group commit.
-        Vec<CompletedClientTransmitter<ExecuteResponse>>,
+        Vec<CompletedClientTransmitter>,
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
     ),
@@ -209,14 +209,26 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PeekValidity,
     },
+
+    // Like Command::Execute, but its context has already been allocated.
+    Execute {
+        portal_name: String,
+        ctx: ExecuteContext,
+        span: tracing::Span,
+    },
+
+    /// Performs any cleanup and logging actions necessary for
+    /// finalizing a statement execution.
+    RetireExecute {
+        data: ExecuteContextExtra,
+    },
 }
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct CreateSourceStatementReady {
-    pub session: Session,
     #[derivative(Debug = "ignore")]
-    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub ctx: ExecuteContext,
     pub result: Result<
         (
             Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
@@ -234,7 +246,7 @@ pub struct CreateSourceStatementReady {
 #[derivative(Debug)]
 pub struct SinkConnectionReady {
     #[derivative(Debug = "ignore")]
-    pub session_and_tx: Option<(Session, ClientTransmitter<ExecuteResponse>)>,
+    pub ctx: Option<ExecuteContext>,
     pub id: GlobalId,
     pub oid: u32,
     pub create_export_token: CreateExportToken,
@@ -244,19 +256,17 @@ pub struct SinkConnectionReady {
 #[derive(Debug)]
 pub enum RealTimeRecencyContext {
     ExplainTimestamp {
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        ctx: ExecuteContext,
         format: ExplainFormat,
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
     },
     Peek {
-        tx: ClientTransmitter<ExecuteResponse>,
+        ctx: ExecuteContext,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
         dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        session: Session,
         cluster_id: ClusterId,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
@@ -271,10 +281,10 @@ pub enum RealTimeRecencyContext {
 }
 
 impl RealTimeRecencyContext {
-    pub(crate) fn take_tx_and_session(self) -> (ClientTransmitter<ExecuteResponse>, Session) {
+    pub(crate) fn take_context(self) -> ExecuteContext {
         match self {
-            RealTimeRecencyContext::ExplainTimestamp { tx, session, .. }
-            | RealTimeRecencyContext::Peek { tx, session, .. } => (tx, session),
+            RealTimeRecencyContext::ExplainTimestamp { ctx, .. }
+            | RealTimeRecencyContext::Peek { ctx, .. } => ctx,
         }
     }
 }
@@ -476,12 +486,10 @@ struct ConnMeta {
 #[derive(Debug)]
 /// A pending transaction waiting to be committed.
 pub struct PendingTxn {
-    /// Transmitter used to send a response back to the client.
-    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Context used to send a response back to the client.
+    ctx: ExecuteContext,
     /// Client response for transaction.
     response: Result<PendingTxnResponse, AdapterError>,
-    /// Session of the client who initiated the transaction.
-    session: Session,
     /// The action to take at the end of the transaction.
     action: EndTransactionAction,
 }
@@ -555,31 +563,135 @@ impl PendingReadTxn {
     }
 
     /// Alert the client that the read has been linearized.
-    pub fn finish(self) {
+    ///
+    /// If it is necessary to finalize an execute, return the state necessary to do so
+    /// (execution context and result)
+    pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
             PendingReadTxn::Read {
                 txn:
                     PendingTxn {
-                        client_transmitter,
+                        mut ctx,
                         response,
-                        mut session,
                         action,
                     },
                 ..
             } => {
-                let changed = session.vars_mut().end_transaction(action);
+                let changed = ctx.session_mut().vars_mut().end_transaction(action);
                 // Append any parameters that changed to the response.
                 let response = response.map(|mut r| {
                     r.extend_params(changed);
                     ExecuteResponse::from(r)
                 });
 
-                client_transmitter.send(response, session);
+                Some((ctx, response))
             }
             PendingReadTxn::ReadThenWrite { tx, .. } => {
                 // Ignore errors if the caller has hung up.
                 let _ = tx.send(());
+                None
             }
+        }
+    }
+}
+
+/// State that the coordinator must process as part of retiring
+/// command execution.  `ExecuteContextExtra::Default` is guaranteed
+/// to produce a value that will cause the coordinator to do nothing, and
+/// is intended for use by code that invokes the execution processing flow
+/// (i.e., `sequence_plan`) without actually being a statement execution.
+// Currently nothing; planned to be data related to statement logging
+// at some point in the future.
+#[derive(Debug, Default)]
+pub struct ExecuteContextExtra;
+
+/// Bundle of state related to statement execution.
+///
+/// This struct collects a bundle of state that needs to be threaded
+/// through various functions as part of statement execution.
+/// Currently, it is only used to finalize execution, by calling one
+/// of the methods `retire` or `retire_aysnc`. Finalizing execution
+/// involves sending the session back to the pgwire layer so that it
+/// may be used to process further commands. In the future, it will
+/// also involve performing some work on the main coordinator thread
+/// (e.g., recording the time at which the statement finished
+/// executing) the state necessary to perform this work is bundled in
+/// the `ExecuteContextExtra` object (today, it is simply empty).
+#[derive(Debug)]
+pub struct ExecuteContext {
+    tx: ClientTransmitter<ExecuteResponse>,
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    session: Session,
+    extra: ExecuteContextExtra,
+}
+
+impl ExecuteContext {
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    pub fn tx(&self) -> &ClientTransmitter<ExecuteResponse> {
+        &self.tx
+    }
+
+    pub fn tx_mut(&mut self) -> &mut ClientTransmitter<ExecuteResponse> {
+        &mut self.tx
+    }
+
+    pub fn from_parts(
+        tx: ClientTransmitter<ExecuteResponse>,
+        internal_cmd_tx: mpsc::UnboundedSender<Message>,
+        session: Session,
+        extra: ExecuteContextExtra,
+    ) -> Self {
+        Self {
+            tx,
+            session,
+            extra,
+            internal_cmd_tx,
+        }
+    }
+
+    /// By calling this function, the caller takes responsibility for
+    /// dealing with the instance of `ExecuteContextExtra`. This is
+    /// intended to support protocols (like `COPY FROM`) that involve
+    /// multiple passes of sending the session back and forth between
+    /// the coordinator and the pgwire layer. As part of any such
+    /// protocol, we must ensure that the `ExecuteContextExtra`
+    /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
+    /// eventual retirement.
+    pub fn into_parts(
+        self,
+    ) -> (
+        ClientTransmitter<ExecuteResponse>,
+        mpsc::UnboundedSender<Message>,
+        Session,
+        ExecuteContextExtra,
+    ) {
+        let Self {
+            tx,
+            internal_cmd_tx,
+            session,
+            extra,
+        } = self;
+        (tx, internal_cmd_tx, session, extra)
+    }
+
+    /// Retire the execution, by sending a message to the coordinator.
+    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
+        let Self {
+            tx,
+            internal_cmd_tx,
+            session,
+            extra,
+        } = self;
+        tx.send(result, session);
+        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute { data: extra }) {
+            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
         }
     }
 }
@@ -1146,7 +1258,7 @@ impl Coordinator {
                             // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
                             let result = internal_cmd_tx.send(Message::SinkConnectionReady(
                                 SinkConnectionReady {
-                                    session_and_tx: None,
+                                    ctx: None,
                                     id,
                                     oid,
                                     create_export_token,

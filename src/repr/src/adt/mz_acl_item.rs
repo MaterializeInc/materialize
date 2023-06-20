@@ -29,12 +29,24 @@ use crate::role_id::RoleId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.mz_acl_item.rs"));
 
+// Append
 const INSERT_CHAR: char = 'a';
+// Read
 const SELECT_CHAR: char = 'r';
+// Write
 const UPDATE_CHAR: char = 'w';
+// Delete
 const DELETE_CHAR: char = 'd';
+// Usage
 const USAGE_CHAR: char = 'U';
+// Create
 const CREATE_CHAR: char = 'C';
+// Role
+const CREATE_ROLE_CHAR: char = 'R';
+// dataBase
+const CREATE_DB_CHAR: char = 'B';
+// compute Node
+const CREATE_CLUSTER_CHAR: char = 'N';
 
 const INSERT_STR: &str = "INSERT";
 const SELECT_STR: &str = "SELECT";
@@ -42,20 +54,41 @@ const UPDATE_STR: &str = "UPDATE";
 const DELETE_STR: &str = "DELETE";
 const USAGE_STR: &str = "USAGE";
 const CREATE_STR: &str = "CREATE";
+const CREATE_ROLE_STR: &str = "CREATEROLE";
+const CREATE_DB_STR: &str = "CREATEDB";
+const CREATE_CLUSTER_STR: &str = "CREATECLUSTER";
 
 bitflags! {
     /// A bit flag representing all the privileges that can be granted to a role.
     ///
     /// Modeled after:
     /// https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101
+    ///
+    /// The lower 32 bits are used for different privilege types.
+    ///
+    /// The upper 32 bits indicate a grant option on the privilege for the current bit shifted
+    /// right by 32 bits (Currently unimplemented in Materialize).
+    ///
+    /// Privileges that exist in Materialize but not PostgreSQL start at the highest available bit
+    /// and move down towards the PostgreSQL compatible bits. This is try to avoid collisions with
+    /// privileges that PostgreSQL may add in the future.
     #[derive(Serialize, Deserialize)]
     pub struct AclMode: u64 {
+        // PostgreSQL compatible privileges.
         const INSERT = 1 << 0;
         const SELECT = 1 << 1;
         const UPDATE = 1 << 2;
         const DELETE = 1 << 3;
         const USAGE = 1 << 8;
         const CREATE = 1 << 9;
+
+        // Materialize custom privileges.
+        const CREATE_CLUSTER = 1 << 29;
+        const CREATE_DB = 1 << 30;
+        const CREATE_ROLE = 1 << 31;
+
+        // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
+        // reserved for grant options.
     }
 }
 
@@ -68,6 +101,9 @@ impl AclMode {
             DELETE_STR => Ok(AclMode::DELETE),
             USAGE_STR => Ok(AclMode::USAGE),
             CREATE_STR => Ok(AclMode::CREATE),
+            CREATE_ROLE_STR => Ok(AclMode::CREATE_ROLE),
+            CREATE_DB_STR => Ok(AclMode::CREATE_DB),
+            CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
             _ => Err(anyhow!("unrecognized privilege type: {}", s.quoted())),
         }
     }
@@ -101,6 +137,15 @@ impl AclMode {
         if self.contains(AclMode::CREATE) {
             privileges.push(CREATE_STR);
         }
+        if self.contains(AclMode::CREATE_ROLE) {
+            privileges.push(CREATE_ROLE_STR);
+        }
+        if self.contains(AclMode::CREATE_DB) {
+            privileges.push(CREATE_DB_STR);
+        }
+        if self.contains(AclMode::CREATE_CLUSTER) {
+            privileges.push(CREATE_CLUSTER_STR);
+        }
         privileges.join(", ")
     }
 }
@@ -118,6 +163,9 @@ impl FromStr for AclMode {
                 DELETE_CHAR => acl_mode.bitor_assign(AclMode::DELETE),
                 USAGE_CHAR => acl_mode.bitor_assign(AclMode::USAGE),
                 CREATE_CHAR => acl_mode.bitor_assign(AclMode::CREATE),
+                CREATE_ROLE_CHAR => acl_mode.bitor_assign(AclMode::CREATE_ROLE),
+                CREATE_DB_CHAR => acl_mode.bitor_assign(AclMode::CREATE_DB),
+                CREATE_CLUSTER_CHAR => acl_mode.bitor_assign(AclMode::CREATE_CLUSTER),
                 _ => return Err(anyhow!("invalid privilege '{c}' in acl mode '{s}'")),
             }
         }
@@ -146,6 +194,15 @@ impl fmt::Display for AclMode {
         }
         if self.contains(AclMode::CREATE) {
             write!(f, "{CREATE_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_ROLE) {
+            write!(f, "{CREATE_ROLE_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_DB) {
+            write!(f, "{CREATE_DB_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_CLUSTER) {
+            write!(f, "{CREATE_CLUSTER_CHAR}")?;
         }
         Ok(())
     }
@@ -377,6 +434,9 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=UC/u4";
@@ -389,6 +449,9 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "s7=/s12";
@@ -401,6 +464,9 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=/u100";
@@ -413,6 +479,24 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert_eq!(s, mz_acl.to_string());
+
+    let s = "u1=RBN/u2";
+    let mz_acl: MzAclItem = s.parse().unwrap();
+    assert_eq!(RoleId::User(1), mz_acl.grantee);
+    assert_eq!(RoleId::User(2), mz_acl.grantor);
+    assert!(!mz_acl.acl_mode.contains(AclMode::INSERT));
+    assert!(!mz_acl.acl_mode.contains(AclMode::SELECT));
+    assert!(!mz_acl.acl_mode.contains(AclMode::UPDATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     assert!("u32=C/".parse::<MzAclItem>().is_err());

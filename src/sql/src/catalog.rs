@@ -47,7 +47,7 @@ use crate::names::{
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::PlanError;
+use crate::plan::{PlanError, PlanNotice};
 use crate::session::vars::SystemVars;
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -68,9 +68,12 @@ use crate::session::vars::SystemVars;
 ///
 ///   * Lookup operations, like [`SessionCatalog::get_item`]. These retrieve
 ///     metadata about a catalog entity based on a fully-specified name that is
-///     known to be valid (i.e., because the name was successfully resolved,
-///     or was constructed based on the output of a prior lookup operation).
-///     These functions panic if called with invalid input.
+///     known to be valid (i.e., because the name was successfully resolved, or
+///     was constructed based on the output of a prior lookup operation). These
+///     functions panic if called with invalid input.
+///
+///   * Session management, such as managing variables' states and adding
+///     notices to the session.
 ///
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
@@ -304,6 +307,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the minimal qualification required to unambiguously specify
     /// `qualified_name`.
     fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName;
+
+    /// Adds a [`PlanNotice`] that will be displayed to the user if the plan
+    /// successfully executes.
+    fn add_notice(&self, notice: PlanNotice);
 }
 
 /// Configuration associated with a catalog.

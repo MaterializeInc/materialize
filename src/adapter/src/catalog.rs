@@ -68,7 +68,8 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
+    Plan, PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig,
+    StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -91,6 +92,7 @@ use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::MutexGuard;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
@@ -106,7 +108,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
+use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
 
 mod builtin_table_updates;
 mod config;
@@ -318,8 +320,10 @@ impl CatalogState {
                     ));
                 }
                 id @ ObjectId::Role(_) => {
-                    seen.insert(id.clone());
-                    dependents.push(id.clone());
+                    let unseen = seen.insert(id.clone());
+                    if unseen {
+                        dependents.push(id.clone());
+                    }
                 }
                 ObjectId::Item(id) => {
                     dependents.extend_from_slice(&self.item_dependents(*id, seen))
@@ -699,18 +703,7 @@ impl CatalogState {
     /// context.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
-        let mut session_catalog = ConnCatalog {
-            state: Cow::Borrowed(self),
-            conn_id: SYSTEM_CONN_ID.clone(),
-            cluster: "default".into(),
-            database: self
-                .resolve_database(DEFAULT_DATABASE_NAME)
-                .ok()
-                .map(|db| db.id()),
-            search_path: Vec::new(),
-            role_id: MZ_SYSTEM_ROLE_ID,
-            prepared_statements: None,
-        };
+        let mut session_catalog = Catalog::for_system_session_state(self);
 
         // Enable catalog features that might be required during planning in
         // [Catalog::open]. Existing catalog items might have been created while a
@@ -1624,6 +1617,7 @@ pub struct ConnCatalog<'a> {
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     role_id: RoleId,
     prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
+    notices_tx: UnboundedSender<AdapterNotice>,
 }
 
 impl ConnCatalog<'_> {
@@ -1644,6 +1638,7 @@ impl ConnCatalog<'_> {
             search_path: self.search_path,
             role_id: self.role_id,
             prepared_statements: self.prepared_statements.map(|s| Cow::Owned(s.into_owned())),
+            notices_tx: self.notices_tx,
         }
     }
 
@@ -4454,28 +4449,39 @@ impl Catalog {
             search_path,
             role_id: session.current_role_id().clone(),
             prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
+            notices_tx: session.retain_notice_transmitter(),
         }
     }
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
+        Self::for_sessionless_user_state(&self.state, role_id)
+    }
+
+    pub fn for_sessionless_user_state(state: &CatalogState, role_id: RoleId) -> ConnCatalog {
+        let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
         ConnCatalog {
-            state: Cow::Borrowed(&self.state),
+            state: Cow::Borrowed(state),
             conn_id: SYSTEM_CONN_ID.clone(),
             cluster: "default".into(),
-            database: self
+            database: state
                 .resolve_database(DEFAULT_DATABASE_NAME)
                 .ok()
                 .map(|db| db.id()),
+            // Leaving the system's search path empty allows us to catch issues
+            // where catalog object names have not been normalized correctly.
             search_path: Vec::new(),
             role_id,
             prepared_statements: None,
+            notices_tx,
         }
     }
 
-    // Leaving the system's search path empty allows us to catch issues
-    // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
-        self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
+        Self::for_system_session_state(&self.state)
+    }
+
+    pub fn for_system_session_state(state: &CatalogState) -> ConnCatalog {
+        Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
     }
 
     async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
@@ -8223,6 +8229,10 @@ impl SessionCatalog for ConnCatalog<'_> {
                 || self.resolve_function_name(&res) == Ok(qualified_name)
         );
         res
+    }
+
+    fn add_notice(&self, notice: PlanNotice) {
+        let _ = self.notices_tx.send(notice.into());
     }
 }
 

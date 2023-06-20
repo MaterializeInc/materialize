@@ -40,7 +40,9 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::storage::stash::{DEPLOY_GENERATION, USER_VERSION};
+use crate::catalog::storage::stash::{
+    DEPLOY_GENERATION, SYSTEM_PRIVILEGES_COLLECTION, USER_VERSION,
+};
 use crate::catalog::{
     self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
@@ -820,6 +822,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         system_gid_mapping,
         system_configurations,
         default_privileges,
+        system_privileges,
     ) = stash
         .with_transaction(|tx| {
             Box::pin(async move {
@@ -845,6 +848,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
                             .await?
                     ),
                     tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
                 )
             })
         })
@@ -872,6 +876,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
         system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
         default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
+        system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
         audit_log_updates: Vec::new(),
         storage_usage_updates: Vec::new(),
     })
@@ -894,6 +899,7 @@ pub struct Transaction<'a> {
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
+    system_privileges: TableTransaction<SystemPrivilegesKey, ()>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -1736,6 +1742,7 @@ impl<'a> Transaction<'a> {
         let system_gid_mapping = Arc::new(self.system_gid_mapping.pending());
         let system_configurations = Arc::new(self.system_configurations.pending());
         let default_privileges = Arc::new(self.default_privileges.pending());
+        let system_privileges = Arc::new(self.system_privileges.pending());
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
@@ -1786,6 +1793,13 @@ impl<'a> Transaction<'a> {
                         &mut batches,
                         &DEFAULT_PRIVILEGES_COLLECTION,
                         &default_privileges,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SYSTEM_PRIVILEGES_COLLECTION,
+                        &system_privileges,
                     )
                     .await?;
                     add_batch(&tx, &mut batches, &AUDIT_LOG_COLLECTION, &audit_log_updates).await?;
@@ -2045,6 +2059,11 @@ pub struct DefaultPrivilegesValue {
     privileges: AclMode,
 }
 
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SystemPrivilegesKey {
+    privileges: MzAclItem,
+}
+
 pub const ALL_COLLECTIONS: &[&str] = &[
     AUDIT_LOG_COLLECTION.name(),
     CLUSTER_COLLECTION.name(),
@@ -2062,6 +2081,7 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     SYSTEM_GID_MAPPING_COLLECTION.name(),
     TIMESTAMP_COLLECTION.name(),
     DEFAULT_PRIVILEGES_COLLECTION.name(),
+    SYSTEM_PRIVILEGES_COLLECTION.name(),
 ];
 
 #[cfg(test)]

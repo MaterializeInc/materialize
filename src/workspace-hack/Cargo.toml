@@ -75,9 +75,9 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 proc-macro2 = { version = "1.0.59", features = ["span-locations"] }
-prost = { git = "https://github.com/MaterializeInc/prost", features = ["no-recursion-limit"] }
-prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
-prost-types = { git = "https://github.com/MaterializeInc/prost" }
+prost = { version = "0.11.9", features = ["no-recursion-limit"] }
+prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
+prost-types = { version = "0.11.9" }
 quote = { version = "1.0.28" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
@@ -175,9 +175,9 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 proc-macro2 = { version = "1.0.59", features = ["span-locations"] }
-prost = { git = "https://github.com/MaterializeInc/prost", features = ["no-recursion-limit"] }
-prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
-prost-types = { git = "https://github.com/MaterializeInc/prost" }
+prost = { version = "0.11.9", features = ["no-recursion-limit"] }
+prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
+prost-types = { version = "0.11.9" }
 quote = { version = "1.0.28" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }

@@ -129,6 +129,8 @@ pub use crate::coord::timeline::TimelineContext;
 pub use crate::coord::timestamp_selection::{
     TimestampContext, TimestampExplanation, TimestampProvider,
 };
+pub use crate::coord::ExecuteContext;
+pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;

@@ -3325,7 +3325,10 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Schema => {
-                let name = UnresolvedObjectName::Schema(self.parse_schema_name()?);
+                let names = self.parse_comma_separated(|parser| {
+                    Ok(UnresolvedObjectName::Schema(parser.parse_schema_name()?))
+                })?;
+
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
@@ -3333,7 +3336,7 @@ impl<'a> Parser<'a> {
                 Ok(Statement::DropObjects(DropObjectsStatement {
                     object_type: ObjectType::Schema,
                     if_exists,
-                    names: vec![name],
+                    names,
                     cascade,
                 }))
             }

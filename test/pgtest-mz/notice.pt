@@ -283,3 +283,36 @@ ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"c4\" has been dropped"}]}
 CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}
+
+# AlterNoop
+
+send
+Query {"query": "CREATE ROLE joe"}
+Query {"query": "ALTER CLUSTER IF EXISTS foo OWNER TO joe"}
+Query {"query": "ALTER CLUSTER REPLICA IF EXISTS default.default RENAME TO bar_foo"}
+Query {"query": "ALTER SOURCE IF EXISTS ms SET (SIZE = '4')"}
+Query {"query": "ALTER INDEX IF EXISTS t SET (LOGICAL COMPACTION WINDOW)"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"RBAC is disabled so no role attributes or object ownership will be considered when executing statements"}]}
+CommandComplete {"tag":"CREATE ROLE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER \"foo\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER CLUSTER"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER REPLICA \"default.default\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER CLUSTER REPLICA"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SOURCE \"ms\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER SOURCE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"INDEX \"t\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER INDEX"}
+ReadyForQuery {"status":"I"}

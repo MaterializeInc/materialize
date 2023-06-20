@@ -77,6 +77,8 @@ pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
     proto::DefaultPrivilegesKey,
     proto::DefaultPrivilegesValue,
 > = TypedCollection::new("default_privileges");
+pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<proto::SystemPrivilegesKey, ()> =
+    TypedCollection::new("system_privileges");
 // If you add a new collection, then don't forget to write a migration that initializes the
 // collection either with some initial values or as empty. See
 // [`mz_stash::upgrade::v17_to_v18`] as an example.
@@ -569,6 +571,26 @@ pub async fn initialize(
                 proto::DefaultPrivilegesValue {
                     privileges: Some(AclMode::USAGE.into_proto()),
                 },
+            )],
+        )
+        .await?;
+    SYSTEM_PRIVILEGES_COLLECTION
+        .initialize(
+            tx,
+            vec![(
+                proto::SystemPrivilegesKey {
+                    privileges: Some(proto::MzAclItem {
+                        grantee: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                        grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                        acl_mode: Some(
+                            AclMode::CREATE_CLUSTER
+                                .union(AclMode::CREATE_DB)
+                                .union(AclMode::CREATE_ROLE)
+                                .into_proto(),
+                        ),
+                    }),
+                },
+                (),
             )],
         )
         .await?;

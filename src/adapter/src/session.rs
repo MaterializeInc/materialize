@@ -174,11 +174,11 @@ impl<T: TimestampManipulation> Session<T> {
     /// Starts an explicit transaction, or changes an implicit to an explicit
     /// transaction.
     pub fn start_transaction(
-        mut self,
+        &mut self,
         wall_time: DateTime<Utc>,
         access: Option<TransactionAccessMode>,
         isolation_level: Option<TransactionIsolationLevel>,
-    ) -> (Self, Result<(), AdapterError>) {
+    ) -> Result<(), AdapterError> {
         // Check that current transaction state is compatible with new `access`
         if let Some(txn) = self.transaction.inner() {
             // `READ WRITE` prohibited if:
@@ -192,11 +192,11 @@ impl<T: TimestampManipulation> Session<T> {
             };
 
             if read_write_prohibited && access == Some(TransactionAccessMode::ReadWrite) {
-                return (self, Err(AdapterError::ReadWriteUnavailable));
+                return Err(AdapterError::ReadWriteUnavailable);
             }
         }
 
-        match self.transaction {
+        match std::mem::take(&mut self.transaction) {
             TransactionStatus::Default => {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
@@ -225,12 +225,12 @@ impl<T: TimestampManipulation> Session<T> {
                 .expect("transaction_isolation should be a valid var and isolation level is a valid value");
         }
 
-        (self, Ok(()))
+        Ok(())
     }
 
     /// Starts either a single statement or implicit transaction based on the
     /// number of statements, but only if no transaction has been started already.
-    pub fn start_transaction_implicit(mut self, wall_time: DateTime<Utc>, stmts: usize) -> Self {
+    pub fn start_transaction_implicit(&mut self, wall_time: DateTime<Utc>, stmts: usize) {
         if let TransactionStatus::Default = self.transaction {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
@@ -247,7 +247,6 @@ impl<T: TimestampManipulation> Session<T> {
                 _ => {}
             }
         }
-        self
     }
 
     /// Clears a transaction, setting its state to Default and destroying all
