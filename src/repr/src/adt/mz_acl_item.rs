@@ -299,30 +299,6 @@ impl MzAclItem {
     pub const fn binary_size() -> usize {
         RoleId::binary_size() + RoleId::binary_size() + size_of::<u64>()
     }
-
-    pub fn group_by_grantee(items: Vec<MzAclItem>) -> PrivilegeMap {
-        PrivilegeMap::new(
-            items
-                .into_iter()
-                .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
-                    accum
-                        .entry(mz_acl_item.grantee)
-                        .or_default()
-                        .push(mz_acl_item);
-                    accum
-                }),
-        )
-    }
-
-    pub fn flatten(items: &PrivilegeMap) -> Vec<MzAclItem> {
-        items
-            .0
-            .values()
-            .map(|items| items.into_iter())
-            .flatten()
-            .cloned()
-            .collect()
-    }
 }
 
 impl FromStr for MzAclItem {
@@ -385,25 +361,110 @@ impl Columnation for MzAclItem {
     type InnerRegion = CloneRegion<MzAclItem>;
 }
 
-/// Key is the role that granted the privilege, value is the privilege itself.
+/// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub struct PrivilegeMap(pub BTreeMap<RoleId, Vec<MzAclItem>>);
+pub struct PrivilegeMap(BTreeMap<RoleId, Vec<MzAclItem>>);
 
 impl PrivilegeMap {
-    pub fn new(privilege_map: BTreeMap<RoleId, Vec<MzAclItem>>) -> PrivilegeMap {
-        PrivilegeMap(privilege_map)
+    /// Creates a new empty `PrivilegeMap`.
+    pub fn new() -> PrivilegeMap {
+        PrivilegeMap(BTreeMap::new())
     }
 
+    /// Creates a new `PrivilegeMap` from a collection of [`MzAclItem`]s.
+    pub fn from_mz_acl_items(items: impl IntoIterator<Item = MzAclItem>) -> PrivilegeMap {
+        let mut map = PrivilegeMap::new();
+        for item in items {
+            map.grant(item);
+        }
+        map
+    }
+
+    /// Get the acl item granted to `grantee` by `grantor`.
+    pub fn get_acl_item(&self, grantee: &RoleId, grantor: &RoleId) -> Option<&MzAclItem> {
+        self.0.get(grantee).and_then(|privileges| {
+            privileges
+                .into_iter()
+                .find(|mz_acl_item| &mz_acl_item.grantor == grantor)
+        })
+    }
+
+    /// Get all acl items granted to `grantee`.
+    pub fn get_acl_items_for_grantee(&self, grantee: &RoleId) -> impl Iterator<Item = &MzAclItem> {
+        self.0
+            .get(grantee)
+            .into_iter()
+            .flat_map(|privileges| privileges.into_iter())
+    }
+
+    /// Returns references to all contained [`MzAclItem`].
     pub fn all_values(&self) -> impl Iterator<Item = &MzAclItem> {
         self.0
             .values()
             .flat_map(|privileges| privileges.into_iter())
     }
+
+    /// Returns clones of all contained [`MzAclItem`].
+    pub fn all_values_owned(&self) -> impl Iterator<Item = MzAclItem> + '_ {
+        self.all_values().cloned()
+    }
+
+    /// Adds an [`MzAclItem`] to this map.
+    pub fn grant(&mut self, privilege: MzAclItem) {
+        let grantee_privileges = self.0.entry(privilege.grantee).or_default();
+        if let Some(existing_privilege) = grantee_privileges
+            .iter_mut()
+            .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
+        {
+            // sanity check that the key is consistent.
+            assert_eq!(
+                privilege.grantee, existing_privilege.grantee,
+                "PrivilegeMap out of sync"
+            );
+            existing_privilege.acl_mode = existing_privilege.acl_mode.union(privilege.acl_mode);
+        } else {
+            grantee_privileges.push(privilege);
+        }
+    }
+
+    /// Removes an [`MzAclItem`] from this map.
+    pub fn revoke(&mut self, privilege: &MzAclItem) {
+        let grantee_privileges = self.0.entry(privilege.grantee).or_default();
+        if let Some(existing_privilege) = grantee_privileges
+            .iter_mut()
+            .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
+        {
+            // sanity check that the key is consistent.
+            assert_eq!(
+                privilege.grantee, existing_privilege.grantee,
+                "PrivilegeMap out of sync"
+            );
+            existing_privilege.acl_mode =
+                existing_privilege.acl_mode.difference(privilege.acl_mode);
+        }
+
+        // Remove empty privileges.
+        grantee_privileges.retain(|privilege| !privilege.acl_mode.is_empty());
+        if grantee_privileges.is_empty() {
+            self.0.remove(&privilege.grantee);
+        }
+    }
+
+    /// Returns a `PrivilegeMap` formatted as a `serde_json::Value` that is suitable for debugging. For
+    /// example `CatalogState::dump`.
+    pub fn debug_json(&self) -> serde_json::Value {
+        let privileges_by_str: BTreeMap<String, _> = self
+            .0
+            .iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+        serde_json::json!(privileges_by_str)
+    }
 }
 
 impl Default for PrivilegeMap {
     fn default() -> PrivilegeMap {
-        PrivilegeMap::new(BTreeMap::new())
+        PrivilegeMap::new()
     }
 }
 

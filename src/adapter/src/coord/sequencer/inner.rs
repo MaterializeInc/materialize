@@ -1141,26 +1141,24 @@ impl Coordinator {
             catalog: &Catalog,
         ) {
             let object_type = object_type.to_string().to_lowercase();
-            for (_, privileges) in &privileges.0 {
-                for privilege in privileges {
-                    if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
-                        let grantor_name = catalog.get_role(&privilege.grantor).name();
-                        dependent_objects
-                            .entry(role_name.to_string())
-                            .or_default()
-                            .push(format!(
+            for privilege in privileges.all_values() {
+                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                    let grantor_name = catalog.get_role(&privilege.grantor).name();
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
                             "privileges on {object_type} {object_name} granted by {grantor_name}",
                         ));
-                    }
-                    if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
-                        let grantee_name = catalog.get_role(&privilege.grantee).name();
-                        dependent_objects
-                            .entry(role_name.to_string())
-                            .or_default()
-                            .push(format!(
+                }
+                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                    let grantee_name = catalog.get_role(&privilege.grantee).name();
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
                             "privileges granted on {object_type} {object_name} to {grantee_name}"
                         ));
-                    }
                 }
             }
         }
@@ -3827,13 +3825,7 @@ impl Coordinator {
             for grantee in &grantees {
                 self.catalog().ensure_not_system_role(grantee)?;
                 let existing_privilege = privileges
-                    .0
-                    .get(grantee)
-                    .and_then(|privileges| {
-                        privileges
-                            .into_iter()
-                            .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-                    })
+                    .get_acl_item(grantee, &grantor)
                     .map(Cow::Borrowed)
                     .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
 
