@@ -2234,7 +2234,12 @@ where
                     .await
                     .expect("stash operation must succeed");
 
-                self.finalize_shards().await;
+                if self.state.config.finalize_shards {
+                    info!("triggering shard finalization due to dropped storage object");
+                    self.finalize_shards().await;
+                } else {
+                    info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false")
+                }
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
