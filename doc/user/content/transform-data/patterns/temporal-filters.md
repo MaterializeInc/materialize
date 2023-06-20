@@ -214,7 +214,7 @@ The strategy for this example is to put an initial temporal filter on the input 
                 mz_now() < window_end + INTERVAL '7 days'
             GROUP BY window_end, id;
     ```
-    This `WHERE` clause means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without the latter constraint, records in the result set would receive strange updates as input records expire from the initial 30 day filter on the input records.
+    This `WHERE` clause means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without the latter constraint, records in the result set would receive strange updates as records expire from the initial 30 day filter on the input.
 1. Subscribe to the `output`.
     ```sql
     COPY (SUBSCRIBE (SELECT * FROM output)) TO STDOUT;
@@ -232,7 +232,7 @@ The strategy for this example is to put an initial temporal filter on the input 
 1. Back at the `SUBSCRIBE`, wait about a minute for your final aggregation result to show up the moment the 1 minute window ends.
     ```nofmt
      mz_timestamp | mz_diff |  id   | count |      window_end
-    --------------|---------|-------|-------|---------------------
+    --------------|---------|-------|-------|----------------------
     1686889140000       1       1       3       2023-06-16 04:19:00
     1686889140000       1       2       1       2023-06-16 04:19:00
     ```
