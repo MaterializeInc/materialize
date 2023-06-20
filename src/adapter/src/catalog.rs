@@ -100,7 +100,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::MutexGuard;
 use tracing::{info, trace, warn};
-use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
