@@ -419,7 +419,7 @@ publish: true
 
      Cargo is invoked with the `--release` flag unless the `--dev` flag is
      specified. The binary's debuginfo can be extracted and copied to a file in
-     the same directory named `BIN.debug` by specifying `split_debuginfo: true`.
+     the same directory named `BIN.debug` by specifying `split-debuginfo: true`.
      The binary itself will be stripped of debug information unless `strip:
      false` is requested.
 

@@ -411,7 +411,7 @@ class CargoBuild(CargoPreImage):
         example = config.pop("example", [])
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
-        self.split_debuginfo = config.pop("split_debuginfo", False)
+        self.split_debuginfo = config.pop("split-debuginfo", False)
         self.extract = config.pop("extract", {})
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
@@ -488,7 +488,7 @@ class CargoBuild(CargoPreImage):
                 # images and shipping them around.
                 #
                 # This option can be used in conjuction with
-                # `split_debuginfo` and the `s3-upload-debuginfo`
+                # `split-debuginfo` and the `s3-upload-debuginfo`
                 # preimage to save the info to an S3 bucket for future use.
                 spawn.runv(
                     [*self.rd.tool("strip"), "--strip-debug", exe_path],

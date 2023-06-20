@@ -12,7 +12,7 @@ pre-image:
   - type: cargo-build
     bin: environmentd
     strip: true
-    split_debuginfo: true
+    split-debuginfo: true
   - type: s3-upload-debuginfo
     bin: environmentd
     bucket: materialize-debuginfo
