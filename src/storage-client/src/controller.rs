@@ -1545,12 +1545,9 @@ where
             .expect("verified valid in check_alter_collection_inner");
 
         let collection = self.collection_mut(id).expect("validated exists");
-
-        // Install new ingestion here rather than in `check_alter_collection_inner` because of
-        // mutability; making check_alter_collection_inner take a mutable reference is possible but
-        // renders the code even harder to reason about.
         let new_source_exports = match &mut collection.description.data_source {
             DataSource::Ingestion(active_ingestion) => {
+                // Determine which IDs we're adding.
                 let new_source_exports: Vec<_> = description
                     .source_exports
                     .keys()
@@ -1564,9 +1561,14 @@ where
             _ => unreachable!("verified collection refers to ingestion"),
         };
 
+        // Assess dependency since, which we have to fast-forward this
+        // collection's since to.
         let storage_dependencies = collection.description.get_storage_dependencies();
 
-        // Install read capability for all dependencies on new source exports.
+        // Ensure this new collection's since is aligned with the dependencies.
+        // This will likely place its since beyond its upper which is OK because
+        // its snapshot will catch it up with the rest of the source, i.e. we
+        // will never see its upper at a state beyond 0 and less than its since.
         self.install_dependency_read_holds(new_source_exports.into_iter(), &storage_dependencies)?;
 
         // Fetch the client for this ingestion's instance.
@@ -2436,7 +2438,7 @@ where
     /// The outer error is a potentially recoverable internal error, while the
     /// inner error is appropriate to return to the adapter.
     fn determine_collection_since_joins(
-        &mut self,
+        &self,
         collections: &[GlobalId],
     ) -> Result<Antichain<T>, StorageError> {
         let mut joined_since = Antichain::from_elem(T::minimum());
@@ -3060,44 +3062,68 @@ where
         Ok(())
     }
 
-    /// On each element of `collections`, install a read hold on all of the `storage_dependencies`.
+    /// For each element of `collections`, install a read hold on all of the
+    /// `storage_dependencies`.
+    ///
+    /// Note that this adjustment is only guaranteed to be reflected in memory;
+    /// downgrades to persist shards are not guaranteed to occur unless they
+    /// close the shard.
+    ///
+    /// # Panics
+    ///
+    /// - If any identified collection's since is less than the dependency since
+    ///   and:
+    ///     - Its read policy is not `ReadPolicy::NoPolicy`
+    ///     - Its read policy is `ReadPolicy::NoPolicy(f)` and the dependency
+    ///       since is <= `f`.
+    ///
+    ///     - Its write frontier is neither `T::minimum` nor beyond the
+    ///       dependency since.
+    /// - If any identified collection's data source is not
+    ///   [`DataSource::Ingestion] (primary source) or [`DataSource::Other`]
+    ///   (subsources).
     fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
         &mut self,
         collections: I,
         storage_dependencies: &[GlobalId],
     ) -> Result<(), StorageError> {
         let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+
         for id in collections {
             let collection = self.collection(id).expect("known to exist");
+            assert!(
+                matches!(collection.description.data_source, DataSource::Other | DataSource::Ingestion(_)),
+                "only primary sources w/ subsources and subsources can have dependency read holds installed"
+            );
 
-            // At the time of collection creation, we did not yet
-            // have firm guarantees that the since of our
-            // dependencies was not advanced beyond those of its
-            // dependents, so we need to patch up the
-            // implied_capability/since of the collction.
+            // Because of the "backward" dependency structure (primary sources
+            // depend on subsources, rather than the other way around, which one
+            // might expect), we do not know what the initial since of the
+            // collection should be. We only find out that information once its
+            // primary sources comes along and correlates the subsource to its
+            // dependency sinces (e.g. remap shards).
             //
-            // TODO(aljoscha): This comes largely from the fact that
-            // subsources are created with a `DataSource::Other`, so
-            // we have no idea (at their creation time) that they
-            // are a subsource, or that they are a subsource of a
-            // source where they need a read hold on that
-            // ingestion's remap collection.
+            // Once we find that out, we need ensure that the controller's
+            // version of the since is sufficiently advanced so that we may
+            // install the read hold.
+            //
+            // TODO: remove this if statement once we fix the inverse dependency
+            // of subsources
             if PartialOrder::less_than(&collection.implied_capability, &dependency_since) {
                 assert!(
-                    PartialOrder::less_than(&dependency_since, &collection.write_frontier),
-                    "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
-                    collection.write_frontier,
-                    dependency_since,
-                );
-                mz_ore::soft_assert!(
-                    matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
+                    match &collection.read_policy {
+                        ReadPolicy::NoPolicy { initial_since } =>
+                            PartialOrder::less_than(initial_since, &dependency_since),
+                        _ => false,
+                    },
                     "subsources should not have external read holds installed until \
                                     their ingestion is created, but {:?} has read policy {:?}",
                     id,
                     collection.read_policy
                 );
 
-                // This patches up the implied_capability!
+                // Patch up the implied capability + maybe the persist shard's
+                // since.
                 self.set_read_policy(vec![(
                     id,
                     ReadPolicy::NoPolicy {
@@ -3117,6 +3143,14 @@ where
 
             // Fill in the storage dependencies.
             let collection = self.collection_mut(id).expect("known to exist");
+
+            assert!(
+                PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
+                    // Whenever a collection is being initialized, this state is
+                    // acceptable.
+                    || *collection.write_frontier == [T::minimum()]
+            );
+
             collection
                 .storage_dependencies
                 .extend(storage_dependencies.iter().cloned());
@@ -3127,8 +3161,8 @@ where
                     &collection.implied_capability.borrow()
                 ),
                 "{id}: at this point, there can be no read holds for any time that is not \
-                                beyond the implied capability \
-                                but we have implied_capability {:?}, read_capabilities {:?}",
+                    beyond the implied capability  but we have implied_capability {:?}, \
+                    read_capabilities {:?}",
                 collection.implied_capability,
                 collection.read_capabilities,
             );
