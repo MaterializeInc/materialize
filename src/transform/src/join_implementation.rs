@@ -155,7 +155,7 @@ impl JoinImplementation {
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
             // Cardinality information for each input relation
-            let mut cardinalities: Vec<SymExp> = Vec::with_capacity(inputs.len());
+            let mut symbolic_cardinalities: Vec<SymExp> = Vec::with_capacity(inputs.len());
             // Symbolic terms in the cardinality estimate
             let mut symbolics = std::collections::BTreeSet::new();
             for input in inputs.iter() {
@@ -171,7 +171,7 @@ impl JoinImplementation {
                     .expect("cardinality");
 
                 cardinality.collect_symbolics(&mut symbolics);
-                cardinalities.push(cardinality);
+                symbolic_cardinalities.push(cardinality);
             }
 
             let mut cardinality_stats = BTreeMap::new();
@@ -217,27 +217,6 @@ impl JoinImplementation {
             if have_stats_for_all_inputs {
                 println!("computing join with non-trivial stats {cardinality_stats:?}");
             }
-
-            // Compute the actual cardinalities given our statistics. One of two cases applies:
-            //
-            //   1. `have_stats_for_all_inputs`, and we can use `fill_in_estimates` to get cardinalities for every input
-            //   2. Some inputs are missing inputs; we treat cardinality estimates in terms of their order (i.e., the degree or highest exponent in their polynomial)
-            let cardinalities = cardinalities
-                .into_iter()
-                .map(|c| {
-                    if have_stats_for_all_inputs {
-                        let estimate = c.evaluate(&fill_in_estimates);
-                        let rounded = estimate.round();
-                        Some(usize::cast_from(
-                            u64::try_cast_from(rounded)
-                                .expect("positive and representable cardinality estimate"),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-
             // The first fundamental question is whether we should employ a delta query or not.
             //
             // Here we conservatively use the rule that if sufficient arrangements exist we will
@@ -263,7 +242,8 @@ impl JoinImplementation {
                 .map(|typ| typ.keys)
                 .collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
-            let mut filters = Vec::new();
+            let mut filters = Vec::with_capacity(inputs.len());
+            let mut cardinalities = Vec::with_capacity(inputs.len());
 
             // We figure out what predicates from mfp_above could be pushed to which input.
             // We won't actually push these down now; this just informs FilterCharacteristics.
@@ -324,8 +304,33 @@ impl JoinImplementation {
                         characteristics.add_literal_equality();
                     }
                 }
-                characteristics |=
+                let push_down_characteristics =
                     FilterCharacteristics::filter_characteristics(&push_downs[index])?;
+                let push_down_factor = push_down_characteristics.worst_case_scaling_factor();
+                characteristics |= push_down_characteristics;
+
+                // Compute the actual cardinalities given our statistics. One of two cases applies:
+                //
+                //   1. `have_stats_for_all_inputs`, and we can use `fill_in_estimates` to get cardinalities for every input
+                //   2. Some inputs are missing inputs; we ignore the estimates
+                if have_stats_for_all_inputs {
+                    // evaluate and scale by the filters
+                    let estimate = symbolic_cardinalities[index].evaluate(&fill_in_estimates);
+                    // we've already accounted for the filters _in_ the term; these capture the ones above
+                    let scaled = estimate * push_down_factor;
+
+                    // round and flatten
+                    let rounded = scaled.ceil();
+                    let flattened = usize::cast_from(
+                        u64::try_cast_from(rounded)
+                            .expect("positive and representable cardinality estimate"),
+                    );
+
+                    println!("input {index} with symbolic cardinality {} adjusted cardinality {estimate}*{push_down_factor} = {estimate} rounds to {rounded} flattens to {flattened}", &symbolic_cardinalities[index]);
+                    cardinalities.push(Some(flattened));
+                } else {
+                    cardinalities.push(None);
+                }
                 filters.push(characteristics);
 
                 // Collect available arrangements on this input.
@@ -390,8 +395,6 @@ impl JoinImplementation {
                     })
                 });
             }
-
-            // TODO(mgree): should we factor these `FilterCharacteristics` into the cardinality estimates?
 
             let old_implementation = implementation.clone();
 
@@ -631,15 +634,6 @@ mod differential {
                 filters,
                 input_mapper,
             );
-
-            for (idx, c) in cardinalities.iter().enumerate() {
-                println!("index {idx} has cardinality {c:?}");
-            }
-
-            for (order_idx, order) in orders.iter().enumerate() {
-                let (jic, expr, index) = order.get(0).expect("first");
-                println!("order #{order_idx} has {jic:?} for index {index}\n{expr:?}\n");
-            }
 
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
@@ -1164,8 +1158,6 @@ impl<'a> Orderer<'a> {
                         //   query better.
                         if let Some(rel) = rels.next() {
                             if rels.next().is_none() {
-                                println!("ordering {expr:?}");
-
                                 let expr = self.input_mapper.map_expr_to_local(expr.clone());
 
                                 // Update bound columns.
