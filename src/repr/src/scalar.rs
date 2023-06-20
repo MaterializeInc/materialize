@@ -205,6 +205,27 @@ impl TryFrom<Datum<'_>> for Option<f32> {
     }
 }
 
+impl TryFrom<Datum<'_>> for OrderedFloat<f32> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Float32(f) => Ok(f),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<OrderedFloat<f32>> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Float32(f) => Ok(Some(f)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<Datum<'_>> for f64 {
     type Error = ();
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
@@ -221,6 +242,27 @@ impl TryFrom<Datum<'_>> for Option<f64> {
         match from {
             Datum::Null => Ok(None),
             Datum::Float64(f) => Ok(Some(*f)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for OrderedFloat<f64> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Float64(f) => Ok(f),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<OrderedFloat<f64>> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Float64(f) => Ok(Some(f)),
             _ => Err(()),
         }
     }
@@ -398,6 +440,27 @@ impl TryFrom<Datum<'_>> for Option<OrderedDecimal<Numeric>> {
         match from {
             Datum::Null => Ok(None),
             Datum::Numeric(n) => Ok(Some(n)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for crate::Timestamp {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::MzTimestamp(n) => Ok(n),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<crate::Timestamp> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::MzTimestamp(n) => Ok(Some(n)),
             _ => Err(()),
         }
     }
