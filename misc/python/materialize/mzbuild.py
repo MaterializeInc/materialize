@@ -181,11 +181,8 @@ class PreImage:
 class Copy(PreImage):
     """A `PreImage` action which copies files from a directory.
 
-    The contents of the specified `source` directory are copied into the
-    `destination` directory. The `source` directory is relative to the
-    repository root. The `destination` directory is relative to the mzbuild
-    context. Files in the `source` directory are matched against the glob
-    specified by the `matching` argument.
+    See doc/developer/mzbuild.md for an explanation of the user-facing
+    parameters.
     """
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
@@ -401,7 +398,11 @@ class CargoPreImage(PreImage):
 
 
 class CargoBuild(CargoPreImage):
-    """A pre-image action that builds individual binaries with Cargo."""
+    """A `PreImage` action that builds a single binary with Cargo.
+
+    See doc/developer/mzbuild.md for an explanation of the user-facing
+    parameters.
+    """
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
