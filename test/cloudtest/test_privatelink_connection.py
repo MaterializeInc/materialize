@@ -62,6 +62,11 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     # its existence.
 
     mz.environmentd.sql(
+        "ALTER SYSTEM SET enable_connection_validation_syntax = true",
+        port="internal",
+        user="mz_system",
+    )
+    mz.environmentd.sql(
         dedent(
             """\
             CREATE CONNECTION kafkaconn TO KAFKA (

@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
 # over qualified objects should return an error
 query error qualified name did not have between 1 and 3 components
 SELECT * FROM universe.db.schema.foo

@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
 query error system schema 'mz_catalog' cannot be modified
 ALTER TABLE mz_tables RENAME TO foo;
 

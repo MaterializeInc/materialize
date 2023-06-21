@@ -9,6 +9,9 @@
 
 # Test `mz_internal.mz_object_dependencies`.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_connection_validation_syntax = true
+
 > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SELECT

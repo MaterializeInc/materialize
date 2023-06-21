@@ -32,10 +32,10 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
     AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOptionName,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DropOwnedStatement, SshConnectionOption, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, WithOptionValue,
+    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
+    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -3482,6 +3482,8 @@ impl TryFrom<AwsPrivatelinkConnectionOptionExtracted> for AwsPrivatelinkConnecti
     }
 }
 
+generate_extracted_config!(CreateConnectionOption, (Validate, bool));
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -3534,19 +3536,19 @@ pub fn plan_create_connection(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
-    let mut user_validate = None;
-    for option in with_options {
-        match option.name {
-            CreateConnectionOptionName::Validate => match option.value {
-                Some(WithOptionValue::Value(Value::Boolean(new_val))) => match user_validate {
-                    Some(_) => sql_bail!("Option VALIDATE must be set at most once"),
-                    None => user_validate = Some(new_val),
-                },
-                _ => sql_bail!("Option VALIDATE must be set to either TRUE or FALSE"),
-            },
-        }
+    let options = CreateConnectionOptionExtracted::try_from(with_options)?;
+    if options.validate.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
     }
-    let validate = user_validate.unwrap_or_else(|| connection.validate_by_default());
+    let validate = match options.validate {
+        Some(val) => val,
+        None => {
+            scx.catalog
+                .system_vars()
+                .enable_default_connection_validation()
+                && connection.validate_by_default()
+        }
+    };
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
