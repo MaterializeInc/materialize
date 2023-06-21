@@ -374,9 +374,7 @@ impl PrivilegeMap {
     /// Creates a new `PrivilegeMap` from a collection of [`MzAclItem`]s.
     pub fn from_mz_acl_items(items: impl IntoIterator<Item = MzAclItem>) -> PrivilegeMap {
         let mut map = PrivilegeMap::new();
-        for item in items {
-            map.grant(item);
-        }
+        map.grant_all(items);
         map
     }
 
@@ -424,6 +422,13 @@ impl PrivilegeMap {
             existing_privilege.acl_mode = existing_privilege.acl_mode.union(privilege.acl_mode);
         } else {
             grantee_privileges.push(privilege);
+        }
+    }
+
+    /// Grant multiple [`MzAclItem`]s to this map.
+    pub fn grant_all(&mut self, mz_acl_items: impl IntoIterator<Item = MzAclItem>) {
+        for mz_acl_item in mz_acl_items {
+            self.grant(mz_acl_item);
         }
     }
 

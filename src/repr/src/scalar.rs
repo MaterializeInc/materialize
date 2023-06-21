@@ -1063,6 +1063,12 @@ impl<'a> From<crate::Timestamp> for Datum<'a> {
     }
 }
 
+impl<'a> From<MzAclItem> for Datum<'a> {
+    fn from(mz_acl_item: MzAclItem) -> Self {
+        Datum::MzAclItem(mz_acl_item)
+    }
+}
+
 impl<'a, T> From<Option<T>> for Datum<'a>
 where
     Datum<'a>: From<T>,

@@ -195,6 +195,7 @@ pub struct CatalogState {
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     default_privileges: DefaultPrivileges,
+    system_privileges: PrivilegeMap,
 }
 
 impl CatalogState {
@@ -230,6 +231,7 @@ impl CatalogState {
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
             default_privileges: Default::default(),
+            system_privileges: Default::default(),
         }
     }
 
@@ -3043,6 +3045,7 @@ impl Catalog {
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
                 default_privileges: DefaultPrivileges::default(),
+                system_privileges: PrivilegeMap::default(),
             },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
@@ -3153,6 +3156,9 @@ impl Catalog {
                 .default_privileges
                 .grant(default_privilege_object, default_privilege);
         }
+
+        let system_privileges = catalog.storage().await.load_system_privileges().await?;
+        catalog.state.system_privileges.grant_all(system_privileges);
 
         catalog
             .load_system_configuration(
@@ -3613,6 +3619,13 @@ impl Catalog {
                     1,
                 ));
             }
+        }
+        for system_privilege in catalog.state.system_privileges.all_values_owned() {
+            builtin_table_updates.push(
+                catalog
+                    .state
+                    .pack_system_privileges_update(system_privilege, 1),
+            );
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));

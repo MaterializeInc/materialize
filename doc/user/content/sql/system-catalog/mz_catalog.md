@@ -397,6 +397,14 @@ Field                  | Type                         | Meaning
 `size_bytes`           | [`uint8`]                    | The number of storage bytes used by the object.
 `collection_timestamp` | [`timestamp with time zone`] | The time at which storage usage of the object was assessed.
 
+### `mz_system_privileges`
+
+The `mz_system_privileges` table contains information on system privileges.
+
+Field         | Type     | Meaning
+--------------|----------|--------
+`privileges` | [`mz_aclitem`] | The privileges belonging to the system.
+
 ### `mz_tables`
 
 The `mz_tables` table contains a row for each table in the system.
