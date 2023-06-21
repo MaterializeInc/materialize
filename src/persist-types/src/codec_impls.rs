@@ -60,7 +60,7 @@ impl Schema<()> for UnitSchema {
     }
 
     fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        let () = cols.finish()?;
+        let (_len, ()) = cols.finish()?;
         Ok(UnitSchema)
     }
 }
@@ -88,7 +88,7 @@ impl Codec for () {
 }
 
 /// An implementation of [PartEncoder] for a single column.
-pub struct SimpleEncoder<'a, X, T: Data>(SimpleEncoderFn<'a, X, T>);
+pub struct SimpleEncoder<'a, X, T: Data>(&'a mut usize, SimpleEncoderFn<'a, X, T>);
 
 enum SimpleEncoderFn<'a, X, T: Data> {
     Cast {
@@ -103,7 +103,8 @@ enum SimpleEncoderFn<'a, X, T: Data> {
 
 impl<'a, X, T: Data> PartEncoder<'a, X> for SimpleEncoder<'a, X, T> {
     fn encode(&mut self, val: &X) {
-        match &mut self.0 {
+        *self.0 += 1;
+        match &mut self.1 {
             SimpleEncoderFn::Cast { col, encode } => ColumnPush::<T>::push(*col, encode(val)),
             SimpleEncoderFn::Push { col, encode } => encode(col, val),
         }
@@ -151,8 +152,8 @@ impl<X, T: Data> SimpleSchema<X, T> {
         encode: for<'b> fn(&'b X) -> T::Ref<'b>,
     ) -> Result<SimpleEncoder<'a, X, T>, String> {
         let col = cols.col::<T>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleEncoder(SimpleEncoderFn::Cast { col, encode }))
+        let (len, ()) = cols.finish()?;
+        Ok(SimpleEncoder(len, SimpleEncoderFn::Cast { col, encode }))
     }
 
     /// A helper for [Schema::encoder] impls of a single column.
@@ -161,8 +162,8 @@ impl<X, T: Data> SimpleSchema<X, T> {
         encode: fn(&mut T::Mut, &X),
     ) -> Result<SimpleEncoder<'a, X, T>, String> {
         let col = cols.col::<T>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleEncoder(SimpleEncoderFn::Push { col, encode }))
+        let (len, ()) = cols.finish()?;
+        Ok(SimpleEncoder(len, SimpleEncoderFn::Push { col, encode }))
     }
 }
 
