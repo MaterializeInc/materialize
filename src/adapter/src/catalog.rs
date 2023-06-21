@@ -7319,6 +7319,9 @@ impl Catalog {
             keep_n_source_status_history_entries: self
                 .system_config()
                 .keep_n_source_status_history_entries(),
+            keep_n_sink_status_history_entries: self
+                .system_config()
+                .keep_n_source_status_history_entries(),
             upsert_rocksdb_tuning_config: {
                 match mz_rocksdb::RocksDBTuningParameters::from_parameters(
                     self.system_config().upsert_rocksdb_compaction_style(),

@@ -22,6 +22,7 @@ message ProtoStorageParameters {
     uint64 keep_n_source_status_history_entries = 4;
     mz_rocksdb.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;
+    uint64 keep_n_sink_status_history_entries = 7;
 }
 
 
