@@ -77,6 +77,11 @@ impl SeqNo {
     pub fn minimum() -> Self {
         SeqNo(0)
     }
+
+    /// A maximum value.
+    pub fn maximum() -> Self {
+        SeqNo(u64::MAX)
+    }
 }
 
 impl RustType<u64> for SeqNo {

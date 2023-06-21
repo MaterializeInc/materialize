@@ -100,6 +100,12 @@ pub struct StateVersions {
 #[derive(Debug, Clone)]
 pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 
+impl RecentLiveDiffs {
+    pub(crate) fn latest(&self) -> Option<&VersionedData> {
+        self.0.last()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AllLiveDiffs(pub Vec<VersionedData>);
 

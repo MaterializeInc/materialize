@@ -89,7 +89,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
-use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::location::{Blob, Consensus, ExternalError, SeqNo};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,8 @@ use crate::internal::compact::Compactor;
 use crate::internal::encoding::{parse_id, Schemas};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::paths::BlobKeyPrefix;
+use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle};
@@ -328,6 +330,70 @@ impl PersistClient {
             self.open_leased_reader(shard_id, purpose, key_schema, val_schema)
                 .await?,
         ))
+    }
+
+    /// WIP
+    pub async fn permanently_delete<T>(&self, shard_id: ShardId) -> Option<ShardId>
+    where
+        T: Timestamp + Lattice + Codec64,
+    {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+
+        if let Some(latest_diff) = state_versions
+            .fetch_recent_live_diffs::<T>(&shard_id)
+            .await
+            .latest()
+        {
+            let diff = self.metrics.codecs.state_diff.decode(|| {
+                StateDiff::<T>::decode(&self.cfg.build_version, latest_diff.data.clone())
+            });
+
+            if diff.applier_version >= self.cfg.build_version {
+                // The shard might still be safe to delete (there are no active readers or writers
+                // to the shard), but it is safer to return here and reconsider it again later.
+                // For now, we gate the deletion of a shard on the current build being greater
+                // than the last applied version to ensure that, if persist is being held properly,
+                // that there are no active handles to the shard on this version.
+                return None;
+            }
+        }
+
+        let path = shard_id.to_string();
+        // WIP: use the right metrics
+        retry_external(&self.metrics.retries.external.gc_truncate, || async {
+            self.consensus.truncate(&path, SeqNo::maximum()).await
+        })
+        .await;
+
+        // WIP: quick hack around Blob::list_keys_and_metadata not accepting a fn we can await
+        // ideally we can page through the keys with a limit and/or multi-delete and/or Blob
+        // implements some delete_prefix fn
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let blob = Arc::clone(&self.blob);
+        mz_ore::task::spawn(
+            || format!("PersistClient::permanently_delete({})", shard_id),
+            async move {
+                while let Some(x) = rx.recv().await {
+                    let _ = blob.delete(&x).await;
+                }
+            },
+        );
+
+        retry_external(&self.metrics.retries.external.batch_delete, || async {
+            self.blob
+                .list_keys_and_metadata(&BlobKeyPrefix::Shard(&shard_id).to_string(), &mut |key| {
+                    let _ = tx.send(key.key.to_owned());
+                })
+                .await
+        })
+        .await;
+
+        Some(shard_id)
     }
 
     /// [Self::open], but returning only a [/eadHandle].

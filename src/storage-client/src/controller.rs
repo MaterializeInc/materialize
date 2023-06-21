@@ -3057,52 +3057,12 @@ where
             .await
             .unwrap();
 
-        let persist_client = &persist_client;
-
         use futures::stream::StreamExt;
         let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
-            .map(|shard_id| async move {
-                // Open read handle, whose since is the global since.
-                let read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
-                    .open_leased_reader(
-                        shard_id,
-                        "finalizing shards",
-                        Arc::new(RelationDesc::empty()),
-                        Arc::new(UnitSchema),
-                    )
-                    .await
-                    .expect("invalid persist usage");
-
-                // If global since is empty, we can close shard because no one has an outstanding
-                // read hold.
-                if read_handle.since().is_empty() {
-                    let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
-                        .open_writer(
-                            shard_id,
-                            "finalizing shards",
-                            Arc::new(RelationDesc::empty()),
-                            Arc::new(UnitSchema),
-                        )
-                        .await
-                        .expect("invalid persist usage");
-
-                    if !write_handle.upper().is_empty() {
-                        write_handle
-                            .append(
-                                Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
-                                write_handle.upper().clone(),
-                                Antichain::new(),
-                            )
-                            .await
-                            // Rather than error, just leave this shard as one to finalize later.
-                            .ok()?
-                            .ok()?;
-                    }
-
-                    Some(shard_id)
-                } else {
-                    None
-                }
+            .map(|shard_id| {
+                let shard_id = shard_id.clone();
+                let persist_client = &persist_client;
+                async move { persist_client.permanently_delete::<T>(shard_id).await }
             })
             // Poll each future for each collection concurrently, maximum of 10 at a time.
             .buffer_unordered(10)
