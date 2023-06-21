@@ -5128,6 +5128,7 @@ impl Catalog {
                 size,
                 availability_zone,
                 az_user_specified,
+                disk,
             } => {
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
                 let cluster_replica_sizes = &self.state.cluster_replica_sizes;
@@ -5141,6 +5142,7 @@ impl Catalog {
                     availability_zone,
                     size,
                     az_user_specified,
+                    disk,
                 })
             }
         };
@@ -5896,7 +5898,7 @@ impl Catalog {
                         &config.clone().into(),
                         owner_id,
                     )?;
-                    if let ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) =
+                    if let ReplicaLocation::Managed(ManagedReplicaLocation { size, disk, .. }) =
                         &config.location
                     {
                         let details = EventDetails::CreateClusterReplicaV1(
@@ -5906,6 +5908,7 @@ impl Catalog {
                                 replica_id: Some(id.to_string()),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
+                                disk: *disk,
                             },
                         );
                         state.add_to_audit_log(
@@ -7806,6 +7809,7 @@ pub struct ClusterVariantManaged {
     pub logging: SerializedReplicaLogging,
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
+    pub disk: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
@@ -7871,6 +7875,7 @@ pub enum SerializedReplicaLocation {
         /// `true` if the AZ was specified by the user and must be respected;
         /// `false` if it was picked arbitrarily by Materialize.
         az_user_specified: bool,
+        disk: bool,
     },
 }
 
@@ -7895,10 +7900,12 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
                 size,
                 availability_zone,
                 az_user_specified,
+                disk,
             }) => SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified,
+                disk,
             },
         }
     }

@@ -107,6 +107,7 @@ class MaterializeApplication(Application):
             "cloudtest-worker",
             "cloudtest-worker2",
             "cloudtest-worker3",
+            "cloudtest-worker4",
         ]:
             self.kubectl(
                 "label",

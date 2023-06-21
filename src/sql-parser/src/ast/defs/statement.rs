@@ -1215,6 +1215,8 @@ pub enum ClusterOptionName {
     ReplicationFactor,
     /// The `SIZE` option.
     Size,
+    /// The `DISK` option.
+    Disk,
 }
 
 impl AstDisplay for ClusterOptionName {
@@ -1230,6 +1232,7 @@ impl AstDisplay for ClusterOptionName {
             ClusterOptionName::Replicas => f.write_str("REPLICAS"),
             ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
             ClusterOptionName::Size => f.write_str("SIZE"),
+            ClusterOptionName::Disk => f.write_str("DISK"),
         }
     }
 }
@@ -1376,6 +1379,8 @@ pub enum ReplicaOptionName {
     IntrospectionDebugging,
     /// The `IDLE ARRANGEMENT MERGE EFFORT [=] <value>` option.
     IdleArrangementMergeEffort,
+    /// The `DISK [[=] <enabled>]` option.
+    Disk,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1393,6 +1398,7 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::IdleArrangementMergeEffort => {
                 f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
             }
+            ReplicaOptionName::Disk => f.write_str("DISK"),
         }
     }
 }

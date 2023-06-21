@@ -100,8 +100,8 @@ class Materialized(Service):
 
         if system_parameter_defaults is None:
             system_parameter_defaults = {
-                "enable_upsert_source_disk": "true",
-                "upsert_source_disk_default": "true",
+                "enable_disk_cluster_replicas": "true",
+                "disk_cluster_replicas_default": "true",
                 "persist_sink_minimum_batch_updates": "128",
                 "enable_multi_worker_storage_persist_sink": "true",
                 "storage_persist_sink_minimum_batch_updates": "100",
@@ -244,13 +244,18 @@ class Clusterd(Service):
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
         options: List[str] = [],
+        scratch_directory: bool = True,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
-            "CLUSTERD_SCRATCH_DIRECTORY=/mzdata/source_data",
             *environment_extra,
         ]
+
+        if scratch_directory:
+            environment.append(
+                "CLUSTERD_SCRATCH_DIRECTORY=/mzdata/source_data",
+            )
 
         command = []
 

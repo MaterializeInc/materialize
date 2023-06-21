@@ -342,6 +342,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             labels,
             availability_zone: _,
             anti_affinity: _,
+            disk,
+            // limit is meaningless for processes, as we just use a local path.
+            disk_limit: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);
@@ -393,6 +396,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         image: image.clone(),
                         args,
                         ports,
+                        disk,
                     }),
                 );
 
@@ -467,6 +471,7 @@ impl NamespacedProcessOrchestrator {
             image,
             args,
             ports,
+            disk,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
         let suppress_output = self.suppress_output;
@@ -499,13 +504,20 @@ impl NamespacedProcessOrchestrator {
             self.secrets_dir.display()
         ));
 
-        let scratch_directory = self.scratch_directory.as_ref().map(|dir| dir.join(id));
-        if let Some(scratch_directory) = &scratch_directory {
-            args.push(format!(
-                "--scratch-directory={}",
-                scratch_directory.display()
-            ));
-        }
+        let scratch_directory = if disk {
+            let scratch_directory = self.scratch_directory.as_ref().map(|dir| dir.join(id));
+            if let Some(scratch_directory) = &scratch_directory {
+                args.push(format!(
+                    "--scratch-directory={}",
+                    scratch_directory.display()
+                ));
+            } else {
+                // Ensured elsewhere
+            }
+            scratch_directory
+        } else {
+            None
+        };
 
         async move {
             let mut proxy_handles = vec![];
@@ -647,6 +659,7 @@ struct ServiceProcessConfig<'a> {
     image: String,
     args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
     ports: Vec<ServiceProcessPort>,
+    disk: bool,
 }
 
 struct ServiceProcessPort {

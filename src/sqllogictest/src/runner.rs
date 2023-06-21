@@ -957,7 +957,6 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
-                scratch_directory_enabled: false,
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
             },
             secrets_controller,

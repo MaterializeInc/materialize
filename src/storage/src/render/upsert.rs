@@ -158,7 +158,7 @@ where
         source_config.worker_id,
     );
 
-    if upsert_envelope.disk {
+    if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
         tracing::info!(
@@ -168,10 +168,7 @@ where
             source_config.id
         );
         let rocksdb_metrics = Arc::clone(&upsert_metrics.rocksdb);
-        let rocksdb_dir = instance_context
-            .scratch_directory
-            .as_ref()
-            .expect("instance directory to be there if rendering an ON DISK source")
+        let rocksdb_dir = scratch_directory
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
 

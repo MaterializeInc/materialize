@@ -283,6 +283,7 @@ message ClusterConfig {
         repeated string availability_zones = 3;
         ReplicaLogging logging = 4;
         ReplicaMergeEffort idle_arrangement_merge_effort = 5;
+        bool disk = 6;
     }
 
     oneof variant {
@@ -304,6 +305,7 @@ message ReplicaConfig {
         string size = 1;
         string availability_zone = 2;
         bool az_user_specified = 3;
+        bool disk = 4;
     }
 
     oneof location {
@@ -460,6 +462,7 @@ message AuditLogEventV1 {
         StringWrapper replica_id = 3;
         string replica_name = 4;
         string logical_size = 5;
+        bool disk = 6;
     }
 
     message DropClusterReplicaV1 {
