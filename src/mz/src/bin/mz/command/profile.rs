@@ -90,6 +90,7 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
                 profile,
                 *no_browser,
                 endpoint.admin_endpoint.clone(),
+                endpoint.cloud_endpoint.clone(),
             )
             .await
         }

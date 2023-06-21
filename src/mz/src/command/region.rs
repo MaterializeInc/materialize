@@ -24,7 +24,7 @@ use crate::{context::RegionContext, error::Error};
 use mz_cloud_api::client::{cloud_provider::CloudProvider, environment::Environment};
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
-use tokio::time::{sleep};
+use tokio::time::sleep;
 
 /// Enable a region in the profile organization.
 ///
@@ -52,14 +52,14 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
         match cx.get_environment(region.clone()).await {
             Ok(environment) => {
                 if environment.resolvable {
-                    break Ok(environment)
+                    break Ok(environment);
                 }
-            },
+            }
             Err(e) => {
                 if tries == 10 {
                     break Err(e);
                 }
-            },
+            }
         }
         sleep(Duration::from_secs(10)).await;
     }?;

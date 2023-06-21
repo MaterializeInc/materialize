@@ -10,6 +10,9 @@ use mz_frontegg_auth::AppPassword;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
+use uuid::Uuid;
+
+use crate::error::Error;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,24 +22,41 @@ struct BrowserAPIToken {
 }
 
 /// Request handler for the server waiting the browser API token creation
-// Axum requires the handler be async even though we don't await
+/// Axum requires the handler be async even though we don't await
 #[allow(clippy::unused_async)]
 async fn request(
     Query(BrowserAPIToken { secret, client_id }): Query<BrowserAPIToken>,
-    tx: UnboundedSender<AppPassword>,
+    tx: UnboundedSender<Result<AppPassword, Error>>,
 ) -> impl IntoResponse {
-    tx.send(AppPassword {
-        client_id: client_id.parse().unwrap(),
-        secret_key: secret.parse().unwrap(),
-    })
-    // TODO: Implement custom error
-    .unwrap_or_else(|_| panic!("Error handling login details."));
-    (StatusCode::OK, "You can now close the tab.")
+    if secret.len() == 0 && client_id.len() == 0 {
+        tx.send(Err(Error::LoginOperationCanceled))
+            .unwrap_or_else(|_| panic!("Error handling login details."));
+        return (StatusCode::OK, "Login canceled. You can now close the tab.");
+    }
+
+    let client_id = client_id.parse::<Uuid>();
+    let secret = secret.parse::<Uuid>();
+    if client_id.is_ok() && secret.is_ok() {
+        let app_password = AppPassword {
+            client_id: client_id.unwrap(),
+            secret_key: secret.unwrap(),
+        };
+        tx.send(Ok(app_password))
+            .unwrap_or_else(|_| panic!("Error handling login details."));
+        (StatusCode::OK, "You can now close the tab.")
+    } else {
+        tx.send(Err(Error::InvalidAppPassword))
+            .unwrap_or_else(|_| panic!("Error handling login details."));
+        (
+            StatusCode::OK,
+            "Invalid credentials. Please, try again or communicate with support.",
+        )
+    }
 }
 
 /// Server for handling login's information.
 pub fn server(
-    tx: UnboundedSender<AppPassword>,
+    tx: UnboundedSender<Result<AppPassword, Error>>,
 ) -> (
     Server<hyper::server::conn::AddrIncoming, IntoMakeService<Router>>,
     u16,

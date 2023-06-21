@@ -76,4 +76,11 @@ pub enum Error {
     /// I/O Error
     #[error(transparent)]
     CSVParseError(#[from] csv::Error),
+    /// Error that happens when a user cancels a login from the console UI.
+    #[error("Login canceled.")]
+    LoginOperationCanceled,
+    /// Error that happens occures when the clientid or secret are invalid.
+    /// It is a simpler alternative for parsing errors.
+    #[error("Invalid credentials. Please, try again or communicate with support.")]
+    InvalidAppPassword,
 }

@@ -42,13 +42,13 @@ use crate::{
 
 /// Opens the default web browser in the host machine
 /// and awaits a single request containing the profile's app password.
-pub async fn init_with_browser() -> Result<AppPassword, Error> {
+pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPassword, Error> {
     // Bind a web server to a local port to receive the app password.
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (server, port) = server(tx);
 
     // Build the login URL
-    let mut url = DEFAULT_ENDPOINT.clone();
+    let mut url = cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone());
     url.path_segments_mut()
         .expect("constructor validated URL can be a base")
         .extend(&["account", "login"]);
@@ -74,7 +74,7 @@ pub async fn init_with_browser() -> Result<AppPassword, Error> {
         _ = server => unreachable!("server should not shut down"),
         result = rx.recv() => {
             match result {
-                Some(app_password) => Ok(app_password),
+                Some(app_password_result) => app_password_result,
                 None => { panic!("failed to login via browser") },
             }
         }
@@ -137,10 +137,11 @@ pub async fn init(
     profile_name: Option<String>,
     no_browser: bool,
     admin_endpoint: Option<Url>,
+    cloud_endpoint: Option<Url>,
 ) -> Result<(), Error> {
     let app_password = match no_browser {
         true => init_without_browser(admin_endpoint.clone()).await?,
-        false => init_with_browser().await?,
+        false => init_with_browser(cloud_endpoint.clone()).await?,
     };
 
     let new_profile = TomlProfile {
@@ -148,7 +149,7 @@ pub async fn init(
         vault: None,
         region: None,
         admin_endpoint: admin_endpoint.map(|url| url.to_string()),
-        cloud_endpoint: None,
+        cloud_endpoint: cloud_endpoint.map(|url| url.to_string()),
     };
 
     scx.config_file()
