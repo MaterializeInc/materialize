@@ -316,6 +316,7 @@ query TT
 SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 CREATE DATABASE d;
@@ -430,6 +431,7 @@ query TT
 SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=UC/joe
+c  mz_introspection=U/joe
 
 simple conn=mz_system,user=mz_system
 ALTER DATABASE d OWNER TO joe
@@ -1477,6 +1479,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=U/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
@@ -1497,6 +1500,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=U/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on CLUSTER c TO PUBLIC
@@ -1507,6 +1511,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 c  =UC/materialize
 c  joe=U/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 simple conn=joe8,user=joe
 GRANT USAGE on CLUSTER c TO other
@@ -1524,6 +1529,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  =UC/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
@@ -1544,6 +1550,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  =UC/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1558,6 +1565,7 @@ query TT
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for CLUSTER
 GRANT INSERT, SELECT, UPDATE, DELETE ON CLUSTER c TO joe

@@ -1187,6 +1187,7 @@ owner: privileges on database materialize granted by mz_system
 owner: privileges on schema public granted by mz_system
 owner: privileges on cluster default granted by mz_system
 owner: owner of cluster materialize_public_s
+owner: privileges granted on cluster materialize_public_s to mz_introspection
 owner: privileges on cluster materialize_public_s granted by owner
 owner: privileges granted on cluster materialize_public_s to owner
 owner: owner of cluster replica linked
@@ -1729,6 +1730,7 @@ DETAIL: owner: privileges on database materialize granted by mz_system
 owner: privileges on schema public granted by mz_system
 owner: privileges on cluster default granted by mz_system
 owner: owner of cluster clus
+owner: privileges granted on cluster clus to mz_introspection
 owner: privileges on cluster clus granted by owner
 owner: privileges granted on cluster clus to owner
 owner: owner of cluster replica r1

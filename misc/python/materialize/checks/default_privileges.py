@@ -73,6 +73,7 @@ class DefaultPrivileges(Check):
                   LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
                   LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
                   ORDER BY role_name, grantee_name;
+                PUBLIC <null> <null> CLUSTER mz_introspection U
                 PUBLIC <null> <null> TYPE PUBLIC U
                 materialize defpriv_db defpriv_schema TABLE defpriv_role1 arwd
                 materialize defpriv_db defpriv_schema TABLE defpriv_role2 arwd
