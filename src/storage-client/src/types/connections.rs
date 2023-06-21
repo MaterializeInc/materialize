@@ -1120,7 +1120,7 @@ impl SshTunnel {
 impl SshConnection {
     #[allow(clippy::unused_async)]
     async fn validate(&self, _connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
-        Ok(())
+        Err(anyhow!("Validating SSH connections is not supported yet"))
     }
 
     fn validate_by_default(&self) -> bool {
@@ -1131,7 +1131,9 @@ impl SshConnection {
 impl AwsPrivatelinkConnection {
     #[allow(clippy::unused_async)]
     async fn validate(&self, _connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
-        Ok(())
+        Err(anyhow!(
+            "Validating AWS Privatelink connections is not supported yet"
+        ))
     }
 
     fn validate_by_default(&self) -> bool {

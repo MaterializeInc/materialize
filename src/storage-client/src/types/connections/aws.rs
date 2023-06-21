@@ -9,6 +9,7 @@
 
 //! AWS configuration for sources and sinks.
 
+use anyhow::anyhow;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
@@ -185,7 +186,7 @@ impl AwsConfig {
         &self,
         _connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
-        Ok(())
+        Err(anyhow!("Validating SSH connections is not supported yet"))
     }
 
     pub(crate) fn validate_by_default(&self) -> bool {
