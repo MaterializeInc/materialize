@@ -328,7 +328,7 @@ where
         ];
 
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            let mut filter = EnvFilter::from_str(&format!("{}", otel_config.filter)).expect("WIP");
+            let mut filter = otel_config.filter;
             for directive in &default_directives {
                 filter = filter.add_directive(directive.clone());
             }

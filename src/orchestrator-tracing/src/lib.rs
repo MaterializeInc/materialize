@@ -288,7 +288,7 @@ impl TracingCliArgs {
                     },
                     LogFormat::Json => StderrLogFormat::Json,
                 },
-                filter: self.log_filter.clone().inner(),
+                filter: self.log_filter.clone().into(),
             },
             opentelemetry: self.opentelemetry_endpoint.clone().map(|endpoint| {
                 OpenTelemetryConfig {
@@ -298,7 +298,7 @@ impl TracingCliArgs {
                         .iter()
                         .map(|header| (header.key.clone(), header.value.clone()))
                         .collect(),
-                    filter: self.opentelemetry_filter.clone().inner(),
+                    filter: self.opentelemetry_filter.clone().into(),
                     resource: Resource::new(
                         self.opentelemetry_resource
                             .iter()
@@ -489,31 +489,38 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ValidatedEnvFilterString(String);
+
 /// Wraps [`EnvFilter`] to provide a [`Clone`] implementation.
 #[derive(Debug)]
 pub struct CloneableEnvFilter {
     filter: EnvFilter,
+    validated: ValidatedEnvFilterString,
 }
 
-impl CloneableEnvFilter {
-    pub fn inner_ref(&self) -> &EnvFilter {
+impl AsRef<EnvFilter> for CloneableEnvFilter {
+    fn as_ref(&self) -> &EnvFilter {
         &self.filter
     }
+}
 
-    pub fn inner(self) -> EnvFilter {
-        self.filter
+impl From<CloneableEnvFilter> for EnvFilter {
+    fn from(value: CloneableEnvFilter) -> Self {
+        value.filter
     }
 }
 
 impl Clone for CloneableEnvFilter {
     fn clone(&self) -> Self {
-        // At the time of this implementation, `EnvFilter` does not implement Clone
-        // but is expected, without explicit documentation saying so, to roundtrip
-        // through its Display implementation [1].
-        //
-        // [1]: https://github.com/tokio-rs/tracing/blob/e603c2a254d157a25a7a1fbfd4da46ad7e05f555/tracing-subscriber/src/filter/env/mod.rs#L944-L953
-        let filter = EnvFilter::from_str(&format!("{}", self.filter)).expect("roundtrips");
-        Self { filter }
+        // TODO: implement Clone on `EnvFilter` upstream
+        Self {
+            // While EnvFilter has the undocumented property of roundtripping through
+            // its String format, it seems safer to always create a new EnvFilter from
+            // the same validated input when cloning.
+            filter: EnvFilter::from_str(&self.validated.0).expect("validated"),
+            validated: self.validated.clone(),
+        }
     }
 }
 
@@ -522,7 +529,10 @@ impl FromStr for CloneableEnvFilter {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let filter: EnvFilter = s.parse()?;
-        Ok(CloneableEnvFilter { filter })
+        Ok(CloneableEnvFilter {
+            filter,
+            validated: ValidatedEnvFilterString(s.to_string()),
+        })
     }
 }
 
