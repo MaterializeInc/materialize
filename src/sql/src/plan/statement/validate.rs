@@ -32,6 +32,7 @@ pub fn plan_validate_connection(
     // Validate the target of the validate statement.
     match item.connection().cloned() {
         Ok(connection) => Ok(Plan::ValidateConnection(ValidateConnectionPlan {
+            id: item.id(),
             connection,
         })),
         Err(_) => {

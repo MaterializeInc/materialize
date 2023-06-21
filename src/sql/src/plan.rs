@@ -568,6 +568,7 @@ pub struct CreateConnectionPlan {
 
 #[derive(Debug)]
 pub struct ValidateConnectionPlan {
+    pub id: GlobalId,
     /// The connection to validate.
     pub connection: mz_storage_client::types::connections::Connection,
 }
