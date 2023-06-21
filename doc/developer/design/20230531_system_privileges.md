@@ -62,6 +62,8 @@ System privileges and role attributes will interact in the following ways:
 - Granting a system privilege will grant the privilege AND set the attribute to true.
 - Revoking a system privilege will revoke the privilege AND set the attribute to false.
 - Altering a role attribute will affect the role attribute but will not change the system privilege.
+    - If altering a role attribute triggered a system privilege to be granted/revoked, then role
+      attributes would effectively be inheritable, which would break PostgreSQL compatibility.
 - When checking to see if a role is allowed to execute a command we will check if they have the
   system privilege or the role attribute.
 
@@ -80,9 +82,30 @@ We will support the following system privileges:
 System privileges are inherited through role membership.
 
 Whenever someone alters a role attribute we will issue a warning indicating that system privileges
-take precedence and are preferred to role attributes. Additionally, the documentation will focus on
-system privileges and indicate that role attributes are there for PostgreSQL compatibility and not
-the preferred approach.
+take precedence and are preferred to role attributes. If a role attribute is set to false for some
+role and that role still has the system privilege, then the warning will indicate that the role
+still has the system privilege. Additionally, the documentation will focus on system privileges and
+indicate that role attributes are there for PostgreSQL compatibility and not the preferred approach.
+
+### Observability
+
+We will add the following function:
+`has_system_privilege([role: text or oid, ]privileges: text) -> bool`
+to indicate whether a role has a system privilege. The semantics of this function will match our
+existing
+[access privilege inquiry functions](https://materialize.com/docs/sql/functions/#access-privilege-inquiry-func).
+
+## Future Work
+
+The overall observability for privileges could be improved by adding `SHOW` commands that show a
+user their current privileges. Some examples may be:
+
+- `SHOW PRIVILEGES` would show all privileges for the current user.
+- `SHOW PRIVILEGES ON SYSTEM` would show all system privileges for the current user.
+- `SHOW PRIVILEGES ON TABLE t` would show all table privileges for the current user on `t`.
+- etc.
+
+While these aren't specific to system privileges, they are relevant.
 
 ## Alternatives
 
