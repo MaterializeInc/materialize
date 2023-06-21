@@ -15,18 +15,29 @@ keywords. For example, `ALTER ROLE r CREATEDB` will grant the ability to create 
 role `r`. `ALTER ROLE r CREATECLUSTER` will grant the ability to create clusters to role `r`. Role
 attributes cannot be inherited through role membership.
 
+Role attributes always exist in a boolean state. To change the state of a role attribute you must
+alter the role. For example `ALTER ROLE joe CREATEDB` sets the `CREATEDB` attribute to `true`,
+and `ALTER ROLE NOCREATEDB` sets the `CREATEDB` attribute to `false`.
+
+On the other hand, privileges either exist or they don't exist. You create them by granting a
+privilege via `GRANT ...` and you destroy them via `REVOKE ...`.
+
 Role attributes present some problems as they currently exist:
 
 - It can be confusing that there are two separate privilege primitives that control a role's
-  privilege.
+  privilege, and they have different semantics.
 - Role attributes are not inherited which makes it cumbersome to grant attributes to a large
   number of roles.
+- Users are not able to easily grant the ability to create top level objects to many current and
+  future users in a short amount of time.
 
 ## Goals
 
 - Reduce confusion around privileges.
 - Allow the ability to create databases, clusters, and roles to be inherited through role
   membership.
+- Allow users to easily grant the ability to create top level objects to many current and future
+  users in a short amount of time.
 - Maintain PostgreSQL compatibility.
 
 ## Overview
