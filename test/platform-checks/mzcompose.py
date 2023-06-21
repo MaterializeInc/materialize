@@ -27,7 +27,11 @@ from materialize.mzcompose.services import (
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(
+        setup_materialize=True,
+        # Workaround for #19810
+        restart="on-failure:5",
+    ),
     Postgres(),
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
