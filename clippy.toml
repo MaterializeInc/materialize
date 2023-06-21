@@ -1,3 +1,8 @@
+await-holding-invalid-types = [
+    { path = "tracing::span::Entered", reason = "use `tracing::instrument`, `tracing::Instrument::instrument`, or `tracing::Span::in_scope` instead" },
+    { path = "tracing::span::EnteredSpan", reason = "use `tracing::instrument`, `tracing::Instrument::instrument`, or `tracing::Span::in_scope` instead" },
+]
+
 disallowed-methods = [
     { path = "std::panic::catch_unwind", reason = "use `mz_ore::panic::catch_unwind` instead" },
     { path = "futures::FutureExt::catch_unwind", reason = "use `mz_ore::future::FutureExt::catch_unwind` instead" },

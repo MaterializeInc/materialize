@@ -1506,12 +1506,11 @@ impl Coordinator {
                 }
             };
 
-            // All message processing functions trace. Start a parent span for them to make
-            // it easy to find slow messages.
-            let span = span!(Level::DEBUG, "coordinator message processing");
-            let _enter = span.enter();
-
-            self.handle_message(msg).await;
+            self.handle_message(msg)
+                // All message processing functions trace. Start a parent span for them to make
+                // it easy to find slow messages.
+                .instrument(span!(Level::DEBUG, "coordinator message processing"))
+                .await;
         }
     }
 
