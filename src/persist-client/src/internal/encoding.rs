@@ -1080,6 +1080,10 @@ impl RustType<Bytes> for LazyPartStats {
     }
 }
 
+pub(crate) fn any_some_lazy_part_stats() -> impl Strategy<Value = Option<LazyPartStats>> {
+    proptest::prelude::any::<LazyPartStats>().prop_map(Some)
+}
+
 #[allow(unused_parens)]
 impl Arbitrary for LazyPartStats {
     type Parameters = ();
@@ -1092,6 +1096,7 @@ impl Arbitrary for LazyPartStats {
         })
     }
 }
+
 impl RustType<ProtoHollowRollup> for HollowRollup {
     fn into_proto(&self) -> ProtoHollowRollup {
         ProtoHollowRollup {
