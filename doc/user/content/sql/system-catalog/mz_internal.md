@@ -374,7 +374,7 @@ The `mz_compute_exports` view describes the objects exported by [dataflows][data
 | Field          | Type         | Meaning                                                                                                                                                                                                                                                                                        |
 | -------------- | ------------ | --------                                                                                                                                                                                                                                                                                       |
 | `export_id`    | [`text`]     | The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
-| `dataflow_id`  | [`bigint`]   | The ID of the dataflow. Corresponds to [`mz_dataflows.local_id`](#mz_dataflows).                                                                                                                                                                                                               |
+| `dataflow_id`  | [`bigint`]   | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                                                                                                                                                                                               |
 
 ### `mz_compute_frontiers`
 
@@ -414,7 +414,6 @@ The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
 | Field       | Type         | Meaning                                |
 | ----------- | ------------ | --------                               |
 | `id`        | [`bigint`]   | The ID of the dataflow.                |
-| `local_id`  | [`bigint`]   | The scope-local index of the dataflow. |
 | `name`      | [`text`]     | The internal name of the dataflow.     |
 
 ### `mz_dataflow_addresses`
