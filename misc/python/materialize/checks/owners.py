@@ -320,6 +320,7 @@ class Owners(Check):
                 contains: column "privileges" does not exist
 
                 > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
+                owner_cluster1 mz_introspection=U/owner_role_01
                 owner_cluster1 owner_role_01=UC/owner_role_01
 
                 > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'
