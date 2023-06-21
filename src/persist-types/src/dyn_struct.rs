@@ -230,6 +230,7 @@ impl DynStructCol {
             .as_any()
             .downcast_ref::<StructArray>()
             .ok_or_else(|| format!("expected StructArray but was {:?}", array.data_type()))?;
+        let len = array.len();
         let validity = array.validity().cloned();
         let mut cols = Vec::new();
         assert_eq!(cfg.cols.len(), array.values().len());
@@ -237,7 +238,6 @@ impl DynStructCol {
             let col = DynColumnRef::from_arrow(typ, array)?;
             cols.push(col);
         }
-        let len = cols.first().map_or(0, |x| x.len());
         Ok(DynStructCol {
             len,
             cfg,
@@ -347,9 +347,17 @@ impl DynStructMut {
     ///
     /// Panics if this struct is optional.
     pub fn as_mut<'a>(&'a mut self) -> ColumnsMut<'a> {
-        let ColumnsMut { validity, cols } = self.as_opt_mut();
+        let ColumnsMut {
+            len,
+            validity,
+            cols,
+        } = self.as_opt_mut();
         assert!(validity.validity.is_none());
-        ColumnsMut { validity: (), cols }
+        ColumnsMut {
+            len,
+            validity: (),
+            cols,
+        }
     }
 
     /// Explodes this _optional_ struct column into its component fields and
@@ -373,6 +381,7 @@ impl DynStructMut {
             })
             .collect();
         ColumnsMut {
+            len: &mut self.len,
             validity: ValidityMut {
                 len: 0,
                 validity: &mut self.validity,
@@ -408,9 +417,8 @@ impl From<DynStructMut> for DynStructCol {
             .into_iter()
             .map(DynColumnRef::from)
             .collect::<Vec<_>>();
-        let len = cols.first().map_or(0, |x| x.len());
         DynStructCol {
-            len,
+            len: value.len,
             cfg,
             validity,
             cols,
@@ -542,6 +550,7 @@ impl<'a, V> ColumnsRef<'a, V> {
 /// been accounted for.
 #[derive(Debug)]
 pub struct ColumnsMut<'a, V = ()> {
+    len: &'a mut usize,
     validity: V,
     pub(crate) cols: BTreeMap<&'a str, &'a mut DynColumnMut>,
 }
@@ -557,9 +566,9 @@ impl<'a, V> ColumnsMut<'a, V> {
     }
 
     /// Verifies that all columns in the set have been removed.
-    pub fn finish(self) -> Result<V, String> {
+    pub fn finish(self) -> Result<(&'a mut usize, V), String> {
         if self.cols.is_empty() {
-            Ok(self.validity)
+            Ok((self.len, self.validity))
         } else {
             let names = self.cols.iter().map(|(x, _)| *x).collect::<Vec<_>>();
             Err(format!("unused cols: {}", names.join(" ")))
