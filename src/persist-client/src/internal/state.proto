@@ -67,9 +67,16 @@ message ProtoHollowRollup {
     optional uint64 encoded_size_bytes = 2;
 }
 
+message ProtoIdSpineBatch {
+    ProtoSpineId id = 1;
+    ProtoSpineBatch batch = 2;
+}
+
 message ProtoTrace {
     ProtoU64Antichain since = 1;
-    repeated ProtoHollowBatch spine = 2;
+    repeated ProtoHollowBatch deprecated_spine = 2;
+    repeated ProtoIdSpineBatch spine_batches = 3;
+    map<uint64, ProtoSpineLevel> spine_levels = 4;
 }
 
 message ProtoLeasedReaderState {

@@ -176,17 +176,11 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
         for spine_diff in self.spine_batches.iter() {
             match &spine_diff.val {
-                StateFieldValDiff::Insert(ThinSpineBatch::Hollow(x)) => {
+                StateFieldValDiff::Insert(ThinSpineBatch::Hollow(x)) | StateFieldValDiff::Update(_, ThinSpineBatch::Hollow(x)) => {
                     f(HollowBlobRef::Batch(x));
                 }
-                StateFieldValDiff::Update(_, _) => {
-                    // spine fields are always inserted/deleted, this
-                    // would mean we encountered a malformed diff.
-                    //
-                    // WIP is this still true?
-                    panic!("cannot update spine field")
-                }
                 StateFieldValDiff::Insert(ThinSpineBatch::Fueled { .. })
+                | StateFieldValDiff::Update(_, ThinSpineBatch::Fueled{ .. })
                 | StateFieldValDiff::Delete(_) => {} // No-op
             }
         }
@@ -203,17 +197,11 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
         for spine_diff in self.spine_batches.iter() {
             match &spine_diff.val {
-                StateFieldValDiff::Delete(ThinSpineBatch::Hollow(x)) => {
+                StateFieldValDiff::Delete(ThinSpineBatch::Hollow(x)) | StateFieldValDiff::Update(ThinSpineBatch::Hollow(x), _) => {
                     f(HollowBlobRef::Batch(x));
                 }
-                StateFieldValDiff::Update(_, _) => {
-                    // spine fields are always inserted/deleted, this
-                    // would mean we encountered a malformed diff.
-                    //
-                    // WIP is this still true?
-                    panic!("cannot update spine field")
-                }
                 StateFieldValDiff::Delete(ThinSpineBatch::Fueled { .. })
+                | StateFieldValDiff::Update(ThinSpineBatch::Fueled { .. }, _)
                 | StateFieldValDiff::Insert(_) => {} // No-op
             }
         }
@@ -1349,7 +1337,7 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement lower (untouched batch before the split one)

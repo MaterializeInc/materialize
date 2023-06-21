@@ -27,8 +27,6 @@ use prost::Message;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::debug;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -47,7 +45,7 @@ use crate::internal::state::{
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
-use crate::internal::trace::{SpineId, SpineLevel, ThinSpineBatch, Trace};
+use crate::internal::trace::{SpineId, SpineLevel, ThinSpineBatch};
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
 use crate::write::WriterEnrichedHollowBatch;
@@ -830,53 +828,6 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedSta
             ts_codec: x.ts_codec.into_rust()?,
             diff_codec: x.diff_codec.into_rust()?,
         })
-    }
-}
-
-impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
-    fn into_proto(&self) -> ProtoTrace {
-        let mut spine = Vec::new();
-        self.map_batches(|b| {
-            spine.push(b.into_proto());
-        });
-        ProtoTrace {
-            since: Some(self.since().into_proto()),
-            spine,
-        }
-    }
-
-    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
-        let mut ret = Trace::default();
-        ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
-        let mut batches_pushed = 0;
-        for batch in proto.spine.into_iter() {
-            let batch: HollowBatch<T> = batch.into_rust()?;
-            if PartialOrder::less_than(ret.since(), batch.desc.since()) {
-                return Err(TryFromProtoError::InvalidPersistState(format!(
-                    "invalid ProtoTrace: the spine's since {:?} was less than a batch's since {:?}",
-                    ret.since(),
-                    batch.desc.since()
-                )));
-            }
-            // We could perhaps more directly serialize and rehydrate the
-            // internals of the Spine, but this is nice because it insulates
-            // us against changes in the Spine logic. The current logic has
-            // turned out to be relatively expensive in practice, but as we
-            // tune things (especially when we add inc state) the rate of
-            // this deserialization should go down. Revisit as necessary.
-            //
-            // Ignore merge_reqs because whichever process generated this diff is
-            // assigned the work.
-            let () = ret.push_batch_no_merge_reqs(batch);
-
-            batches_pushed += 1;
-            if batches_pushed % 1000 == 0 {
-                let mut batch_count = 0;
-                ret.map_batches(|_| batch_count += 1);
-                debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
-            }
-        }
-        Ok(ret)
     }
 }
 

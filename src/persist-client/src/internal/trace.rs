@@ -57,11 +57,12 @@ use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
 use mz_persist_types::Codec64;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
-use crate::internal::state::HollowBatch;
+use crate::internal::state::{HollowBatch, ProtoIdSpineBatch, ProtoTrace};
 use crate::internal::state_diff::{apply_diffs_map, StateFieldDiff};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -398,17 +399,31 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
             return Ok(());
         }
 
+        tracing::info!(
+            "updating trace\n  batches={:?}\n  levels={:?}\n  before={}\n",
+            batches,
+            levels,
+            self.describe(),
+        );
+
         let mut batches_map = self.batches_map().collect::<BTreeMap<_, _>>();
         apply_diffs_map("spine_batches", batches.clone(), &mut batches_map)?;
         let mut levels_map = self.levels_map().collect::<BTreeMap<_, _>>();
         apply_diffs_map("spine_levels", levels.clone(), &mut levels_map)?;
 
+        let () = self.set_from_maps(batches_map, levels_map)?;
+        self.spine.validate()
+    }
+
+    fn set_from_maps(
+        &mut self,
+        batches: BTreeMap<SpineId, ThinSpineBatch<T>>,
+        levels: BTreeMap<usize, SpineLevel<T>>,
+    ) -> Result<(), String> {
         tracing::info!(
-            "updating trace\n  batches={:?}\n  levels={:?}\n  batches_map={:?}\n  levels_map={:?}\n  before={}\n",
+            "updating trace\n  batches_map={:?}\n  levels_map={:?}\n  before={}\n",
             batches,
             levels,
-            batches_map,
-            levels_map,
             self.describe(),
         );
 
@@ -463,17 +478,16 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
         }
 
         let mut merging = Vec::new();
-        for (idx, x) in levels_map {
+        // WIP no clone
+        for (idx, x) in levels.clone() {
             while merging.len() <= idx {
                 merging.push(MergeState::Vacant);
             }
             merging[idx] = match x {
-                SpineLevel::Single(x) => {
-                    MergeState::Single(Some(get_spine_batch(&batches_map, x)?))
-                }
+                SpineLevel::Single(x) => MergeState::Single(Some(get_spine_batch(&batches, x)?)),
                 SpineLevel::Double(b0, b1, remaining_work, since) => {
-                    let b0 = get_spine_batch(&batches_map, b0)?;
-                    let b1 = get_spine_batch(&batches_map, b1)?;
+                    let b0 = get_spine_batch(&batches, b0)?;
+                    let b1 = get_spine_batch(&batches, b1)?;
                     MergeState::Double(MergeVariant::InProgress(
                         b0,
                         b1,
@@ -488,7 +502,15 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
 
         let before = self.describe();
         self.spine.merging = merging;
+        eprintln!(
+            "WIP BEFORE RECALCULATE {:?} {:?}",
+            self.spine.next_id, self.spine.upper
+        );
         self.wip_recalculate_upper();
+        eprintln!(
+            "WIP AFTER RECALCULATE {:?} {:?}",
+            self.spine.next_id, self.spine.upper
+        );
 
         tracing::info!(
             "updated trace\n  batches={:?}\n  levels={:?}\n  before={}\n   after={}\n",
@@ -497,7 +519,7 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
             before,
             self.describe()
         );
-        self.spine.validate()
+        Ok(())
     }
 
     pub fn wip_recalculate_upper(&mut self) {
@@ -1034,6 +1056,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// `effort` parameter is that multiplier. This value should be at least one
     /// for the merging to happen; a value of zero is not helpful.
     pub fn new() -> Self {
+        eprintln!("WIP Spine::new ");
         Spine {
             effort: 1,
             next_id: 0,
@@ -1052,6 +1075,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         let id = self.next_id;
         self.next_id += 1;
         let id = SpineId(id, self.next_id);
+        eprintln!("WIP ASSIGNED {:?} to {:?}", id, batch);
         let batch = SpineBatch::Merged(Arc::new(IdHollowBatch { id, batch }));
 
         self.upper.clone_from(batch.upper());
@@ -1648,6 +1672,53 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
         } else {
             *self = variant;
         }
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
+    fn into_proto(&self) -> ProtoTrace {
+        let spine_batches = self
+            .batches_map()
+            .map(|(k, v)| ProtoIdSpineBatch {
+                id: Some(k.into_proto()),
+                batch: Some(v.into_proto()),
+            })
+            .collect();
+        let spine_levels = self
+            .levels_map()
+            .map(|(k, v)| (k.into_proto(), v.into_proto()))
+            .collect();
+        ProtoTrace {
+            since: Some(self.since().into_proto()),
+            spine_batches,
+            spine_levels,
+            deprecated_spine: Vec::new(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        let mut ret = Trace::default();
+        ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
+
+        let mut batches = BTreeMap::new();
+        for x in proto.spine_batches {
+            batches.insert(
+                x.id.into_rust_if_some("WIP")?,
+                x.batch.into_rust_if_some("WIP")?,
+            );
+        }
+        let mut levels = BTreeMap::new();
+        for (k, v) in proto.spine_levels {
+            levels.insert(k.into_rust()?, v.into_rust()?);
+        }
+
+        let () = ret
+            .set_from_maps(batches, levels)
+            .map_err(|err| TryFromProtoError::InvalidPersistState(err))?;
+        ret.spine
+            .validate()
+            .map_err(|err| TryFromProtoError::InvalidPersistState(err))?;
+        Ok(ret)
     }
 }
 
