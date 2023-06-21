@@ -62,5 +62,7 @@ compute-specific settings. If needed, these can be set explicitly.
 
 ## See also
 
+- [`CREATE CLUSTER`](/sql/create-cluster/)
+- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 - [`CREATE SINK`](/sql/create-sink/)
 - [`SHOW SINKS`](/sql/show-sinks)

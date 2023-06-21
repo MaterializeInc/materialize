@@ -126,13 +126,13 @@ Adding replicas to clusters | See [Cluster replica scaling](/sql/create-cluster#
 
 ### Basic
 
-Create a cluster with two medium replicas:
+Create a managed cluster with two medium replicas:
 
 ```sql
 CREATE CLUSTER c1 SIZE = 'medium', REPLICATION FACTOR = 2;
 ```
 
-Alternatively, the cluster can be created as an unmanaged cluster:
+Alternatively, you can create an unmanaged cluster:
 
 ```sql
 CREATE CLUSTER c1 REPLICAS (
@@ -143,13 +143,13 @@ CREATE CLUSTER c1 REPLICAS (
 
 ### Introspection disabled
 
-Create a cluster with a single replica with introspection disabled:
+Create a managed cluster with a single replica with introspection disabled:
 
 ```sql
 CREATE CLUSTER c  SIZE = 'xsmall', INTROSPECTION INTERVAL = 0;
 ```
 
-Alternatively, the cluster can be created as an unmanaged cluster:
+Alternatively, you can create an unmanaged cluster:
 
 ```sql
 CREATE CLUSTER c REPLICAS (
@@ -163,17 +163,28 @@ that cluster replica.
 
 ### Empty
 
-Create a cluster with no replicas:
+Create a managed cluster with no replicas:
 
 ```sql
 CREATE CLUSTER c1 SIZE 'xsmall', REPLICATION FACTOR 0;
 ```
 
+You can later add replicas to this managed cluster with [`ALTER CLUSTER`](/sql/alter-cluster/.
+)
+
+Alternatively, you can create an unmanaged cluster:
+
 ```sql
 CREATE CLUSTER c1 REPLICAS ();
 ```
 
-You can later add replicas to this cluster with [`CREATE CLUSTER
+You can later add replicas to this unmanaged cluster with [`CREATE CLUSTER
 REPLICA`](../create-cluster-replica).
 
-[AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
+## See also
+
+- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
+- [`ALTER CLUSTER`](/sql/alter-cluster/)
+- [`DROP CLUSTER`](/sql/drop-cluster/)
+
+[AWS availability zone IDs]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html

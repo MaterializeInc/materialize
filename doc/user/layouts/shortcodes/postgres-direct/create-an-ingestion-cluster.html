@@ -1,11 +1,11 @@
-In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an **isolated environment**, similar to a virtual warehouse in Snowflake. Within a cluster, you have [replicas](/get-started/key-concepts/#cluster-replicas), which are the **physical resources** for doing computational work. Clusters are completely isolated from each other, so replicas can be sized based on the specific task of the cluster, whether that is ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
+In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an isolated environment, similar to a virtual warehouse in Snowflake. When you create a cluster, you choose the size of its physical compute resource (i.e., [replica](/get-started/key-concepts/#cluster-replicas)) based on the work you need the cluster to do, whether ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
 
-In this case, you'll create 1 new cluster containing 1 replica for ingesting source data from your PostgreSQL database.
+In this case, you'll create 1 new cluster containing 1 `medium` replica for ingesting source data from your PostgreSQL database.
 
-1. In the `psql` shell connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create the new cluster and replica:
+1. In the `psql` shell connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create the new cluster:
 
     ```sql
-    CREATE CLUSTER ingest_postgres REPLICAS (r1 (SIZE = 'medium'));
+    CREATE CLUSTER ingest_postgres SIZE = 'medium';
     ```
 
-    We recommend starting with a `medium` [size](/sql/create-cluster-replica/#sizes) replica or larger. This will help Materialize more quickly process the initial snapshot of the tables in your publication. Once the snapshot is finished, you'll right-size the cluster replica.
+    We recommend starting with a `medium` [size](/sql/create-cluster-replica/#sizes) replica or larger. This will help Materialize more quickly process the initial snapshot of the tables in your publication. Once the snapshot is finished, you'll right-size the cluster.

@@ -19,7 +19,7 @@ This guide walks you through getting started with Materialize, including:
 
 - Computing real-time results with indexes and materialized views
 
-- Simulating failure to see active replication in action
+- Using replication to increase fault tolerance
 
 - Scaling up or down based on computational needs
 
@@ -68,7 +68,7 @@ Download and install the [PostgreSQL installer](https://www.postgresql.org/downl
 With a free trial, you get 14 days of free access to Materialize resources worth up to 4 credits per hour. This limit should accommodate most trial scenarios. For more details, see [Free trial FAQs](/free-trial-faqs/).
 
 {{< note >}}
-If you already have a Materialize account, skip to the [next step](#step-2-prepare-your-environment).
+If you already have a Materialize account, skip to the [next step](#step-2-create-clusters).
 {{</ note >}}
 
 1. [Sign up for a Materialize trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) using your business email address.
@@ -77,11 +77,11 @@ If you already have a Materialize account, skip to the [next step](#step-2-prepa
 
     Once your account is ready, you'll receive an email from Materialize asking you to activate your account. In the process, you'll create credentials for logging into the Materialize UI.
 
-## Step 2. Prepare your environment
+## Step 2. Create clusters
 
-In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an **isolated environment**, similar to a virtual warehouse in Snowflake. Within a cluster, you have [replicas](/get-started/key-concepts/#cluster-replicas), which are the **physical resources** for doing computational work. Clusters are completely isolated from each other, so replicas can be sized based on the specific task of the cluster, whether that is ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
+In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an isolated environment, similar to a virtual warehouse in Snowflake. When you create a cluster, you choose the size of its physical compute resource (i.e., [replica](/get-started/key-concepts/#cluster-replicas)) based on the work you need the cluster to do, whether ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
 
-For this guide, you'll create 2 clusters, one for ingesting source data and the other for computing and serving query results. Each cluster will contain a single replica at first (you'll explore the value of adding replicas later).
+For this guide, you'll create 2 clusters, one for ingesting source data and the other for computing and serving query results. For now, each cluster will get a single `2xsmall` physical compute resource. Later, you'll explore how to use replication to increase tolerance to failure.
 
 1. In the [Materialize UI](https://console.materialize.com/), enable the region where you want to run Materialize.
 
@@ -95,19 +95,19 @@ For this guide, you'll create 2 clusters, one for ingesting source data and the 
 
     In the SQL shell, you'll be connected to a [pre-installed `default` cluster](/sql/show-clusters/#pre-installed-clusters) from which you can get started.
 
-1. Use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create two new clusters, each with a single replica:
+1. Use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create two new clusters:
 
     ```sql
-    CREATE CLUSTER ingest_qck REPLICAS (r1 (SIZE = '2xsmall'));
+    CREATE CLUSTER ingest_qck SIZE = '2xsmall';
     ```
 
     ```sql
-    CREATE CLUSTER compute_qck REPLICAS (r1 (SIZE = '2xsmall'));
+    CREATE CLUSTER compute_qck SIZE = '2xsmall';
     ```
 
-    The `2xsmall` replica size is sufficient for the data ingestion and computation in this getting started scenario.
+    The `2xsmall` size is sufficient for the data ingestion and computation in this getting started scenario.
 
-1. Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the replicas:
+1. The physical compute resources in your clusters are called [`replicas`](/get-started/key-concepts/#cluster-replicas). Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the replicas:
 
     ```sql
     SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
@@ -146,6 +146,7 @@ For this guide, you'll use a [built-in load generator](/sql/create-source/load-g
     CREATE SOURCE auction_house
       IN CLUSTER ingest_qck
       FROM LOAD GENERATOR AUCTION
+      (TICK INTERVAL '500ms')
       FOR ALL TABLES;
     ```
 
@@ -173,39 +174,30 @@ For this guide, you'll use a [built-in load generator](/sql/create-source/load-g
 
     In addition to the `auction_house` load generator source and its subsources, you'll see `auction_house_progress`, which Materialize creates so you can [monitor source ingestion](/sql/create-source/load-generator/#monitoring-source-progress).
 
-    <!-- NOT SURE IF THIS IS CORRECT: In production scenarios, it's important to note that Materialize takes an [initial snapshot](/ops/troubleshooting/#has-my-source-ingested-its-initial-snapshot) of a source that must complete before Materialize can guarantee correct results.   -->
-
-1. Before moving on, look at the schema of the source data you'll be working with:
+1. Before moving on, get a sense of the data you'll be working with:
 
     ```sql
-    SHOW COLUMNS FROM auctions;
+    SELECT * FROM auctions LIMIT 1;
     ```
     <p></p>
 
     ```nofmt
-       name   | nullable |           type
-    ----------+----------+--------------------------
-     id       | f        | bigint
-     seller   | f        | bigint
-     item     | f        | text
-     end_time | f        | timestamp with time zone
-    (4 rows)
+     id | seller |        item        |          end_time
+    ----+--------+--------------------+----------------------------
+      1 |   1824 | Best Pizza in Town | 2023-06-21 21:25:04.838+00
+    (1 row)
     ```
 
     ```sql
-    SHOW COLUMNS FROM bids;
+    SELECT * FROM bids LIMIT 1;
     ```
     <p></p>
 
     ```nofmt
-        name    | nullable |           type
-    ------------+----------+--------------------------
-     id         | f        | bigint
-     buyer      | f        | bigint
-     auction_id | f        | bigint
-     amount     | f        | integer
-     bid_time   | f        | timestamp with time zone
-    (5 rows)
+     id | buyer | auction_id | amount |          bid_time
+    ----+-------+------------+--------+----------------------------
+     10 |  3844 |          1 |     59 | 2023-06-21 21:24:54.838+00
+    (1 row)
     ```
 
 ## Step 4. Compute real-time results
@@ -249,15 +241,15 @@ With auction data streaming in, you can now explore the unique value of Material
 
     ```nofmt
             item        |    average_bid
-    --------------------+-------------------
-     Custom Art         | 50.10550599815441
-     Gift Basket        | 50.51195882531032
-     City Bar Crawl     | 50.02785145888594
-     Best Pizza in Town | 50.20555741546703
-     Signed Memorabilia | 49.34376098418278
+    --------------------+--------------------
+     Custom Art         |                 46
+     Gift Basket        |              57.25
+     City Bar Crawl     | 48.333333333333336
+     Best Pizza in Town |   50.4390243902439
+     Signed Memorabilia | 54.916666666666664
     (5 rows)
 
-    Time: 738.987 ms
+    Time: 919.607 ms
     ```
 
     ```sql
@@ -268,15 +260,15 @@ With auction data streaming in, you can now explore the unique value of Material
 
     ```nofmt
             item        |    average_bid
-    --------------------+--------------------
-     Custom Art         | 50.135432589422194
-     Gift Basket        | 50.485373134328356
-     City Bar Crawl     |  50.03637566137566
-     Best Pizza in Town |  50.16190159574468
-     Signed Memorabilia | 49.354624781849914
+    --------------------+-------------------
+     Custom Art         | 51.06666666666667
+     Gift Basket        |              57.5
+     City Bar Crawl     | 46.61818181818182
+     Best Pizza in Town | 50.67307692307692
+     Signed Memorabilia | 49.06896551724138
     (5 rows)
 
-    Time: 707.403 ms
+    Time: 458.388 ms
     ```
 
     You'll see the average bid change as new auction data streams into Materialize. However, the view retrieves data from durable storage and computes results at query-time, so latency is high and would be much higher with a production dataset.
@@ -298,18 +290,18 @@ With auction data streaming in, you can now explore the unique value of Material
 
     ```nofmt
             item        |    average_bid
-    --------------------+--------------------
-     Custom Art         | 49.783986655546286
-     Gift Basket        |  49.93436483689761
-     City Bar Crawl     |  49.93733653007847
-     Best Pizza in Town |  50.43617136074242
-     Signed Memorabilia |  50.09202958093673
+    --------------------+-------------------
+     Custom Art         | 51.78431372549019
+     Gift Basket        |  53.8448275862069
+     City Bar Crawl     | 44.68181818181818
+     Best Pizza in Town | 50.63636363636363
+     Signed Memorabilia |              43.3
     (5 rows)
 
-    Time: 26.403 ms
+    Time: 37.004 ms
     ```
 
-    You'll see the average bids continue to change, but now that the view is indexed and results are pre-computed and stored in memory, latency is down to 26 milliseconds!
+    You'll see the average bids continue to change, but now that the view is indexed and results are pre-computed and stored in memory, latency is down to 37 milliseconds!
 
 1. One thing to note about indexes is that they exist only in the cluster where they are created. To experience this, switch to the `default` cluster and query the view again:
 
@@ -380,14 +372,14 @@ With auction data streaming in, you can now explore the unique value of Material
     ```nofmt
             item        | number_of_bids
     --------------------+----------------
-     Custom Art         |          10634
-     Gift Basket        |          11266
-     City Bar Crawl     |          10292
-     Best Pizza in Town |          10498
-     Signed Memorabilia |          10801
+     Custom Art         |            111
+     Gift Basket        |            101
+     City Bar Crawl     |            133
+     Best Pizza in Town |            126
+     Signed Memorabilia |             83
     (5 rows)
 
-    Time: 790.384 ms
+    Time: 146.928 ms
     ```
 
     As you can see, although the materialized view was created in the `default` cluster, its results are available from other clusters as well because they are in shared, durable storage.
@@ -406,30 +398,28 @@ With auction data streaming in, you can now explore the unique value of Material
     ```nofmt
             item        | number_of_bids
     --------------------+----------------
-     Custom Art         |          14373
-     Gift Basket        |          15271
-     City Bar Crawl     |          14294
-     Best Pizza in Town |          14606
-     Signed Memorabilia |          14843
+     Custom Art         |            116
+     Gift Basket        |            113
+     City Bar Crawl     |            142
+     Best Pizza in Town |            131
+     Signed Memorabilia |             87
     (5 rows)
 
-    Time: 32.064 ms
+    Time: 34.888 ms
     ```
 
     Now that the materialzed view serves results from memory, latency is low again.
 
 ## Step 5. Survive failures
 
-Earlier, when you created your clusters, you gave each cluster one [replica](/get-started/key-concepts/#cluster-replicas), that is, one physical resource. For the `ingest_qck` cluster, that's the max number of replicas allowed, as clusters for sources can have only one replica. For the `compute_qck` cluster, however, you can increase the number of replicas for greater tolerance to replica failure.
+The clusters you created earlier each got a single replica (i.e., physical compute resource) by default. For clusters used to ingest source data (e.g., `ingest_qck`), that's the max replicas allowed. However, for clusters used to do computation or serving (e.g., `compute_qck`), you can increase the replication factor to increase the cluster's tolerance to failure.
 
-Each replica in a non-source cluster is a logical clone, doing the same computation and holding the same results in memory. This design provides Materialize with active replication, and so long as one replica is still reachable, the cluster continues making progress.
+Each replica in a cluster is a logical clone, doing the same computation and holding the same results in memory. When a cluster has a replication factor higher than 1, and one of the replicas fails, the cluster can therefore continue making progress with the remaining replicas and service continues uninterrupted.
 
-Let's see this in action.
-
-1. Add a second replica to the `compute_qck` cluster:
+1. Use the [`ALTER CLUSTER`](/sql/alter-cluster/) command to increase the replication factor of the `compute_qck` cluster:
 
     ```sql
-    CREATE CLUSTER REPLICA compute_qck.r2 SIZE = '2xsmall';
+    ALTER CLUSTER compute_qck SET (REPLICATION FACTOR 2);
     ```
 
 1. Check the status of the new replica:
@@ -447,66 +437,21 @@ Let's see this in action.
     (2 rows)
     ```
 
-1. Once the `r2` replica is ready (`ready=t`), drop the `r1` replica to simulate a failure:
-
-    ```sql
-    DROP CLUSTER REPLICA compute_qck.r1;
-    ```
-
-1. Query the indexed view that you created in `compute_qck` earlier:
-
-    ```sql
-    SELECT * FROM avg_bids;
-    ```
-    <p></p>
-
-    ```nofmt
-            item        |    average_bid
-    --------------------+--------------------
-     Custom Art         | 49.770776201263864
-     Gift Basket        |   49.8909070204407
-     City Bar Crawl     | 50.056635368698046
-     Best Pizza in Town |  50.50023551577956
-     Signed Memorabilia |  50.11854192264935
-    (5 rows)
-
-    Time: 23.537 ms
-    ```
-
-    As you can see, the results are available despite the failure of one of the cluster's replicas.
+    When the new replica shows `ready=t`, Materialize has acquired physical compute resources for the new replica and is catching it up to the initial replica. Once the new replica is caught up, the two replicas are logical clones that do the same computation and hold the same results.
 
 ## Step 6. Scale up or down
 
-In addition to using replicas to increase fault tolerance, you can add and remove replicas to scale resources up or down according to the needs of a cluster. For example, let's say the `2xsmall` replica in the `compute_qck` cluster is running low on memory.
+You can scale the physical compute resources of a cluster up or down based on need. For example, let's say `2xsmall` is not providing enough memory for the work of the `compute_qck` cluster.
 
-1. Add the next largest replica, `xsmall`:
-
-    ```sql
-    CREATE CLUSTER REPLICA compute_qck.r3 SIZE = 'xsmall';
-    ```
-
-1. Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the new replica:
+1. Use the [`ALTER CLUSTER`](/sql/alter-cluster/) command to bump the cluster up to the next largest size, `xsmall`:
 
     ```sql
-    SHOW CLUSTER REPLICAS WHERE CLUSTER = 'compute_qck';
-    ```
-    <p></p>
-
-    ```noftm
-       cluster   | replica |  size   | ready
-    -------------+---------+---------+-------
-     compute_qck | r2      | 2xsmall | t
-     compute_qck | r3      | xsmall  | t
-    (2 rows)
+    ALTER CLUSTER compute_qck SET (SIZE 'xsmall');
     ```
 
-1. Once the `r3` replica is ready (`ready=t`), it's safe to remove the `r2` replica:
+    Behind the scenes, this command adds a new `xsmall` replica and removes the `2xsmall` replica. There may be an interruption in the cluster's ability to serve queries while the new replica catches up to where the old replica left off.
 
-    ```sql
-    DROP CLUSTER REPLICA compute_qck.r2;
-    ```
-
-1. Again, because replicas in a cluster are logical clones, the new replica returns results just like the old replica:
+1. Once the new replica is caught up, which should happen very quickly in this case, the new `xsmall` replica returns results just like the old `2xsmall` replica:
 
     ```sql
     SELECT * FROM avg_bids;
