@@ -59,7 +59,7 @@ impl StorageParameters {
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
-        self.finalize_shards = finalize_shards
+        self.finalize_shards = finalize_shards;
         self.tracing.update(tracing);
     }
 }
@@ -98,6 +98,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             upsert_rocksdb_tuning_config: proto
                 .upsert_rocksdb_tuning_config
                 .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
+            finalize_shards: proto.finalize_shards,
             tracing: proto
                 .tracing
                 .into_rust_if_some("ProtoStorageParameters::tracing")?,

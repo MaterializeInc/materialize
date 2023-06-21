@@ -90,7 +90,6 @@ use mz_storage_client::types::sinks::{
 use mz_storage_client::types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
-use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
 use mz_tracing::params::TracingParameters;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
@@ -7549,6 +7548,7 @@ impl Catalog {
                     }
                 }
             },
+            finalize_shards: self.system_config().enable_storage_shard_finalization(),
             tracing: self.tracing_config(),
         }
     }

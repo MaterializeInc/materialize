@@ -721,7 +721,7 @@ pub static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
 pub static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("mz_log_filter"),
     value: &DEFAULT_LOGGING_FILTER,
-    description: "WIP",
+    description: "Sets the filter to apply to stderr logging.",
     internal: true,
 });
 
@@ -730,7 +730,7 @@ pub static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
 pub static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("mz_opentelemetry_filter"),
     value: &DEFAULT_OPENTELEMETRY_FILTER,
-    description: "WIP",
+    description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
     internal: true,
 });
 

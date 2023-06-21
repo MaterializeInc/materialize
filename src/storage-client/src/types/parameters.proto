@@ -25,6 +25,7 @@ message ProtoStorageParameters {
     bool finalize_shards = 6;
     uint64 keep_n_sink_status_history_entries = 7;
     mz_tracing.params.ProtoTracingParameters tracing = 6;
+    mz_tracing.params.ProtoTracingParameters tracing = 7;
 }
 
 

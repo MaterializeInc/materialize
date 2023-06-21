@@ -7,74 +7,45 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//!
-
-use mz_ore::tracing::TracingHandle;
-use proptest::arbitrary::any;
-use proptest::prelude::{Arbitrary, BoxedStrategy};
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
-use serde::{de, Deserialize, Serialize, Serializer};
 use std::str::FromStr;
 
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
 
+use mz_ore::tracing::TracingHandle;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::CloneableEnvFilter;
 
 include!(concat!(env!("OUT_DIR"), "/mz_tracing.params.rs"));
 
-/// WIP
+/// Parameters related to `tracing`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
 pub struct TracingParameters {
-    /// WIP
+    /// Filter to apply to stderr logging.
     pub log_filter: Option<CloneableEnvFilter>,
-    /// WIP
+    /// Filter to apply to OpenTelemetry/distributed tracing.
     pub opentelemetry_filter: Option<CloneableEnvFilter>,
-}
-
-impl Arbitrary for CloneableEnvFilter {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // WIP: write a real implementation
-        any::<String>()
-            .prop_filter_map("valid", |x| match CloneableEnvFilter::from_str(&x) {
-                Ok(ok) => Some(ok),
-                Err(_) => None,
-            })
-            .boxed()
-    }
-}
-
-impl serde::Serialize for CloneableEnvFilter {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&format!("{}", self))
-    }
-}
-
-impl<'de> Deserialize<'de> for CloneableEnvFilter {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(Self::from_str(s.as_str()).map_err(|x| de::Error::custom(x.to_string()))?)
-    }
 }
 
 impl TracingParameters {
     pub fn apply(&self, tracing_handle: &TracingHandle) {
         if let Some(filter) = &self.log_filter {
-            // WIP
-            let _ = tracing_handle.reload_stderr_log_filter(filter.clone().inner());
+            if let Err(e) = tracing_handle.reload_stderr_log_filter(filter.clone().into()) {
+                warn!(
+                    "unable to apply stderr log filter: {:?}. filter={}",
+                    e, filter
+                );
+            }
         }
         if let Some(filter) = &self.opentelemetry_filter {
-            let _ = tracing_handle.reload_opentelemetry_filter(filter.clone().inner());
+            if let Err(e) = tracing_handle.reload_opentelemetry_filter(filter.clone().into()) {
+                warn!(
+                    "unable to apply OpenTelemetry filter: {:?}. filter={}",
+                    e, filter
+                );
+            }
         }
     }
 
@@ -104,9 +75,11 @@ impl RustType<String> for CloneableEnvFilter {
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        Ok(CloneableEnvFilter::from_str(&proto)
-            // WIP: TryFromProtoError doesn't have a generic variant, should we add one?
-            .map_err(|x| TryFromProtoError::UnknownEnumVariant(x.to_string()))?)
+        CloneableEnvFilter::from_str(&proto)
+            // this isn't an accurate enum for this error, but it seems preferable
+            // to adding in a dependency on mz_tracing / tracing to mz_proto just
+            // to improve the error message here
+            .map_err(|x| TryFromProtoError::UnknownEnumVariant(x.to_string()))
     }
 }
 

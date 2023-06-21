@@ -73,17 +73,36 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//!
+//! Mz-specific library for interacting with `tracing`.
 
+use proptest::arbitrary::{any, Arbitrary};
+use proptest::prelude::{BoxedStrategy, Strategy};
+use serde::{de, Deserialize, Serializer};
 use std::fmt::Formatter;
 use std::str::FromStr;
 use tracing_subscriber::EnvFilter;
 
 pub mod params;
 
+#[derive(Debug, Clone)]
+struct ValidatedEnvFilterString(String);
+
 /// Wraps [`EnvFilter`] to provide a [`Clone`] implementation.
 pub struct CloneableEnvFilter {
     filter: EnvFilter,
+    validated: ValidatedEnvFilterString,
+}
+
+impl AsRef<EnvFilter> for CloneableEnvFilter {
+    fn as_ref(&self) -> &EnvFilter {
+        &self.filter
+    }
+}
+
+impl From<CloneableEnvFilter> for EnvFilter {
+    fn from(value: CloneableEnvFilter) -> Self {
+        value.filter
+    }
 }
 
 impl PartialEq for CloneableEnvFilter {
@@ -94,25 +113,16 @@ impl PartialEq for CloneableEnvFilter {
 
 impl Eq for CloneableEnvFilter {}
 
-impl CloneableEnvFilter {
-    pub fn inner_ref(&self) -> &EnvFilter {
-        &self.filter
-    }
-
-    pub fn inner(self) -> EnvFilter {
-        self.filter
-    }
-}
-
 impl Clone for CloneableEnvFilter {
     fn clone(&self) -> Self {
-        // At the time of this implementation, `EnvFilter` does not implement Clone
-        // but is expected, without explicit documentation saying so, to roundtrip
-        // through its Display implementation [1].
-        //
-        // [1]: https://github.com/tokio-rs/tracing/blob/e603c2a254d157a25a7a1fbfd4da46ad7e05f555/tracing-subscriber/src/filter/env/mod.rs#L944-L953
-        let filter = EnvFilter::from_str(&format!("{}", self.filter)).expect("roundtrips");
-        Self { filter }
+        // TODO: implement Clone on `EnvFilter` upstream
+        Self {
+            // While EnvFilter has the undocumented property of roundtripping through
+            // its String format, it seems safer to always create a new EnvFilter from
+            // the same validated input when cloning.
+            filter: EnvFilter::from_str(&self.validated.0).expect("validated"),
+            validated: self.validated.clone(),
+        }
     }
 }
 
@@ -121,12 +131,15 @@ impl FromStr for CloneableEnvFilter {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let filter: EnvFilter = s.parse()?;
-        Ok(CloneableEnvFilter { filter })
+        Ok(CloneableEnvFilter {
+            filter,
+            validated: ValidatedEnvFilterString(s.to_string()),
+        })
     }
 }
 
 impl std::fmt::Display for CloneableEnvFilter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.filter)
     }
 }
@@ -134,5 +147,60 @@ impl std::fmt::Display for CloneableEnvFilter {
 impl std::fmt::Debug for CloneableEnvFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.filter)
+    }
+}
+
+impl Arbitrary for CloneableEnvFilter {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        // WIP: write a real implementation
+        any::<String>()
+            .prop_filter_map("valid", |x| match CloneableEnvFilter::from_str(&x) {
+                Ok(ok) => Some(ok),
+                Err(_) => None,
+            })
+            .boxed()
+    }
+}
+
+impl serde::Serialize for CloneableEnvFilter {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{}", self))
+    }
+}
+
+impl<'de> Deserialize<'de> for CloneableEnvFilter {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(s.as_str()).map_err(|x| de::Error::custom(x.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::CloneableEnvFilter;
+    use std::str::FromStr;
+
+    #[mz_ore::test]
+    fn roundtrips() {
+        let filter = CloneableEnvFilter::from_str(
+            "abc=debug,def=trace,[123],foo,baz[bar{a=b}]=debug,[{13=37}]=trace,info",
+        )
+        .expect("valid");
+        assert_eq!(
+            format!("{}", filter),
+            format!(
+                "{}",
+                CloneableEnvFilter::from_str(&format!("{}", filter)).expect("valid")
+            )
+        );
     }
 }

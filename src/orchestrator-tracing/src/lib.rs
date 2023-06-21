@@ -486,59 +486,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ValidatedEnvFilterString(String);
-
-/// Wraps [`EnvFilter`] to provide a [`Clone`] implementation.
-#[derive(Debug)]
-pub struct CloneableEnvFilter {
-    filter: EnvFilter,
-    validated: ValidatedEnvFilterString,
-}
-
-impl AsRef<EnvFilter> for CloneableEnvFilter {
-    fn as_ref(&self) -> &EnvFilter {
-        &self.filter
-    }
-}
-
-impl From<CloneableEnvFilter> for EnvFilter {
-    fn from(value: CloneableEnvFilter) -> Self {
-        value.filter
-    }
-}
-
-impl Clone for CloneableEnvFilter {
-    fn clone(&self) -> Self {
-        // TODO: implement Clone on `EnvFilter` upstream
-        Self {
-            // While EnvFilter has the undocumented property of roundtripping through
-            // its String format, it seems safer to always create a new EnvFilter from
-            // the same validated input when cloning.
-            filter: EnvFilter::from_str(&self.validated.0).expect("validated"),
-            validated: self.validated.clone(),
-        }
-    }
-}
-
-impl FromStr for CloneableEnvFilter {
-    type Err = tracing_subscriber::filter::ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let filter: EnvFilter = s.parse()?;
-        Ok(CloneableEnvFilter {
-            filter,
-            validated: ValidatedEnvFilterString(s.to_string()),
-        })
-    }
-}
-
-impl std::fmt::Display for CloneableEnvFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.filter)
-    }
-}
-
 /// Specifies the format of a stderr log message.
 #[derive(Debug, Clone, Default, clap::ValueEnum)]
 pub enum LogFormat {
@@ -559,26 +506,5 @@ impl fmt::Display for LogFormat {
             LogFormat::Text => f.write_str("text"),
             LogFormat::Json => f.write_str("json"),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::CloneableEnvFilter;
-    use std::str::FromStr;
-
-    #[mz_ore::test]
-    fn roundtrips() {
-        let filter = CloneableEnvFilter::from_str(
-            "abc=debug,def=trace,[123],foo,baz[bar{a=b}]=debug,[{13=37}]=trace,info",
-        )
-        .expect("valid");
-        assert_eq!(
-            format!("{}", filter),
-            format!(
-                "{}",
-                CloneableEnvFilter::from_str(&format!("{}", filter)).expect("valid")
-            )
-        );
     }
 }

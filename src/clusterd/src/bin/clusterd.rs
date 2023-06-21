@@ -245,7 +245,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .route(
                     "/api/opentelemetry/config",
                     routing::put({
-                        let tracing_handle = tracing_handle.clone();
+                        let tracing_handle = Arc::clone(&tracing_handle);
                         move |payload| async move {
                             mz_http_util::handle_reload_tracing_filter(
                                 &tracing_handle,
@@ -259,7 +259,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .route(
                     "/api/stderr/config",
                     routing::put({
-                        let tracing_handle = tracing_handle.clone();
+                        let tracing_handle = Arc::clone(&tracing_handle);
                         move |payload| async move {
                             mz_http_util::handle_reload_tracing_filter(
                                 &tracing_handle,
