@@ -209,7 +209,7 @@ mv1_primary_idx mv1
   WHERE
     mv.name = 'my_unique_mv_name' AND
     mv.id = exp.export_id AND
-    exp.dataflow_id = df.local_id AND
+    exp.dataflow_id = df.id AND
     df.name LIKE '%my_unique_mv_name%';
 1
 
@@ -227,7 +227,7 @@ mv1_primary_idx mv1
 
 > SELECT DISTINCT count(*)
   FROM mz_internal.mz_dataflows_per_worker
-  GROUP BY id, local_id, name
+  GROUP BY id, name
 16
 
 > SELECT DISTINCT count(*)

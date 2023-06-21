@@ -252,7 +252,7 @@ CREATE SECRET my_secret AS 'abcd123';
 statement ok
 CREATE TEMPORARY VIEW export_to_dataflow AS
 SELECT export_id, id FROM mz_internal.mz_compute_exports AS mce JOIN mz_internal.mz_dataflows AS md ON
-mce.dataflow_id = md.local_id;
+mce.dataflow_id = md.id;
 
 statement ok
 CREATE TEMPORARY VIEW all_ops AS
