@@ -3,18 +3,18 @@
   <div>
     {{ .Inner | $.Page.RenderString }}
 
-  <p>
-    {{ if (isset $.Params "primary_text") }}
-    <a class="btn" {{ with .Get "primary_url" }} href="{{ . }}"{{ end }}>
-      {{ .Get "primary_text" }}
-    </a>
-    {{ end }}
-    {{ if (isset $.Params "secondary_text") }}
-    <a class="btn" {{ with .Get "secondary_url" }} href="{{ . }}"{{ end }}>
-      {{ .Get "secondary_text" }}
-    </a>
-    {{ end }}
-  </p>
+    <p>
+      {{ if and ($.Params) (isset $.Params "primary_text") }}
+      <a class="btn" {{ with .Get "primary_url" }} href="{{ . }}" {{ end }}>
+        {{ .Get "primary_text" }}
+      </a>
+      {{ end }}
+      {{ if and ($.Params) (isset $.Params "secondary_text") }}
+      <a class="btn" {{ with .Get "secondary_url" }} href="{{ . }}" {{ end }}>
+        {{ .Get "secondary_text" }}
+      </a>
+      {{ end }}
+    </p>
   </div>
 
 </div>
