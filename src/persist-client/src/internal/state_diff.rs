@@ -175,7 +175,20 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
 
     pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
         for spine_diff in self.spine_batches.iter() {
-            todo!("WIP {:?}", spine_diff);
+            match &spine_diff.val {
+                StateFieldValDiff::Insert(ThinSpineBatch::Hollow(x)) => {
+                    f(HollowBlobRef::Batch(x));
+                }
+                StateFieldValDiff::Update(_, _) => {
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    //
+                    // WIP is this still true?
+                    panic!("cannot update spine field")
+                }
+                StateFieldValDiff::Insert(ThinSpineBatch::Fueled { .. })
+                | StateFieldValDiff::Delete(_) => {} // No-op
+            }
         }
         for rollups_diff in self.rollups.iter() {
             match &rollups_diff.val {
@@ -189,7 +202,20 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
 
     pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
         for spine_diff in self.spine_batches.iter() {
-            todo!("WIP {:?}", spine_diff);
+            match &spine_diff.val {
+                StateFieldValDiff::Delete(ThinSpineBatch::Hollow(x)) => {
+                    f(HollowBlobRef::Batch(x));
+                }
+                StateFieldValDiff::Update(_, _) => {
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    //
+                    // WIP is this still true?
+                    panic!("cannot update spine field")
+                }
+                StateFieldValDiff::Delete(ThinSpineBatch::Fueled { .. })
+                | StateFieldValDiff::Insert(_) => {} // No-op
+            }
         }
         for rollups_diff in self.rollups.iter() {
             match &rollups_diff.val {
