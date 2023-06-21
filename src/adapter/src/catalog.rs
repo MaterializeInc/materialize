@@ -67,9 +67,9 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
+    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -86,7 +86,9 @@ use mz_storage_client::types::parameters::StorageParameters;
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
+use mz_storage_client::types::sources::{
+    IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
+};
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -1928,13 +1930,52 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
-    Ingestion(Ingestion),
+    Ingestion(IngestionDescription),
     /// Receives data from some other source
     Source,
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
+}
+
+impl DataSourceDesc {
+    /// Describes the ingestion to the adapter, which essentially just enriches the a higher-level
+    /// [`PlanIngestion`] with a [`ClusterId`].
+    pub fn ingestion(
+        id: GlobalId,
+        ingestion: PlanIngestion,
+        instance_id: ClusterId,
+    ) -> DataSourceDesc {
+        let source_imports = ingestion
+            .source_imports
+            .iter()
+            .map(|id| (*id, ()))
+            .collect();
+
+        let source_exports = ingestion
+            .subsource_exports
+            .iter()
+            // By convention the first output corresponds to the main source object
+            .chain(std::iter::once((&id, &0)))
+            .map(|(id, output_index)| {
+                let export = SourceExport {
+                    output_index: *output_index,
+                    storage_metadata: (),
+                };
+                (*id, export)
+            })
+            .collect();
+
+        DataSourceDesc::Ingestion(IngestionDescription {
+            desc: ingestion.desc.clone(),
+            ingestion_metadata: (),
+            source_imports,
+            source_exports,
+            instance_id,
+            remap_collection_id: ingestion.progress_subsource,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2020,9 +2061,11 @@ impl Source {
     pub fn user_controllable_persist_shard_count(&self) -> i64 {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => {
-                // Ingestions with subsources only use persist shards for their subsources; those
-                // without subsources use 1.
-                std::cmp::max(1, i64::try_from(ingestion.subsource_exports.len()).expect("fewer than i64::MAX persist shards"))
+                // Ingestions with subsources only use persist shards for their
+                // subsources (i.e. not the primary source's persist shard);
+                // those without subsources use 1 (their primary source's
+                // persist shard).
+                std::cmp::max(1, i64::try_from(ingestion.source_exports.len().saturating_sub(1)).expect("fewer than i64::MAX persist shards"))
             }
             //  DataSourceDesc::Source represents subsources, which are accounted for in their
             //  primary source's ingestion.
@@ -2040,24 +2083,6 @@ pub struct Log {
     pub variant: LogVariant,
     /// Whether the log is backed by a storage collection.
     pub has_storage_collection: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Ingestion {
-    // TODO(benesch): this field contains connection information that could be
-    // derived from the connection ID. Too hard to fix at the moment.
-    pub desc: SourceDesc,
-    pub source_imports: BTreeSet<GlobalId>,
-    /// The *additional* subsource exports of this ingestion. Each collection identified by its
-    /// GlobalId will contain the contents of this ingestion's output stream that is identified by
-    /// the index.
-    ///
-    /// This map does *not* include the export of the source associated with the ingestion itself
-    pub subsource_exports: BTreeMap<GlobalId, usize>,
-    pub cluster_id: ClusterId,
-    /// The ID of this collection's remap/progress collection.
-    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
-    pub remap_collection_id: Option<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2393,7 +2418,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.cluster_id),
+                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => None,
@@ -2559,22 +2584,19 @@ impl CatalogEntry {
     }
 
     /// Returns the `GlobalId` of all of this entry's subsources.
-    pub fn subsources(&self) -> Vec<GlobalId> {
+    pub fn subsources(&self) -> BTreeSet<GlobalId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => ingestion
-                    .subsource_exports
+                    .source_exports
                     .keys()
+                    .filter(|id| id != &&self.id)
                     .copied()
-                    .chain(std::iter::once(
-                        ingestion
-                            .remap_collection_id
-                            .expect("remap collection must named by this point"),
-                    ))
+                    .chain(std::iter::once(ingestion.remap_collection_id))
                     .collect(),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Source => vec![],
+                | DataSourceDesc::Source => BTreeSet::new(),
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
@@ -2585,7 +2607,29 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => vec![],
+            | CatalogItem::Connection(_) => BTreeSet::new(),
+        }
+    }
+
+    /// Returns the `GlobalId` of all of this entry's progress ID.
+    pub fn progress_id(&self) -> Option<GlobalId> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => None,
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -7011,19 +7055,17 @@ impl Catalog {
                 create_sql: source.create_sql,
                 data_source: match source.data_source {
                     mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        DataSourceDesc::Ingestion(Ingestion {
-                            desc: ingestion.desc,
-                            source_imports: ingestion.source_imports,
-                            subsource_exports: ingestion.subsource_exports,
-                            cluster_id: match cluster_config {
+                        DataSourceDesc::ingestion(
+                            id,
+                            ingestion,
+                            match cluster_config {
                                 plan::SourceSinkClusterConfig::Existing { id } => id,
                                 plan::SourceSinkClusterConfig::Linked { .. }
                                 | plan::SourceSinkClusterConfig::Undefined => {
                                     self.state.clusters_by_linked_object_id[&id]
                                 }
                             },
-                            remap_collection_id: ingestion.progress_subsource,
-                        })
+                        )
                     }
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
@@ -7304,6 +7346,7 @@ impl Catalog {
                     }
                 }
             },
+            finalize_shards: self.system_config().enable_storage_shard_finalization(),
         }
     }
 
@@ -8440,8 +8483,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 
-    fn subsources(&self) -> Vec<GlobalId> {
+    fn subsources(&self) -> BTreeSet<GlobalId> {
         self.subsources()
+    }
+
+    fn progress_id(&self) -> Option<GlobalId> {
+        self.progress_id()
     }
 
     fn owner_id(&self) -> RoleId {

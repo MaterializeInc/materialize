@@ -42,6 +42,10 @@
       {{ if .unmaterializable }}
         <br><br><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>.
       {{ end }}
+
+      {{ if .side_effecting }}
+        <br><br><b>Note:</b> This function is <a href="#side-effecting-functions">side-effecting</a>.
+      {{ end }}
     </td>
   </tr>
   {{ end }} {{/*  {{ range .functions }} */}}

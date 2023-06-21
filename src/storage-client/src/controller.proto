@@ -27,7 +27,8 @@ message ProtoCollectionMetadata {
 
 message ProtoDurableCollectionMetadata {
     // This message is persisted to disk. Changes must be backwards compatible.
-    reserved 1, 2, 5;
+    reserved 1, 2, 4, 5;
+    reserved "remap_shard";
     string data_shard = 3;
-    optional string remap_shard = 4;
+    // optional string remap_shard = 4;
 }

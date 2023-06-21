@@ -2303,7 +2303,7 @@ impl<'a> ScalarType {
 
     /// Derives a column type from this scalar type with the specified
     /// nullability.
-    pub fn nullable(self, nullable: bool) -> ColumnType {
+    pub const fn nullable(self, nullable: bool) -> ColumnType {
         ColumnType {
             nullable,
             scalar_type: self,

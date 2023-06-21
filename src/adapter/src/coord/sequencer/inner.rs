@@ -51,8 +51,8 @@ use mz_sql::plan::{
     DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
     InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
     ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
-    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
+    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -63,7 +63,6 @@ use mz_sql_parser::ast::TransactionMode;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::Optimizer;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
@@ -155,13 +154,7 @@ impl Coordinator {
                                 session,
                             )
                             .await?;
-                        DataSourceDesc::Ingestion(catalog::Ingestion {
-                            desc: ingestion.desc,
-                            source_imports: ingestion.source_imports,
-                            subsource_exports: ingestion.subsource_exports,
-                            cluster_id,
-                            remap_collection_id: ingestion.progress_subsource,
-                        })
+                        DataSourceDesc::ingestion(source_id, ingestion, cluster_id)
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {
                         assert!(
@@ -209,40 +202,10 @@ impl Coordinator {
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            let mut source_imports = BTreeMap::new();
-                            for source_import in ingestion.source_imports {
-                                source_imports.insert(source_import, ());
-                            }
-
-                            let mut source_exports = BTreeMap::new();
-                            // By convention the first output corresponds to the main source object
-                            let main_export = SourceExport {
-                                output_index: 0,
-                                storage_metadata: (),
-                            };
-                            source_exports.insert(source_id, main_export);
-                            for (subsource, output_index) in ingestion.subsource_exports {
-                                let export = SourceExport {
-                                    output_index,
-                                    storage_metadata: (),
-                                };
-                                source_exports.insert(subsource, export);
-                            }
-                            (
-                                DataSource::Ingestion(IngestionDescription {
-                                    desc: ingestion.desc,
-                                    ingestion_metadata: (),
-                                    source_imports,
-                                    source_exports,
-                                    instance_id: ingestion.cluster_id,
-                                    remap_collection_id: ingestion.remap_collection_id.expect(
-                                        "ingestion-based collection must name remap collection before going to storage",
-                                    ),
-                                }),
-                                source_status_collection_id,
-                            )
-                        }
+                        DataSourceDesc::Ingestion(ingestion) => (
+                            DataSource::Ingestion(ingestion),
+                            source_status_collection_id,
+                        ),
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
@@ -1727,6 +1690,26 @@ impl Coordinator {
         }
 
         Ok((None, None))
+    }
+
+    pub(super) fn sequence_side_effecting_func(
+        &mut self,
+        plan: SideEffectingFunc,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        match plan {
+            SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let res = if let Some((id_handle, _conn_meta)) =
+                    self.active_conns.get_key_value(&connection_id)
+                {
+                    // check_plan already verified role membership.
+                    self.handle_privileged_cancel(id_handle.clone());
+                    Datum::True
+                } else {
+                    Datum::False
+                };
+                Ok(send_immediate_rows(vec![Row::pack_slice(&[res])]))
+            }
+        }
     }
 
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.

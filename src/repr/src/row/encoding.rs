@@ -539,6 +539,7 @@ impl DatumEncoderT<'_> for NoStats {
 /// An implementation of [PartEncoder] for [Row].
 #[derive(Debug)]
 pub struct RowEncoder<'a> {
+    len: &'a mut usize,
     col_encoders: Vec<DatumEncoder<'a>>,
 }
 
@@ -547,10 +548,15 @@ impl<'a> RowEncoder<'a> {
     pub fn col_encoders(&mut self) -> &mut [DatumEncoder<'a>] {
         &mut self.col_encoders
     }
+
+    pub fn inc_len(&mut self) {
+        *self.len += 1;
+    }
 }
 
 impl<'a> PartEncoder<'a, Row> for RowEncoder<'a> {
     fn encode(&mut self, val: &Row) {
+        *self.len += 1;
         for (encoder, datum) in self.col_encoders.iter_mut().zip(val.iter()) {
             encoder.encode(datum);
         }
@@ -708,8 +714,8 @@ impl RelationDesc {
                 .unwrap_or_else(|| DatumEncoder::NoStats(NoStats(typ.clone())));
             col_encoders.push(col_encoder);
         }
-        let validity = part.finish()?;
-        Ok((validity, RowEncoder { col_encoders }))
+        let (len, validity) = part.finish()?;
+        Ok((validity, RowEncoder { len, col_encoders }))
     }
 }
 
@@ -1180,7 +1186,7 @@ mod tests {
     fn columnar_roundtrip() {
         let (schema, row) = schema_and_row();
         assert_eq!(
-            mz_persist_types::columnar::validate_roundtrip(&schema, &row),
+            mz_persist_types::columnar::validate_roundtrip(&schema, &row, false),
             Ok(())
         );
     }
@@ -1195,12 +1201,9 @@ mod tests {
     }
 
     fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
-        // Skip types that we don't keep stats for (yet).
-        if is_no_stats_type(&scalar_type) {
-            return;
-        }
+        let skip_decode = is_no_stats_type(&scalar_type);
 
-        use mz_persist_types::parquet::validate_roundtrip;
+        use mz_persist_types::columnar::validate_roundtrip;
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {
             rows.push(Row::pack(std::iter::once(datum)));
@@ -1209,14 +1212,14 @@ mod tests {
         // Non-nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
         for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+            assert_eq!(validate_roundtrip(&schema, row, skip_decode), Ok(()));
         }
 
         // Nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
         rows.push(Row::pack(std::iter::once(Datum::Null)));
         for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+            assert_eq!(validate_roundtrip(&schema, row, skip_decode), Ok(()));
         }
     }
 

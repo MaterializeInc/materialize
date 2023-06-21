@@ -103,7 +103,8 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::ReassignOwned(_) => return TargetCluster::Active,
+        | Plan::ReassignOwned(_)
+        | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
 
     // Bail if the user has disabled it via the SessionVar.
@@ -247,7 +248,8 @@ pub fn user_privilege_hack(
         | Plan::Close(_)
         | Plan::Prepare(_)
         | Plan::Execute(_)
-        | Plan::Deallocate(_) => {}
+        | Plan::Deallocate(_)
+        | Plan::SideEffectingFunc(_) => {}
 
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)

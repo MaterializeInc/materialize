@@ -807,3 +807,31 @@ EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x |
 # Regression test for the join visitation part of #19177
 statement ok
 EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
+
+query T multiline
+EXPLAIN
+SELECT lag(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x)
+FROM t1;
+----
+Explained Query:
+  Project (#2)
+    Map (record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Reduce aggregates=[lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0, 3, "default")), (#0 || #0)))]
+          Get materialize.public.t1
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT first_value(x) OVER (ORDER BY x || x ROWS BETWEEN 5 preceding AND CURRENT ROW)
+FROM t1;
+----
+Explained Query:
+  Project (#2)
+    Map (record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Reduce aggregates=[first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0), (#0 || #0)))]
+          Get materialize.public.t1
+
+EOF

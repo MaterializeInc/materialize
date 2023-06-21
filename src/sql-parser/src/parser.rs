@@ -629,36 +629,45 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let over = if self.parse_keyword(OVER) {
-            // TBD: support window names (`OVER mywin`) in place of inline specification
-            self.expect_token(&Token::LParen)?;
-            let partition_by = if self.parse_keywords(&[PARTITION, BY]) {
-                // a list of possibly-qualified column names
-                self.parse_comma_separated(Parser::parse_expr)?
-            } else {
-                vec![]
-            };
-            let order_by = if self.parse_keywords(&[ORDER, BY]) {
-                self.parse_comma_separated(Parser::parse_order_by_expr)?
-            } else {
-                vec![]
-            };
-            let window_frame = if !self.consume_token(&Token::RParen) {
-                let window_frame = self.parse_window_frame()?;
-                self.expect_token(&Token::RParen)?;
-                Some(window_frame)
+        let over =
+            if self.peek_keyword(OVER) || self.peek_keyword(IGNORE) || self.peek_keyword(RESPECT) {
+                // TBD: support window names (`OVER mywin`) in place of inline specification
+                // https://github.com/MaterializeInc/materialize/issues/19755
+
+                let ignore_nulls = self.parse_keywords(&[IGNORE, NULLS]);
+                let respect_nulls = self.parse_keywords(&[RESPECT, NULLS]);
+                self.expect_keyword(OVER)?;
+
+                self.expect_token(&Token::LParen)?;
+                let partition_by = if self.parse_keywords(&[PARTITION, BY]) {
+                    // a list of possibly-qualified column names
+                    self.parse_comma_separated(Parser::parse_expr)?
+                } else {
+                    vec![]
+                };
+                let order_by = if self.parse_keywords(&[ORDER, BY]) {
+                    self.parse_comma_separated(Parser::parse_order_by_expr)?
+                } else {
+                    vec![]
+                };
+                let window_frame = if !self.consume_token(&Token::RParen) {
+                    let window_frame = self.parse_window_frame()?;
+                    self.expect_token(&Token::RParen)?;
+                    Some(window_frame)
+                } else {
+                    None
+                };
+
+                Some(WindowSpec {
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    ignore_nulls,
+                    respect_nulls,
+                })
             } else {
                 None
             };
-
-            Some(WindowSpec {
-                partition_by,
-                order_by,
-                window_frame,
-            })
-        } else {
-            None
-        };
 
         Ok(Function {
             name,

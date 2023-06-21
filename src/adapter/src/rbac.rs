@@ -33,8 +33,8 @@ use mz_sql::plan::{
     ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
     MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
     ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
-    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    StartTransactionPlan, SubscribePlan, UpdatePrivilege,
+    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SideEffectingFunc,
+    SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -42,7 +42,9 @@ use mz_sql_parser::ast::QualifiedReplica;
 
 use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use crate::catalog::Catalog;
+use crate::client::ConnectionId;
 use crate::command::Command;
+use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
 use crate::AdapterError;
 
@@ -145,6 +147,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
 
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
+    coord: &Coordinator,
     catalog: &impl SessionCatalog,
     session: &Session,
     plan: &Plan,
@@ -182,9 +185,10 @@ pub fn check_plan(
 
     // Validate that the current session has the required role membership to execute the provided
     // plan.
-    let required_membership: BTreeSet<_> = generate_required_role_membership(plan)
-        .into_iter()
-        .collect();
+    let required_membership: BTreeSet<_> =
+        generate_required_role_membership(plan, coord.active_conns())
+            .into_iter()
+            .collect();
     let unheld_membership: Vec<_> = required_membership.difference(&role_membership).collect();
     if !unheld_membership.is_empty() {
         let role_names = unheld_membership
@@ -272,7 +276,10 @@ pub fn is_rbac_enabled_for_system(system_vars: &SystemVars) -> bool {
 }
 
 /// Generates the role membership required to execute a give plan.
-pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
+pub fn generate_required_role_membership(
+    plan: &Plan,
+    active_conns: &BTreeMap<ConnectionId, ConnMeta>,
+) -> Vec<RoleId> {
     match plan {
         Plan::AlterOwner(AlterOwnerPlan { new_owner, .. }) => vec![*new_owner],
         Plan::DropOwned(DropOwnedPlan { role_ids, .. }) => role_ids.clone(),
@@ -291,6 +298,13 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
             .iter()
             .map(|privilege_object| privilege_object.role_id)
             .collect(),
+        Plan::SideEffectingFunc(SideEffectingFunc::PgCancelBackend { connection_id }) => {
+            let mut roles = Vec::new();
+            if let Some(conn) = active_conns.get(connection_id) {
+                roles.push(conn.authenticated_role);
+            }
+            roles
+        }
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -451,7 +465,8 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::ReassignOwned(_) => Vec::new(),
+        | Plan::ReassignOwned(_)
+        | Plan::SideEffectingFunc(_) => Vec::new(),
     }
 }
 
@@ -604,7 +619,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::RevokeRole(_)
         | Plan::DropOwned(_)
         | Plan::ReassignOwned(_)
-        | Plan::AlterDefaultPrivileges(_) => Vec::new(),
+        | Plan::AlterDefaultPrivileges(_)
+        | Plan::SideEffectingFunc(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -1261,7 +1277,8 @@ fn generate_required_privileges(
             old_roles: _,
             new_role: _,
             reassign_ids: _,
-        }) => Vec::new(),
+        })
+        | Plan::SideEffectingFunc(_) => Vec::new(),
     }
 }
 
