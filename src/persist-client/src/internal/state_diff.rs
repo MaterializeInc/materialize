@@ -176,11 +176,12 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
         for spine_diff in self.spine_batches.iter() {
             match &spine_diff.val {
-                StateFieldValDiff::Insert(ThinSpineBatch::Hollow(x)) | StateFieldValDiff::Update(_, ThinSpineBatch::Hollow(x)) => {
+                StateFieldValDiff::Insert(ThinSpineBatch::Hollow(x))
+                | StateFieldValDiff::Update(_, ThinSpineBatch::Hollow(x)) => {
                     f(HollowBlobRef::Batch(x));
                 }
                 StateFieldValDiff::Insert(ThinSpineBatch::Fueled { .. })
-                | StateFieldValDiff::Update(_, ThinSpineBatch::Fueled{ .. })
+                | StateFieldValDiff::Update(_, ThinSpineBatch::Fueled { .. })
                 | StateFieldValDiff::Delete(_) => {} // No-op
             }
         }
@@ -197,7 +198,8 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
         for spine_diff in self.spine_batches.iter() {
             match &spine_diff.val {
-                StateFieldValDiff::Delete(ThinSpineBatch::Hollow(x)) | StateFieldValDiff::Update(ThinSpineBatch::Hollow(x), _) => {
+                StateFieldValDiff::Delete(ThinSpineBatch::Hollow(x))
+                | StateFieldValDiff::Update(ThinSpineBatch::Hollow(x), _) => {
                     f(HollowBlobRef::Batch(x));
                 }
                 StateFieldValDiff::Delete(ThinSpineBatch::Fueled { .. })
@@ -1365,7 +1367,7 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

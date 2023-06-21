@@ -39,7 +39,7 @@ use crate::internal::state::{
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
     ProtoLeasedReaderState, ProtoMergeInProgress, ProtoSpineBatch, ProtoSpineId, ProtoSpineLevel,
     ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
-    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State,
+    ProtoStateRollup, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State,
     StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{

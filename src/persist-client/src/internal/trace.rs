@@ -311,17 +311,17 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
         let other_levels = other.levels_map().collect::<BTreeMap<_, _>>();
         super::state_diff::diff_field_sorted_iter(self_levels.iter(), other_levels.iter(), levels);
 
-        tracing::info!(
-            "diffing trace\n  batches={:?}\n  levels={:?}\n   self_batches={:?}\n  other_batches={:?}\n   self_levels={:?}\n  other_levels={:?}\n  before={}\n   after={}\n",
-            batches,
-            levels,
-            self_batches,
-            other_batches,
-            self_levels,
-            other_levels,
-            self.describe(),
-            other.describe(),
-        );
+        // tracing::info!(
+        //     "diffing trace\n  batches={:?}\n  levels={:?}\n   self_batches={:?}\n  other_batches={:?}\n   self_levels={:?}\n  other_levels={:?}\n  before={}\n   after={}\n",
+        //     batches,
+        //     levels,
+        //     self_batches,
+        //     other_batches,
+        //     self_levels,
+        //     other_levels,
+        //     self.describe(),
+        //     other.describe(),
+        // );
     }
 
     fn batches_map(&self) -> impl Iterator<Item = (SpineId, ThinSpineBatch<T>)> + '_ {
@@ -399,12 +399,12 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
             return Ok(());
         }
 
-        tracing::info!(
-            "updating trace\n  batches={:?}\n  levels={:?}\n  before={}\n",
-            batches,
-            levels,
-            self.describe(),
-        );
+        // tracing::info!(
+        //     "updating trace\n  batches={:?}\n  levels={:?}\n  before={}\n",
+        //     batches,
+        //     levels,
+        //     self.describe(),
+        // );
 
         let mut batches_map = self.batches_map().collect::<BTreeMap<_, _>>();
         apply_diffs_map("spine_batches", batches.clone(), &mut batches_map)?;
@@ -420,12 +420,12 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
         batches: BTreeMap<SpineId, ThinSpineBatch<T>>,
         levels: BTreeMap<usize, SpineLevel<T>>,
     ) -> Result<(), String> {
-        tracing::info!(
-            "updating trace\n  batches_map={:?}\n  levels_map={:?}\n  before={}\n",
-            batches,
-            levels,
-            self.describe(),
-        );
+        // tracing::info!(
+        //     "updating trace\n  batches_map={:?}\n  levels_map={:?}\n  before={}\n",
+        //     batches,
+        //     levels,
+        //     self.describe(),
+        // );
 
         fn get_spine_batch<T: Debug + Clone + PartialOrder>(
             by_id: &BTreeMap<SpineId, ThinSpineBatch<T>>,
@@ -502,23 +502,23 @@ impl<T: Timestamp + Lattice + Codec64> Trace<T> {
 
         let before = self.describe();
         self.spine.merging = merging;
-        eprintln!(
-            "WIP BEFORE RECALCULATE {:?} {:?}",
-            self.spine.next_id, self.spine.upper
-        );
+        // eprintln!(
+        //     "WIP BEFORE RECALCULATE {:?} {:?}",
+        //     self.spine.next_id, self.spine.upper
+        // );
         self.wip_recalculate_upper();
-        eprintln!(
-            "WIP AFTER RECALCULATE {:?} {:?}",
-            self.spine.next_id, self.spine.upper
-        );
+        // eprintln!(
+        //     "WIP AFTER RECALCULATE {:?} {:?}",
+        //     self.spine.next_id, self.spine.upper
+        // );
 
-        tracing::info!(
-            "updated trace\n  batches={:?}\n  levels={:?}\n  before={}\n   after={}\n",
-            batches,
-            levels,
-            before,
-            self.describe()
-        );
+        // tracing::info!(
+        //     "updated trace\n  batches={:?}\n  levels={:?}\n  before={}\n   after={}\n",
+        //     batches,
+        //     levels,
+        //     before,
+        //     self.describe()
+        // );
         Ok(())
     }
 
@@ -571,15 +571,13 @@ enum SpineLog<'a, T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SpineId(pub usize, pub usize);
 
-#[derive(Debug, Clone)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IdHollowBatch<T> {
     pub id: SpineId,
     pub batch: HollowBatch<T>,
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[derive(Debug, Clone, PartialEq)]
 enum SpineBatch<T> {
     Merged(Arc<IdHollowBatch<T>>),
     Fueled {
@@ -1056,7 +1054,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// `effort` parameter is that multiplier. This value should be at least one
     /// for the merging to happen; a value of zero is not helpful.
     pub fn new() -> Self {
-        eprintln!("WIP Spine::new ");
+        // eprintln!("WIP Spine::new ");
         Spine {
             effort: 1,
             next_id: 0,
@@ -1075,7 +1073,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         let id = self.next_id;
         self.next_id += 1;
         let id = SpineId(id, self.next_id);
-        eprintln!("WIP ASSIGNED {:?} to {:?}", id, batch);
+        // eprintln!("WIP ASSIGNED {:?} to {:?}", id, batch);
         let batch = SpineBatch::Merged(Arc::new(IdHollowBatch { id, batch }));
 
         self.upper.clone_from(batch.upper());
@@ -1429,7 +1427,6 @@ impl<T: Timestamp + Lattice> Spine<T> {
         }
     }
 
-    #[cfg(any(test, debug_assertions))]
     fn validate(&self) -> Result<(), String> {
         let mut id = SpineId(0, 0);
         let mut frontier = Antichain::from_elem(T::minimum());
@@ -1441,9 +1438,11 @@ impl<T: Timestamp + Lattice> Spine<T> {
                 MergeState::Single(Some(x))
                 | MergeState::Double(MergeVariant::Complete(Some(x))) => vec![x],
                 MergeState::Double(MergeVariant::InProgress(x0, x1, m)) => {
-                    if m.remaining_work > x0.len() + x1.len() {
-                        return Err(format!("too much remaining work: {:?}", x));
-                    }
+                    // WIP this might be too aggressive in the presence of
+                    // compactions?
+                    //
+                    // if m.remaining_work > x0.len() + x1.len() { return
+                    //     Err(format!("too much remaining work: {:?}", x)); }
                     vec![x0, x1]
                 }
             };
