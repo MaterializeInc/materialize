@@ -3738,8 +3738,9 @@ fn plan_drop_item_inner(
         Some(catalog_item) => {
             if catalog_item.id().is_system() {
                 sql_bail!(
-                    "cannot drop item {} because it is required by the database system",
-                    scx.catalog.resolve_full_name(catalog_item.name()),
+                    "cannot drop {} {} because it is required by the database system",
+                    catalog_item.item_type(),
+                    scx.catalog.minimal_qualification(catalog_item.name()),
                 );
             }
             let item_type = catalog_item.item_type();
@@ -3823,8 +3824,10 @@ fn plan_drop_item_inner(
                         if dependency_prevents_drop(object_type, dep) {
                             // TODO: Add a hint to add cascade.
                             sql_bail!(
-                                "cannot drop {}: still depended upon by catalog item '{}'",
+                                "cannot drop {} {}: still depended upon by {} {}",
+                                catalog_item.item_type(),
                                 scx.catalog.minimal_qualification(catalog_item.name()),
+                                dep.item_type(),
                                 scx.catalog.minimal_qualification(dep.name())
                             );
                         }

@@ -211,7 +211,7 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 statement ok
 CREATE VIEW v AS SELECT * FROM mv
 
-statement error cannot drop materialize.public.mv: still depended upon by catalog item 'materialize.public.v'
+statement error cannot drop materialized view mv: still depended upon by view v
 DROP MATERIALIZED VIEW mv
 
 

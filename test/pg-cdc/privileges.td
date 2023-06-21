@@ -84,4 +84,4 @@ REVOKE SELECT ON public."""select""" FROM priv;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public);
 contains:failed to connect to PostgreSQL database
-detail:user priv lacks SELECT privileges for tables public."select", public."""select"""
+detail:user priv lacks SELECT privileges for tables public."""select""", public."select"

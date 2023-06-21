@@ -97,7 +97,7 @@ pub async fn check_table_privileges(
         ],
     );
 
-    let invalid_table_privileges = client
+    let mut invalid_table_privileges = client
         .query(
             "
             WITH
@@ -129,6 +129,8 @@ pub async fn check_table_privileges(
             }
         })
         .collect::<Vec<String>>();
+
+    invalid_table_privileges.sort();
 
     if invalid_table_privileges.is_empty() {
         Ok(())
