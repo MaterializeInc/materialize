@@ -11,33 +11,33 @@ import os
 import random
 import sys
 import time
+from time import sleep
 from typing import Generator, List
 
 from materialize.checks.actions import Action
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
-from materialize.mzcompose import Composition, WorkflowArgumentParser, Service
+from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Clusterd,
-    SchemaRegistry,
+    Kafka,
     Materialized,
     Postgres,
-    Kafka,
-    Zookeeper,
+    SchemaRegistry,
 )
 from materialize.mzcompose.services import Testdrive as TestdriveService
+from materialize.mzcompose.services import Zookeeper
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromGit
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from time import sleep
 
 SERVICES = [
     Postgres(),
     Zookeeper(),
-    #Kafka(auto_create_topics=True),
+    # Kafka(auto_create_topics=True),
     Kafka(auto_create_topics=False),
     SchemaRegistry(),
     Materialized(),
@@ -46,12 +46,9 @@ SERVICES = [
     Service("data-ingest", {"mzbuild": "data-ingest"}),
 ]
 
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument(
-        "--upsert",
-        action="store_true",
-        help="Run upserts"
-    )
+    parser.add_argument("--upsert", action="store_true", help="Run upserts")
 
     parser.add_argument("--seed", metavar="SEED", type=str, default=str(time.time()))
 
@@ -63,11 +60,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("testdrive", persistent=True)
     c.up("materialized", "zookeeper", "kafka", "schema-registry", "postgres")
 
-        #$ kafka-ingest format=avro key-format=avro topic=upsert-insert key-schema=${keyschema} schema=${schema} repeat=10000
-        #{"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
+    # $ kafka-ingest format=avro key-format=avro topic=upsert-insert key-schema=${keyschema} schema=${schema} repeat=10000
+    # {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-    c.testdrive(dedent(
-        """
+    c.testdrive(
+        dedent(
+            """
         $ set keyschema={
             "type": "record",
             "name": "Key",
@@ -100,7 +98,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         > CREATE MATERIALIZED VIEW upsert_insert_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert;
         """
-    ))
+        )
+    )
 
     c.run("data-ingest")
 

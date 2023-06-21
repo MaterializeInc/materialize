@@ -19,10 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-confluent-kafka \
     python3-requests \
+    python3-pg8000 \
     python3-pip && pip3 install fastavro
 
 
 COPY . data-ingest/
 
 #ENTRYPOINT ["python3", "data-ingest/data-ingest.py"]
-ENTRYPOINT ["bash"]
+ENTRYPOINT ["bash", "-c", "python3 data-ingest/data-ingest.py || bash"]
