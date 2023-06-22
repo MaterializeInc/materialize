@@ -38,13 +38,12 @@ Role attributes present some problems as they currently exist:
   membership.
 - Allow users to easily grant the ability to create top level objects to many current and future
   users in a short amount of time.
-- Maintain PostgreSQL compatibility.
 
 ## Overview
 
 We will add a new type of privilege called System Privileges. They will look and act just like
 normal object privileges, but they will grant the abilities that would otherwise be granted through
-role attributes. They will exist in parallel with role attributes.
+role attributes. These will replace role attributes.
 
 NOTE: Other databases, such as CockroachDB and Snowflake, have some form of system privileges that
 control similar privileges to role attributes.
@@ -57,22 +56,6 @@ System privileges will be granted with the following syntax:
 System privileges will be revoked with the following syntax:
 `REVOKE <privilege-specification> ON SYSTEM FROM <role-specification>`
 
-System privileges and role attributes will interact in the following ways:
-
-- Granting a system privilege will grant the privilege AND set the attribute to true.
-- Revoking a system privilege will revoke the privilege AND set the attribute to false.
-- Altering a role attribute will affect the role attribute but will not change the system privilege.
-    - If altering a role attribute triggered a system privilege to be granted/revoked, then role
-      attributes would effectively be inheritable, which would break PostgreSQL compatibility.
-- When checking to see if a role is allowed to execute a command we will check if they have the
-  system privilege or the role attribute.
-
-This approach has the following nice properties:
-
-- The ability to use system privileges without thinking about role attributes.
-- The ability to use role attributes without thinking about system privileges.
-- System privileges always take priority over role attributes when using both.
-
 We will support the following system privileges:
 
 - `CREATEDB`: Allows users to create databases.
@@ -81,11 +64,10 @@ We will support the following system privileges:
 
 System privileges are inherited through role membership.
 
-Whenever someone alters a role attribute we will issue a warning indicating that system privileges
-take precedence and are preferred to role attributes. If a role attribute is set to false for some
-role and that role still has the system privilege, then the warning will indicate that the role
-still has the system privilege. Additionally, the documentation will focus on system privileges and
-indicate that role attributes are there for PostgreSQL compatibility and not the preferred approach.
+System privileges will be exposed through a system table called `mz_system_privileges`. It will have
+a single column of type `mz_aclitem` that will store all the privileges.
+
+Role attributes can be added back in at a later point if we determine that they are necessary.
 
 ### Observability
 
@@ -109,12 +91,10 @@ While these aren't specific to system privileges, they are relevant.
 
 ## Alternatives
 
-- Drop role attributes completely, lose PostgreSQL compatibility, and add system privileges.
+- Add system privileges and don't remove role attributes.
 - Make role attributes inheritable and lose some PostgreSQL compatibility.
 - Keep the current setup.
 
 ## Open questions
 
-- Where in the catalog should system privileges be stored? One option is in `mz_roles`. Another
-  option is in a new table with a single column for system privileges.
-- Should we use the existing `mz_aclitem` for system privileges or create a new type?
+None currently.
