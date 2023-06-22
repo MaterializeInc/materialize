@@ -2103,7 +2103,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     false
                 )
                 END
-            ") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
+            ") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_OID_TEXT_OID;
             params!(String) => sql_impl_func("has_system_privilege(current_user, $1)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
         },
         "has_table_privilege" => Scalar {
