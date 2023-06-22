@@ -275,7 +275,7 @@ where
     P: Push<BundleCore<T, D>> + 'static,
 {
     fn new(wrapper: OutputWrapper<T, D, P>) -> Self {
-        let mut wrapper = Box::pin(wrapper);
+        let mut wrapper = Rc::new(Box::pin(wrapper));
         // SAFETY:
         // get_unchecked_mut is safe because we are not moving the wrapper
         //
@@ -284,14 +284,18 @@ where
         //   be dropped before the wrapper, thus manually enforcing the lifetime.
         // * We never touch wrapper again after this point
         let handle = unsafe {
-            let handle = wrapper.as_mut().get_unchecked_mut().activate();
+            let handle = Rc::get_mut(&mut wrapper)
+                .unwrap()
+                .as_mut()
+                .get_unchecked_mut()
+                .activate();
             std::mem::transmute::<OutputHandleCore<'_, T, D, P>, OutputHandleCore<'static, T, D, P>>(
                 handle,
             )
         };
         Self {
+            wrapper,
             handle: Rc::new(RefCell::new(handle)),
-            wrapper: Rc::new(wrapper),
         }
     }
 
