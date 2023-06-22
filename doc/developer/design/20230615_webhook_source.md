@@ -58,14 +58,14 @@ collection using a new monotonic append API on the `StorageController`.
 
 We'll update the parser to support creating a new kind of Source, `WEBHOOK`, for which you can
 specify a `BODY FORMAT`, this denotes how we decode the body of a request. To start we'll support
-two formats, `BYTES`, `JSON`, or `TEXT`. By default we will not include the headers of the
+three formats, `BYTES`, `JSON`, or `TEXT`. By default we will not include the headers of the
 request, they can optionally be added by specifying `INCLUDE HEADERS`.
 
 ```
-CREATE SOURCE <name> FROM WEBHOOK (
+CREATE SOURCE <name> FROM WEBHOOK
   BODY FORMAT [BYTES | JSON | TEXT]
   (INCLUDE HEADERS)?
-);
+;
 ```
 
 After executing this request, we'll create a source with the following columns:
@@ -153,54 +153,27 @@ Adding this new API gets us two important properties that the existing `append` 
 [request_validation]: #request_validation
 
 Every `WEBHOOK` source will be open to the entire internet, as such we need to include some sort of
-validation so we can verify that requests are legitimate. This is can be fairly difficult to do
-though because it could require us to run arbitrary logic when receiving each event, e.g. something
-very similar to `TRANSFORM USING`. Scanning a few applications there seem to be two common ways of
-validating webhook requests:
+validation so we can verify that requests are legitimate. In general webhooks are validated by
+HMAC-ing the request body using SHA256, and validating the result with a signature provided in the
+request headers. An issue though is everyone does this just a little bit different:
 
-1. HMAC SHA256 of the request body using a shared secret, with the signature being stored in a
-   header.
-2. Shared token being present in a header.
+* Segment signature = HMAC of just the body of the request
+* Buildkite signature = HMAC of "#{timestamp}.#{body}"
+* GitHub signature = "body=" + HMAC of {body}
 
-As such, I believe we can introduce specific syntax to cover these two scenarios, eliminating the
-need to support running arbitrary logic when receiving an event. We can introduce new keywords,
-`VALIDATE USING ( ... )` which contains the statement used to validate a request. In the future
-this statement can be arbirary, the two predefined statements we'll support today are:
+As such we'll need to support some custom logic for validation. What we can do is support a
+`VALIDATE USING` statement that accepts only a single scalar expression. This expression will
+be provided the request `headers` as `map[text] -> text`, and the `body` as `text` _regardless of
+whether or not the source has `INCLUDE HEADERS` or what `FORMAT BODY` is specified._ For example:
 
 ```
-CREATE SECRET segment_hmac_key = "<SEGMENT_HMAC_KEY>";
-
 VALIDATE USING (
-  HMAC KEY = SECRET segment_hmac_key,
-  HMAC BODY SHA256 SIGNATURE HEADER = 'X-Signature',
+  headers['X-Signature'] = hmac('sha256', SECRET webhook_secret, body)
 )
 ```
 
-or
-
-```
-CREATE SECRET buildkite_webhook_token = "<BUILDKITE_WEBHOOK_TOKEN>";
-
-VALIDATE USING (
-  TOKEN = SECRET buildkite_webhook_token,
-  TOKEN EXISTS IN HEADER = 'X-Token',
-)
-```
-
-In the future the statement could be anything that returns a single bool, for example:
-
-```
-CREATE SECRET hmac_key = "<hmac_key>";
-
-VALIDATE USING (
-  SELECT signature = hmac('sha256', hmac_key, payload)
-  FROM (
-    SELECT
-      header->>'X-Signature' as signature,
-      base64('timestamp=' || header->>'timestamp' || 'body=' || body) as payload
-  )
-)
-```
+Internally the provided expression will be turned into a `MirScalarExpr` which will be used to
+evaluate each request. This evaluation will happen off the main coordinator thread.
 
 ### Request Limits
 [request_limits]: #request_limits
@@ -229,6 +202,7 @@ There are three metrics we should track, to measure success and performance of t
 
 1. Number of `WEBHOOK` sources created.
 2. Number of requests made to the `/api/webhook` endpoint.
+    * Subdivided by number of successes and failures.
 3. Response time of the `/api/webhook` endpoint.
 
 A second way to measure success, and get feedback on this new feature, is to use it internally.
@@ -294,16 +268,23 @@ QPS per source, and allow us to build the more complex features listed below.
 2. `TRANSFORM USING` a given request. Being able to map a JSON (or Avro, protobuf, etc.) body to
 a relation at the time of receiving a request, would be a win for the user as it's more ergonomic,
 and a win for us to reduce the amount of storage used.
-3. Validate requests at the time of receiving them with arbitrary logic.
-4. Subsources and batching. Being able map a single event to multiple independent sources, could
+3. Subsources and batching. Being able map a single event to multiple independent sources, could
 be a big win for the ergonomics of the feature.
-5. User configuration of request limits via `ALTER <source>`, i.e. rate and size.
+4. User configuration of request limits via `ALTER <source>`, i.e. rate and size.
+5. Consider using some "external ID" that users can use to reference Webhook sources, e.g.
+   `/api/webhook/abcdefg`. This would allow users to drop and re-create sources without needing to
+   update external systems.
+   See <https://github.com/MaterializeInc/materialize/pull/20002#discussion_r1234726035> for more
+   details.
+6. Supporting "recipes" for request validation for common webhook applications. For example,
+   `VALIDATE STRIPE (SECRET ...)` would handle HMAC-ing the body of the request, and matching it
+   against the exact header that Stripe expects.
 
 
 As a _rough sketch_, the north star for this feature in terms of SQL syntax could be:
 
 ```
-CREATE SOURCE <name> FROM WEBHOOK (
+CREATE SOURCE <name> FROM WEBHOOK
   -- parse the body as JSON.
   BODY FORMAT JSON,
   INCLUDE HEADERS,
@@ -325,8 +306,7 @@ CREATE SOURCE <name> FROM WEBHOOK (
     SELECT
       body->>'id' as id,
       body->>'ip_addr' as id_address
-  ),
-)
+  );
 ```
 
 ## Open questions
