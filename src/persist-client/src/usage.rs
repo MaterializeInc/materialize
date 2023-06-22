@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use tracing::{error, info};
 
 use crate::cfg::PersistConfig;
-use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
+use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, WriterKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::StateVersions;
 use crate::write::WriterId;
@@ -141,7 +141,7 @@ struct BlobUsage {
 
 #[derive(Clone, Debug, Default)]
 struct ShardBlobUsage {
-    by_writer: BTreeMap<WriterId, u64>,
+    by_writer: BTreeMap<WriterKey, u64>,
     rollup_bytes: u64,
 }
 
@@ -544,7 +544,7 @@ struct ShardUsageCumulativeMaybeRacy<'a, T> {
     current_state_batches_bytes: u64,
     current_state_bytes: u64,
     referenced_other_bytes: u64,
-    referenced_batches_bytes: &'a BTreeMap<WriterId, u64>,
+    referenced_batches_bytes: &'a BTreeMap<WriterKey, u64>,
     live_writers: &'a BTreeMap<WriterId, T>,
     blob_usage: &'a ShardBlobUsage,
 }
@@ -555,20 +555,31 @@ impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsa
         let mut total_bytes = 0;
         for (writer_id, bytes) in x.blob_usage.by_writer.iter() {
             total_bytes += *bytes;
-            if x.live_writers.contains_key(writer_id) {
-                not_leaked_bytes += *bytes;
-            } else {
-                // This writer is no longer live, so it can never again link
-                // anything into state. As a result, we know that anything it
-                // hasn't linked into state is now leaked and eligible for
-                // reclamation by a (future) leaked blob detector.
-                let writer_referenced = x.referenced_batches_bytes.get(writer_id).map_or(0, |x| *x);
-                // It's possible, due to races, that a writer has more
-                // referenced batches in state than we saw for that writer in
-                // blob. Cap it at the number of bytes we saw in blob, otherwise
-                // we could hit the "blob inputs should be cumulative" panic
-                // below.
-                not_leaked_bytes += std::cmp::min(*bytes, writer_referenced);
+            match writer_id {
+                WriterKey::Id(writer_id) => {
+                    if x.live_writers.contains_key(writer_id) {
+                        not_leaked_bytes += *bytes;
+                    } else {
+                        // This writer is no longer live, so it can never again link
+                        // anything into state. As a result, we know that anything it
+                        // hasn't linked into state is now leaked and eligible for
+                        // reclamation by a (future) leaked blob detector.
+                        let writer_referenced = x
+                            .referenced_batches_bytes
+                            .get(&WriterKey::Id(writer_id.clone()))
+                            .map_or(0, |x| *x);
+                        // It's possible, due to races, that a writer has more
+                        // referenced batches in state than we saw for that writer in
+                        // blob. Cap it at the number of bytes we saw in blob, otherwise
+                        // we could hit the "blob inputs should be cumulative" panic
+                        // below.
+                        not_leaked_bytes += std::cmp::min(*bytes, writer_referenced);
+                    }
+                }
+                WriterKey::Version(_) => {
+                    // TODO: check that the given version is at least the minimum
+                    not_leaked_bytes += *bytes;
+                }
             }
         }
         // For now, assume rollups aren't leaked. We could compute which rollups
@@ -965,7 +976,7 @@ mod tests {
             let referenced_batches_bytes = self
                 .referenced_batches_bytes
                 .iter()
-                .map(|(id, b)| (writer_id(*id), *b))
+                .map(|(id, b)| (WriterKey::Id(writer_id(*id)), *b))
                 .collect();
             let live_writers = self
                 .live_writers
@@ -976,7 +987,7 @@ mod tests {
                 by_writer: self
                     .blob_usage_by_writer
                     .iter()
-                    .map(|(id, b)| (writer_id(*id), *b))
+                    .map(|(id, b)| (WriterKey::Id(writer_id(*id)), *b))
                     .collect(),
                 rollup_bytes: self.blob_usage_rollups,
             };
