@@ -21,11 +21,11 @@ WHERE mz_now() <= event_ts + INTERVAL '5min'
 
 Consider this diagram that shows a record `E` falling out of the result set as time moves forward:
 
-![temporal filter diagram](/images/temporal-filter.jpg)
+![temporal filter diagram](/images/temporal-filter.svg)
 
 {{< note >}}
 It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
-For reasons having to do with the internal implementation of `mz_now()`, there are currently no valid operators for the resulting [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
+However, for reasons having to do with the internal implementation of `mz_now()`, there are currently no valid operators for the [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
 {{< /note >}}
 
 ## Requirements
@@ -90,7 +90,7 @@ You can materialize the `last_30_sec` view by creating an index on it (results s
 
 ### Time-to-Live (TTL)
 
-The **time to live (TTL)** pattern helps to filter rows using expiration times.
+The **time to live (TTL)** pattern helps to filter rows with user-defined expiration times.
 This example uses a `tasks` table with a time to live for each task.
 Materialize then helps perform actions according to each task's expiration time.
 
