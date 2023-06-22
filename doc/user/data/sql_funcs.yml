@@ -332,7 +332,7 @@
 
   - signature: 'parse_ident(ident: str[, strict_mode: bool]) -> str[]'
     description: >-
-      Splits qualified_identifier into an array of identifiers, removing any quoting of
+      Splits a qualified identifier into an array of identifiers, removing any quoting of
       individual identifiers. Extra characters after the last identifier are considered an error,
       unless `strict_mode` is `false` or elided, then such extra characters are ignored. (This
       behavior is useful for parsing names for objects like functions.) Note that this function does
