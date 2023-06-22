@@ -39,7 +39,7 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
-use crate::internal::paths::{PartId, PartialBatchKey};
+use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::stats::PartStats;
 use crate::write::WriterEnrichedHollowBatch;
@@ -731,7 +731,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let blob = Arc::clone(&self.blob);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
-        let partial_key = PartialBatchKey::new(&self.writer_id, &PartId::new());
+        let partial_key =
+            PartialBatchKey::new(&WriterKey::Id(self.writer_id.clone()), &PartId::new());
         let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let stats_collection_enabled = self.cfg.stats_collection_enabled;

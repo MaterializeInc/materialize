@@ -37,7 +37,7 @@ use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::{
-    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
+    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
 use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
 use crate::rpc::NoopPubSubSender;
@@ -579,6 +579,10 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
 
     let mut unreferenced_blobs = UnreferencedBlobs::default();
     for (part, writer) in all_parts {
+        let WriterKey::Id(writer) = writer else {
+            // TODO: even a new-style key might be unreferenced.
+            continue
+        };
         if !known_writers.contains(&writer) && !known_parts.contains(&part) {
             unreferenced_blobs.batch_parts.insert(part);
         }
