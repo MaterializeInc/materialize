@@ -250,6 +250,11 @@ SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'type'
 =U/mz_system
 mz_system=U/mz_system
 
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+mz_system=RBN/mz_system
+
 ## Test user created objects
 
 statement ok
@@ -1829,6 +1834,27 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
 
+## System
+
+query B
+SELECT has_system_privilege('mz_system', 'CREATEROLE')
+----
+true
+
+query B
+SELECT has_system_privilege('mz_system', 'CREATEDB')
+----
+true
+
+query B
+SELECT has_system_privilege('mz_system', 'CREATECLUSTER')
+----
+true
+
+# TODO(jkosh44) Add tests when GRANT is implemented for system privileges
+
+## Test misc error scenarios
+
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for SCHEMA
 GRANT INSERT, SELECT, UPDATE, DELETE ON SCHEMA sch TO joe
 
@@ -1901,8 +1927,6 @@ simple conn=mz_system,user=mz_system
 REVOKE CREATE ON SCHEMA pg_catalog FROM joe
 ----
 db error: ERROR: system schema 'pg_catalog' cannot be modified
-
-## Test misc error scenarios
 
 statement error unknown database 't'
 GRANT SELECT ON DATABASE t TO joe
@@ -2063,6 +2087,18 @@ db error: ERROR: system cluster 'mz_introspection' cannot be modified
 
 ## If any input is NULL then the result is NULL.
 
+### System
+
+query B
+SELECT has_system_privilege(NULL, 'CREATEROLE')
+----
+NULL
+
+query B
+SELECT has_system_privilege('joe', NULL)
+----
+NULL
+
 ### Cluster
 
 query B
@@ -2184,6 +2220,14 @@ NULL
 
 ## If any of the text inputs are invalid then the query should error.
 
+### System
+
+query error role "fake-role" does not exist
+SELECT has_system_privilege('fake-role', 'CREATEDB')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_system_privilege('joe', 'fake privilege')
+
 ### Cluster
 
 query error role "fake-role" does not exist
@@ -2262,6 +2306,13 @@ query error unrecognized privilege type: "fake privilege"
 SELECT has_type_privilege('joe', 'ty', 'fake privilege')
 
 ## If any of the oid inputs are invalid then the query should be NULL.
+
+### System
+
+query B
+SELECT has_system_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'CREATECLUSTER')
+----
+NULL
 
 ### Cluster
 
@@ -2343,6 +2394,10 @@ SELECT has_type_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1)::
 NULL
 
 ## The function should return true if ANY of the privileges exist, not all.
+
+### System
+
+# TODO(jkosh44) Add tests when GRANT is implemented for system privileges
 
 ### Cluster
 
@@ -2463,7 +2518,21 @@ SELECT has_type_privilege('joe', 'ty', 'USAGE, CREATE')
 ----
 true
 
-## Test two input variants.
+## Test two/one input variants.
+
+### System
+
+query B
+SELECT has_system_privilege('materialize', 'CREATEDB')
+----
+false
+
+query B
+SELECT has_system_privilege('CREATEDB')
+----
+false
+
+# TODO(jkosh44) Add tests when GRANT is implemented for system privileges
 
 ### Cluster
 
