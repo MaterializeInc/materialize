@@ -31,7 +31,8 @@ use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationT
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
-    AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
@@ -4702,6 +4703,11 @@ pub fn describe_alter_connection(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(
+    AlterSourceAddSubsourceOption,
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+);
+
 pub fn plan_alter_source(
     scx: &mut StatementContext,
     stmt: AlterSourceStatement<Aug>,
@@ -4821,9 +4827,11 @@ pub fn plan_alter_source(
         AlterSourceAction::AddSubsources {
             subsources,
             details,
+            options,
         } => crate::plan::AlterSourceAction::AddSubsourceExports {
             subsources,
             details,
+            options,
         },
     };
 

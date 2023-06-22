@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::BoxFuture;
+use itertools::Itertools;
 use maplit::btreeset;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
@@ -67,8 +68,9 @@ use mz_sql::session::vars::{
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
-    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
+    AlterSourceAddSubsourceOptionName, CreateSourceConnection, CreateSourceSubsource,
+    DeferredItemName, PgConfigOption, PgConfigOptionName, ReferencedSubsources, Statement,
+    TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
@@ -4020,6 +4022,7 @@ impl Coordinator {
             AlterSourceAction::AddSubsourceExports {
                 subsources,
                 details,
+                options,
             } => {
                 const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
 
@@ -4038,41 +4041,100 @@ impl Coordinator {
                     .ok_or(purification_err())?
                 {
                     ReferencedSubsources::SubsetTables(c) => {
-                        mz_ore::soft_assert!({
-                            let current_references: BTreeSet<_> = c
-                                .iter()
-                                .map(|CreateSourceSubsource { reference, .. }| reference)
-                                .collect();
-                            let subsources: BTreeSet<_> = subsources
-                                .iter()
-                                .map(|CreateSourceSubsource { reference, .. }| reference)
-                                .collect();
+                        mz_ore::soft_assert!(
+                            {
+                                let current_references: BTreeSet<_> = c
+                                    .iter()
+                                    .map(|CreateSourceSubsource { reference, .. }| reference)
+                                    .collect();
+                                let subsources: BTreeSet<_> = subsources
+                                    .iter()
+                                    .map(|CreateSourceSubsource { reference, .. }| reference)
+                                    .collect();
 
-                            current_references
-                                .intersection(&subsources)
-                                .next()
-                                .is_none()
-                        });
+                                current_references
+                                    .intersection(&subsources)
+                                    .next()
+                                    .is_none()
+                            },
+                            "cannot add subsources that refer to existing PG tables; this should have errored in purification"
+                        );
 
                         c.extend(subsources);
                     }
                     _ => return Err(purification_err()),
                 };
 
-                let options = match &mut create_source_stmt.connection {
+                let curr_options = match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres { options, .. } => options,
                     _ => return Err(purification_err()),
                 };
 
                 // Remove any old detail references
-                options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
+                curr_options
+                    .retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
 
-                options.push(PgConfigOption {
+                curr_options.push(PgConfigOption {
                     name: PgConfigOptionName::Details,
                     value: details,
                 });
 
-                // TODO text columns
+                // Merge text columns
+                let curr_text_columns = curr_options
+                    .iter_mut()
+                    .find(|option| option.name == PgConfigOptionName::TextColumns);
+
+                let new_text_columns = options
+                    .into_iter()
+                    .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns);
+
+                match (curr_text_columns, new_text_columns) {
+                    (Some(curr), Some(new)) => {
+                        let curr = match curr.value {
+                            Some(WithOptionValue::Sequence(ref mut curr)) => curr,
+                            _ => unreachable!(),
+                        };
+                        let new = match new.value {
+                            Some(WithOptionValue::Sequence(new)) => new,
+                            _ => unreachable!(),
+                        };
+
+                        curr.extend(new);
+                        curr.sort();
+
+                        mz_ore::soft_assert!(
+                            curr.iter()
+                                .all(|v| matches!(v, WithOptionValue::UnresolvedItemName(_))),
+                            "all elements of text columns must be UnresolvedItemName, but got {:?}",
+                            curr
+                        );
+
+                        mz_ore::soft_assert!(
+                            curr.iter().duplicates().next().is_none(),
+                            "TEXT COLUMN references must be unique among both sets, but got {:?}",
+                            curr
+                        );
+                    }
+                    (None, Some(new)) => {
+                        mz_ore::soft_assert!(
+                            match &new.value {
+                                Some(WithOptionValue::Sequence(v)) => v
+                                    .iter()
+                                    .all(|v| matches!(v, WithOptionValue::UnresolvedItemName(_))),
+                                _ => false,
+                            },
+                            "TEXT COLUMNS must have a sequence of unresolved item names but got {:?}",
+                            new.value
+                        );
+
+                        curr_options.push(PgConfigOption {
+                            name: PgConfigOptionName::TextColumns,
+                            value: new.value,
+                        })
+                    }
+                    // No change
+                    _ => {}
+                }
 
                 let mut catalog = self.catalog().for_system_session();
                 catalog.mark_id_unresolvable_for_replanning(cur_entry.id());

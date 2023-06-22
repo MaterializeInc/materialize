@@ -30,9 +30,16 @@ CREATE TABLE cdc_enum_table (a an_enum);
 INSERT INTO cdc_enum_table VALUES ('var1'), ('var0');
 ALTER TABLE cdc_enum_table REPLICA IDENTITY FULL;
 
+CREATE TABLE another_enum_table (a an_enum);
+INSERT INTO another_enum_table VALUES ('var1'), ('var0');
+ALTER TABLE another_enum_table REPLICA IDENTITY FULL;
+
 DROP TABLE IF EXISTS cdc_empty_on_boot_table;
 CREATE TABLE cdc_empty_on_boot_table (a int);
 ALTER TABLE cdc_empty_on_boot_table REPLICA IDENTITY FULL;
+
+DROP PUBLICATION IF EXISTS upgrade_pg_cdc_text_col_pub;
+CREATE PUBLICATION upgrade_pg_cdc_text_col_pub FOR TABLE cdc_enum_table, another_enum_table;
 
 # Specifying `TEXT COLUMNS` lets us ingest enum data.
 > CREATE SECRET IF NOT EXISTS pgpass AS 'postgres';
@@ -47,7 +54,7 @@ ALTER TABLE cdc_empty_on_boot_table REPLICA IDENTITY FULL;
   CONNECTION pgconn
   (
     PUBLICATION 'upgrade_pg_cdc_publication',
-    TEXT COLUMNS (cdc_enum_table.a)
+    TEXT COLUMNS (cdc_enum_table.a, another_enum_table.a)
   )
   FOR ALL TABLES;
 
@@ -110,3 +117,12 @@ SELECT mz_version_num() >= 5600;
 3
 4
 5
+
+> CREATE SOURCE dangling_text_cols_source
+  FROM POSTGRES
+  CONNECTION pgconn
+  (
+    PUBLICATION 'upgrade_pg_cdc_publication',
+    TEXT COLUMNS (cdc_enum_table.a, another_enum_table.a)
+  )
+  FOR ALL TABLES;
