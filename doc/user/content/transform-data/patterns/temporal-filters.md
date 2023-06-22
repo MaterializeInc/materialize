@@ -24,7 +24,7 @@ Consider this diagram that shows a record `E` falling out of the result set as t
 ![temporal filter diagram](/images/temporal-filter.jpg)
 
 {{< note >}}
-It may feel more natural to write this filter as `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
+It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
 For reasons having to do with the internal implementation of `mz_now()`, there are currently no valid operators for the resulting [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
 {{< /note >}}
 
