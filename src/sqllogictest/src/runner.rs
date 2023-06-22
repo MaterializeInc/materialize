@@ -372,10 +372,10 @@ enum PrepareQueryOutcome<'a> {
 
 pub struct Runner<'a> {
     config: &'a RunConfig<'a>,
-    inner: Option<RunnerInner>,
+    inner: Option<RunnerInner<'a>>,
 }
 
-pub struct RunnerInner {
+pub struct RunnerInner<'a> {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
@@ -386,6 +386,8 @@ pub struct RunnerInner {
     auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
+    verbosity: usize,
+    stdout: &'a dyn WriteFmt,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
@@ -868,8 +870,8 @@ impl<'a> Runner<'a> {
     }
 }
 
-impl RunnerInner {
-    pub async fn start(config: &RunConfig<'_>) -> Result<RunnerInner, anyhow::Error> {
+impl<'a> RunnerInner<'a> {
+    pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
@@ -1046,6 +1048,8 @@ impl RunnerInner {
             auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
             enable_table_keys: config.enable_table_keys,
+            verbosity: config.verbosity,
+            stdout: config.stdout,
         })
     }
 
@@ -1130,13 +1134,13 @@ impl RunnerInner {
         }
     }
 
-    async fn run_statement<'a>(
+    async fn run_statement<'r>(
         &self,
-        expected_error: Option<&'a str>,
+        expected_error: Option<&'r str>,
         expected_rows_affected: Option<u64>,
-        sql: &'a str,
+        sql: &'r str,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         static UNSUPPORTED_INDEX_STATEMENT_REGEX: Lazy<Regex> =
             Lazy::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
         if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
@@ -1181,13 +1185,13 @@ impl RunnerInner {
         }
     }
 
-    async fn prepare_query<'a>(
+    async fn prepare_query<'r>(
         &self,
         sql: &str,
-        output: &'a Result<QueryOutput<'_>, &'a str>,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
         in_transaction: &mut bool,
-    ) -> Result<PrepareQueryOutcome<'a>, anyhow::Error> {
+    ) -> Result<PrepareQueryOutcome<'r>, anyhow::Error> {
         // get statement
         let statements = match mz_sql::parse::parse(sql) {
             Ok(statements) => statements,
@@ -1259,12 +1263,12 @@ impl RunnerInner {
         }))
     }
 
-    async fn execute_query<'a>(
+    async fn execute_query<'r>(
         &self,
         sql: &str,
-        output: &'a Result<QueryOutput<'_>, &'a str>,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
@@ -1397,13 +1401,45 @@ impl RunnerInner {
         Ok(Outcome::Success)
     }
 
-    async fn execute_view<'a>(
+    async fn execute_view_inner<'r>(
+        &self,
+        sql: &str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+    ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
+        print_sql_if(self.stdout, sql, self.verbosity >= 2);
+        let sql_result = self.client.execute(sql, &[]).await;
+
+        // Evaluate if we already reached an outcome or not.
+        let tentative_outcome = if let Err(view_error) = sql_result {
+            if let Err(expected_error) = output {
+                if Regex::new(expected_error)?.is_match(&format!("{:#}", view_error)) {
+                    Some(Outcome::Success)
+                } else {
+                    Some(Outcome::PlanFailure {
+                        error: view_error.into(),
+                        location: location.clone(),
+                    })
+                }
+            } else {
+                Some(Outcome::PlanFailure {
+                    error: view_error.into(),
+                    location: location.clone(),
+                })
+            }
+        } else {
+            None
+        };
+        Ok(tentative_outcome)
+    }
+
+    async fn execute_view<'r>(
         &self,
         sql: &str,
         num_attributes: Option<usize>,
-        output: &'a Result<QueryOutput<'_>, &'a str>,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         // Create indexed view SQL commands and execute `CREATE VIEW`.
         let expected_column_names = if let Ok(QueryOutput { column_names, .. }) = output {
             column_names.clone()
@@ -1416,47 +1452,42 @@ impl RunnerInner {
             num_attributes,
             expected_column_names,
         );
-        let create_view_result = self.client.execute(create_view.as_str(), &[]).await;
+        let tentative_outcome = self
+            .execute_view_inner(create_view.as_str(), output, location.clone())
+            .await?;
 
-        // Either handle a view creation error or alternatively index
-        // and query the view.
-        let view_outcome;
-        if let Err(view_error) = create_view_result {
-            if let Err(expected_error) = output {
-                view_outcome = if Regex::new(expected_error)?.is_match(&format!("{:#}", view_error))
-                {
-                    Outcome::Success
-                } else {
-                    Outcome::PlanFailure {
-                        error: view_error.into(),
-                        location: location.clone(),
-                    }
-                }
-            } else {
-                view_outcome = Outcome::PlanFailure {
-                    error: view_error.into(),
-                    location: location.clone(),
-                }
-            }
-        } else {
-            self.client.execute(create_index.as_str(), &[]).await?;
-            view_outcome = self
-                .execute_query(view_sql.as_str(), output, location.clone())
-                .await?;
-
-            // Remember to clean up after ourselves by dropping the view.
-            self.client.execute(drop_view.as_str(), &[]).await?;
+        // Either we already have an outcome or alternatively,
+        // we proceed to index and query the view.
+        if let Some(view_outcome) = tentative_outcome {
+            return Ok(view_outcome);
         }
+
+        let tentative_outcome = self
+            .execute_view_inner(create_index.as_str(), output, location.clone())
+            .await?;
+        if let Some(view_outcome) = tentative_outcome {
+            return Ok(view_outcome);
+        }
+
+        print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+        let view_outcome = self
+            .execute_query(view_sql.as_str(), output, location.clone())
+            .await?;
+
+        // Remember to clean up after ourselves by dropping the view.
+        print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
+        self.client.execute(drop_view.as_str(), &[]).await?;
+
         Ok(view_outcome)
     }
 
-    async fn run_query<'a>(
+    async fn run_query<'r>(
         &self,
-        sql: &'a str,
-        output: &'a Result<QueryOutput<'_>, &'a str>,
+        sql: &'r str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
         in_transaction: &mut bool,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         let prepare_outcome = self
             .prepare_query(sql, output, location.clone(), in_transaction)
             .await?;
@@ -1525,14 +1556,14 @@ impl RunnerInner {
         }
     }
 
-    async fn run_simple<'a>(
+    async fn run_simple<'r>(
         &mut self,
-        conn: Option<&'a str>,
-        user: Option<&'a str>,
-        sql: &'a str,
-        output: &'a Output,
+        conn: Option<&'r str>,
+        user: Option<&'r str>,
+        sql: &'r str,
+        output: &'r Output,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         let client = self.get_conn(conn, user).await;
         let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => result
@@ -1608,11 +1639,19 @@ pub struct RunConfig<'a> {
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
-        Record::Statement { sql, .. } | Record::Query { sql, .. } => {
-            writeln!(config.stdout, "{}", crate::util::indent(sql, 4))
-        }
+        Record::Statement { sql, .. } | Record::Query { sql, .. } => print_sql(config.stdout, sql),
         _ => (),
     }
+}
+
+fn print_sql_if<'a>(stdout: &'a dyn WriteFmt, sql: &str, cond: bool) {
+    if cond {
+        print_sql(stdout, sql)
+    }
+}
+
+fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
+    writeln!(stdout, "{}", crate::util::indent(sql, 4))
 }
 
 pub async fn run_string(
