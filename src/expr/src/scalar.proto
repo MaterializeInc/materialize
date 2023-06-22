@@ -796,5 +796,6 @@ message ProtoEvalError {
         uint64 max_array_size_exceeded = 70;
         string invalid_date_part = 71;
         ProtoDateDiffOverflow date_diff_overflow = 72;
+        string if_null_error = 73;
     }
 }

@@ -462,7 +462,15 @@ impl Display for DataflowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DataflowError::DecodeError(e) => write!(f, "Decode error: {}", e),
-            DataflowError::EvalError(e) => write!(f, "Evaluation error: {}", e),
+            DataflowError::EvalError(e) => write!(
+                f,
+                "{}{}",
+                match **e {
+                    EvalError::IfNullError(_) => "",
+                    _ => "Evaluation error: ",
+                },
+                e
+            ),
             DataflowError::SourceError(e) => write!(f, "Source error: {}", e),
             DataflowError::EnvelopeError(e) => write!(f, "Envelope error: {}", e),
         }

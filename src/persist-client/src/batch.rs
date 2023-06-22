@@ -28,6 +28,7 @@ use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::stats::trim_to_budget;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::order::Reverse;
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
@@ -55,6 +56,9 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) shard_id: ShardId,
+
+    /// The version of Materialize which wrote this batch.
+    pub(crate) version: Version,
 
     /// A handle to the data represented by this batch.
     pub(crate) batch: HollowBatch<T>,
@@ -96,10 +100,12 @@ where
     pub(crate) fn new(
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
+        version: Version,
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
             shard_id,
+            version,
             batch,
             _blob: blob,
             _phantom: PhantomData,
@@ -169,6 +175,7 @@ where
     pub fn into_writer_hollow_batch(mut self) -> WriterEnrichedHollowBatch<T> {
         let ret = WriterEnrichedHollowBatch {
             shard_id: self.shard_id,
+            version: self.version.clone(),
             batch: self.batch.clone(),
         };
         self.mark_consumed();
@@ -287,6 +294,7 @@ where
     inclusive_upper: Antichain<Reverse<T>>,
 
     shard_id: ShardId,
+    version: Version,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
     _schemas: Schemas<K, V>,
@@ -326,6 +334,7 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         shard_id: ShardId,
+        version: Version,
         writer_id: WriterId,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
@@ -361,6 +370,7 @@ where
             num_updates: 0,
             parts,
             shard_id,
+            version,
             since,
             // TODO: The default case would ideally be `{t + 1 for t in self.inclusive_upper}` but
             // there's nothing that lets us increment a timestamp. An empty
@@ -413,6 +423,7 @@ where
         let batch = Batch::new(
             self.blob,
             self.shard_id.clone(),
+            self.version,
             HollowBatch {
                 desc,
                 parts,

@@ -27,7 +27,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, error, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -101,6 +101,7 @@ impl WriterId {
 )]
 pub struct WriterEnrichedHollowBatch<T> {
     pub(crate) shard_id: ShardId,
+    pub(crate) version: semver::Version,
     pub(crate) batch: HollowBatch<T>,
 }
 
@@ -442,6 +443,15 @@ where
                     handle_shard: self.machine.shard_id(),
                 });
             }
+            if self.cfg.build_version != batch.version {
+                error!(
+                    shard_id =? self.machine.shard_id(),
+                    batch_version =? batch.version,
+                    writer_version =? self.cfg.build_version,
+                    "Appending batch with a version that does not match the current build. \
+                    This may fail in the future."
+                )
+            }
         }
 
         let lower = expected_upper.clone();
@@ -512,6 +522,7 @@ where
         );
         Batch {
             shard_id: self.machine.shard_id(),
+            version: hollow.version,
             batch: hollow.batch,
             _blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
@@ -541,6 +552,7 @@ where
             Arc::clone(&self.blob),
             Arc::clone(&self.cpu_heavy_runtime),
             self.machine.shard_id().clone(),
+            self.cfg.build_version.clone(),
             self.writer_id.clone(),
             Antichain::from_elem(T::minimum()),
             None,

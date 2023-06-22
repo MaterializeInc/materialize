@@ -1597,10 +1597,16 @@ where
                             self.state.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory => {
-                            self.reconcile_source_status_history().await;
+                            self.partially_truncate_status_history(
+                                IntrospectionType::SourceStatusHistory,
+                            )
+                            .await;
                         }
                         IntrospectionType::SinkStatusHistory => {
-                            // nothing to do: these collections are append only
+                            self.partially_truncate_status_history(
+                                IntrospectionType::SinkStatusHistory,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -2731,8 +2737,18 @@ where
 
     /// Effectively truncates the source status history shard except for the most recent updates
     /// from each ID.
-    async fn reconcile_source_status_history(&mut self) {
-        let id = self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+    async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
+        let keep_n = match collection {
+            IntrospectionType::SourceStatusHistory => {
+                self.state.config.keep_n_source_status_history_entries
+            }
+            IntrospectionType::SinkStatusHistory => {
+                self.state.config.keep_n_sink_status_history_entries
+            }
+            _ => unreachable!(),
+        };
+
+        let id = self.state.introspection_ids[&collection];
 
         let rows = match self.state.collections[&id]
             .write_frontier
@@ -2785,7 +2801,7 @@ where
 
             // Retain some number of entries, using pop_first to mark the oldest entries for
             // deletion.
-            while entries.len() > self.state.config.keep_n_source_status_history_entries {
+            while entries.len() > keep_n {
                 if let Some((_, r)) = entries.pop_first() {
                     deletions.push(r);
                 }

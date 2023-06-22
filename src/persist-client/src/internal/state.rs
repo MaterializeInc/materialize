@@ -164,6 +164,7 @@ pub struct HollowBatchPart {
     pub encoded_size_bytes: usize,
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
+    #[proptest(strategy = "super::encoding::any_some_lazy_part_stats()")]
     pub stats: Option<LazyPartStats>,
 }
 

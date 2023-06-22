@@ -856,7 +856,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .collect(),
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
-            &args.tracing.log_filter.inner,
+            args.tracing.log_filter.as_ref(),
             args.aws_external_id_prefix,
             secrets_reader,
         ),

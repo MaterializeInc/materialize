@@ -537,6 +537,18 @@ impl Connection {
             .collect::<Result<_, _>>()?)
     }
 
+    /// Load the persisted system privileges.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+        Ok(SYSTEM_PRIVILEGES_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, _): (SystemPrivilegesKey, ())| k.privileges)
+            .collect::<Result<_, _>>()?)
+    }
+
     /// Load the persisted server configurations.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {

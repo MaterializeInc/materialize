@@ -2076,6 +2076,36 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_OID;
         },
+        "has_system_privilege" => Scalar {
+            params!(String, String) => sql_impl_func("has_system_privilege(mz_internal.mz_role_oid($1), $2)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_TEXT_OID;
+            params!(Oid, String) => sql_impl_func("
+                CASE
+                -- We need to validate the privileges to return a proper error before
+                -- anything else.
+                WHEN NOT mz_internal.mz_validate_privileges($2)
+                OR $1 IS NULL
+                OR $2 IS NULL
+                OR $1 NOT IN (SELECT oid FROM mz_roles)
+                THEN NULL
+                ELSE COALESCE(
+                    (
+                        SELECT
+                            bool_or(
+                                mz_internal.mz_acl_item_contains_privilege(privileges, $2)
+                            )
+                                AS has_system_privilege
+                        FROM mz_system_privileges
+                        LEFT JOIN mz_roles ON
+                                mz_internal.mz_aclitem_grantee(privileges) = mz_roles.id
+                        WHERE
+                            mz_roles.oid = $1
+                    ),
+                    false
+                )
+                END
+            ") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_OID_TEXT_OID;
+            params!(String) => sql_impl_func("has_system_privilege(current_user, $1)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
+        },
         "has_table_privilege" => Scalar {
             params!(String, String, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 1922;
             params!(String, Oid, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 1923;
@@ -3637,11 +3667,11 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Timestamp, Interval) => AddTimestampInterval => Timestamp, 2066;
             params!(Interval, Timestamp) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
-            } => Interval, 2553;
+            } => Timestamp, 2553;
             params!(TimestampTz, Interval) => AddTimestampTzInterval => TimestampTz, 1327;
             params!(Interval, TimestampTz) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
-            } => Interval, 2554;
+            } => TimestampTz, 2554;
             params!(Date, Interval) => AddDateInterval => Timestamp, 1076;
             params!(Interval, Date) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateInterval)))
@@ -3653,7 +3683,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Time, Interval) => AddTimeInterval => Time, 1800;
             params!(Interval, Time) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
-            } => Interval, 1849;
+            } => Time, 1849;
             params!(Numeric, Numeric) => AddNumeric => Numeric, 1758;
             params!(RangeAny, RangeAny) => RangeUnion => RangeAny, 3898;
         },

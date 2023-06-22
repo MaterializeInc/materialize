@@ -1371,6 +1371,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             datadriven.shard_id.clone(),
+            datadriven.client.cfg.build_version.clone(),
             WriterId::new(),
             since,
             Some(upper.clone()),

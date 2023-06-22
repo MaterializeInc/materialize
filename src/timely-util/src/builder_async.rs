@@ -275,7 +275,7 @@ where
     P: Push<BundleCore<T, D>> + 'static,
 {
     fn new(wrapper: OutputWrapper<T, D, P>) -> Self {
-        let mut wrapper = Box::pin(wrapper);
+        let mut wrapper = Rc::new(Box::pin(wrapper));
         // SAFETY:
         // get_unchecked_mut is safe because we are not moving the wrapper
         //
@@ -284,14 +284,18 @@ where
         //   be dropped before the wrapper, thus manually enforcing the lifetime.
         // * We never touch wrapper again after this point
         let handle = unsafe {
-            let handle = wrapper.as_mut().get_unchecked_mut().activate();
+            let handle = Rc::get_mut(&mut wrapper)
+                .unwrap()
+                .as_mut()
+                .get_unchecked_mut()
+                .activate();
             std::mem::transmute::<OutputHandleCore<'_, T, D, P>, OutputHandleCore<'static, T, D, P>>(
                 handle,
             )
         };
         Self {
+            wrapper,
             handle: Rc::new(RefCell::new(handle)),
-            wrapper: Rc::new(wrapper),
         }
     }
 
@@ -694,8 +698,6 @@ impl Drop for PressOnDropButton {
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
-
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
@@ -703,41 +705,34 @@ mod test {
 
     use super::*;
 
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-    async fn async_operator() {
-        // Run timely in a separate thread
-        #[allow(clippy::disallowed_methods)]
-        let extracted = tokio::task::spawn_blocking(|| {
-            let capture = timely::example(|scope| {
-                let input = (0..10).to_stream(scope);
+    #[mz_ore::test]
+    fn async_operator() {
+        let capture = timely::example(|scope| {
+            let input = (0..10).to_stream(scope);
 
-                let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
-                let mut input_handle = op.new_input(&input, Pipeline);
-                let (mut output, output_stream) = op.new_output();
+            let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
+            let mut input_handle = op.new_input(&input, Pipeline);
+            let (mut output, output_stream) = op.new_output();
 
-                op.build(move |_capabilities| async move {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    while let Some(event) = input_handle.next().await {
-                        match event {
-                            Event::Data(cap, data) => {
-                                let cap = cap.retain();
-                                for item in data.iter().copied() {
-                                    tokio::time::sleep(Duration::from_millis(10)).await;
-                                    output.give(&cap, item).await;
-                                }
+            op.build(move |_capabilities| async move {
+                tokio::task::yield_now().await;
+                while let Some(event) = input_handle.next().await {
+                    match event {
+                        Event::Data(cap, data) => {
+                            let cap = cap.retain();
+                            for item in data.iter().copied() {
+                                tokio::task::yield_now().await;
+                                output.give(&cap, item).await;
                             }
-                            Event::Progress(_frontier) => {}
                         }
+                        Event::Progress(_frontier) => {}
                     }
-                });
-
-                output_stream.capture()
+                }
             });
-            capture.extract()
-        })
-        .await
-        .expect("timely panicked");
+
+            output_stream.capture()
+        });
+        let extracted = capture.extract();
 
         assert_eq!(extracted, vec![(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])]);
     }

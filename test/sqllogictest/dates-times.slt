@@ -1362,3 +1362,9 @@ query T
 SELECT to_timestamp(-0.1::float8);
 ----
 1969-12-31 23:59:59.9+00
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/20077
+query T
+SELECT now() + null;
+----
+NULL

@@ -236,7 +236,6 @@ mod tests {
                     let _ = watch.wait_for_seqno_ge(wait_seqno).await;
                     let observed_seqno =
                         state.read_lock(&metrics.locks.applier_read_noncacheable, |x| x.seqno);
-                    tracing::info!("{} vs {}", wait_seqno, observed_seqno);
                     assert!(
                         wait_seqno <= observed_seqno,
                         "{} vs {}",
@@ -253,7 +252,6 @@ mod tests {
                 mz_ore::task::spawn(|| "write", async move {
                     state.write_lock(&metrics.locks.applier_write, |x| {
                         x.seqno = x.seqno.next();
-                        eprintln!("wrote {}", x.seqno);
                     });
                 })
             })

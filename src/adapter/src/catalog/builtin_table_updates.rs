@@ -23,7 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
@@ -46,8 +46,8 @@ use crate::catalog::builtin::{
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
     MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
@@ -1307,6 +1307,18 @@ impl CatalogState {
                 grantee.to_string().as_str().into(),
                 acl_mode.to_string().as_str().into(),
             ]),
+            diff,
+        }
+    }
+
+    pub fn pack_system_privileges_update(
+        &self,
+        privileges: MzAclItem,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SYSTEM_PRIVILEGES),
+            row: Row::pack_slice(&[privileges.into()]),
             diff,
         }
     }
