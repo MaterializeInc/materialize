@@ -1501,9 +1501,9 @@ impl Drop for DebugStashFactory {
                         std::panic::resume_unwind(Box::new(e));
                     }
                 });
-                client
-                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
-                    .await?;
+                // client
+                //     .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
+                //     .await?;
                 Ok::<_, StashError>(())
             })
         })
@@ -1519,6 +1519,42 @@ impl Drop for DebugStashFactory {
             }
 
             Err(e) => std::panic::resume_unwind(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::DebugStashFactory;
+
+    #[mz_ore::test]
+    fn test_open_lots_of_stashes() {
+        let mut handles = vec![];
+        for i in 0..16 {
+            let handle = std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to create runtime");
+
+                // Open our Stash.
+                runtime
+                    .block_on(async {
+                        let factory = DebugStashFactory::new().await;
+                        println!("{i} created factory");
+                        let mut stash = factory.open_debug().await;
+                        println!("{i} opened stash");
+                        let collections = stash.collections().await;
+                        collections
+                    })
+                    .expect("failed to open stash");
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let result = handle.join();
+            println!("{result:?}");
         }
     }
 }
