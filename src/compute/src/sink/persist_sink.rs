@@ -283,9 +283,8 @@ where
         Antichain::new()
     }));
 
-    compute_state
-        .sink_write_frontiers
-        .insert(sink_id, Rc::clone(&shared_frontier));
+    let collection = compute_state.expect_collection_mut(sink_id);
+    collection.sink_write_frontier = Some(Rc::clone(&shared_frontier));
 
     let mut mint_op =
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);

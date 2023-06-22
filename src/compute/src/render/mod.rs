@@ -264,8 +264,10 @@ pub fn build_compute_dataflow<A: Allocate>(
         // Collect flow control probes for this dataflow.
         let index_ids = dataflow.index_imports.keys();
         let output_probes: Vec<_> = index_ids
-            .flat_map(|id| compute_state.flow_control_probes.get(id))
-            .flatten()
+            .flat_map(|id| {
+                let collection = compute_state.expect_collection(*id);
+                &collection.index_flow_control_probes
+            })
             .cloned()
             .chain(flow_control_probe)
             .collect();
@@ -491,9 +493,8 @@ where
             )
         });
 
-        compute_state
-            .flow_control_probes
-            .insert(idx_id, probes.clone());
+        let collection = compute_state.expect_collection_mut(idx_id);
+        collection.index_flow_control_probes = probes.clone();
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
@@ -556,9 +557,8 @@ where
             )
         });
 
-        compute_state
-            .flow_control_probes
-            .insert(idx_id, probes.clone());
+        let collection = compute_state.expect_collection_mut(idx_id);
+        collection.index_flow_control_probes = probes.clone();
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {

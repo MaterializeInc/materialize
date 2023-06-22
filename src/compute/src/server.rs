@@ -628,12 +628,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // about them anymore.
             compute_state.dropped_collections = Default::default();
 
-            // Adjust reported frontiers:
-            //  * For dataflows we continue to use, reset to ensure we report something not before
-            //    the new `as_of` next.
-            //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
-            //    anything for them. This is only needed until we implement #16275.
-            for (&id, reported_frontier) in compute_state.reported_frontiers.iter_mut() {
+            for (&id, collection) in compute_state.collections.iter_mut() {
+                // Adjust reported frontiers:
+                //  * For dataflows we continue to use, reset to ensure we report something not
+                //    before the new `as_of` next.
+                //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
+                //    anything for them. This is only needed until we implement #16275.
                 let retained = retain_ids.contains(&id);
                 let compaction = old_compaction.remove(&id);
                 let new_reported_frontier = match (retained, compaction) {
@@ -654,7 +654,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                 // Compensate what already was sent to logging sources.
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = reported_frontier.logging_time() {
+                    if let Some(time) = collection.reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                     if let Some(time) = new_reported_frontier.logging_time() {
@@ -662,18 +662,19 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
-                *reported_frontier = new_reported_frontier;
-            }
+                collection.reported_frontier = new_reported_frontier;
 
-            // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
-            //
-            // Dropping the tokens of active subscribes makes them place `DroppedAt` responses into
-            // the subscribe response buffer. We drop that buffer in the next step, which ensures
-            // that we don't send out `DroppedAt` responses for subscribes dropped during
-            // reconciliation.
-            compute_state
-                .sink_tokens
-                .retain(|id, _| retain_ids.contains(id));
+                // Sink tokens should be retained for retained dataflows, and dropped for dropped
+                // dataflows.
+                //
+                // Dropping the tokens of active subscribes makes them place `DroppedAt` responses
+                // into the subscribe response buffer. We drop that buffer in the next step, which
+                // ensures that we don't send out `DroppedAt` responses for subscribes dropped
+                // during reconciliation.
+                if !retained {
+                    collection.sink_token = None;
+                }
+            }
 
             // We must drop the subscribe response buffer as it is global across all subscribes.
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
