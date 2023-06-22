@@ -200,6 +200,11 @@ impl Coordinator {
                 let result = self.sequence_show_variable(ctx.session(), plan);
                 ctx.retire(result);
             }
+            Plan::InspectShard(plan) => {
+                // TODO: Ideally, this await would happen off the main thread.
+                let result = self.sequence_inspect_shard(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
             Plan::SetVariable(plan) => {
                 let result = self.sequence_set_variable(ctx.session_mut(), plan);
                 ctx.retire(result);

@@ -31,6 +31,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
@@ -49,10 +50,11 @@ use mz_sql::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan,
     DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
-    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
-    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
-    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
+    InsertPlan, InspectShardPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
+    QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan,
+    RevokeRolePlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan,
+    SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
+    VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -1478,6 +1480,29 @@ impl Coordinator {
             session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
         Ok(send_immediate_rows(vec![row]))
+    }
+
+    pub(super) async fn sequence_inspect_shard(
+        &self,
+        session: &Session,
+        plan: InspectShardPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO: Not thrilled about this rbac special case here, but probably
+        // sufficient for now.
+        if !session.user().is_internal() {
+            return Err(AdapterError::Unauthorized(
+                rbac::UnauthorizedError::MzSystem {
+                    action: "inspect".into(),
+                },
+            ));
+        }
+        let state = self
+            .controller
+            .storage
+            .inspect_persist_state(plan.id)
+            .await?;
+        let jsonb = Jsonb::from_serde_json(state)?;
+        Ok(send_immediate_rows(vec![jsonb.into_row()]))
     }
 
     pub(super) fn sequence_set_variable(

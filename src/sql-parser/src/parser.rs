@@ -308,6 +308,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(GRANT) => Ok(self.parse_grant()?),
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
                 Token::Keyword(REASSIGN) => Ok(self.parse_reassign_owned()?),
+                Token::Keyword(INSPECT) => Ok(Statement::Show(self.parse_inspect()?)),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -5488,6 +5489,12 @@ impl<'a> Parser<'a> {
         } else {
             Ok(None)
         }
+    }
+
+    fn parse_inspect(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
+        self.expect_keyword(SHARD)?;
+        let id = self.parse_literal_string()?;
+        Ok(ShowStatement::InspectShard(InspectShardStatement { id }))
     }
 
     fn parse_table_and_joins(&mut self) -> Result<TableWithJoins<Raw>, ParserError> {
