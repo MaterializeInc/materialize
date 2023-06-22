@@ -615,13 +615,27 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-> CREATE SOURCE enum_source
+! CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source',
     TEXT COLUMNS [
       enum_table.a,
       public.another_enum_table."колона",
       pk_table.pk
+    ]
+  )
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
+contains:TEXT COLUMNS can only refer to tables being added to source
+
+> CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [
+      enum_table.a,
+      public.another_enum_table."колона"
     ]
   )
   FOR TABLES (

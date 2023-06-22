@@ -1669,6 +1669,39 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AlterSourceAddSubsourceOptionName {
+    /// Columns whose types you want to unconditionally format as text
+    TextColumns,
+}
+
+impl AstDisplay for AlterSourceAddSubsourceOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            AlterSourceAddSubsourceOptionName::TextColumns => "TEXT COLUMNS",
+        })
+    }
+}
+impl_display!(AlterSourceAddSubsourceOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in an `ALTER SOURCE...ADD SUBSOURCE` statement.
+pub struct AlterSourceAddSubsourceOption<T: AstInfo> {
+    pub name: AlterSourceAddSubsourceOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSourceAddSubsourceOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(AlterSourceAddSubsourceOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterSourceAction<T: AstInfo> {
     SetOptions(Vec<CreateSourceOption<T>>),
@@ -1676,6 +1709,7 @@ pub enum AlterSourceAction<T: AstInfo> {
     AddSubsources {
         subsources: Vec<CreateSourceSubsource<T>>,
         details: Option<WithOptionValue<T>>,
+        options: Vec<AlterSourceAddSubsourceOption<T>>,
     },
     DropSubsources {
         if_exists: bool,
@@ -1727,7 +1761,21 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
                     f.write_str(" CASCADE");
                 }
             }
-            _ => todo!(),
+            AlterSourceAction::AddSubsources {
+                subsources,
+                details: _,
+                options,
+            } => {
+                f.write_str("ADD SUBSOURCE ");
+
+                f.write_node(&display::comma_separated(subsources));
+
+                if !options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
+            }
         }
     }
 }

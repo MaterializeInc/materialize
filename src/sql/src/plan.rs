@@ -45,8 +45,8 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::{
-    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode,
-    WithOptionValue,
+    AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
+    TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
@@ -869,6 +869,7 @@ pub enum AlterSourceAction {
     AddSubsourceExports {
         subsources: Vec<CreateSourceSubsource<Aug>>,
         details: Option<WithOptionValue<Aug>>,
+        options: Vec<AlterSourceAddSubsourceOption<Aug>>,
     },
 }
 
