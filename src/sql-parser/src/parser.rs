@@ -6329,6 +6329,10 @@ impl<'a> Parser<'a> {
         &mut self,
         statement_type: &str,
     ) -> Result<GrantTargetSpecification<Raw>, ParserError> {
+        if self.parse_keyword(SYSTEM) {
+            return Ok(GrantTargetSpecification::System);
+        }
+
         let (object_type, object_spec_inner) = if self.parse_keyword(ALL) {
             let object_type = self.expect_grant_revoke_plural_object_type(statement_type)?;
             let object_spec_inner = if self.parse_keyword(IN) {
@@ -6371,7 +6375,7 @@ impl<'a> Parser<'a> {
             (object_type, object_spec_inner)
         };
 
-        Ok(GrantTargetSpecification {
+        Ok(GrantTargetSpecification::Object {
             object_type,
             object_spec_inner,
         })
@@ -6654,13 +6658,26 @@ impl<'a> Parser<'a> {
     /// Look for a privilege and return it if it matches.
     fn parse_privilege(&mut self) -> Option<Privilege> {
         Some(
-            match self.parse_one_of_keywords(&[INSERT, SELECT, UPDATE, DELETE, USAGE, CREATE])? {
+            match self.parse_one_of_keywords(&[
+                INSERT,
+                SELECT,
+                UPDATE,
+                DELETE,
+                USAGE,
+                CREATE,
+                CREATEROLE,
+                CREATEDB,
+                CREATECLUSTER,
+            ])? {
                 INSERT => Privilege::INSERT,
                 SELECT => Privilege::SELECT,
                 UPDATE => Privilege::UPDATE,
                 DELETE => Privilege::DELETE,
                 USAGE => Privilege::USAGE,
                 CREATE => Privilege::CREATE,
+                CREATEROLE => Privilege::CREATEROLE,
+                CREATEDB => Privilege::CREATEDB,
+                CREATECLUSTER => Privilege::CREATECLUSTER,
                 _ => unreachable!(),
             },
         )

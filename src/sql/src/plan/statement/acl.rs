@@ -413,7 +413,13 @@ fn plan_update_privilege(
     target: GrantTargetSpecification<Aug>,
     roles: Vec<ResolvedRoleName>,
 ) -> Result<UpdatePrivilegesPlan, PlanError> {
-    let object_type = target.object_type.into();
+    let (object_type, object_spec_inner) = match target {
+        GrantTargetSpecification::Object {
+            object_type,
+            object_spec_inner,
+        } => (object_type.into(), object_spec_inner),
+        GrantTargetSpecification::System => bail_unsupported!("SYSTEM PRIVILEGES"),
+    };
     fn object_type_filter(
         object_id: &ObjectId,
         object_type: &ObjectType,
@@ -425,7 +431,7 @@ fn plan_update_privilege(
             object_type == &scx.get_object_type(object_id)
         }
     }
-    let object_ids: Vec<ObjectId> = match target.object_spec_inner {
+    let object_ids: Vec<ObjectId> = match object_spec_inner {
         GrantTargetSpecificationInner::All(GrantTargetAllSpecification::All) => {
             let cluster_ids = scx
                 .catalog
@@ -584,6 +590,9 @@ fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
         Privilege::DELETE => AclMode::DELETE,
         Privilege::USAGE => AclMode::USAGE,
         Privilege::CREATE => AclMode::CREATE,
+        Privilege::CREATEROLE => AclMode::CREATE_ROLE,
+        Privilege::CREATEDB => AclMode::CREATE_DB,
+        Privilege::CREATECLUSTER => AclMode::CREATE_CLUSTER,
     }
 }
 

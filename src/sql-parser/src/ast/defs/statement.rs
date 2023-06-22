@@ -2998,6 +2998,9 @@ pub enum Privilege {
     DELETE,
     USAGE,
     CREATE,
+    CREATEROLE,
+    CREATEDB,
+    CREATECLUSTER,
 }
 
 impl AstDisplay for Privilege {
@@ -3009,6 +3012,9 @@ impl AstDisplay for Privilege {
             Privilege::DELETE => "DELETE",
             Privilege::CREATE => "CREATE",
             Privilege::USAGE => "USAGE",
+            Privilege::CREATEROLE => "CREATEROLE",
+            Privilege::CREATEDB => "CREATEDB",
+            Privilege::CREATECLUSTER => "CREATECLUSTER",
         });
     }
 }
@@ -3033,13 +3039,16 @@ impl AstDisplay for PrivilegeSpecification {
 impl_display!(PrivilegeSpecification);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GrantTargetSpecification<T: AstInfo> {
-    /// The type of object.
-    ///
-    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
-    pub object_type: ObjectType,
-    /// Specification of each object affected.
-    pub object_spec_inner: GrantTargetSpecificationInner<T>,
+pub enum GrantTargetSpecification<T: AstInfo> {
+    Object {
+        /// The type of object.
+        ///
+        /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
+        object_type: ObjectType,
+        /// Specification of each object affected.
+        object_spec_inner: GrantTargetSpecificationInner<T>,
+    },
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -3067,31 +3076,37 @@ impl<T: AstInfo> GrantTargetAllSpecification<T> {
 
 impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match &self.object_spec_inner {
-            GrantTargetSpecificationInner::All(all_spec) => match all_spec {
-                GrantTargetAllSpecification::All => {
-                    f.write_str("ALL ");
-                    f.write_node(&self.object_type);
-                    f.write_str("S");
-                }
-                GrantTargetAllSpecification::AllDatabases { databases } => {
-                    f.write_str("ALL ");
-                    f.write_node(&self.object_type);
-                    f.write_str("S IN DATABASE ");
-                    f.write_node(&display::comma_separated(databases));
-                }
-                GrantTargetAllSpecification::AllSchemas { schemas } => {
-                    f.write_str("ALL ");
-                    f.write_node(&self.object_type);
-                    f.write_str("S IN SCHEMA ");
-                    f.write_node(&display::comma_separated(schemas));
+        match self {
+            GrantTargetSpecification::Object {
+                object_type,
+                object_spec_inner,
+            } => match object_spec_inner {
+                GrantTargetSpecificationInner::All(all_spec) => match all_spec {
+                    GrantTargetAllSpecification::All => {
+                        f.write_str("ALL ");
+                        f.write_node(object_type);
+                        f.write_str("S");
+                    }
+                    GrantTargetAllSpecification::AllDatabases { databases } => {
+                        f.write_str("ALL ");
+                        f.write_node(object_type);
+                        f.write_str("S IN DATABASE ");
+                        f.write_node(&display::comma_separated(databases));
+                    }
+                    GrantTargetAllSpecification::AllSchemas { schemas } => {
+                        f.write_str("ALL ");
+                        f.write_node(object_type);
+                        f.write_str("S IN SCHEMA ");
+                        f.write_node(&display::comma_separated(schemas));
+                    }
+                },
+                GrantTargetSpecificationInner::Objects { names } => {
+                    f.write_node(object_type);
+                    f.write_str(" ");
+                    f.write_node(&display::comma_separated(names));
                 }
             },
-            GrantTargetSpecificationInner::Objects { names } => {
-                f.write_node(&self.object_type);
-                f.write_str(" ");
-                f.write_node(&display::comma_separated(names));
-            }
+            GrantTargetSpecification::System => f.write_str("SYSTEM"),
         }
     }
 }

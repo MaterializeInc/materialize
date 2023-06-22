@@ -1934,6 +1934,12 @@ GRANT SELECT ON DATABASE t TO joe
 statement error invalid privilege types USAGE for TABLE
 GRANT SELECT, USAGE ON TABLE t TO joe
 
+statement error invalid privilege types CREATEROLE for TABLE "materialize.public.t"
+GRANT CREATEROLE ON TABLE t TO test_role
+
+statement error  invalid privilege types CREATEDB for CLUSTER "c"
+REVOKE CREATEDB ON CLUSTER c FROM test_role
+
 ## Test multiple roles
 
 simple conn=mz_system,user=mz_system
@@ -2048,6 +2054,14 @@ query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'v1'
 ----
 v1  mz_system=r/mz_system
+
+## System
+
+statement error SYSTEM PRIVILEGES not yet supported
+GRANT CREATECLUSTER ON SYSTEM TO test_role
+
+statement error SYSTEM PRIVILEGES not yet supported
+REVOKE CREATEROLE ON SYSTEM FROM test_role
 
 ## Test system objects
 
