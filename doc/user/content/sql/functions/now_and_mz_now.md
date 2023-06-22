@@ -14,12 +14,12 @@ By contrast, `mz_now()` returns the logical time at which the query was executed
 
 For example, at 9pm, Materialize may choose to execute a query as of logical time 8:30pm, perhaps because data for 8:30–9pm has not yet arrived. In this scenario, `now()` would return 9pm, while `mz_now()` would return 8:30pm.
 
-The typical uses of `mz_now()` are:
+The typical uses of `now()` and `mz_now()` are:
 
 * **Query timestamp introspection**
 
-  `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
-  The data returned by a query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
+  An ad-hoc `SELECT` query with `now()` and `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
+  The data returned by the query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
 
 * **Temporal filters**
 
@@ -27,11 +27,11 @@ The typical uses of `mz_now()` are:
   This is referred to as a **temporal filter**.
   See the [temporal filter](/sql/patterns/temporal-filters) pattern for more details.
 
-* **Ad-hoc queries**
-
-  You can use `now()` and `mz_now()` in the `SELECT` clause of ad-hoc queries, but you cannot materialize these queries.
-  This is because `now()` and `mz_now()` change every millisecond.
-  If this materialization _were_ allowed, every record in the collection would be updated every millisecond, which would be absurd.
+{{< warning >}}
+Queries that contain `now()` or `mz_now()` in the `SELECT` clause cannot be materialized.
+In other words, you cannot create an index or a materialized view on a query with `now()` or `mz_now()` in the `SELECT` clause.
+This is because `now()` and `mz_now()` change every millisecond, so if this materialization _were_ allowed, every record in the collection would be updated every millisecond, which would be resource prohibitive.
+{{< /warning >}}
 
 ## Examples
 

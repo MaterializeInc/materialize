@@ -19,7 +19,7 @@ Here is a typical temporal filter that considers records whose timestamps are wi
 WHERE mz_now() <= event_ts + INTERVAL '5min'
 ```
 
-Consider this diagram that shows an record `E` falling out of the result set as time moves forward:
+Consider this diagram that shows a record `E` falling out of the result set as time moves forward:
 
 ![temporal filter diagram](/images/temporal-filter.jpg)
 
@@ -33,34 +33,9 @@ For reasons having to do with the internal implementation of `mz_now()`, there a
 You can only use `mz_now()` to establish a temporal filter under the following conditions:
 
 - `mz_now` appears in a `WHERE` or `HAVING` clause.
-- The clause must directly compare `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`,
-    or be part of a conjunction phrase (`AND`) which directly compares `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`.
-- The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
+- The clause must compare `mz_now()` to a [`numeric`](/sql/types/numeric) or [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`
+- The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN...AND...`).
     At the moment, you can't use the `!=` operator with `mz_now()`.
-
-## "Late Arriving Events" and Grace Period
-
-For various reasons, it's possible for records to arrive out of order.
-For example, network connectivity issues may cause a mobile device to emit data with a timestamp from the relatively distant past.
-How can you account for late arriving data in Materialize?
-
-Consider the temporal filter for the most recent hour's worth of records.
-
-```sql
-WHERE mz_now() <= event_ts + INTERVAL '1hr'
-```
-
-Suppose a record with a timestamp `11:00:01` arrives "late" with a virtual timestamp of `11:59:59` and you query this collection at a virtual timestamp of `12:00:00`.
-According to the temporal filter, the record is included in your result set!
-In an ideal world, it would have been included for the whole hour, but as Materialize can't (yet?) tell the future, the record is only included once it arrives.
-Since the record arrived late, it only made its appearance for a brief moment before being retracted just after `12:00:01` virtual time.
-
-Let's say another record comes in with a timestamp of `11:00:01`, but `mz_now()` has marched forward to `12:00:02`.
-Unfortunately, this record does not pass the filter and is excluded from processing.
-It was too late to be included.
-
-All this to say, if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
-This is often referred to as a **grace period**.
 
 ## Examples
 
@@ -240,3 +215,24 @@ The strategy for this example is to put an initial temporal filter on the input 
     Press `Ctrl+C` to exit the `SUBSCRIBE` when you are finished playing.
 
 From here, you could create a [Kafka sink](/sql/create-sink/) and use Kafka Connect to archive the historical results to a data warehouse (ignoring Kafka tombstone records that represent retracted results).
+
+## "Late Arriving Events" and Grace Period
+
+For various reasons, it's possible for records to arrive out of order.
+For example, network connectivity issues may cause a mobile device to emit data with a timestamp from the relatively distant past.
+How can you account for late arriving data in Materialize?
+
+Consider the temporal filter for the most recent hour's worth of records.
+
+```sql
+WHERE mz_now() <= event_ts + INTERVAL '1hr'
+```
+
+Suppose a record with a timestamp `11:00:00` arrives "late" with a virtual timestamp of `11:59:59` and you query this collection at a virtual timestamp of `12:00:00`.
+According to the temporal filter, the record is included for results as of virtual time `11:59:59` and retracted just after `12:00:00`.
+
+Let's say another record comes in with a timestamp of `11:00:00`, but `mz_now()` has marched forward to `12:00:01`.
+Unfortunately, this record does not pass the filter and is excluded from processing altogether.
+
+All this to say, if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
+This is often referred to as a **grace period**.
