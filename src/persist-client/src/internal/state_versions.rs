@@ -9,7 +9,6 @@
 
 //! A durable, truncatable log of versions of [State].
 
-#[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
@@ -33,7 +32,6 @@ use crate::internal::encoding::UntypedState;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
-#[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
 use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
@@ -812,7 +810,6 @@ pub struct StateVersionsIter<T> {
     key_codec: String,
     val_codec: String,
     diff_codec: String,
-    #[cfg(debug_assertions)]
     validator: ReferencedBlobValidator<T>,
 }
 
@@ -837,7 +834,6 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             key_codec,
             val_codec,
             diff_codec,
-            #[cfg(debug_assertions)]
             validator: ReferencedBlobValidator::default(),
         }
     }
@@ -872,17 +868,15 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         // no-op.
         if diff.seqno_to == self.state.seqno {
             let inspect = InspectDiff::FromInitial(&self.state);
-            #[cfg(debug_assertions)]
-            {
-                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
-            }
+
+            inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
+
             inspect_diff_fn(inspect);
         } else {
             let inspect = InspectDiff::Diff(&diff);
-            #[cfg(debug_assertions)]
-            {
-                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
-            }
+
+            inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
+
             inspect_diff_fn(inspect);
         }
 
@@ -890,10 +884,9 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         self.state
             .apply_diffs(&self.metrics, std::iter::once((diff, data)));
         assert_eq!(self.state.seqno, diff_seqno_to);
-        #[cfg(debug_assertions)]
-        {
-            self.validator.validate_against_state(&self.state);
-        }
+
+        self.validator.validate_against_state(&self.state);
+
         Some(&self.state)
     }
 
@@ -932,7 +925,6 @@ impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
     }
 }
 
-#[cfg(debug_assertions)]
 struct ReferencedBlobValidator<T> {
     // A copy of every batch and rollup referenced by some state iterator,
     // computed by scanning the full copy of state at each seqno.
@@ -944,7 +936,6 @@ struct ReferencedBlobValidator<T> {
     inc_rollups: BTreeSet<HollowRollup>,
 }
 
-#[cfg(debug_assertions)]
 impl<T> Default for ReferencedBlobValidator<T> {
     fn default() -> Self {
         Self {
@@ -956,7 +947,6 @@ impl<T> Default for ReferencedBlobValidator<T> {
     }
 }
 
-#[cfg(debug_assertions)]
 impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
     fn add_inc_blob(&mut self, x: HollowBlobRef<'_, T>) {
         match x {
