@@ -2554,7 +2554,7 @@ impl BinaryFunc {
             | AddTimestampTzInterval
             | SubTimestampTzInterval
             | AddTimeInterval
-            | SubTimeInterval => input1_type,
+            | SubTimeInterval => input1_type.nullable(in_nullable),
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
             | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
