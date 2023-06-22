@@ -2072,9 +2072,8 @@ pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflows_per_worker AS SELECT
-    ops.id,
+    addrs.address[1] AS id,
     ops.worker_id,
-    addrs.address[1] AS local_id,
     ops.name
 FROM
     mz_internal.mz_dataflow_addresses_per_worker addrs,
@@ -2089,7 +2088,7 @@ pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflows AS
-SELECT id, local_id, name
+SELECT id, name
 FROM mz_internal.mz_dataflows_per_worker
 WHERE worker_id = 0",
 };
@@ -2137,7 +2136,7 @@ FROM
 WHERE
     ops.id = addrs.id AND
     ops.worker_id = addrs.worker_id AND
-    dfs.local_id = addrs.address[1] AND
+    dfs.id = addrs.address[1] AND
     dfs.worker_id = addrs.worker_id",
 };
 

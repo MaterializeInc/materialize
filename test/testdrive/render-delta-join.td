@@ -58,12 +58,9 @@ count
         (SELECT id
          FROM mz_internal.mz_dataflow_addresses
          WHERE address[1] =
-             (SELECT address[1]
-              FROM mz_internal.mz_dataflow_addresses
-              WHERE id =
-                  (SELECT id
-                   FROM mz_internal.mz_dataflows
-                   WHERE name LIKE '%.delta_join%')))
+             (SELECT id
+              FROM mz_internal.mz_dataflows
+              WHERE name LIKE '%.delta_join%'))
     AND sent > 100
   ORDER BY sent;
 sent
