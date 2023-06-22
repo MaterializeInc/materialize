@@ -39,9 +39,11 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, 
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
-    CatalogTypeDetails, ObjectType, SessionCatalog,
+    CatalogTypeDetails, ObjectType, SessionCatalog, SystemObjectType,
 };
-use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier};
+use mz_sql::names::{
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier, SystemObjectId,
+};
 use mz_sql::plan::{
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
@@ -1101,7 +1103,7 @@ impl Coordinator {
             privileges: &PrivilegeMap,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
-            object_type: ObjectType,
+            object_type: SystemObjectType,
             object_name: &str,
             catalog: &Catalog,
         ) {
@@ -1144,7 +1146,7 @@ impl Coordinator {
                 entry.privileges(),
                 dropped_roles,
                 &mut dependent_objects,
-                entry.item().typ().into(),
+                SystemObjectType::Object(entry.item().typ().into()),
                 &entry.name().item,
                 self.catalog(),
             );
@@ -1160,7 +1162,7 @@ impl Coordinator {
                 &database.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                ObjectType::Database,
+                SystemObjectType::Object(ObjectType::Database),
                 database.name(),
                 self.catalog(),
             );
@@ -1175,7 +1177,7 @@ impl Coordinator {
                     &schema.privileges,
                     dropped_roles,
                     &mut dependent_objects,
-                    ObjectType::Schema,
+                    SystemObjectType::Object(ObjectType::Schema),
                     &schema.name().schema,
                     self.catalog(),
                 );
@@ -1192,7 +1194,7 @@ impl Coordinator {
                 &cluster.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                ObjectType::Cluster,
+                SystemObjectType::Object(ObjectType::Cluster),
                 cluster.name(),
                 self.catalog(),
             );
@@ -1205,6 +1207,14 @@ impl Coordinator {
                 }
             }
         }
+        privilege_check(
+            self.catalog().system_privileges(),
+            dropped_roles,
+            &mut dependent_objects,
+            SystemObjectType::System,
+            "SYSTEM",
+            self.catalog(),
+        );
         for (default_privilege_object, default_privilege_acl_items) in
             self.catalog.default_privileges()
         {
@@ -1263,14 +1273,14 @@ impl Coordinator {
                 .map(|(object_id, _)| object_id)
                 .collect();
             for invalid_revoke in invalid_revokes {
-                let name = session_catalog.get_object_name(&invalid_revoke);
+                let name = session_catalog.get_system_object_name(&invalid_revoke);
                 session.add_notice(AdapterNotice::CannotRevoke { name });
             }
         }
 
         let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
             catalog::Op::UpdatePrivilege {
-                object_id,
+                target_id: object_id,
                 privilege,
                 variant: UpdatePrivilegeVariant::Revoke,
             }
@@ -3798,21 +3808,18 @@ impl Coordinator {
 
         for UpdatePrivilege {
             acl_mode,
-            object_id,
+            target_id,
             grantor,
         } in update_privileges
         {
-            self.catalog()
-                .ensure_not_reserved_object(&object_id, session.conn_id())?;
-
-            let actual_object_type = catalog.get_object_type(&object_id);
+            let actual_object_type = catalog.get_system_object_type(&target_id);
             // For all relations we allow all applicable table privileges, but send a warning if the
             // privilege isn't actually applicable to the object type.
             if actual_object_type.is_relation() {
                 let applicable_privileges = rbac::all_object_privileges(actual_object_type);
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
-                    let object_name = catalog.get_object_name(&object_id);
+                    let object_name = catalog.get_system_object_name(&target_id);
                     warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
                         non_applicable_privileges,
                         object_type: actual_object_type,
@@ -3821,9 +3828,14 @@ impl Coordinator {
                 }
             }
 
+            if let SystemObjectId::Object(object_id) = &target_id {
+                self.catalog()
+                    .ensure_not_reserved_object(object_id, session.conn_id())?;
+            }
+
             let privileges = self
                 .catalog()
-                .get_privileges(&object_id, session.conn_id())
+                .get_privileges(&target_id, session.conn_id())
                 // Should be unreachable since the parser will refuse to parse grant/revoke
                 // statements on objects without privileges.
                 .ok_or(AdapterError::Unsupported(
@@ -3842,7 +3854,7 @@ impl Coordinator {
                         if !existing_privilege.acl_mode.contains(acl_mode) =>
                     {
                         ops.push(catalog::Op::UpdatePrivilege {
-                            object_id: object_id.clone(),
+                            target_id: target_id.clone(),
                             privilege: MzAclItem {
                                 grantee: *grantee,
                                 grantor,
@@ -3858,7 +3870,7 @@ impl Coordinator {
                             .is_empty() =>
                     {
                         ops.push(catalog::Op::UpdatePrivilege {
-                            object_id: object_id.clone(),
+                            target_id: target_id.clone(),
                             privilege: MzAclItem {
                                 grantee: *grantee,
                                 grantor,

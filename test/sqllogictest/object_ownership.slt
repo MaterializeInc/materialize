@@ -2145,11 +2145,22 @@ GRANT SELECT ON v TO materialize;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO materialize;
+----
+COMPLETE 0
+
 query TT
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system
 v  materialize=r/mz_system
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+materialize=B/mz_system
+mz_system=RBN/mz_system
 
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
@@ -2180,6 +2191,11 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
 ----
 v  mz_system=r/mz_system
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+mz_system=RBN/mz_system
 
 simple conn=mz_system,user=mz_system
 DROP VIEW v;

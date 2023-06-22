@@ -14,7 +14,7 @@ use mz_controller::clusters::ClusterId;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::RoleAttributes;
+use mz_sql::catalog::{RoleAttributes, SystemObjectType};
 use mz_sql::names::{DatabaseId, SchemaId, PUBLIC_ROLE_NAME};
 use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION};
@@ -227,7 +227,10 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(mz_sql::catalog::ObjectType::Database).into_proto(),
+                rbac::all_object_privileges(SystemObjectType::Object(
+                    mz_sql::catalog::ObjectType::Database,
+                ))
+                .into_proto(),
             ),
         })
     };
@@ -319,18 +322,18 @@ pub async fn initialize(
         ]
         .into_iter()
         // Optionally add the bootstrap role to the public schema.
-        .chain(
-            bootstrap_role
-                .as_ref()
-                .map(|(role_id, _)| proto::MzAclItem {
-                    grantee: Some(role_id.clone()),
-                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                    acl_mode: Some(
-                        rbac::all_object_privileges(mz_sql::catalog::ObjectType::Schema)
-                            .into_proto(),
-                    ),
-                }),
-        )
+        .chain(bootstrap_role.as_ref().map(|(role_id, _)| {
+            proto::MzAclItem {
+                grantee: Some(role_id.clone()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                acl_mode: Some(
+                    rbac::all_object_privileges(SystemObjectType::Object(
+                        mz_sql::catalog::ObjectType::Schema,
+                    ))
+                    .into_proto(),
+                ),
+            }
+        }))
         .collect(),
     };
 
@@ -371,7 +374,10 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(mz_sql::catalog::ObjectType::Cluster).into_proto(),
+                rbac::all_object_privileges(SystemObjectType::Object(
+                    mz_sql::catalog::ObjectType::Cluster,
+                ))
+                .into_proto(),
             ),
         });
     };

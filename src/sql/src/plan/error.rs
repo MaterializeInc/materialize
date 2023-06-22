@@ -29,7 +29,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::parser::ParserError;
 
-use crate::catalog::{CatalogError, CatalogItemType, ObjectType};
+use crate::catalog::{CatalogError, CatalogItemType, SystemObjectType};
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
@@ -87,13 +87,13 @@ pub enum PlanError {
     InvalidId(GlobalId),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
-        expected_type: ObjectType,
-        actual_type: ObjectType,
+        expected_type: SystemObjectType,
+        actual_type: SystemObjectType,
         object_name: String,
     },
     InvalidPrivilegeTypes {
         invalid_privileges: AclMode,
-        object_type: ObjectType,
+        object_type: SystemObjectType,
         object_name: Option<String>,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),

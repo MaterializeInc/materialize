@@ -1837,21 +1837,99 @@ sch  materialize=UC/materialize
 ## System
 
 query B
-SELECT has_system_privilege('mz_system', 'CREATEROLE')
+SELECT has_system_privilege('joe', 'CREATEDB')
+----
+false
+
+query B
+SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREATEDB')
+----
+false
+
+statement ok
+GRANT CREATEDB ON SYSTEM TO joe
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+joe=B/mz_system
+mz_system=RBN/mz_system
+
+query B
+SELECT has_system_privilege('joe', 'CREATEDB')
 ----
 true
 
 query B
-SELECT has_system_privilege('mz_system', 'CREATEDB')
+SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREATEDB')
 ----
 true
+
+### Duplicate grants have no effect
+statement ok
+GRANT CREATEDB ON SYSTEM TO joe
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+joe=B/mz_system
+mz_system=RBN/mz_system
+
+statement ok
+GRANT CREATEROLE, CREATECLUSTER ON SYSTEM TO PUBLIC
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+=RN/mz_system
+joe=B/mz_system
+mz_system=RBN/mz_system
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE CREATEDB ON SYSTEM FROM joe
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+=RN/mz_system
+mz_system=RBN/mz_system
 
 query B
-SELECT has_system_privilege('mz_system', 'CREATECLUSTER')
+SELECT has_system_privilege('joe', 'CREATEDB')
 ----
-true
+false
 
-# TODO(jkosh44) Add tests when GRANT is implemented for system privileges
+query B
+SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREATEDB')
+----
+false
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE CREATEDB ON SYSTEM FROM joe
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+=RN/mz_system
+mz_system=RBN/mz_system
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE CREATEROLE, CREATECLUSTER ON SYSTEM FROM PUBLIC
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+mz_system=RBN/mz_system
 
 ## Test misc error scenarios
 
@@ -2055,13 +2133,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 'v1'
 ----
 v1  mz_system=r/mz_system
 
-## System
+simple conn=mz_system,user=mz_system
+GRANT ALL ON SYSTEM TO joe
+----
+COMPLETE 0
 
-statement error SYSTEM PRIVILEGES not yet supported
-GRANT CREATECLUSTER ON SYSTEM TO test_role
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+joe=RBN/mz_system
+mz_system=RBN/mz_system
 
-statement error SYSTEM PRIVILEGES not yet supported
-REVOKE CREATEROLE ON SYSTEM FROM test_role
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON SYSTEM FROM joe
+----
+COMPLETE 0
+
+query T
+SELECT privileges::text FROM mz_system_privileges
+----
+mz_system=RBN/mz_system
 
 ## Test system objects
 
@@ -2411,7 +2502,20 @@ NULL
 
 ### System
 
-# TODO(jkosh44) Add tests when GRANT is implemented for system privileges
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_system_privilege('joe', 'CREATEROLE, CREATECLUSTER')
+----
+true
 
 ### Cluster
 
@@ -2536,6 +2640,11 @@ true
 
 ### System
 
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM materialize
+----
+COMPLETE 0
+
 query B
 SELECT has_system_privilege('materialize', 'CREATEDB')
 ----
@@ -2546,7 +2655,20 @@ SELECT has_system_privilege('CREATEDB')
 ----
 false
 
-# TODO(jkosh44) Add tests when GRANT is implemented for system privileges
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_system_privilege('materialize', 'CREATEDB')
+----
+true
+
+query B
+SELECT has_system_privilege('CREATEDB')
+----
+true
 
 ### Cluster
 

@@ -57,7 +57,9 @@ use crate::catalog::{
     CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
     RoleAttributes,
 };
-use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
+use crate::names::{
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId,
+};
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -642,7 +644,7 @@ pub struct DropOwnedPlan {
     /// All object IDs to drop.
     pub drop_ids: Vec<ObjectId>,
     /// The privileges to revoke.
-    pub privilege_revokes: Vec<(ObjectId, MzAclItem)>,
+    pub privilege_revokes: Vec<(SystemObjectId, MzAclItem)>,
     /// The default privileges to revoke.
     pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
 }
@@ -964,8 +966,8 @@ pub struct RevokeRolePlan {
 pub struct UpdatePrivilege {
     /// The privileges being granted/revoked on an object.
     pub acl_mode: AclMode,
-    /// The ID of the object.
-    pub object_id: ObjectId,
+    /// The ID of the object receiving privileges.
+    pub target_id: SystemObjectId,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }

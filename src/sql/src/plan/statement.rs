@@ -24,12 +24,12 @@ use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunne
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, ObjectType,
-    SessionCatalog,
+    SessionCatalog, SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
+    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -719,6 +719,13 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_object_type(&self, id: &ObjectId) -> ObjectType {
         self.catalog.get_object_type(id)
+    }
+
+    pub fn get_system_object_type(&self, id: &SystemObjectId) -> SystemObjectType {
+        match id {
+            SystemObjectId::Object(id) => SystemObjectType::Object(self.get_object_type(id)),
+            SystemObjectId::System => SystemObjectType::System,
+        }
     }
 
     /// Returns an error if the named `FeatureFlag` is not set to `on`.
