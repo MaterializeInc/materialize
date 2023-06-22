@@ -3637,11 +3637,11 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Timestamp, Interval) => AddTimestampInterval => Timestamp, 2066;
             params!(Interval, Timestamp) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
-            } => Interval, 2553;
+            } => Timestamp, 2553;
             params!(TimestampTz, Interval) => AddTimestampTzInterval => TimestampTz, 1327;
             params!(Interval, TimestampTz) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
-            } => Interval, 2554;
+            } => TimestampTz, 2554;
             params!(Date, Interval) => AddDateInterval => Timestamp, 1076;
             params!(Interval, Date) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateInterval)))
@@ -3653,7 +3653,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Time, Interval) => AddTimeInterval => Time, 1800;
             params!(Interval, Time) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
-            } => Interval, 1849;
+            } => Time, 1849;
             params!(Numeric, Numeric) => AddNumeric => Numeric, 1758;
             params!(RangeAny, RangeAny) => RangeUnion => RangeAny, 3898;
         },
