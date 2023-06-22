@@ -80,7 +80,7 @@ pub struct ComputeState {
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
-    pub max_result_size: u32,
+    max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: usize,
     /// Implementation to use for rendering linear joins.
@@ -88,10 +88,39 @@ pub struct ComputeState {
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
-    pub tracing_handle: Arc<TracingHandle>,
+    tracing_handle: Arc<TracingHandle>,
 }
 
 impl ComputeState {
+    /// Construct a new `ComputeState`.
+    pub fn new(
+        traces: TraceManager,
+        persist_clients: Arc<PersistClientCache>,
+        metrics: ComputeMetrics,
+        tracing_handle: Arc<TracingHandle>,
+    ) -> Self {
+        let command_history = ComputeCommandHistory::new(metrics.for_history());
+
+        Self {
+            traces,
+            sink_tokens: Default::default(),
+            subscribe_response_buffer: Default::default(),
+            sink_write_frontiers: Default::default(),
+            flow_control_probes: Default::default(),
+            pending_peeks: Default::default(),
+            reported_frontiers: Default::default(),
+            dropped_collections: Default::default(),
+            compute_logger: None,
+            persist_clients,
+            command_history,
+            max_result_size: u32::MAX,
+            dataflow_max_inflight_bytes: usize::MAX,
+            linear_join_impl: Default::default(),
+            metrics,
+            tracing_handle,
+        }
+    }
+
     /// Return whether a collection with the given ID exists.
     pub fn collection_exists(&self, id: GlobalId) -> bool {
         self.traces.get(&id).is_some() || self.sink_tokens.contains_key(&id)
@@ -237,40 +266,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         for (id, frontier) in list {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
-
-                let is_subscribe = self.compute_state.sink_tokens.contains_key(&id)
-                    && !self.compute_state.sink_write_frontiers.contains_key(&id);
-
-                // Sink-specific work:
-                self.compute_state.sink_write_frontiers.remove(&id);
-                self.compute_state.sink_tokens.remove(&id);
-                // Index-specific work:
-                self.compute_state.traces.del_trace(&id);
-                self.compute_state.flow_control_probes.remove(&id);
-
-                // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
-                let prev_frontier = self
-                    .compute_state
-                    .reported_frontiers
-                    .remove(&id)
-                    .expect("Dropped compute collection with no frontier");
-                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::ExportDropped { id });
-                    if let Some(time) = prev_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                    }
-                }
-
-                // We need to emit a final response reporting the dropping of this collection,
-                // unless:
-                //  * The collection is a subscribe, in which case we will emit a
-                //    `SubscribeResponse::Dropped` independently.
-                //  * The collection has already advanced to the empty frontier, in which case
-                //    the final `FrontierUppers` response already serves the purpose of reporting
-                //    the end of the dataflow.
-                if !is_subscribe && !prev_frontier.is_empty() {
-                    self.compute_state.dropped_collections.push(id);
-                }
+                self.drop_collection(id);
             } else {
                 self.compute_state
                     .traces
@@ -328,6 +324,44 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             } else {
                 self.compute_state.pending_peeks.insert(uuid, peek);
             }
+        }
+    }
+
+    fn drop_collection(&mut self, id: GlobalId) {
+        let is_subscribe = self.compute_state.sink_tokens.contains_key(&id)
+            && !self.compute_state.sink_write_frontiers.contains_key(&id);
+
+        // Sink-specific work:
+        self.compute_state.sink_write_frontiers.remove(&id);
+        self.compute_state.sink_tokens.remove(&id);
+        // Index-specific work:
+        self.compute_state.traces.del_trace(&id);
+        self.compute_state.flow_control_probes.remove(&id);
+
+        // Work common to sinks and indexes:
+
+        // Remove removing frontier tracking and logging.
+        let prev_frontier = self
+            .compute_state
+            .reported_frontiers
+            .remove(&id)
+            .expect("Dropped compute collection with no frontier");
+        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+            logger.log(ComputeEvent::ExportDropped { id });
+            if let Some(time) = prev_frontier.logging_time() {
+                logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
+            }
+        }
+
+        // We need to emit a final response reporting the dropping of this collection,
+        // unless:
+        //  * The collection is a subscribe, in which case we will emit a
+        //    `SubscribeResponse::Dropped` independently.
+        //  * The collection has already advanced to the empty frontier, in which case
+        //    the final `FrontierUppers` response already serves the purpose of reporting
+        //    the end of the dataflow.
+        if !is_subscribe && !prev_frontier.is_empty() {
+            self.compute_state.dropped_collections.push(id);
         }
     }
 
