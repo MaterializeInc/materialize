@@ -299,10 +299,10 @@ Field            | Type       | Meaning
 `id`             | [`text`]   | Materialize's unique ID for the role.
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
 `name`           | [`text`]   | The name of the role.
-`inherit`        | [`bool`]   | Indicates whether the role has inheritance of privileges.
-`create_role`    | [`bool`]   | Indicates whether the role is allowed to create, alter, drop, grant, and revoke roles.
-`create_db`      | [`bool`]   | Indicates whether the role is allowed to create databases.
-`create_cluster` | [`bool`]   | Indicates whether the role is allowed to create clusters.
+`inherit`        | [`boolean`]   | Indicates whether the role has inheritance of privileges.
+`create_role`    | [`boolean`]   | Indicates whether the role is allowed to create, alter, drop, grant, and revoke roles.
+`create_db`      | [`boolean`]   | Indicates whether the role is allowed to create databases.
+`create_cluster` | [`boolean`]   | Indicates whether the role is allowed to create clusters.
 
 ### `mz_role_members`
 
@@ -403,7 +403,7 @@ The `mz_system_privileges` table contains information on system privileges.
 
 Field         | Type     | Meaning
 --------------|----------|--------
-`privileges` | [`mz_aclitem`] | The privileges belonging to the system.
+`privileges` | [`mz_aclitem array`] | The privileges belonging to the system.
 
 ### `mz_tables`
 
@@ -455,3 +455,5 @@ Field          | Type                 | Meaning
 [`text array`]: /sql/types/array
 [`record`]: /sql/types/record
 [`uint8`]: /sql/types/uint8
+[`uint4`]: /sql/types/uint4
+[`mz_aclitem array`]: /sql/types/mz_aclitem
