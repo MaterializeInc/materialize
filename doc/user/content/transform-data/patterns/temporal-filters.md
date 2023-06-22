@@ -19,7 +19,7 @@ Here is a typical temporal filter that considers records whose timestamps are wi
 WHERE mz_now() <= event_ts + INTERVAL '5min'
 ```
 
-Consider this diagram that shows a record `E` falling out of the result set as time moves forward:
+Consider this diagram that shows a record `B` falling out of the result set as time moves forward:
 
 ![temporal filter diagram](/images/temporal-filter.svg)
 
