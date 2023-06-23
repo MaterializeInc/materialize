@@ -126,6 +126,11 @@ known_errors = [
     "string is not a valid identifier:",  # Expected in parse_ident
     "invalid datepart",
     "pg_cancel_backend in this position not yet supported",
+    "unrecognized configuration parameter",
+    "numeric field overflow",
+    "uint8 out of range",
+    "interval out of range",
+    "timezone interval must not contain months or years",
 ]
 
 
