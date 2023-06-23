@@ -153,6 +153,9 @@ pub enum PlanError {
         name: String,
         supported_azs: BTreeSet<String>,
     },
+    DuplicatePrivatelinkAvailabilityZone {
+        duplicate_azs: BTreeSet<String>,
+    },
     InvalidSchemaName,
     ItemAlreadyExists {
         name: String,
@@ -261,6 +264,10 @@ impl PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { supported_azs, ..} => {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
+            }
+            Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
+                let duplicate_azs  = duplicate_azs.iter().join("\n  ");
+                Some(format!("Availability zone IDs must be unique. The following zone IDs were duplicates:\n  {}", duplicate_azs))
             }
             Self::SubsourceNameConflict { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
@@ -441,6 +448,10 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
+            Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
+                let duplicate_azs  = duplicate_azs.iter().join("\n  ");
+                write!(f, "duplicate AWS PrivateLink availability zones {}", duplicate_azs.quoted())
+            },
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
