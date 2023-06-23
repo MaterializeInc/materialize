@@ -4087,6 +4087,7 @@ mod tests {
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::func::OP_IMPLS;
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
+    use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
@@ -4210,6 +4211,32 @@ mod tests {
             };
 
             let mut all_oids = BTreeSet::new();
+
+            // A function to determine if two oids are equivalent enough for these tests. We don't
+            // support some types, so map exceptions here.
+            let equivalent_types: BTreeSet<(Option<u32>, Option<u32>)> = BTreeSet::from_iter(
+                [
+                    // We don't support NAME.
+                    (Type::NAME, Type::TEXT),
+                    (Type::NAME_ARRAY, Type::TEXT_ARRAY),
+                    // We don't support time with time zone.
+                    (Type::TIME, Type::TIMETZ),
+                    (Type::TIME_ARRAY, Type::TIMETZ_ARRAY),
+                ]
+                .map(|(a, b)| (Some(a.oid()), Some(b.oid()))),
+            );
+            let ignore_return_types: BTreeSet<u32> = BTreeSet::from([
+                1619, // pg_typeof: TODO: We now have regtype and can correctly implement this.
+            ]);
+            let is_same_type = |fn_oid: u32, a: Option<u32>, b: Option<u32>| -> bool {
+                if ignore_return_types.contains(&fn_oid) {
+                    return true;
+                }
+                if equivalent_types.contains(&(a, b)) || equivalent_types.contains(&(b, a)) {
+                    return true;
+                }
+                a == b
+            };
 
             for builtin in BUILTINS::iter() {
                 match builtin {
@@ -4366,19 +4393,18 @@ mod tests {
 
                             let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
 
-                            if imp_return_oid != pg_fn.ret_oid {
-                                println!(
+                            assert!(
+                                is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
                             );
-                            }
 
-                            if imp.return_is_set != pg_fn.ret_set {
-                                panic!(
+                            assert_eq!(
+                                imp.return_is_set,
+                                pg_fn.ret_set,
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
-                            }
                         }
                     }
                     _ => (),
