@@ -11,7 +11,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -113,11 +113,6 @@ pub enum ComputeEvent {
         /// Operator index
         operator: usize,
     },
-    /// All operators of a dataflow have shut down.
-    DataflowShutdown {
-        /// Timely worker index of the dataflow.
-        dataflow_index: usize,
-    },
 }
 
 /// A logged peek event.
@@ -181,7 +176,6 @@ pub(super) fn construct<A: Allocate + 'static>(
         let (mut frontier_delay_out, frontier_delay) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut peek_duration_out, peek_duration) = demux.new_output();
-        let (mut shutdown_duration_out, shutdown_duration) = demux.new_output();
         let (mut arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
         let (mut arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
         let (mut arrangement_heap_allocations_out, arrangement_heap_allocations) =
@@ -198,7 +192,6 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let mut frontier_delay = frontier_delay_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
-                let mut shutdown_duration = shutdown_duration_out.activate();
                 let mut arrangement_heap_size = arrangement_heap_size_out.activate();
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
@@ -214,7 +207,6 @@ pub(super) fn construct<A: Allocate + 'static>(
                         frontier_delay: frontier_delay.session(&cap),
                         peek: peek.session(&cap),
                         peek_duration: peek_duration.session(&cap),
-                        shutdown_duration: shutdown_duration.session(&cap),
                         arrangement_heap_size: arrangement_heap_size.session(&cap),
                         arrangement_heap_capacity: arrangement_heap_capacity.session(&cap),
                         arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
@@ -288,13 +280,7 @@ pub(super) fn construct<A: Allocate + 'static>(
         let peek_duration = peek_duration.as_collection().map(move |bucket| {
             Row::pack_slice(&[
                 Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::UInt64(bucket.try_into().expect("bucket too big")),
-            ])
-        });
-        let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
-            Row::pack_slice(&[
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::UInt64(bucket.try_into().expect("bucket too big")),
+                Datum::UInt64(bucket.try_into().expect("pow too big")),
             ])
         });
 
@@ -326,7 +312,6 @@ pub(super) fn construct<A: Allocate + 'static>(
             (FrontierDelay, frontier_delay),
             (PeekCurrent, peek_current),
             (PeekDuration, peek_duration),
-            (ShutdownDuration, shutdown_duration),
             (ArrangementHeapSize, arrangement_heap_size),
             (ArrangementHeapCapacity, arrangement_heap_capacity),
             (ArrangementHeapAllocations, arrangement_heap_allocations),
@@ -376,13 +361,7 @@ struct DemuxState<A: Allocate> {
     export_dataflows: BTreeMap<GlobalId, usize>,
     /// Maps dataflow exports to their imports and frontier delay tracking state.
     export_imports: BTreeMap<GlobalId, BTreeMap<GlobalId, FrontierDelayState>>,
-    /// Maps live dataflows to counts of their exports.
-    dataflow_export_counts: BTreeMap<usize, u32>,
-    /// Maps dropped dataflows to their drop time.
-    dataflow_drop_times: BTreeMap<usize, Duration>,
-    /// Contains dataflows that have shut down but not yet been dropped.
-    shutdown_dataflows: BTreeSet<usize>,
-    /// Maps pending peeks to their installation time.
+    /// Maps pending peeks to their installation time (in ns).
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
@@ -394,9 +373,6 @@ impl<A: Allocate> DemuxState<A> {
             worker,
             export_dataflows: Default::default(),
             export_imports: Default::default(),
-            dataflow_export_counts: Default::default(),
-            dataflow_drop_times: Default::default(),
-            shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
         }
@@ -427,7 +403,6 @@ struct DemuxOutput<'a> {
     frontier_delay: OutputSession<'a, FrontierDelayDatum>,
     peek: OutputSession<'a, Peek>,
     peek_duration: OutputSession<'a, u128>,
-    shutdown_duration: OutputSession<'a, u128>,
     arrangement_heap_size: OutputSession<'a, ArrangementHeapDatum>,
     arrangement_heap_capacity: OutputSession<'a, ArrangementHeapDatum>,
     arrangement_heap_allocations: OutputSession<'a, ArrangementHeapDatum>,
@@ -539,7 +514,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             ArrangementHeapSizeOperatorDrop { operator } => {
                 self.handle_arrangement_heap_size_operator_dropped(operator)
             }
-            DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
         }
     }
 
@@ -550,11 +524,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         self.state.export_dataflows.insert(id, dataflow_id);
         self.state.export_imports.insert(id, BTreeMap::new());
-        *self
-            .state
-            .dataflow_export_counts
-            .entry(dataflow_id)
-            .or_default() += 1;
     }
 
     fn handle_export_dropped(&mut self, id: GlobalId) {
@@ -562,18 +531,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         if let Some(dataflow_id) = self.state.export_dataflows.remove(&id) {
             let datum = ExportDatum { id, dataflow_id };
             self.output.export.give((datum, ts, -1));
-
-            match self.state.dataflow_export_counts.get_mut(&dataflow_id) {
-                entry @ Some(0) | entry @ None => {
-                    error!(
-                        export = ?id,
-                        dataflow = ?dataflow_id,
-                        "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
-                    );
-                }
-                Some(1) => self.handle_dataflow_dropped(dataflow_id),
-                Some(count) => *count -= 1,
-            }
         } else {
             error!(
                 export = ?id,
@@ -604,38 +561,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 export = ?id,
                 "missing export_imports entry at time of export drop"
             );
-        }
-    }
-
-    fn handle_dataflow_dropped(&mut self, id: usize) {
-        self.state.dataflow_export_counts.remove(&id);
-
-        if self.state.shutdown_dataflows.remove(&id) {
-            // Dataflow has already shut down before it was dropped.
-            self.output.shutdown_duration.give((0, self.ts(), 1));
-        } else {
-            // Dataflow has not yet shut down.
-            let existing = self.state.dataflow_drop_times.insert(id, self.time);
-            if existing.is_some() {
-                error!(dataflow = ?id, "dataflow already dropped");
-            }
-        }
-    }
-
-    fn handle_dataflow_shutdown(&mut self, id: usize) {
-        if let Some(start) = self.state.dataflow_drop_times.remove(&id) {
-            // Dataflow has alredy been dropped.
-            let elapsed_ns = self.time.saturating_sub(start).as_nanos();
-            let elapsed_pow = elapsed_ns.next_power_of_two();
-            self.output
-                .shutdown_duration
-                .give((elapsed_pow, self.ts(), 1));
-        } else {
-            // Dataflow has not yet been dropped.
-            let was_new = self.state.shutdown_dataflows.insert(id);
-            if !was_new {
-                error!(dataflow = ?id, "dataflow already shutdown");
-            }
         }
     }
 

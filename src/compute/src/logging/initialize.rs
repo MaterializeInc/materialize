@@ -94,7 +94,6 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             self.worker,
             self.config,
             self.t_event_queue.clone(),
-            Rc::clone(&self.shared_state),
         ));
         traces.extend(super::reachability::construct(
             self.worker,
@@ -132,18 +131,21 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
     }
 
     fn register_loggers(&self) {
-        let t_logger = self.simple_logger(self.t_event_queue.clone());
-        let r_logger = self.reachability_logger();
-        let d_logger = self.simple_logger(self.d_event_queue.clone());
-        let c_logger = self.simple_logger(self.c_event_queue.clone());
-
-        let mut register = self.worker.log_register();
-        register.insert_logger("timely", t_logger);
-        register.insert_logger("timely/reachability", r_logger);
-        register.insert_logger("differential/arrange", d_logger);
-        register.insert_logger("materialize/compute", c_logger.clone());
-
-        self.shared_state.borrow_mut().compute_logger = Some(c_logger);
+        self.worker
+            .log_register()
+            .insert_logger("timely", self.simple_logger(self.t_event_queue.clone()));
+        self.worker
+            .log_register()
+            .insert_logger("timely/reachability", self.reachability_logger());
+        self.worker.log_register().insert_logger(
+            "differential/arrange",
+            self.simple_logger(self.d_event_queue.clone()),
+        );
+        let compute_logger = self.simple_logger(self.c_event_queue.clone());
+        self.worker
+            .log_register()
+            .insert_logger("materialize/compute", compute_logger.clone());
+        self.shared_state.borrow_mut().compute_logger = Some(compute_logger);
     }
 
     fn simple_logger<E: 'static>(&self, event_queue: EventQueue<E>) -> Logger<E> {
