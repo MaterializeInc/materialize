@@ -228,8 +228,6 @@ bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_ra
 bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  5  time  NULL  true
 bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  1  id  NULL  false
 bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
-bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u7_primary_idx  2  duration_ns  NULL  false
 bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  1  channel_id  NULL  false
 bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  2  from_worker_id  NULL  false
 bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  3  to_worker_id  NULL  false
@@ -392,7 +390,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-23
+22
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -405,7 +403,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-116
+112
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -413,7 +411,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-93
+90
 
 statement error nvalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;

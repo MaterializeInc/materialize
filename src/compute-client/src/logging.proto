@@ -55,7 +55,6 @@ message ProtoComputeLog {
         google.protobuf.Empty arrangement_heap_size = 8;
         google.protobuf.Empty arrangement_heap_capacity = 9;
         google.protobuf.Empty arrangement_heap_allocations = 10;
-        google.protobuf.Empty shutdown_duration = 11;
     }
 }
 message ProtoLogVariant {

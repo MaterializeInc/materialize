@@ -308,7 +308,6 @@ mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresse
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_introspection    {id,worker_id}
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
-mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
