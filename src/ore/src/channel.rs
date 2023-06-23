@@ -15,8 +15,6 @@
 
 //! Channel utilities and extensions.
 
-use std::collections::VecDeque;
-
 use async_trait::async_trait;
 
 /// Extensions for the receiving end of asynchronous channels.
@@ -43,24 +41,24 @@ pub trait ReceiverExt<T: Send> {
     /// Otherwise a good value is probably a fraction of the total channel size, or however large
     /// a batch that your receiving component can handle.
     ///
-    /// TODO(parkmycar): We should refactor this to use `impl Iterator` instead of `VecDeque` when
+    /// TODO(parkmycar): We should refactor this to use `impl Iterator` instead of `Vec` when
     /// "impl trait in trait" is supported.
-    async fn recv_many(&mut self, max: usize) -> Option<VecDeque<T>>;
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<T>>;
 }
 
 #[async_trait]
 impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
-    async fn recv_many(&mut self, max: usize) -> Option<VecDeque<T>> {
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<T>> {
         // Wait for a value to be ready.
         let first = self.recv().await?;
-        let mut buffer = VecDeque::from([first]);
+        let mut buffer = Vec::from([first]);
 
         // Note(parkmycar): It's very important for cancelation safety that we don't add any more
         // .await points other than the initial one.
 
         // Pull all of the remaining values off the channel.
         while let Ok(v) = self.try_recv() {
-            buffer.push_back(v);
+            buffer.push(v);
 
             // Break so we don't loop here continuously.
             if buffer.len() >= max {
@@ -74,17 +72,17 @@ impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
 
 #[async_trait]
 impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::UnboundedReceiver<T> {
-    async fn recv_many(&mut self, max: usize) -> Option<VecDeque<T>> {
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<T>> {
         // Wait for a value to be ready.
         let first = self.recv().await?;
-        let mut buffer = VecDeque::from([first]);
+        let mut buffer = Vec::from([first]);
 
         // Note(parkmycar): It's very important for cancelation safety that we don't add any more
         // .await points other than the initial one.
 
         // Pull all of the remaining values off the channel.
         while let Ok(v) = self.try_recv() {
-            buffer.push_back(v);
+            buffer.push(v);
 
             // Break so we don't loop here continuously.
             if buffer.len() >= max {
