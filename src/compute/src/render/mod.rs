@@ -106,6 +106,8 @@ use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::izip;
 use mz_compute_client::plan::Plan;
@@ -131,9 +133,6 @@ use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::extensions::collection::ConsolidateExt;
-use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::LogImportFrontiers;
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::typedefs::{ErrSpine, RowKeySpine};
@@ -565,12 +564,12 @@ where
                 let oks = oks
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .mz_arrange("Arrange export iterative");
+                    .arrange_named("Arrange export iterative");
                 oks.stream.probe_notify_with(probes);
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .mz_arrange("Arrange export iterative err");
+                    .arrange_named("Arrange export iterative err");
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -653,7 +652,7 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.mz_consolidate::<RowKeySpine<_, _, _>>("LetRecConsolidation");
+                let mut oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation");
                 if let Some(token) = &self.shutdown_token.get_inner() {
                     oks = oks.with_token(Weak::clone(token));
                 }
@@ -687,10 +686,9 @@ where
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
-                let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
-                    .mz_arrange::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
-                    .mz_reduce_abelian::<_, ErrSpine<_, _, _>>(
+                    .arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
+                    .reduce_abelian::<_, ErrSpine<_, _, _>>(
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), 1)),
                     )
