@@ -20,8 +20,8 @@ use std::collections::VecDeque;
 use async_trait::async_trait;
 
 /// Extensions for the receiving end of asynchronous channels.
-#[async_trait(?Send)]
-pub trait ReceiverExt<T> {
+#[async_trait]
+pub trait ReceiverExt<T: Send> {
     /// Receives all of the currently buffered elements on the channel, up to some max.
     ///
     /// This method returns `None` if the channel has been closed and there are no remaining
@@ -30,11 +30,26 @@ pub trait ReceiverExt<T> {
     /// If there are no messages in the channel's buffer, but the channel is not yet closed, this
     /// method will sleep until a message is sent or the channel is closed. When woken it will
     /// return up to max currently buffered elements.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv_many` is used as the event in a `select!` statement
+    /// and some other branch completes first, it is guaranteed that no messages were received on
+    /// this channel.
+    ///
+    /// # Max Buffer Size
+    ///
+    /// The provided max buffer size should always be less than the total capacity of the channel.
+    /// Otherwise a good value is probably a fraction of the total channel size, or however large
+    /// a batch that your receiving component can handle.
+    ///
+    /// TODO(parkmycar): We should refactor this to use `impl Iterator` instead of `VecDeque` when
+    /// "impl trait in trait" is supported.
     async fn recv_many(&mut self, max: usize) -> Option<VecDeque<T>>;
 }
 
-#[async_trait(?Send)]
-impl<T> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
+#[async_trait]
+impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
     async fn recv_many(&mut self, max: usize) -> Option<VecDeque<T>> {
         // Wait for a value to be ready.
         let first = self.recv().await?;
@@ -57,8 +72,8 @@ impl<T> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
     }
 }
 
-#[async_trait(?Send)]
-impl<T> ReceiverExt<T> for tokio::sync::mpsc::UnboundedReceiver<T> {
+#[async_trait]
+impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::UnboundedReceiver<T> {
     async fn recv_many(&mut self, max: usize) -> Option<VecDeque<T>> {
         // Wait for a value to be ready.
         let first = self.recv().await?;
