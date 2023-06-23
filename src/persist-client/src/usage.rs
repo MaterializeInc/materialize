@@ -492,6 +492,9 @@ impl StorageUsageClient {
             current_state_bytes,
             referenced_other_bytes,
             referenced_batches_bytes: &referenced_batches_bytes,
+            // In the future, this is likely to include a "grace period" so recent but non-current
+            // versions are also considered live
+            minimum_version: WriterKey::for_version(&self.cfg.build_version),
             live_writers,
             blob_usage,
         });
@@ -545,6 +548,7 @@ struct ShardUsageCumulativeMaybeRacy<'a, T> {
     current_state_bytes: u64,
     referenced_other_bytes: u64,
     referenced_batches_bytes: &'a BTreeMap<WriterKey, u64>,
+    minimum_version: WriterKey,
     live_writers: &'a BTreeMap<WriterId, T>,
     blob_usage: &'a ShardBlobUsage,
 }
@@ -553,33 +557,27 @@ impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsa
     fn from(x: ShardUsageCumulativeMaybeRacy<'_, T>) -> Self {
         let mut not_leaked_bytes = 0;
         let mut total_bytes = 0;
-        for (writer_id, bytes) in x.blob_usage.by_writer.iter() {
+        for (writer_key, bytes) in x.blob_usage.by_writer.iter() {
             total_bytes += *bytes;
-            match writer_id {
-                WriterKey::Id(writer_id) => {
-                    if x.live_writers.contains_key(writer_id) {
-                        not_leaked_bytes += *bytes;
-                    } else {
-                        // This writer is no longer live, so it can never again link
-                        // anything into state. As a result, we know that anything it
-                        // hasn't linked into state is now leaked and eligible for
-                        // reclamation by a (future) leaked blob detector.
-                        let writer_referenced = x
-                            .referenced_batches_bytes
-                            .get(&WriterKey::Id(writer_id.clone()))
-                            .map_or(0, |x| *x);
-                        // It's possible, due to races, that a writer has more
-                        // referenced batches in state than we saw for that writer in
-                        // blob. Cap it at the number of bytes we saw in blob, otherwise
-                        // we could hit the "blob inputs should be cumulative" panic
-                        // below.
-                        not_leaked_bytes += std::cmp::min(*bytes, writer_referenced);
-                    }
-                }
-                WriterKey::Version(_) => {
-                    // TODO: check that the given version is at least the minimum
-                    not_leaked_bytes += *bytes;
-                }
+            let writer_key_is_live = match writer_key {
+                WriterKey::Id(writer_id) => x.live_writers.contains_key(writer_id),
+                version @ WriterKey::Version(_) => *version >= x.minimum_version,
+            };
+            if writer_key_is_live {
+                not_leaked_bytes += *bytes;
+            } else {
+                // This writer is no longer live, so it can never again link
+                // anything into state. As a result, we know that anything it
+                // hasn't linked into state is now leaked and eligible for
+                // reclamation by a (future) leaked blob detector.
+                let writer_referenced =
+                    x.referenced_batches_bytes.get(writer_key).map_or(0, |x| *x);
+                // It's possible, due to races, that a writer has more
+                // referenced batches in state than we saw for that writer in
+                // blob. Cap it at the number of bytes we saw in blob, otherwise
+                // we could hit the "blob inputs should be cumulative" panic
+                // below.
+                not_leaked_bytes += std::cmp::min(*bytes, writer_referenced);
             }
         }
         // For now, assume rollups aren't leaked. We could compute which rollups
@@ -733,6 +731,7 @@ mod tests {
     use crate::cfg::PersistParameters;
     use bytes::Bytes;
     use mz_persist::location::{Atomicity, SeqNo};
+    use semver::Version;
     use timely::progress::Antichain;
 
     use crate::internal::paths::{PartialRollupKey, RollupId};
@@ -849,7 +848,7 @@ mod tests {
         ];
 
         let shard_id = ShardId::new();
-        let client = new_test_client().await;
+        let mut client = new_test_client().await;
 
         let (mut write0, _) = client
             .expect_open::<String, String, u64, i64>(shard_id)
@@ -881,6 +880,7 @@ mod tests {
         let maintenance = write0.machine.add_rollup_for_current_seqno().await;
         maintenance.perform(&write0.machine, &write0.gc).await;
 
+        client.cfg.build_version.minor += 1;
         let usage = StorageUsageClient::open(client);
         let shard_usage_audit = usage.shard_usage_audit(shard_id).await;
         let shard_usage_referenced = usage.shard_usage_referenced(shard_id).await;
@@ -996,6 +996,7 @@ mod tests {
                 current_state_bytes: self.current_state_bytes,
                 referenced_other_bytes: self.referenced_other_bytes,
                 referenced_batches_bytes: &referenced_batches_bytes,
+                minimum_version: WriterKey::for_version(&Version::new(0, 0, 1)),
                 live_writers: &live_writers,
                 blob_usage: &blob_usage,
             };
