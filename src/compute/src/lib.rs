@@ -78,7 +78,6 @@
 
 pub(crate) mod arrangement;
 pub mod compute_state;
-pub(crate) mod extensions;
 pub(crate) mod logging;
 pub(crate) mod metrics;
 pub(crate) mod render;

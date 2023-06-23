@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arrange, Arranged};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -36,7 +36,6 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
@@ -782,9 +781,10 @@ where
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
-                let oks = oks_keyed.mz_arrange::<RowSpine<Row, Row, _, _>>(&name);
-                let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
+                let errs = errs
+                    .concat(&errs_keyed)
+                    .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }

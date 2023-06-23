@@ -290,9 +290,6 @@ mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_
 mz_arrangement_batches_raw_s2_primary_idx                   mz_arrangement_batches_raw                   mz_introspection    {operator_id,worker_id}
 mz_arrangement_records_raw_s2_primary_idx                   mz_arrangement_records_raw                   mz_introspection    {operator_id,worker_id}
 mz_arrangement_sharing_raw_s2_primary_idx                   mz_arrangement_sharing_raw                   mz_introspection    {operator_id,worker_id}
-mz_arrangement_heap_capacity_raw_s2_primary_idx             mz_arrangement_heap_capacity_raw             mz_introspection    {operator_id,worker_id}
-mz_arrangement_heap_allocations_raw_s2_primary_idx          mz_arrangement_heap_allocations_raw          mz_introspection    {operator_id,worker_id}
-mz_arrangement_heap_size_raw_s2_primary_idx                 mz_arrangement_heap_size_raw                 mz_introspection    {operator_id,worker_id}
 mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_introspection    {replica_id}
 mz_cluster_replica_sizes_ind                                mz_cluster_replica_sizes                     mz_introspection    {size}
 mz_cluster_replica_statuses_ind                             mz_cluster_replica_statuses                  mz_introspection    {replica_id}
@@ -308,7 +305,6 @@ mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresse
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_introspection    {id,worker_id}
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
-mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}

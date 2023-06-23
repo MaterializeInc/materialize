@@ -17,6 +17,8 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -30,9 +32,6 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
-use crate::extensions::arrange::MzArrange;
-use crate::extensions::collection::ConsolidateExt;
-use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{RowKeySpine, RowSpine};
@@ -91,7 +90,7 @@ where
                             };
                             (group_row, row)
                         })
-                        .mz_consolidate_if::<RowKeySpine<_, _, _>>(
+                        .consolidate_named_if::<RowKeySpine<_, _, _>>(
                             must_consolidate,
                             "Consolidated MonotonicTopK input",
                         );
@@ -301,7 +300,7 @@ where
         (
             oks.negate()
                 .concat(&input)
-                .mz_consolidate::<RowKeySpine<_, _, _>>("Consolidated TopK"),
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated TopK"),
             errs,
         )
     }
@@ -335,7 +334,7 @@ where
                     (group_key, row)
                 }
             })
-            .mz_consolidate_if::<RowKeySpine<_, _, _>>(
+            .consolidate_named_if::<RowKeySpine<_, _, _>>(
                 must_consolidate,
                 "Consolidated MonotonicTop1 input",
             );
@@ -361,8 +360,8 @@ where
         });
         let result = partial
             .map(|k| (k, ()))
-            .mz_arrange::<RowSpine<Row, _, _, _>>("Arranged MonotonicTop1 partial")
-            .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("MonotonicTop1", {
+            .arrange_named::<RowSpine<Row, _, _, _>>("Arranged MonotonicTop1 partial")
+            .reduce_abelian::<_, RowSpine<_, _, _, _>>("MonotonicTop1", {
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
                     output.push((accum.row.clone(), 1));
@@ -388,8 +387,8 @@ where
     // We only want to arrange parts of the input that are not part of the actual output
     // such that `input.concat(&negated_output.negate())` yields the correct TopK
     input
-        .mz_arrange::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
-        .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced TopK input", {
+        .arrange_named::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced TopK input", {
             move |_key, source, target: &mut Vec<(R, Diff)>| {
                 if let Some(err) = R::into_error() {
                     for (row, diff) in source.iter() {

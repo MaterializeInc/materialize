@@ -75,9 +75,6 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_durations_histogram);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_dataflow_shutdown_durations_histogram);
-1
-
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_records_per_dataflow);
 1
 
@@ -173,9 +170,6 @@ SID   operator_id 1           uint8
 SID   worker_id   2           uint8
 SID   records     3           bigint
 SID   batches     4           bigint
-SID   size        5           bigint
-SID   capacity    6           bigint
-SID   allocations 7           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)

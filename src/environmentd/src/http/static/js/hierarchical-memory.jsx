@@ -159,7 +159,7 @@ function Dataflows(props) {
                         ON channels.id = counts.channel_id;
 
                 SELECT
-                    operator_id as id, records, size
+                    operator_id as id, records
                 FROM
                     mz_internal.mz_arrangement_sizes;
             `);
@@ -183,10 +183,7 @@ function Dataflows(props) {
       );
       setChans(chans);
 
-      const records = Object.fromEntries(
-        records_table.rows.map(([id, records, size]) => [id, [records, size]])
-      )
-      setRecords(records);
+      setRecords(Object.fromEntries(records_table.rows));
 
       try {
         const view = await getCreateView(stats.name);
@@ -220,10 +217,7 @@ function Dataflows(props) {
       const id_to_addr = Object.fromEntries(Object.entries(addrs).map(([id, addr]) => [id, addr]));
       const id_to_name = Object.fromEntries(Object.entries(opers).map(([id, name]) => [id, name]));
       const addr_to_id = Object.fromEntries(Object.entries(opers).map(([id, name]) => [addrStr(id_to_addr[id]), id]));
-      const max_record_count = Math.max.apply(
-        Math,
-        Object.values(records).map(([records, size]) => records)
-      );
+      const max_record_count = Math.max.apply(Math, Object.values(records));
 
       // Map scopes to children.
       const scope_children = new Map();
@@ -290,10 +284,9 @@ function Dataflows(props) {
               } else {
                 let my_records = records["".concat(id)];
                 if (my_records != null) {
-                  let my_size = Math.ceil(my_records[1]/1024);
-                  return `${id} [label= "${id} : ${name}\nrecords: ${my_records[0]}, ${my_size} KiB",style=filled,color=red,fillcolor="#ffbbbb",shape=box]`;
+                  return `${id} [label= "${id} : ${name} \n\t records : ${my_records}",style=filled,color=red,fillcolor="#ffbbbb"]`;
                 } else {
-                  return `${id} [label="${id} : ${name}",shape=box]`;
+                  return `${id} [label="${id} : ${name}"]`;
                 }
               }
             } else {

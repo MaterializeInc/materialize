@@ -519,9 +519,6 @@ mz_active_peeks_per_worker                   log   <null>
 mz_arrangement_batches_raw                   log   <null>
 mz_arrangement_records_raw                   log   <null>
 mz_arrangement_sharing_raw                   log   <null>
-mz_arrangement_heap_size_raw                 log   <null>
-mz_arrangement_heap_capacity_raw             log   <null>
-mz_arrangement_heap_allocations_raw          log   <null>
 mz_compute_delays_histogram_raw              log   <null>
 mz_compute_dependencies_per_worker           log   <null>
 mz_compute_exports_per_worker                log   <null>
@@ -532,7 +529,6 @@ mz_dataflow_addresses_per_worker             log   <null>
 mz_dataflow_channels_per_worker              log   <null>
 mz_dataflow_operator_reachability_raw        log   <null>
 mz_dataflow_operators_per_worker             log   <null>
-mz_dataflow_shutdown_durations_histogram_raw log   <null>
 mz_message_counts_received_raw               log   <null>
 mz_message_counts_sent_raw                   log   <null>
 mz_peek_durations_histogram_raw              log   <null>
@@ -582,7 +578,6 @@ mz_compute_import_frontiers
 mz_compute_operator_durations_histogram
 mz_compute_operator_durations_histogram_per_worker
 mz_dataflow_addresses
-mz_dataflow_arrangement_sizes
 mz_dataflow_channel_operators
 mz_dataflow_channel_operators_per_worker
 mz_dataflow_channels
@@ -590,11 +585,10 @@ mz_dataflow_operator_dataflows
 mz_dataflow_operator_dataflows_per_worker
 mz_dataflow_operator_parents
 mz_dataflow_operator_parents_per_worker
+mz_dataflow_arrangement_sizes
 mz_dataflow_operator_reachability
 mz_dataflow_operator_reachability_per_worker
 mz_dataflow_operators
-mz_dataflow_shutdown_durations_histogram
-mz_dataflow_shutdown_durations_histogram_per_worker
 mz_dataflows
 mz_dataflows_per_worker
 mz_message_counts
@@ -633,7 +627,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-93
+81
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

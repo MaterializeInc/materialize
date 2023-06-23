@@ -29,7 +29,7 @@ pub trait AsRunnableWorker<C, R> {
 
     /// Build and continuously run a worker. Called on each timely
     /// thread.
-    fn build_and_run<A: timely::communication::Allocate + 'static>(
+    fn build_and_run<A: timely::communication::Allocate>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
