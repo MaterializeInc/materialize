@@ -1353,7 +1353,7 @@ pub mod datadriven {
         let consolidate = args.optional("consolidate").unwrap_or(true);
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
-        let mut cfg = BatchBuilderConfig::from(&datadriven.client.cfg);
+        let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new());
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1372,7 +1372,6 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
-            WriterId::new(),
             since,
             Some(upper.clone()),
             consolidate,
@@ -1531,13 +1530,12 @@ pub mod datadriven {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::from(&cfg),
+            CompactConfig::new(&cfg, &writer_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             req,
-            writer_id,
             schemas,
         )
         .await?;

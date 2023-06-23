@@ -42,8 +42,8 @@ use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::stats::PartStats;
-use crate::write::WriterEnrichedHollowBatch;
-use crate::{PersistConfig, ShardId, WriterId};
+use crate::write::{WriterEnrichedHollowBatch, WriterId};
+use crate::{PersistConfig, ShardId};
 
 /// A handle to a batch of updates that has been written to blob storage but
 /// which has not yet been appended to a shard.
@@ -197,15 +197,19 @@ pub enum Added {
 /// run of BatchBuilder.
 #[derive(Debug, Clone)]
 pub struct BatchBuilderConfig {
+    writer_key: WriterKey,
     pub(crate) blob_target_size: usize,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
 }
 
-impl From<&PersistConfig> for BatchBuilderConfig {
-    fn from(value: &PersistConfig) -> Self {
+impl BatchBuilderConfig {
+    /// Initialize a batch builder config based on a snapshot of the Persist config.
+    pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
+        let writer_key = WriterKey::Id(writer_id.clone());
         BatchBuilderConfig {
+            writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
             batch_builder_max_outstanding_parts: value
                 .dynamic
@@ -335,7 +339,6 @@ where
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         shard_id: ShardId,
         version: Version,
-        writer_id: WriterId,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
         consolidate: bool,
@@ -345,7 +348,6 @@ where
             Arc::clone(&metrics),
             shard_metrics,
             shard_id,
-            writer_id,
             lower.clone(),
             Arc::clone(&blob),
             cpu_heavy_runtime,
@@ -673,7 +675,6 @@ pub(crate) struct BatchParts<T> {
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
     shard_id: ShardId,
-    writer_id: WriterId,
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
@@ -697,7 +698,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         shard_id: ShardId,
-        writer_id: WriterId,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
@@ -708,7 +708,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             metrics,
             shard_metrics,
             shard_id,
-            writer_id,
             lower,
             blob,
             cpu_heavy_runtime,
@@ -731,8 +730,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let blob = Arc::clone(&self.blob);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
-        let partial_key =
-            PartialBatchKey::new(&WriterKey::Id(self.writer_id.clone()), &PartId::new());
+        let partial_key = PartialBatchKey::new(&self.cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let stats_collection_enabled = self.cfg.stats_collection_enabled;
@@ -1008,7 +1006,7 @@ mod tests {
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
-                    assert_eq!(writer.to_string(), write.writer_id.to_string());
+                    assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));
                 }
                 _ => panic!("unparseable blob key"),
             }
@@ -1058,7 +1056,7 @@ mod tests {
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
-                    assert_eq!(writer.to_string(), write.writer_id.to_string());
+                    assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));
                 }
                 _ => panic!("unparseable blob key"),
             }
