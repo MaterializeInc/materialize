@@ -164,7 +164,7 @@ function Views(props) {
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
-          id, name, records, size, capacity, allocations
+          id, name, records
         FROM
           mz_internal.mz_records_per_dataflow
         ${whereFragment}
@@ -215,9 +215,6 @@ function Views(props) {
                 <th>dataflow id</th>
                 <th>index name</th>
                 <th>records</th>
-                <th>size [KiB]</th>
-                <th>capacity [KiB]</th>
-                <th>allocations</th>
               </tr>
             </thead>
             <tbody>
@@ -233,9 +230,6 @@ function Views(props) {
                     {v[1]}
                   </td>
                   <td>{v[2]}</td>
-                  <td>{Math.round(v[3]/1024)}</td>
-                  <td>{Math.round(v[4]/1024)}</td>
-                  <td>{v[5]}</td>
                 </tr>
               ))}
             </tbody>
@@ -277,7 +271,7 @@ function View(props) {
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
-          name, records, size
+          name, records
         FROM
           mz_internal.mz_records_per_dataflow
         WHERE
@@ -381,7 +375,7 @@ function View(props) {
             );
 
         SELECT
-          id, records, size
+          id, records
         FROM
           mz_internal.mz_records_per_dataflow_operator
         WHERE
@@ -394,7 +388,6 @@ function View(props) {
       const stats = {
         name: stats_row[0],
         records: stats_row[1],
-        size: stats_row[2],
       };
       setStats(stats);
 
@@ -417,10 +410,7 @@ function View(props) {
       );
       setChans(chans);
 
-      const records = Object.fromEntries(
-        records_table.rows.map(([id, records, size]) => [id, [records, size]])
-      )
-      setRecords(records);
+      setRecords(Object.fromEntries(records_table.rows));
 
       setElapsed(Object.fromEntries(elapsed_table.rows));
 
@@ -449,10 +439,7 @@ function View(props) {
     const lookup = Object.fromEntries(
       Object.entries(addrs).map(([id, addr]) => [addrStr(addr), id])
     );
-    const max_record_count = Math.max.apply(
-      Math,
-      Object.values(records).map(([records, size]) => records)
-    );
+    const max_record_count = Math.max.apply(Math, Object.values(records));
     const scopes = {};
     // Find all the scopes.
     Object.entries(opers).forEach(([id, name]) => {
@@ -505,14 +492,13 @@ function View(props) {
       const notes = [`id: ${id}`];
       let style = '';
       if (id in records) {
-        const record_count = records[id][0];
-        const size = Math.ceil(records[id][1]/1024);
+        const record_count = records[id];
         // Any operator that can have records will have a red border (even if it
         // currently has 0 records). The fill color is a deeper red based on how many
         // records this operator has compared to the operator with the most records.
-        const pct = record_count ? Math.floor((record_count / max_record_count) * 0xa0) : 0;
+        const pct = record_count ? Math.floor((record_count / max_record_count) * 0xff) : 0;
         const alpha = pct.toString(16).padStart(2, '0');
-        notes.push(`${record_count} rows, ${size} KiB`);
+        notes.push(`${record_count} records`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
       }
       // Only display elapsed time if it's more than 1s.
@@ -523,7 +509,7 @@ function View(props) {
       if (name.length > maxLen + 3) {
         name = name.slice(0, maxLen) + '...';
       }
-      return `_${id} [label="${name}\n${notes.join(', ')}"${style},shape=box]`;
+      return `_${id} [label="${name} (${notes.join(', ')})"${style}]`;
     });
     oper_labels.unshift('');
     clusters.unshift('');

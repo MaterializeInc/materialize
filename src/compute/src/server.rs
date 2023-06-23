@@ -148,7 +148,7 @@ struct Worker<'w, A: Allocate> {
 
 impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
     type Activatable = SyncActivator;
-    fn build_and_run<A: Allocate + 'static>(
+    fn build_and_run<A: Allocate>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
@@ -170,7 +170,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
     }
 }
 
-impl<'w, A: Allocate + 'static> Worker<'w, A> {
+impl<'w, A: Allocate> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
         let mut shutdown = false;
