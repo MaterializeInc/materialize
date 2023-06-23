@@ -22,6 +22,11 @@ ROOT = Path(os.environ["MZ_ROOT"])
 # not released on Docker
 INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.52.1"),
+    MzVersion.parse_mz("v0.55.1"),
+    MzVersion.parse_mz("v0.55.2"),
+    MzVersion.parse_mz("v0.55.3"),
+    MzVersion.parse_mz("v0.55.4"),
+    MzVersion.parse_mz("v0.55.5"),
     MzVersion.parse_mz("v0.55.6"),
     MzVersion.parse_mz("v0.56.0"),
     MzVersion.parse_mz("v0.57.1"),
