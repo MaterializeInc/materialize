@@ -104,6 +104,7 @@ impl<T, E> From<Result<T, E>> for RetryResult<T, E> {
 pub struct Retry {
     initial_backoff: Duration,
     factor: f64,
+    jitter: Option<Duration>,
     clamp_backoff: Duration,
     max_duration: Duration,
     max_tries: usize,
@@ -133,6 +134,16 @@ impl Retry {
     /// default factor is two.
     pub fn factor(mut self, factor: f64) -> Self {
         self.factor = factor;
+        self
+    }
+
+    /// Sets the jitter backoff factor for the retry operation.
+    ///
+    /// The time to wait is varied by `+-jitter` after each failed try. The default is no jitter.
+    #[cfg(feature = "rand")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rand")))]
+    pub fn jitter(mut self, jitter: Duration) -> Self {
+        self.jitter = Some(jitter);
         self
     }
 
@@ -218,6 +229,7 @@ impl Retry {
                         thread::sleep(*next_backoff);
                         *next_backoff =
                             cmp::min(next_backoff.mul_f64(self.factor), self.clamp_backoff);
+                        self.apply_jitter(next_backoff);
                     }
                 },
             }
@@ -293,6 +305,34 @@ impl Retry {
             sleep: time::sleep(Duration::default()),
         }
     }
+
+    /// Applies a random amount of jitter to the provided `Duration`.
+    fn apply_jitter(&self, dur: &mut Duration) {
+        #[cfg(feature = "rand")]
+        let (jitter_factor, neg) = self
+            .jitter
+            .and_then(|jitter| {
+                use rand::Rng;
+
+                let mut rng = rand::thread_rng();
+                let jitter_nanos: u64 = jitter.as_nanos().try_into().ok()?;
+
+                let rand_jitter = rng.gen_range(0..jitter_nanos);
+                let neg = rng.gen_bool(0.5);
+
+                Some((Duration::from_nanos(rand_jitter), neg))
+            })
+            .unwrap_or((Duration::from_nanos(0), false));
+
+        #[cfg(not(feature = "rand"))]
+        let (jitter_factor, neg) = (Duration::from_secs(0), false);
+
+        if neg {
+            *dur = (*dur).saturating_sub(jitter_factor);
+        } else {
+            *dur = (*dur).saturating_add(jitter_factor);
+        }
+    }
 }
 
 impl Default for Retry {
@@ -302,6 +342,7 @@ impl Default for Retry {
         Retry {
             initial_backoff: Duration::from_millis(125),
             factor: 2.0,
+            jitter: None,
             clamp_backoff: Duration::MAX,
             max_tries: usize::MAX,
             max_duration: Duration::MAX,
@@ -345,6 +386,7 @@ impl Stream for RetryStream {
             Some(next_backoff) => {
                 ready!(this.sleep.as_mut().poll(cx));
                 *next_backoff = cmp::min(next_backoff.mul_f64(retry.factor), retry.clamp_backoff);
+                retry.apply_jitter(next_backoff);
             }
         }
 

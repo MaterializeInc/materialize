@@ -18,7 +18,7 @@ differential-dataflow = "0.12.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 itertools = "0.10.5"
-mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
+mz-ore = { path = "../ore", features = ["metrics", "network", "async", "rand", "test"] }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }

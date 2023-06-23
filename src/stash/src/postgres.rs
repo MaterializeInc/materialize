@@ -345,8 +345,10 @@ impl StashFactory {
         // url is bad. We also need to allow for a down server, though, so retry for a while before
         // bailing. These numbers are made up.
         let retry = Retry::default()
-            .clamp_backoff(Duration::from_secs(1))
-            .max_duration(Duration::from_secs(30))
+            .initial_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(60))
+            .factor(1.5)
+            .jitter(Duration::from_millis(150))
             .into_retry_stream();
         let mut retry = Box::pin(retry);
         loop {
