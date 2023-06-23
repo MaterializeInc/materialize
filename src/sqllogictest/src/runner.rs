@@ -1219,15 +1219,10 @@ impl<'a> RunnerInner<'a> {
             [statement] => statement,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
-        let mut is_select = false;
-        let mut num_attributes = None;
-        match statement {
-            Statement::Select(stmt) => {
-                is_select = true;
-                num_attributes = derive_num_attributes(&stmt.query.body);
-            }
-            _ => (),
-        }
+        let (is_select, num_attributes) = match statement {
+            Statement::Select(stmt) => (true, derive_num_attributes(&stmt.query.body)),
+            _ => (false, None),
+        };
 
         match output {
             Ok(_) => {
