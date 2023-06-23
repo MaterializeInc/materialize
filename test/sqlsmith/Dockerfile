@@ -28,7 +28,7 @@ ADD https://api.github.com/repos/def-/sqlsmith/git/refs/heads/materialize versio
 # Build SQLsmith
 RUN git clone --depth=1 --single-branch --branch=materialize https://github.com/def-/sqlsmith \
     && cd sqlsmith \
-    && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=c++ . \
-    && cmake --build . -j $(nproc)
+    && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=c++ . \
+    && cmake --build . -j `nproc`
 
 ENTRYPOINT ["sqlsmith/sqlsmith"]
