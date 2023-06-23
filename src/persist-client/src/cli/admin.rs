@@ -230,13 +230,12 @@ pub async fn force_compaction(
             };
             let res =
                 Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
-                    CompactConfig::from(&cfg),
+                    CompactConfig::new(&cfg, &writer_id),
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
                     Arc::clone(&machine.applier.shard_metrics),
                     Arc::new(CpuHeavyRuntime::new()),
                     req,
-                    writer_id.clone(),
                     schemas,
                 )
                 .await?;

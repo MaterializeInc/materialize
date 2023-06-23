@@ -266,7 +266,7 @@ pub enum BlobKeyPrefix<'a> {
     Shard(&'a ShardId),
     /// Scoped to the batch blobs of an individual writer
     #[cfg(test)]
-    Writer(&'a ShardId, &'a WriterId),
+    Writer(&'a ShardId, &'a WriterKey),
     /// Scoped to all state rollup blobs  of an individual shard
     #[cfg(test)]
     Rollups(&'a ShardId),

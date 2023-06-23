@@ -750,6 +750,7 @@ mod tests {
         ];
 
         let client = new_test_client().await;
+        let build_version = client.cfg.build_version.clone();
         let shard_id_one = ShardId::new();
         let shard_id_two = ShardId::new();
 
@@ -764,14 +765,14 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id_two)
             .await;
         write.expect_append(&data[1..3], vec![0], vec![4]).await;
-        let writer_one = write.writer_id.clone();
+        let writer_one = WriterKey::Id(write.writer_id.clone());
 
         // write one row into shard 2 from writer 2
         let (mut write, _) = client
             .expect_open::<String, String, u64, i64>(shard_id_two)
             .await;
         write.expect_append(&data[4..], vec![0], vec![5]).await;
-        let writer_two = write.writer_id.clone();
+        let writer_two = WriterKey::Id(write.writer_id.clone());
 
         let usage = StorageUsageClient::open(client);
 
@@ -791,6 +792,13 @@ mod tests {
             .size(BlobKeyPrefix::Writer(&shard_id_two, &writer_two))
             .await
             .expect("must have shard size");
+        let versioned_size = usage
+            .size(BlobKeyPrefix::Writer(
+                &shard_id_two,
+                &WriterKey::for_version(&build_version),
+            ))
+            .await
+            .expect("must have shard size");
         let rollups_size = usage
             .size(BlobKeyPrefix::Rollups(&shard_id_two))
             .await
@@ -805,7 +813,7 @@ mod tests {
         assert!(shard_one_size < shard_two_size);
         assert_eq!(
             shard_two_size,
-            writer_one_size + writer_two_size + rollups_size
+            writer_one_size + writer_two_size + versioned_size + rollups_size
         );
         assert_eq!(all_size, shard_one_size + shard_two_size);
 
