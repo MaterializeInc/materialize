@@ -79,6 +79,8 @@ mod persist_handles;
 mod rehydration;
 mod statistics;
 
+pub use collection_mgmt::MonotonicAppender;
+
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
 pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableCollectionMetadata> =
@@ -404,6 +406,10 @@ pub trait StorageController: Debug + Send {
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to
+    /// monotonically append to the specified [`GlobalId`].
+    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -855,6 +861,8 @@ pub enum StorageError {
     SinkIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
+    /// The provided identifier was invalid, maybe missing, wrong type, not registered, etc.
+    IdentifierInvalid(GlobalId),
     /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
@@ -880,6 +888,10 @@ pub enum StorageError {
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
+    /// The specified resource was exhausted, and is not currently accepting more requests.
+    ResourceExhausted(&'static str),
+    /// The specified component is shutting down.
+    ShuttingDown(&'static str),
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -891,6 +903,7 @@ impl Error for StorageError {
             Self::SourceIdReused(_) => None,
             Self::SinkIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
+            Self::IdentifierInvalid(_) => None,
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
             Self::InvalidUppers(_) => None,
@@ -900,6 +913,8 @@ impl Error for StorageError {
             Self::DataflowError(err) => Some(err),
             Self::InvalidAlterSource { .. } => None,
             Self::InvalidUsage(_) => None,
+            Self::ResourceExhausted(_) => None,
+            Self::ShuttingDown(_) => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -918,6 +933,7 @@ impl fmt::Display for StorageError {
                 "sink identifier was re-created after having been dropped: {id}"
             ),
             Self::IdentifierMissing(id) => write!(f, "collection identifier is not present: {id}"),
+            Self::IdentifierInvalid(id) => write!(f, "collection identifier is invalid {id}"),
             Self::UpdateBeyondUpper(id) => {
                 write!(
                     f,
@@ -960,6 +976,8 @@ impl fmt::Display for StorageError {
                 write!(f, "{id} cannot be altered in the requested way")
             }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
+            Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
+            Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }
@@ -1849,6 +1867,10 @@ where
         }
 
         Ok(self.state.persist_write_handles.append(commands))
+    }
+
+    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender {
+        self.state.collection_manager.monotonic_appender(id)
     }
 
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
