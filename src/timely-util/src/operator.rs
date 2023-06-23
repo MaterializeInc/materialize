@@ -559,10 +559,21 @@ where
             // at https://epubs.siam.org/doi/epdf/10.1137/1.9781611973105.16. The latter
             // would provide good bounds for balls-into-bins problems when the number of
             // bins is small (as is our case), so we'd have a theoretical guarantee.
-            let random_state = ahash::RandomState::new();
-            let mut h = random_state.build_hasher();
+            // NOTE: We fix the seeds of a RandomState instance explicity with the same
+            // seeds that would be given by `AHash` via ahash::AHasher::default() so as
+            // to avoid a different selection due to compile-time features being differently
+            // selected in other dependencies using `AHash` vis-à-vis cargo's strategy
+            // of unioning features. This implies that we end up employ the fallback
+            // hasher of `AHash`, but it should be sufficient for our needs.
+            let random_state = ahash::RandomState::with_seeds(
+                0x243f_6a88_85a3_08d3,
+                0x1319_8a2e_0370_7344,
+                0xa409_3822_299f_31d0,
+                0x082e_fa98_ec4e_6c89,
+            );
             let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
                 let data = &(update.0).0;
+                let mut h = random_state.build_hasher();
                 data.hash(&mut h);
                 h.finish()
             });
