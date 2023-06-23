@@ -67,17 +67,18 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
 
 impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
     /// Tests if the dataflow refers to a single timestamp, namely
-    /// that both `as_of` and `until` have a single coordinate and that
-    /// the `until` value corresponds to the `as_of` value plus one.
+    /// that `as_of` has a single coordinate and that the `until`
+    /// value corresponds to the `as_of` value plus one.
     pub fn is_single_time(&self) -> bool {
         // TODO: this would be much easier to check if `until` was a strict lower bound,
         // and we would be testing that `until == as_of`.
-        match (self.as_of.as_ref(), self.until.as_option()) {
-            (Some(as_of), Some(until)) => {
-                as_of.as_option().and_then(|as_of| as_of.checked_add(1)) == Some(*until)
-            }
-            _ => false,
-        }
+        let Some(as_of) = self.as_of.as_ref() else { return false; };
+        !as_of.is_empty()
+            && as_of
+                .as_option()
+                .and_then(|as_of| as_of.checked_add(1))
+                .as_ref()
+                == self.until.as_option()
     }
 }
 

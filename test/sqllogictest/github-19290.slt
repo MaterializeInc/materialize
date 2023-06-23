@@ -1,0 +1,52 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for #19290.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
+----
+COMPLETE 0
+
+statement ok
+CREATE SOURCE tpch
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
+              FOR ALL TABLES
+              WITH (SIZE = '1');
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+  SELECT DISTINCT ON(l_linenumber) l_linenumber, l_discount
+  FROM lineitem
+  ORDER BY l_linenumber, l_orderkey;
+----
+Explained Query:
+  Finish order_by=[#3 asc nulls_last, #0 asc nulls_last] output=[#3, #6]
+    TopK::MonotonicTop1 group_by=[#3] order_by=[#0 asc nulls_last] must_consolidate
+      Get::PassArrangements materialize.public.lineitem
+        raw=true
+
+EOF
+
+statement ok
+SET transaction_isolation = 'serializable'
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+  SELECT DISTINCT ON(l_linenumber) l_linenumber, l_discount
+  FROM lineitem
+  ORDER BY l_linenumber, l_orderkey;
+----
+Explained Query:
+  Finish order_by=[#3 asc nulls_last, #0 asc nulls_last] output=[#3, #6]
+    TopK::MonotonicTop1 group_by=[#3] order_by=[#0 asc nulls_last] must_consolidate
+      Get::PassArrangements materialize.public.lineitem
+        raw=true
+
+EOF
