@@ -3917,7 +3917,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
                     &ScalarType::String,
                 )?;
                 Ok(lhs.call_binary(rhs, TextConcat))
-            }) => String, 2779;
+            }) => NonVecAny, 2779;
             params!(NonVecAny, String) => Operation::binary(|ecx, lhs, rhs| {
                 let lhs = typeconv::plan_cast(
                     ecx,
@@ -3926,7 +3926,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
                     &ScalarType::String,
                 )?;
                 Ok(lhs.call_binary(rhs, TextConcat))
-            }) => String, 2780;
+            }) => NonVecAny, 2780;
             params!(String, String) => TextConcat => String, 654;
             params!(Jsonb, Jsonb) => JsonbConcat => Jsonb, 3284;
             params!(ArrayAnyCompatible, ArrayAnyCompatible) => ArrayArrayConcat => ArrayAnyCompatible, 375;
