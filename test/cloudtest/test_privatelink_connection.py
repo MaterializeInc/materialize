@@ -160,6 +160,22 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
 
     with pytest.raises(
         ProgrammingError,
+        match='duplicate AWS PrivateLink availability zones "use1-az1"',
+    ):
+        mz.environmentd.sql(
+            dedent(
+                """\
+                CREATE CONNECTION privatelinkconn2
+                TO AWS PRIVATELINK (
+                SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+                AVAILABILITY ZONES ('use1-az1', 'use1-az1', 'use1-az2')
+                );
+                """
+            )
+        )
+
+    with pytest.raises(
+        ProgrammingError,
         match='AWS PrivateLink availability zone "use1-az3" does not match any of the availability zones on the AWS PrivateLink connection',
     ):
         mz.environmentd.sql(
