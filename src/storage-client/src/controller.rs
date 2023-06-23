@@ -3032,7 +3032,7 @@ where
     fn check_alter_collection_inner(
         &self,
         id: GlobalId,
-        ingestion: IngestionDescription,
+        mut ingestion: IngestionDescription,
     ) -> Result<(), StorageError> {
         // Check that the client exists.
         self.state.clients.get(&ingestion.instance_id).ok_or(
@@ -3042,9 +3042,6 @@ where
             },
         )?;
 
-        // Describe the ingestion in terms of collection metadata.
-        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
-
         // Take a cloned copy of the description because we are going to treat it as a "scratch
         // space".
         let mut collection_description = self.collection(id)?.description.clone();
@@ -3052,6 +3049,16 @@ where
         // Get the previous storage dependencies; we need these to understand if something has
         // changed in what we depend upon.
         let prev_storage_dependencies = collection_description.get_storage_dependencies();
+
+        // We cannot know the metadata of exports yet to be created, so we have
+        // to remove them. However, we know that adding source exports is
+        // compatible, so still OK to proceed.
+        ingestion
+            .source_exports
+            .retain(|id, _| self.collection(*id).is_ok());
+
+        // Describe the ingestion in terms of collection metadata.
+        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
 
         // Check compatibility between current and new ingestions and install new ingestion in
         // collection description.
