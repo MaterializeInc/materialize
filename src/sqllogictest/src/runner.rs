@@ -1460,14 +1460,16 @@ impl<'a> RunnerInner<'a> {
         let tentative_outcome = self
             .execute_view_inner(create_index.as_str(), output, location.clone())
             .await?;
-        if let Some(view_outcome) = tentative_outcome {
-            return Ok(view_outcome);
-        }
 
-        print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
-        let view_outcome = self
-            .execute_query(view_sql.as_str(), output, location.clone())
-            .await?;
+        let view_outcome;
+        if let Some(outcome) = tentative_outcome {
+            view_outcome = outcome;
+        } else {
+            print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+            view_outcome = self
+                .execute_query(view_sql.as_str(), output, location.clone())
+                .await?;
+        }
 
         // Remember to clean up after ourselves by dropping the view.
         print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
