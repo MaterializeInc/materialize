@@ -1746,7 +1746,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 };
 
                 Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs: vec![elem, dims] })
-            }) => ArrayAnyCompatible, 1193;
+            }) => ArrayAny, 1193;
             params!(
                 AnyElement,
                 ScalarType::Array(Box::new(ScalarType::Int32)),
@@ -1766,7 +1766,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "array_in" => Scalar {
             params!(String, Oid, Int32) =>
-                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
+                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAny, 750;
         },
         "array_length" => Scalar {
             params![ArrayAny, Int64] => BinaryFunc::ArrayLength => Int32, 2176;
@@ -2772,7 +2772,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 // COUNT(*) is equivalent to COUNT(true).
                 Ok((HirScalarExpr::literal_true(), AggregateFunc::Count))
             }) => Int64, 2803;
-            params!(Any) => AggregateFunc::Count => Int32, 2147;
+            params!(Any) => AggregateFunc::Count => Int64, 2147;
         },
         "max" => Aggregate {
             params!(Bool) => AggregateFunc::MaxBool => Bool, oid::FUNC_MAX_BOOL_OID;
@@ -2898,7 +2898,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "lag" => ValueWindow {
             // All args are encoded into a single record to be handled later
-            params!(Any) => Operation::unary(|ecx, e| {
+            params!(AnyElement) => Operation::unary(|ecx, e| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2907,8 +2907,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lag))
-            }) => Any, 3106;
-            params!(Any, Int32) => Operation::binary(|ecx, e, offset| {
+            }) => AnyElement, 3106;
+            params!(AnyElement, Int32) => Operation::binary(|ecx, e, offset| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2917,7 +2917,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lag))
-            }) => Any, 3107;
+            }) => AnyElement, 3107;
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2930,7 +2930,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "lead" => ValueWindow {
             // All args are encoded into a single record to be handled later
-            params!(Any) => Operation::unary(|ecx, e| {
+            params!(AnyElement) => Operation::unary(|ecx, e| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2939,8 +2939,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lead))
-            }) => Any, 3109;
-            params!(Any, Int32) => Operation::binary(|ecx, e, offset| {
+            }) => AnyElement, 3109;
+            params!(AnyElement, Int32) => Operation::binary(|ecx, e, offset| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2949,7 +2949,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lead))
-            }) => Any, 3110;
+            }) => AnyElement, 3110;
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2961,10 +2961,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             }) => AnyCompatible, 3111;
         },
         "first_value" => ValueWindow {
-            params!(Any) => ValueWindowFunc::FirstValue => Any, 3112;
+            params!(AnyElement) => ValueWindowFunc::FirstValue => AnyElement, 3112;
         },
         "last_value" => ValueWindow {
-            params!(Any) => ValueWindowFunc::LastValue => Any, 3113;
+            params!(AnyElement) => ValueWindowFunc::LastValue => AnyElement, 3113;
         },
 
         // Table functions.
@@ -3328,7 +3328,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 })
             }) =>
                 // This return type should be equivalent to "ArrayElementAny", but this would be its sole use.
-                ReturnType::set_of(Any), 2331;
+                ReturnType::set_of(AnyElement), 2331;
             vec![ListAny] => Operation::unary(move |ecx, e| {
                 let el_typ = ecx.scalar_type(&e).unwrap_list_element_type().clone();
                 Ok(TableFuncPlan {
