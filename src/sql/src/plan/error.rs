@@ -267,7 +267,7 @@ impl PlanError {
             }
             Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
                 let duplicate_azs  = duplicate_azs.iter().join("\n  ");
-                Some(format!("Availability zone IDs must be unique. The following zone IDs were duplicates:\n  {}", duplicate_azs))
+                Some(format!("Duplicated availability zones:\n  {}", duplicate_azs))
             }
             Self::SubsourceNameConflict { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
@@ -450,7 +450,7 @@ impl fmt::Display for PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
                 let duplicate_azs  = duplicate_azs.iter().join("\n  ");
-                write!(f, "duplicate AWS PrivateLink availability zones {}", duplicate_azs.quoted())
+                write!(f, "connection cannot contain duplicate availability zones")
             },
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
