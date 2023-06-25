@@ -319,7 +319,6 @@ where
 fn convert_claims_to_external_metadata(claims: Claims, admin_role: &str) -> ExternalUserMetadata {
     ExternalUserMetadata {
         user_id: claims.best_user_id(),
-        group_id: claims.tenant_id,
         admin: claims.admin(admin_role),
     }
 }
