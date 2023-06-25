@@ -311,7 +311,7 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
-    pub plan: mz_sql::plan::PeekPlan,
+    pub plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
 }
 

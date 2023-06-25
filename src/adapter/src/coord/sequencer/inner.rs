@@ -50,9 +50,9 @@ use mz_sql::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan,
     DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
-    InsertPlan, InspectShardPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
-    QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan,
-    RevokeRolePlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan,
+    InsertPlan, InspectShardPlan, MaterializedView, MutationKind, OptimizerConfig, Plan, QueryWhen,
+    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
+    SelectPlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan,
     SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
     VariableValue, View,
 };
@@ -1747,7 +1747,7 @@ impl Coordinator {
     pub(super) async fn sequence_peek(
         &mut self,
         ctx: ExecuteContext,
-        plan: PeekPlan,
+        plan: SelectPlan,
         target_cluster: TargetCluster,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
@@ -1814,7 +1814,7 @@ impl Coordinator {
             target_cluster,
         }: PeekStageValidate,
     ) -> Result<PeekStageOptimize, AdapterError> {
-        let PeekPlan {
+        let SelectPlan {
             source,
             when,
             finishing,
@@ -3221,7 +3221,7 @@ impl Coordinator {
         );
         self.sequence_peek(
             peek_ctx,
-            PeekPlan {
+            SelectPlan {
                 source: selection,
                 when: QueryWhen::Freshest,
                 finishing,

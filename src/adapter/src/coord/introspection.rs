@@ -39,7 +39,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     plan: &'p Plan,
 ) -> TargetCluster {
     let depends_on = match plan {
-        Plan::Peek(plan) => plan.source.depends_on(),
+        Plan::Select(plan) => plan.source.depends_on(),
         Plan::Subscribe(plan) => plan.from.depends_on(),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
@@ -174,7 +174,7 @@ pub fn check_cluster_restrictions(
             SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
             SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
         },
-        Plan::Peek(plan) => Box::new(plan.source.depends_on().into_iter()),
+        Plan::Select(plan) => Box::new(plan.source.depends_on().into_iter()),
         _ => return Ok(()),
     };
 
@@ -232,7 +232,7 @@ pub fn user_privilege_hack(
         }
 
         Plan::Subscribe(_)
-        | Plan::Peek(_)
+        | Plan::Select(_)
         | Plan::CopyFrom(_)
         | Plan::Explain(_)
         | Plan::ShowAllVariables
