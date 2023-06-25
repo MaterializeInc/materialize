@@ -11,8 +11,10 @@ use std::future::Future;
 use std::time::Duration;
 
 use derivative::Derivative;
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use mz_ore::now::NowFn;
+use mz_sql::session::user::ExternalUserMetadata;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{ApiTokenResponse, AppPassword, Client, Error};
@@ -49,8 +51,7 @@ pub struct Authentication {
 pub const REFRESH_SUFFIX: &str = "/token/refresh";
 
 impl Authentication {
-    /// Creates a new frontegg auth. `jwk_rsa_pem` is the RSA public key to
-    /// validate the JWTs. `tenant_id` must be parseable as a UUID.
+    /// Creates a new frontegg auth.
     pub fn new(config: AuthenticationConfig, client: Client) -> Self {
         let mut validation = Validation::new(Algorithm::RS256);
         // We validate with our own now function.
@@ -67,7 +68,7 @@ impl Authentication {
         }
     }
 
-    /// Exchanges a password for a JWT token.
+    /// Exchanges a password for an access token and a refresh token.
     pub async fn exchange_password_for_token(
         &self,
         password: &str,
@@ -82,13 +83,39 @@ impl Authentication {
             .await
     }
 
-    /// Validates an access token and its `tenant_id`.
+    /// Validates an API token response, returning a validated response
+    /// containing the validated claims.
+    ///
+    /// Like [`Authentication::validate_access_token`], but operates on an
+    /// [`ApiTokenResponse`] rather than a raw access token.
+    pub fn validate_api_token_response(
+        &self,
+        response: ApiTokenResponse,
+        expected_email: Option<&str>,
+    ) -> Result<ValidatedApiTokenResponse, Error> {
+        let claims = self.validate_access_token(&response.access_token, expected_email)?;
+        Ok(ValidatedApiTokenResponse {
+            claims,
+            refresh_token: response.refresh_token,
+        })
+    }
+
+    /// Validates an access token, returning the validated claims.
+    ///
+    /// The following validations are always performed:
+    ///
+    ///   * The token is not expired, according to the `Authentication`'s clock.
+    ///
+    ///   * The tenant ID in the token matches the `Authentication`'s tenant ID.
+    ///
+    /// If `expected_email` is provided, the token's email is additionally
+    /// validated to match `expected_email`.
     pub fn validate_access_token(
         &self,
         token: &str,
         expected_email: Option<&str>,
-    ) -> Result<Claims, Error> {
-        let msg = decode::<Claims>(token, &self.decoding_key, &self.validation)?;
+    ) -> Result<ValidatedClaims, Error> {
+        let msg = jsonwebtoken::decode::<Claims>(token, &self.decoding_key, &self.validation)?;
         if msg.claims.exp < self.now.as_secs() {
             return Err(Error::TokenExpired);
         }
@@ -100,7 +127,22 @@ impl Authentication {
                 return Err(Error::WrongEmail);
             }
         }
-        Ok(msg.claims)
+        Ok(ValidatedClaims {
+            exp: msg.claims.exp,
+            email: msg.claims.email,
+            // If the claims come from the exchange of an API token, the `sub`
+            // will be the ID of the API token and the user ID will be in the
+            // `user_id` field. If the claims come from the exchange of a
+            // username and password, the `sub` is the user ID and the `user_id`
+            // field will not be present. This makes sense once you think about
+            // it, but is confusing enough that we massage into a single
+            // `user_id` field that always contains the user ID.
+            user_id: msg.claims.user_id.unwrap_or(msg.claims.sub),
+            // The user is an administrator if they have the admin role that the
+            // `Authenticator` has been configured with.
+            is_admin: msg.claims.roles.iter().any(|r| *r == self.admin_role),
+            _private: (),
+        })
     }
 
     /// Continuously validates and refreshes an access token.
@@ -116,7 +158,7 @@ impl Authentication {
         &self,
         mut token: ApiTokenResponse,
         expected_email: String,
-        mut claims_processor: impl FnMut(Claims),
+        mut claims_processor: impl FnMut(ValidatedClaims),
     ) -> Result<impl Future<Output = ()>, Error> {
         // Do an initial full validity check of the token.
         let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
@@ -143,7 +185,7 @@ impl Authentication {
                                 &token.access_token,
                                 Some(&expected_email),
                             )?;
-                            Ok::<(ApiTokenResponse, Claims), anyhow::Error>((token, claims))
+                            Ok::<_, anyhow::Error>((token, claims))
                         };
                         match resp.await {
                             Ok((token, claims)) => {
@@ -181,9 +223,22 @@ impl Authentication {
     }
 }
 
+/// An [`ApiTokenResponse`] that has been validated by
+/// [`Authentication::validate_api_token_response`].
+pub struct ValidatedApiTokenResponse {
+    /// The validated claims.
+    pub claims: ValidatedClaims,
+    /// The refresh token from the API response.
+    pub refresh_token: String,
+}
+
 // TODO: Do we care about the sub? Do we need to validate the sub or other
 // things, even if unused?
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// The raw claims encoded in a Frontegg access token.
+///
+/// Consult the JSON Web Token specification and the Frontegg documentation to
+/// determine the precise semantics of these fields.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Claims {
     pub exp: i64,
@@ -195,14 +250,28 @@ pub struct Claims {
     pub permissions: Vec<String>,
 }
 
-impl Claims {
-    /// Extracts the most specific user ID present in the token.
-    pub fn best_user_id(&self) -> Uuid {
-        self.user_id.unwrap_or(self.sub)
-    }
+/// [`Claims`] that have been validated by
+/// [`Authentication::validate_access_token`].
+#[derive(Clone, Debug)]
+pub struct ValidatedClaims {
+    /// The time at which the claims expire, represented in seconds since the
+    /// Unix epoch.
+    pub exp: i64,
+    /// The ID of the authenticated user.
+    pub user_id: Uuid,
+    /// The email address of the authenticated user.
+    pub email: String,
+    /// Whether the authenticated user is an administrator.
+    pub is_admin: bool,
+    // Prevent construction outside of `Authentication::validate_access_token`.
+    _private: (),
+}
 
-    /// Returns true if the claims belong to a frontegg admin.
-    pub fn admin(&self, admin_name: &str) -> bool {
-        self.roles.iter().any(|role| role == admin_name)
+impl From<&ValidatedClaims> for ExternalUserMetadata {
+    fn from(claims: &ValidatedClaims) -> ExternalUserMetadata {
+        ExternalUserMetadata {
+            user_id: claims.user_id,
+            admin: claims.is_admin,
+        }
     }
 }

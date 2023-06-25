@@ -22,7 +22,7 @@ use mz_adapter::session::{
 use mz_adapter::{
     AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
 };
-use mz_frontegg_auth::{Authentication as FronteggAuthentication, Claims};
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
@@ -184,16 +184,14 @@ where
                     .await
             }
         };
-        let admin_role = frontegg.admin_role();
-        let external_metadata_rx = session.retain_external_metadata_transmitter();
+        let external_metadata_tx = session.retain_external_metadata_transmitter();
         match frontegg
             .exchange_password_for_token(&password)
             .await
             .and_then(|token| {
                 frontegg.continuously_validate_access_token(token, user.clone(), move |claims| {
-                    let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
                     // Ignore error if client has hung up.
-                    let _ = external_metadata_rx.send(external_metadata);
+                    let _ = external_metadata_tx.send(ExternalUserMetadata::from(&claims));
                 })
             }) {
             Ok(is_expired) => {
@@ -313,13 +311,6 @@ where
                 .await?;
             conn.flush().await
         }
-    }
-}
-
-fn convert_claims_to_external_metadata(claims: Claims, admin_role: &str) -> ExternalUserMetadata {
-    ExternalUserMetadata {
-        user_id: claims.best_user_id(),
-        admin: claims.admin(admin_role),
     }
 }
 
