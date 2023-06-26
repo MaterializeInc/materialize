@@ -1482,7 +1482,7 @@ pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -
     }
 }
 
-pub(crate) const fn default_catalog_privilege(object_type: ObjectType) -> MzAclItem {
+pub(crate) const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
     let acl_mode = match object_type {
         ObjectType::Table
         | ObjectType::View
