@@ -77,9 +77,23 @@ Apache License, Version 2.0. */}}
     <div class="backdrop"></div>
 
     <script>
+      /* Add anchor links to headings */
       anchors.add(
         ".content h2, .content h3, .content h4, .content h5, .content h6"
       );
+
+      /* Copy anchor links to clipboard on click */
+      $('.anchorjs-link').click(function (e) {
+        e.preventDefault();
+        var copyText = $(this).prop('href');
+
+        document.addEventListener('copy', function(e) {
+          e.clipboardData.setData('text/plain', copyText);
+          e.preventDefault();
+        }, true);
+
+        document.execCommand('copy');
+      });
 
       $(".content ol:has(p)").addClass("has-p");
 
