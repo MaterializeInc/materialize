@@ -160,7 +160,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
 
     with pytest.raises(
         ProgrammingError,
-        match='connection cannot contain duplicate availability zones',
+        match="connection cannot contain duplicate availability zones",
     ):
         mz.environmentd.sql(
             dedent(

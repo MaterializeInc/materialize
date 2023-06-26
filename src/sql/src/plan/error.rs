@@ -644,10 +644,7 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
-            Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
-                let duplicate_azs  = duplicate_azs.iter().join("\n  ");
-                write!(f, "connection cannot contain duplicate availability zones")
-            },
+            Self::DuplicatePrivatelinkAvailabilityZone {..} =>   write!(f, "connection cannot contain duplicate availability zones"),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),

@@ -3938,8 +3938,6 @@ pub fn plan_create_connection(
         if_not_exists,
         with_options,
     } = stmt;
-<<<<<<< HEAD
-
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
     if let Connection::Aws(_) = &connection {
@@ -3960,54 +3958,6 @@ pub fn plan_create_connection(
                 .system_vars()
                 .enable_default_connection_validation()
                 && connection.validate_by_default()
-=======
-    let connection = match connection {
-        CreateConnection::Kafka { with_options } => {
-            let c = KafkaConnectionOptionExtracted::try_from(with_options)?;
-            Connection::Kafka(c.to_connection(scx)?)
-        }
-        CreateConnection::Csr { with_options } => {
-            let c = CsrConnectionOptionExtracted::try_from(with_options)?;
-            Connection::Csr(c.to_connection(scx)?)
-        }
-        CreateConnection::Postgres { with_options } => {
-            let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
-            Connection::Postgres(c.to_connection(scx)?)
-        }
-        CreateConnection::Aws { with_options } => {
-            let c = AwsConnectionOptionExtracted::try_from(with_options)?;
-            let connection = AwsConfig::try_from(c)?;
-            Connection::Aws(connection)
-        }
-        CreateConnection::AwsPrivatelink { with_options } => {
-            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(with_options)?;
-            let connection = AwsPrivatelinkConnection::try_from(c)?;
-            if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
-                for connection_az in &connection.availability_zones {
-                    if !supported_azs.contains(connection_az) {
-                        return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
-                            name: connection_az.to_string(),
-                            supported_azs,
-                        });
-                    }
-                }
-                let duplicate_azs: BTreeSet<String> = connection
-                    .availability_zones
-                    .iter()
-                    .duplicates()
-                    .map(|az| az.to_string())
-                    .collect();
-                if !duplicate_azs.is_empty() {
-                    return Err(PlanError::DuplicatePrivatelinkAvailabilityZone { duplicate_azs });
-                }
-            }
-            Connection::AwsPrivatelink(connection)
-        }
-        CreateConnection::Ssh { with_options } => {
-            let c = SshConnectionOptionExtracted::try_from(with_options)?;
-            let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
-            Connection::Ssh(connection)
->>>>>>> e678137fc0 (clean PL conn err msg and use itertools duplicates)
         }
     };
 
