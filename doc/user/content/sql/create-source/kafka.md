@@ -161,22 +161,22 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the headers in a message, you can unpack the value:
+The following example assumes that each message has two `utf8` encoded headers: `client_id` and `trace_id`. To retrieve the headers in a message, you can unpack the value:
 
 ```sql
 SELECT key,
        field1,
        field2,
-       headers[1].value AS kafka_header
+       convert_from(headers[1].value, 'utf8')::bigint AS client_id
 FROM mv_kafka_metadata;
 
-  key  |  field1  |  field2  |  kafka_header
--------+----------+----------+----------------
-  foo  |  fooval  |   1000   |     hvalue
-  bar  |  barval  |   5000   |     <null>
+  key  |  field1  |  field2  |  client_id
+-------+----------+----------+-------------
+  foo  |  fooval  |    1000  |         42
+  bar  |  barval  |    5000  |     <null>
 ```
 
-, or lookup by key:
+You can also lookup headers by key:
 
 ```sql
 SELECT key,
@@ -187,14 +187,14 @@ SELECT key,
 FROM (SELECT key,
              field1,
              field2,
-             unnest(headers).key AS thekey,
-             unnest(headers).value AS value
+             unnest(headers).key AS header_key,
+             convert_from(unnest(headers).value, 'utf8') AS header_value
       FROM mv_kafka_metadata) AS km
-WHERE thekey = 'kvalue';
+WHERE header_key = 'trace_id';
 
-  key  |  field1  |  field2  |  thekey  |  value
--------+----------+----------+----------+--------
-  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+  key  |  field1  |  field2  |  header_key  |       header_value      
+-------+----------+----------+--------------+--------------------------
+  foo  |  fooval  |   1000   |   trace_id   |  xxx;yyy-yyyyy-yy;zzzzz
 ```
 
 Note that:
@@ -491,7 +491,7 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
     (data->>'field3')::float AS field_3
-  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
+  FROM (SELECT convert_from(data, 'utf8')::jsonb AS data FROM json_source);
 ```
 
 {{< /tab >}}
