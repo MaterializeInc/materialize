@@ -1428,10 +1428,10 @@ fn jsonb_get_int64<'a>(
     match a {
         Datum::List(list) => {
             let i = if i >= 0 {
-                usize::cast_from(u64::try_from(i).expect("known to be positive"))
+                usize::cast_from(i.unsigned_abs())
             } else {
                 // index backwards from the end
-                let i = usize::cast_from(u64::try_from(i.abs()).expect("known to be positive"));
+                let i = usize::cast_from(i.unsigned_abs());
                 (list.iter().count()).wrapping_sub(i)
             };
             match list.iter().nth(i) {
@@ -1495,11 +1495,10 @@ fn jsonb_get_path<'a>(
             Datum::List(list) => match strconv::parse_int64(key) {
                 Ok(i) => {
                     let i = if i >= 0 {
-                        usize::cast_from(u64::try_from(i).expect("known to be positive"))
+                        usize::cast_from(i.unsigned_abs())
                     } else {
                         // index backwards from the end
-                        let i =
-                            usize::cast_from(u64::try_from(i.abs()).expect("known to be positive"));
+                        let i = usize::cast_from(i.unsigned_abs());
                         (list.iter().count()).wrapping_sub(i)
                     };
                     match list.iter().nth(i) {
@@ -1664,10 +1663,10 @@ fn jsonb_delete_int64<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena
     match a {
         Datum::List(list) => {
             let i = if i >= 0 {
-                usize::cast_from(u64::try_from(i).expect("known to be positive"))
+                usize::cast_from(i.unsigned_abs())
             } else {
                 // index backwards from the end
-                let i = usize::cast_from(u64::try_from(i.abs()).expect("known to be positive"));
+                let i = usize::cast_from(i.unsigned_abs());
                 (list.iter().count()).wrapping_sub(i)
             };
             let elems = list
