@@ -11,7 +11,7 @@ axum = { version = "0.6.7" }
 base64 = "0.13.1"
 clap = { version = "3.2.20", features = [ "derive" ] }
 csv = "1.2.1"
-dirs = "4.0.0"
+dirs = "5.0.0"
 indicatif = "0.17.2"
 maplit = "1.0.2"
 mz-cloud-api = { path = "../cloud-api" }
