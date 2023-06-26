@@ -201,9 +201,13 @@ support for `TRANSFORM USING`.
 There are three metrics we should track, to measure success and performance of this new source:
 
 1. Number of `WEBHOOK` sources created.
+    *  This will be collected via the Prometheus SQL exporter running a query like:
+       `SELECT count(*) FROM mz_sources WHERE type = 'webhook';`.
 2. Number of requests made to the `/api/webhook` endpoint.
     * Subdivided by number of successes and failures.
+    * This will be a new Prometheus counter called `mz_webhook_source_requests`.
 3. Response time of the `/api/webhook` endpoint.
+    * This will be a new Prometheus histogram called `mz_webhook_source_request_duration_ms`.
 
 A second way to measure success, and get feedback on this new feature, is to use it internally.
 To start, we plan to dogfood the new source with the following applications:
@@ -311,4 +315,7 @@ CREATE SOURCE <name> FROM WEBHOOK
 
 ## Open questions
 
-None at the moment!
+* Security. Users can now push data to Materialize via a publically accessible address. This opens
+  up a new attack vector that we probably need to lock down. For example, maybe we support an allow
+  list or block list of IP addresses. Do we need to have DDOS protection higher up in the stack? We
+  should at least come up with a plan here so we know how we're exposed and prioritize from there.
