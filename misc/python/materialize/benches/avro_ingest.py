@@ -127,40 +127,40 @@ def main() -> None:
 
     conn = pg8000.connect(host="localhost", port=6875, user="materialize")
     conn.autocommit = True
-    cur = conn.cursor()
-    cur.execute(
-        f"""CREATE CONNECTION IF NOT EXISTS csr_conn
-        TO CONFLUENT SCHEMA REGISTRY (
-            URL 'http://{args.confluent_host}:8081'
-        )"""
-    )
-    cur.execute(
-        f"""CREATE CONNECTION kafka_conn
-        TO KAFKA (BROKER '{args.confluent_host}:9092')"""
-    )
-    cur.execute(
-        """CREATE SOURCE src
-        FROM KAFKA CONNECTION kafka_conn (TOPIC 'bench_data')
-        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn"""
-    )
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""CREATE CONNECTION IF NOT EXISTS csr_conn
+            TO CONFLUENT SCHEMA REGISTRY (
+                URL 'http://{args.confluent_host}:8081'
+            )"""
+        )
+        cur.execute(
+            f"""CREATE CONNECTION kafka_conn
+            TO KAFKA (BROKER '{args.confluent_host}:9092')"""
+        )
+        cur.execute(
+            """CREATE SOURCE src
+            FROM KAFKA CONNECTION kafka_conn (TOPIC 'bench_data')
+            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn"""
+        )
 
-    results_file = open("results.csv", "w")
+        results_file = open("results.csv", "w")
 
-    print("Rss,Vms,User Cpu,System Cpu,Wall Time", file=results_file, flush=True)
-    prev = PrevStats(time.time(), 0.0, 0.0)
-    for _ in range(args.trials):
-        cur.execute("DROP VIEW IF EXISTS cnt")
-        cur.execute("CREATE MATERIALIZED VIEW cnt AS SELECT count(*) FROM src")
-        while True:
-            try:
-                cur.execute("SELECT * FROM cnt")
-                n = cur.fetchone()[0]
-                if n >= args.records:
-                    break
-            except ProgrammingError:
-                pass
-            time.sleep(1)
-        prev = print_stats(mz_container, prev, results_file)
+        print("Rss,Vms,User Cpu,System Cpu,Wall Time", file=results_file, flush=True)
+        prev = PrevStats(time.time(), 0.0, 0.0)
+        for _ in range(args.trials):
+            cur.execute("DROP VIEW IF EXISTS cnt")
+            cur.execute("CREATE MATERIALIZED VIEW cnt AS SELECT count(*) FROM src")
+            while True:
+                try:
+                    cur.execute("SELECT * FROM cnt")
+                    n = cur.fetchone()[0]
+                    if n >= args.records:
+                        break
+                except ProgrammingError:
+                    pass
+                time.sleep(1)
+            prev = print_stats(mz_container, prev, results_file)
 
 
 KEY_SCHEMA = json.dumps(
