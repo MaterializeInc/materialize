@@ -27,7 +27,8 @@ COMPLETE 0
 query TTTTTT
 SELECT * FROM mz_default_privileges
 ----
-p  NULL  NULL  TYPE  p  U
+p  NULL  NULL  TYPE     p   U
+p  NULL  NULL  CLUSTER  s2  U
 
 statement ok
 CREATE TYPE ty AS LIST (ELEMENT TYPE = int4);
@@ -56,6 +57,7 @@ LEFT JOIN mz_roles AS roles ON defaults.role_id = roles.id
 LEFT JOIN mz_roles AS grantees ON defaults.grantee = grantees.id
 LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
 LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
+WHERE grantees.name IS NULL OR grantees.name <> 'mz_introspection'
 ORDER BY role_name, grantee_name
 
 # Test altering default privileges
@@ -4539,6 +4541,7 @@ c  r2=U/materialize
 c  r1=UC/materialize
 c  r3=UC/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4553,6 +4556,7 @@ SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r6
 c  r6=UC/r6
+c  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4569,6 +4573,7 @@ SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r7
 c  r7=UC/r7
+c  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4584,6 +4589,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
+c  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
@@ -4651,6 +4657,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4664,6 +4671,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r6=UC/r6
+c  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4679,6 +4687,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r7=UC/r7
+c  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4694,6 +4703,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
+c  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
@@ -5033,6 +5043,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO PUBLIC
 
 statement error role name "mz_system" is reserved
 ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO mz_system
+
+statement error role name "mz_introspection" is reserved
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CLUSTERS FROM mz_introspection
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system

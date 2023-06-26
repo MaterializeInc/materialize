@@ -365,6 +365,11 @@ pub async fn initialize(
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
+        proto::MzAclItem {
+            grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
+        },
         rbac::owner_privilege(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
@@ -566,18 +571,34 @@ pub async fn initialize(
     DEFAULT_PRIVILEGES_COLLECTION
         .initialize(
             tx,
-            vec![(
-                proto::DefaultPrivilegesKey {
-                    role_id: Some(RoleId::Public.into_proto()),
-                    database_id: None,
-                    schema_id: None,
-                    object_type: mz_sql::catalog::ObjectType::Type.into_proto().into(),
-                    grantee: Some(RoleId::Public.into_proto()),
-                },
-                proto::DefaultPrivilegesValue {
-                    privileges: Some(AclMode::USAGE.into_proto()),
-                },
-            )],
+            vec![
+                // mz_introspection needs USAGE privileges on all clusters for the
+                // prometheus-exporter.
+                (
+                    proto::DefaultPrivilegesKey {
+                        role_id: Some(RoleId::Public.into_proto()),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: mz_sql::catalog::ObjectType::Cluster.into_proto().into(),
+                        grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
+                    },
+                    proto::DefaultPrivilegesValue {
+                        privileges: Some(AclMode::USAGE.into_proto()),
+                    },
+                ),
+                (
+                    proto::DefaultPrivilegesKey {
+                        role_id: Some(RoleId::Public.into_proto()),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: mz_sql::catalog::ObjectType::Type.into_proto().into(),
+                        grantee: Some(RoleId::Public.into_proto()),
+                    },
+                    proto::DefaultPrivilegesValue {
+                        privileges: Some(AclMode::USAGE.into_proto()),
+                    },
+                ),
+            ],
         )
         .await?;
     SYSTEM_PRIVILEGES_COLLECTION

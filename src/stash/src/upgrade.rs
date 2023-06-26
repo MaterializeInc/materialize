@@ -57,6 +57,7 @@ pub mod v18_to_v19;
 pub mod v19_to_v20;
 pub mod v20_to_v21;
 pub mod v21_to_v22;
+pub mod v22_to_v23;
 
 pub use json_to_proto::migrate_json_to_proto;
 
