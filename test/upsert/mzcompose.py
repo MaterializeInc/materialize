@@ -106,7 +106,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         options=[
             "--orchestrator-process-scratch-directory=/mzdata/source_data",
         ],
-        additional_system_parameter_defaults={"disk_cluster_replicas_default": "true"},
+        additional_system_parameter_defaults={"disk_cluster_replicas_default": "true", "enable_managed_clusters": "true"},
         environment_extra=materialized_environment_extra,
     )
 
