@@ -389,7 +389,10 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff_spine, trace)?;
+        if !diff_spine.is_empty() {
+            apply_diffs_spine(metrics, diff_spine, trace)?;
+            debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+        }
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==

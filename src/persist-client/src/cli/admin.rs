@@ -200,7 +200,7 @@ pub async fn force_compaction(
             let req = CompactReq {
                 shard_id,
                 desc: req.desc,
-                inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
             };
             let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
             let bytes = req

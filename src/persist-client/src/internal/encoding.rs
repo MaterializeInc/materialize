@@ -864,6 +864,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
                 debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
             }
         }
+        debug_assert_eq!(ret.validate(), Ok(()), "{:?}", ret);
         Ok(ret)
     }
 }
