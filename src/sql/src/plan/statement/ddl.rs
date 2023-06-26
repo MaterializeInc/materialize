@@ -3991,7 +3991,12 @@ pub fn plan_create_connection(
                         });
                     }
                 }
-                let duplicate_azs = connection.availability_zones.iter().duplicates().map(|az| az.to_string()).collect();
+                let duplicate_azs: BTreeSet<String> = connection
+                    .availability_zones
+                    .iter()
+                    .duplicates()
+                    .map(|az| az.to_string())
+                    .collect();
                 if !duplicate_azs.is_empty() {
                     return Err(PlanError::DuplicatePrivatelinkAvailabilityZone { duplicate_azs });
                 }
