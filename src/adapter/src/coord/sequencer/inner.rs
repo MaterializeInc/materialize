@@ -67,7 +67,6 @@ use mz_sql_parser::ast::TransactionMode;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::{EmptyStatisticsOracle, Optimizer};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
