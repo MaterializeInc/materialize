@@ -94,7 +94,6 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     lcov \
     libclang-dev \
     libpq-dev \
-    lld \
     llvm \
     make \
     openssh-client \
@@ -127,7 +126,10 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
-    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && curl -fsSL https://github.com/rui314/mold/releases/download/v1.11.0/mold-1.11.0-$ARCH_GCC-linux.tar.gz > mold.tar.gz \
+    && tar -xzf mold.tar.gz \
+    && cp mold-1.11.0-$ARCH_GCC-linux/bin/mold /usr/local/bin/mold
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
@@ -174,10 +176,10 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \
     && cargo install --root /usr/local --version "=0.3.6" cargo-binutils
 
-# Link the system lld into the cross-compiling sysroot.
-
-RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
-    && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
+# Link the system mold into the cross-compiling sysroot.
+# TODO(def-) Use mold endings and switch to -fuse-ld=mold when crosstool-ng is updated
+RUN ln -s /usr/local/bin/mold /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
+    && ln -s /usr/local/bin/mold /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
 # Install the Antithesis stub instrumentation library.
 
