@@ -177,3 +177,129 @@ impl IntoResponse for WebhookError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+    use bytes::Bytes;
+    use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+    use mz_adapter::AdapterError;
+    use mz_repr::{ColumnType, GlobalId, ScalarType};
+    use mz_storage_client::controller::StorageError;
+    use proptest::prelude::*;
+
+    use super::{pack_row, WebhookError};
+
+    #[test]
+    fn smoke_test_adapter_error_response_status() {
+        // Unsupported errors get mapped to a certain response status.
+        let resp = WebhookError::from(AdapterError::Unsupported("test")).into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // All other errors should map to 500.
+        let resp = WebhookError::from(AdapterError::Internal("test".to_string())).into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn smoke_test_storage_error_response_status() {
+        // Resource exhausted should get mapped to a specific status code.
+        let resp = WebhookError::from(StorageError::ResourceExhausted("test")).into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // IdentifierMissing should also get mapped to a specific status code.
+        let resp =
+            WebhookError::from(StorageError::IdentifierMissing(GlobalId::User(42))).into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // All other errors should map to 500.
+        let resp = WebhookError::from(AdapterError::Internal("test".to_string())).into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_pack_invalid_column_type() {
+        let body = Bytes::from(vec![42, 42, 42, 42]);
+        let headers: HeaderMap<HeaderValue> = HeaderMap::default();
+
+        // Int64 is an invalid column type for a webhook source.
+        let body_ty = ColumnType {
+            scalar_type: ScalarType::Int64,
+            nullable: false,
+        };
+        assert!(pack_row(body, headers, body_ty, None).is_err());
+    }
+
+    fn headermap_strat() -> impl Strategy<Value = HeaderMap> {
+        // TODO(parkmycar): We can probably be better about generating a random but valid
+        // HeaderMap. This will do for now though.
+        let name_strat = proptest::string::string_regex("[a-zA-Z0-9]+").unwrap();
+        let val_strat = proptest::string::string_regex("[a-zA-Z0-9]*").unwrap();
+
+        proptest::collection::vec((name_strat, val_strat), 0..32).prop_map(|pairs| {
+            pairs
+                .into_iter()
+                .map(|(key, val)| {
+                    (
+                        HeaderName::from_bytes(key.as_bytes()).unwrap(),
+                        HeaderValue::from_str(&val).unwrap(),
+                    )
+                })
+                .collect()
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_pack_row_never_panics(
+            body: Vec<u8>,
+            headers in headermap_strat(),
+            body_ty: ColumnType,
+            header_ty: Option<ColumnType>
+        ) {
+            let body = Bytes::from(body);
+            // Call this method to make sure it doesn't panic.
+            let _ = pack_row(body, headers, body_ty, header_ty);
+        }
+
+        #[test]
+        fn proptest_pack_row_succeeds_for_bytes(
+            body: Vec<u8>,
+            headers in headermap_strat(),
+            include_headers: bool,
+        ) {
+            let body = Bytes::from(body);
+
+            let body_ty = ColumnType { scalar_type: ScalarType::Bytes, nullable: false };
+            let header_ty = include_headers.then(|| ColumnType {
+                scalar_type: ScalarType::Map {
+                    value_type: Box::new(ScalarType::String),
+                    custom_id: None,
+                },
+                nullable: false,
+            });
+
+            prop_assert!(pack_row(body, headers, body_ty, header_ty).is_ok());
+        }
+
+        #[test]
+        fn proptest_pack_row_succeeds_for_strings(
+            body: String,
+            headers in headermap_strat(),
+            include_headers: bool,
+        ) {
+            let body = Bytes::from(body);
+
+            let body_ty = ColumnType { scalar_type: ScalarType::String, nullable: false };
+            let header_ty = include_headers.then(|| ColumnType {
+                scalar_type: ScalarType::Map {
+                    value_type: Box::new(ScalarType::String),
+                    custom_id: None,
+                },
+                nullable: false,
+            });
+
+            prop_assert!(pack_row(body, headers, body_ty, header_ty).is_ok());
+        }
+    }
+}
