@@ -57,7 +57,9 @@ use crate::catalog::{
     CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
     RoleAttributes,
 };
-use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
+use crate::names::{
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId,
+};
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -68,6 +70,7 @@ pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
+pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
@@ -81,6 +84,7 @@ pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, Win
 pub use notice::PlanNotice;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
+pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::PlannedRoleAttributes;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
@@ -111,13 +115,14 @@ pub enum Plan {
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
     ShowVariable(ShowVariablePlan),
+    InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
     SetTransaction(SetTransactionPlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction(CommitTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
-    Peek(PeekPlan),
+    Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
     CopyRows(CopyRowsPlan),
@@ -153,6 +158,7 @@ pub enum Plan {
     RevokePrivileges(RevokePrivilegesPlan),
     AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
+    SideEffectingFunc(SideEffectingFunc),
 }
 
 impl Plan {
@@ -192,7 +198,7 @@ impl Plan {
             StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::Subscribe],
+            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -228,14 +234,15 @@ impl Plan {
             StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
-            StatementKind::Select => vec![PlanKind::Peek],
+            StatementKind::Select => vec![PlanKind::Select, PlanKind::SideEffectingFunc],
             StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
-                PlanKind::Peek,
+                PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
+                PlanKind::InspectShard,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
@@ -285,13 +292,14 @@ impl Plan {
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
             Plan::ShowVariable(_) => "show variable",
+            Plan::InspectShard(_) => "inspect shard",
             Plan::SetVariable(_) => "set variable",
             Plan::ResetVariable(_) => "reset variable",
             Plan::SetTransaction(_) => "set transaction",
             Plan::StartTransaction(_) => "start transaction",
             Plan::CommitTransaction(_) => "commit",
             Plan::AbortTransaction(_) => "abort",
-            Plan::Peek(_) => "select",
+            Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
             Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
@@ -363,6 +371,7 @@ impl Plan {
             Plan::RevokePrivileges(_) => "revoke privilege",
             Plan::AlterDefaultPrivileges(_) => "alter default privileges",
             Plan::ReassignOwned(_) => "reassign owned",
+            Plan::SideEffectingFunc(_) => "side effecting func",
         }
     }
 }
@@ -635,7 +644,7 @@ pub struct DropOwnedPlan {
     /// All object IDs to drop.
     pub drop_ids: Vec<ObjectId>,
     /// The privileges to revoke.
-    pub privilege_revokes: Vec<(ObjectId, MzAclItem)>,
+    pub privilege_revokes: Vec<(SystemObjectId, MzAclItem)>,
     /// The default privileges to revoke.
     pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
 }
@@ -643,6 +652,11 @@ pub struct DropOwnedPlan {
 #[derive(Debug)]
 pub struct ShowVariablePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct InspectShardPlan {
+    pub id: GlobalId,
 }
 
 #[derive(Debug)]
@@ -670,7 +684,7 @@ pub struct SetTransactionPlan {
 }
 
 #[derive(Clone, Debug)]
-pub struct PeekPlan {
+pub struct SelectPlan {
     pub source: MirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,
@@ -952,8 +966,8 @@ pub struct RevokeRolePlan {
 pub struct UpdatePrivilege {
     /// The privileges being granted/revoked on an object.
     pub acl_mode: AclMode,
-    /// The ID of the object.
-    pub object_id: ObjectId,
+    /// The ID of the object receiving privileges.
+    pub target_id: SystemObjectId,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }
@@ -1023,8 +1037,7 @@ pub struct Ingestion {
     pub desc: SourceDesc,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
-    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
-    pub progress_subsource: Option<GlobalId>,
+    pub progress_subsource: GlobalId,
 }
 
 #[derive(Clone, Debug)]

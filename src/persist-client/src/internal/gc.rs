@@ -22,7 +22,7 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, warn, Instrument, Span};
+use tracing::{debug, debug_span, error, warn, Instrument, Span};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
@@ -341,16 +341,31 @@ where
         // a rollup to the earliest state we fetched. this invariant isn't affected
         // by the GC work we just performed, but it is a property of GC correctness
         // overall / is a convenient place to run the assertion.
-        assert!(
-            states
-                .state()
-                .collections
-                .rollups
-                .contains_key(&initial_seqno),
+        let valid_pre_gc_state = states
+            .state()
+            .collections
+            .rollups
+            .contains_key(&initial_seqno);
+
+        debug_assert!(
+            valid_pre_gc_state,
             "rollups = {:?}, state seqno = {}",
             states.state().collections.rollups,
             initial_seqno
         );
+
+        if !valid_pre_gc_state {
+            // this should never be true in the steady-state, but may be true the
+            // first time GC runs after fixing any correctness bugs related to our
+            // state version invariants. we'll make it an error so we can track
+            // any violations in Sentry, but opt not to panic because the root
+            // cause of the violation cannot be from this GC run (in fact, this
+            // GC run, assuming it's correct, should have fixed the violation!)
+            error!("earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
+                states.state().collections.rollups,
+                initial_seqno
+            );
+        }
 
         report_step_timing(
             &machine

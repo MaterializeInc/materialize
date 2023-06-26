@@ -32,6 +32,7 @@ use crate::plan::expr::{
 };
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
+use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
 use crate::session::vars;
@@ -357,6 +358,7 @@ pub fn sql_impl(
             relation_type: &RelationType::empty(),
             allow_aggregates: false,
             allow_subqueries: true,
+            allow_parameters: true,
             allow_windows: false,
         };
 
@@ -867,8 +869,8 @@ impl From<ScalarBaseType> for ParamType {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ReturnType {
-    typ: Option<ParamType>,
-    is_set_of: bool,
+    pub typ: Option<ParamType>,
+    pub is_set_of: bool,
 }
 
 impl ReturnType {
@@ -1706,7 +1708,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         };
     }
 
-    builtins! {
+    let mut builtins = builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
         // SELECT oid, proname, proargtypes::regtype[]
@@ -1744,7 +1746,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 };
 
                 Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs: vec![elem, dims] })
-            }) => ArrayAnyCompatible, 1193;
+            }) => ArrayAny, 1193;
             params!(
                 AnyElement,
                 ScalarType::Array(Box::new(ScalarType::Int32)),
@@ -1764,7 +1766,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "array_in" => Scalar {
             params!(String, Oid, Int32) =>
-                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
+                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAny, 750;
         },
         "array_length" => Scalar {
             params![ArrayAny, Int64] => BinaryFunc::ArrayLength => Int32, 2176;
@@ -2073,6 +2075,36 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_secret_privilege", "mz_secrets")) => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_OID_TEXT_OID;
             params!(String, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_OID;
+        },
+        "has_system_privilege" => Scalar {
+            params!(String, String) => sql_impl_func("has_system_privilege(mz_internal.mz_role_oid($1), $2)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_TEXT_OID;
+            params!(Oid, String) => sql_impl_func("
+                CASE
+                -- We need to validate the privileges to return a proper error before
+                -- anything else.
+                WHEN NOT mz_internal.mz_validate_privileges($2)
+                OR $1 IS NULL
+                OR $2 IS NULL
+                OR $1 NOT IN (SELECT oid FROM mz_roles)
+                THEN NULL
+                ELSE COALESCE(
+                    (
+                        SELECT
+                            bool_or(
+                                mz_internal.mz_acl_item_contains_privilege(privileges, $2)
+                            )
+                                AS has_system_privilege
+                        FROM mz_system_privileges
+                        LEFT JOIN mz_roles ON
+                                mz_internal.mz_aclitem_grantee(privileges) = mz_roles.id
+                        WHERE
+                            mz_roles.oid = $1
+                    ),
+                    false
+                )
+                END
+            ") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_OID_TEXT_OID;
+            params!(String) => sql_impl_func("has_system_privilege(current_user, $1)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
         },
         "has_table_privilege" => Scalar {
             params!(String, String, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 1922;
@@ -2740,7 +2772,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 // COUNT(*) is equivalent to COUNT(true).
                 Ok((HirScalarExpr::literal_true(), AggregateFunc::Count))
             }) => Int64, 2803;
-            params!(Any) => AggregateFunc::Count => Int32, 2147;
+            params!(Any) => AggregateFunc::Count => Int64, 2147;
         },
         "max" => Aggregate {
             params!(Bool) => AggregateFunc::MaxBool => Bool, oid::FUNC_MAX_BOOL_OID;
@@ -2866,7 +2898,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "lag" => ValueWindow {
             // All args are encoded into a single record to be handled later
-            params!(Any) => Operation::unary(|ecx, e| {
+            params!(AnyElement) => Operation::unary(|ecx, e| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2875,8 +2907,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lag))
-            }) => Any, 3106;
-            params!(Any, Int32) => Operation::binary(|ecx, e, offset| {
+            }) => AnyElement, 3106;
+            params!(AnyElement, Int32) => Operation::binary(|ecx, e, offset| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2885,7 +2917,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lag))
-            }) => Any, 3107;
+            }) => AnyElement, 3107;
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2898,7 +2930,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "lead" => ValueWindow {
             // All args are encoded into a single record to be handled later
-            params!(Any) => Operation::unary(|ecx, e| {
+            params!(AnyElement) => Operation::unary(|ecx, e| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2907,8 +2939,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lead))
-            }) => Any, 3109;
-            params!(Any, Int32) => Operation::binary(|ecx, e, offset| {
+            }) => AnyElement, 3109;
+            params!(AnyElement, Int32) => Operation::binary(|ecx, e, offset| {
                 let typ = ecx.scalar_type(&e);
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2917,7 +2949,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
                 };
                 Ok((e, ValueWindowFunc::Lead))
-            }) => Any, 3110;
+            }) => AnyElement, 3110;
             params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
@@ -2929,10 +2961,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             }) => AnyCompatible, 3111;
         },
         "first_value" => ValueWindow {
-            params!(Any) => ValueWindowFunc::FirstValue => Any, 3112;
+            params!(AnyElement) => ValueWindowFunc::FirstValue => AnyElement, 3112;
         },
         "last_value" => ValueWindow {
-            params!(Any) => ValueWindowFunc::LastValue => Any, 3113;
+            params!(AnyElement) => ValueWindowFunc::LastValue => AnyElement, 3113;
         },
 
         // Table functions.
@@ -3101,7 +3133,34 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "decode" => Scalar {
             params!(String, String) => BinaryFunc::Decode => Bytes, 1947;
         }
+    };
+
+    // Add side-effecting functions, which are defined in a separate module
+    // using a restricted set of function definition features (e.g., no
+    // overloads) to make them easier to plan.
+    for sef_builtin in PG_CATALOG_SEF_BUILTINS.values() {
+        builtins.insert(
+            sef_builtin.name,
+            Func::Scalar(vec![FuncImpl {
+                oid: sef_builtin.oid,
+                params: ParamList::Exact(
+                    sef_builtin
+                        .param_types
+                        .iter()
+                        .map(|t| ParamType::from(t.clone()))
+                        .collect(),
+                ),
+                return_type: ReturnType::scalar(ParamType::from(
+                    sef_builtin.return_type.scalar_type.clone(),
+                )),
+                op: Operation::variadic(|_ecx, _e| {
+                    bail_unsupported!(format!("{} in this position", sef_builtin.name))
+                }),
+            }]),
+        );
     }
+
+    builtins
 });
 
 pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
@@ -3269,7 +3328,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 })
             }) =>
                 // This return type should be equivalent to "ArrayElementAny", but this would be its sole use.
-                ReturnType::set_of(Any), 2331;
+                ReturnType::set_of(AnyElement), 2331;
             vec![ListAny] => Operation::unary(move |ecx, e| {
                 let el_typ = ecx.scalar_type(&e).unwrap_list_element_type().clone();
                 Ok(TableFuncPlan {
@@ -3608,11 +3667,11 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Timestamp, Interval) => AddTimestampInterval => Timestamp, 2066;
             params!(Interval, Timestamp) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
-            } => Interval, 2553;
+            } => Timestamp, 2553;
             params!(TimestampTz, Interval) => AddTimestampTzInterval => TimestampTz, 1327;
             params!(Interval, TimestampTz) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
-            } => Interval, 2554;
+            } => TimestampTz, 2554;
             params!(Date, Interval) => AddDateInterval => Timestamp, 1076;
             params!(Interval, Date) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateInterval)))
@@ -3624,7 +3683,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Time, Interval) => AddTimeInterval => Time, 1800;
             params!(Interval, Time) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
-            } => Interval, 1849;
+            } => Time, 1849;
             params!(Numeric, Numeric) => AddNumeric => Numeric, 1758;
             params!(RangeAny, RangeAny) => RangeUnion => RangeAny, 3898;
         },

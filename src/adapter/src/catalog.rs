@@ -57,19 +57,20 @@ use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
     CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-    EnvironmentId, IdReference, NameReference, RoleAttributes, SessionCatalog, TypeReference,
+    EnvironmentId, IdReference, NameReference, RoleAttributes, SessionCatalog, SystemObjectType,
+    TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
+    SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
+    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -86,7 +87,9 @@ use mz_storage_client::types::parameters::StorageParameters;
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
+use mz_storage_client::types::sources::{
+    IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
+};
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -193,6 +196,7 @@ pub struct CatalogState {
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     default_privileges: DefaultPrivileges,
+    system_privileges: PrivilegeMap,
 }
 
 impl CatalogState {
@@ -228,6 +232,7 @@ impl CatalogState {
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
             default_privileges: Default::default(),
+            system_privileges: Default::default(),
         }
     }
 
@@ -1701,12 +1706,6 @@ impl Database {
             .iter()
             .map(|(key, value)| (key.to_string(), value.debug_json()))
             .collect();
-        let privileges_by_str: BTreeMap<String, _> = self
-            .privileges
-            .0
-            .iter()
-            .map(|(key, value)| (key.to_string(), value))
-            .collect();
 
         serde_json::json!({
             "name": self.name,
@@ -1714,7 +1713,7 @@ impl Database {
             "schemas_by_id": schemas_by_str,
             "schemas_by_name": self.schemas_by_name,
             "owner_id": self.owner_id,
-            "privileges": privileges_by_str,
+            "privileges": self.privileges.debug_json(),
         })
     }
 }
@@ -1735,20 +1734,13 @@ impl Schema {
     /// Returns a `Schema` formatted as a `serde_json::Value` that is suitable for debugging. For
     /// example `CatalogState::dump`.
     fn debug_json(&self) -> serde_json::Value {
-        let privileges_by_str: BTreeMap<String, _> = self
-            .privileges
-            .0
-            .iter()
-            .map(|(key, value)| (key.to_string(), value))
-            .collect();
-
         serde_json::json!({
             "name": self.name,
             "id": self.id,
             "items": self.items,
             "functions": self.functions,
             "owner_id": self.owner_id,
-            "privileges": privileges_by_str,
+            "privileges": self.privileges.debug_json(),
         })
     }
 }
@@ -1939,13 +1931,52 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
-    Ingestion(Ingestion),
+    Ingestion(IngestionDescription),
     /// Receives data from some other source
     Source,
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
+}
+
+impl DataSourceDesc {
+    /// Describes the ingestion to the adapter, which essentially just enriches the a higher-level
+    /// [`PlanIngestion`] with a [`ClusterId`].
+    pub fn ingestion(
+        id: GlobalId,
+        ingestion: PlanIngestion,
+        instance_id: ClusterId,
+    ) -> DataSourceDesc {
+        let source_imports = ingestion
+            .source_imports
+            .iter()
+            .map(|id| (*id, ()))
+            .collect();
+
+        let source_exports = ingestion
+            .subsource_exports
+            .iter()
+            // By convention the first output corresponds to the main source object
+            .chain(std::iter::once((&id, &0)))
+            .map(|(id, output_index)| {
+                let export = SourceExport {
+                    output_index: *output_index,
+                    storage_metadata: (),
+                };
+                (*id, export)
+            })
+            .collect();
+
+        DataSourceDesc::Ingestion(IngestionDescription {
+            desc: ingestion.desc.clone(),
+            ingestion_metadata: (),
+            source_imports,
+            source_exports,
+            instance_id,
+            remap_collection_id: ingestion.progress_subsource,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2031,9 +2062,11 @@ impl Source {
     pub fn user_controllable_persist_shard_count(&self) -> i64 {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => {
-                // Ingestions with subsources only use persist shards for their subsources; those
-                // without subsources use 1.
-                std::cmp::max(1, i64::try_from(ingestion.subsource_exports.len()).expect("fewer than i64::MAX persist shards"))
+                // Ingestions with subsources only use persist shards for their
+                // subsources (i.e. not the primary source's persist shard);
+                // those without subsources use 1 (their primary source's
+                // persist shard).
+                std::cmp::max(1, i64::try_from(ingestion.source_exports.len().saturating_sub(1)).expect("fewer than i64::MAX persist shards"))
             }
             //  DataSourceDesc::Source represents subsources, which are accounted for in their
             //  primary source's ingestion.
@@ -2051,24 +2084,6 @@ pub struct Log {
     pub variant: LogVariant,
     /// Whether the log is backed by a storage collection.
     pub has_storage_collection: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Ingestion {
-    // TODO(benesch): this field contains connection information that could be
-    // derived from the connection ID. Too hard to fix at the moment.
-    pub desc: SourceDesc,
-    pub source_imports: BTreeSet<GlobalId>,
-    /// The *additional* subsource exports of this ingestion. Each collection identified by its
-    /// GlobalId will contain the contents of this ingestion's output stream that is identified by
-    /// the index.
-    ///
-    /// This map does *not* include the export of the source associated with the ingestion itself
-    pub subsource_exports: BTreeMap<GlobalId, usize>,
-    pub cluster_id: ClusterId,
-    /// The ID of this collection's remap/progress collection.
-    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
-    pub remap_collection_id: Option<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2404,7 +2419,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.cluster_id),
+                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => None,
@@ -2570,22 +2585,19 @@ impl CatalogEntry {
     }
 
     /// Returns the `GlobalId` of all of this entry's subsources.
-    pub fn subsources(&self) -> Vec<GlobalId> {
+    pub fn subsources(&self) -> BTreeSet<GlobalId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => ingestion
-                    .subsource_exports
+                    .source_exports
                     .keys()
+                    .filter(|id| id != &&self.id)
                     .copied()
-                    .chain(std::iter::once(
-                        ingestion
-                            .remap_collection_id
-                            .expect("remap collection must named by this point"),
-                    ))
+                    .chain(std::iter::once(ingestion.remap_collection_id))
                     .collect(),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Source => vec![],
+                | DataSourceDesc::Source => BTreeSet::new(),
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
@@ -2596,7 +2608,29 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => vec![],
+            | CatalogItem::Connection(_) => BTreeSet::new(),
+        }
+    }
+
+    /// Returns the `GlobalId` of all of this entry's progress ID.
+    pub fn progress_id(&self) -> Option<GlobalId> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => None,
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2757,7 +2791,7 @@ impl DefaultPrivileges {
         } else {
             object_type
         };
-        let valid_acl_mode = rbac::all_object_privileges(object_type);
+        let valid_acl_mode = rbac::all_object_privileges(SystemObjectType::Object(object_type));
 
         // Collect all entries that apply to the provided object details.
         // If either `database_id` or `schema_id` are `None`, then we might end up with duplicate
@@ -3012,6 +3046,7 @@ impl Catalog {
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
                 default_privileges: DefaultPrivileges::default(),
+                system_privileges: PrivilegeMap::default(),
             },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
@@ -3037,7 +3072,7 @@ impl Catalog {
                     schemas_by_id: BTreeMap::new(),
                     schemas_by_name: BTreeMap::new(),
                     owner_id,
-                    privileges: MzAclItem::group_by_grantee(privileges),
+                    privileges: PrivilegeMap::from_mz_acl_items(privileges),
                 },
             );
             catalog
@@ -3087,7 +3122,7 @@ impl Catalog {
                     items: BTreeMap::new(),
                     functions: BTreeMap::new(),
                     owner_id,
-                    privileges: MzAclItem::group_by_grantee(privileges),
+                    privileges: PrivilegeMap::from_mz_acl_items(privileges),
                 },
             );
             schemas_by_name.insert(name.clone(), id);
@@ -3122,6 +3157,9 @@ impl Catalog {
                 .default_privileges
                 .grant(default_privilege_object, default_privilege);
         }
+
+        let system_privileges = catalog.storage().await.load_system_privileges().await?;
+        catalog.state.system_privileges.grant_all(system_privileges);
 
         catalog
             .load_system_configuration(
@@ -3194,8 +3232,8 @@ impl Catalog {
                                 has_storage_collection: false,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
-                                rbac::default_catalog_privilege(
+                            PrivilegeMap::from_mz_acl_items(vec![
+                                rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ),
                                 rbac::owner_privilege(
@@ -3224,8 +3262,10 @@ impl Catalog {
                                 is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
-                                rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Table),
+                            PrivilegeMap::from_mz_acl_items(vec![
+                                rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Table,
+                                ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Table,
                                     MZ_SYSTEM_ROLE_ID,
@@ -3262,8 +3302,10 @@ impl Catalog {
                             name,
                             item,
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
-                                rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::View),
+                            PrivilegeMap::from_mz_acl_items(vec![
+                                rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::View,
+                                ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::View,
                                     MZ_SYSTEM_ROLE_ID,
@@ -3309,8 +3351,8 @@ impl Catalog {
                                 is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            MzAclItem::group_by_grantee(vec![
-                                rbac::default_catalog_privilege(
+                            PrivilegeMap::from_mz_acl_items(vec![
+                                rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ),
                                 rbac::owner_privilege(
@@ -3371,7 +3413,7 @@ impl Catalog {
                 linked_object_id,
                 all_indexes,
                 owner_id,
-                MzAclItem::group_by_grantee(privileges),
+                PrivilegeMap::from_mz_acl_items(privileges),
                 config,
             );
         }
@@ -3582,6 +3624,13 @@ impl Catalog {
                     1,
                 ));
             }
+        }
+        for system_privilege in catalog.state.system_privileges.all_values_owned() {
+            builtin_table_updates.push(
+                catalog
+                    .state
+                    .pack_system_privileges_update(system_privilege, 1),
+            );
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
@@ -3859,8 +3908,8 @@ impl Catalog {
                     depends_on: vec![],
                 }),
                 MZ_SYSTEM_ROLE_ID,
-                MzAclItem::group_by_grantee(vec![
-                    rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Type),
+                PrivilegeMap::from_mz_acl_items(vec![
+                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Type),
                     rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
                 ]),
             );
@@ -4180,7 +4229,7 @@ impl Catalog {
                 &name,
                 serialized_item,
                 entry.owner_id,
-                MzAclItem::flatten(entry.privileges()),
+                entry.privileges().all_values_owned().collect(),
             )?;
         }
         tx.update_system_object_mappings(std::mem::take(
@@ -4299,7 +4348,7 @@ impl Catalog {
                 item.name,
                 catalog_item,
                 item.owner_id,
-                MzAclItem::group_by_grantee(item.privileges),
+                PrivilegeMap::from_mz_acl_items(item.privileges),
             );
         }
 
@@ -4813,7 +4862,7 @@ impl Catalog {
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 owner_id,
-                privileges: MzAclItem::group_by_grantee(vec![rbac::owner_privilege(
+                privileges: PrivilegeMap::from_mz_acl_items(vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Schema,
                     owner_id,
                 )]),
@@ -5030,16 +5079,23 @@ impl Catalog {
     }
 
     /// Returns the privileges of an object by its ID.
-    pub fn get_privileges(&self, id: &ObjectId, conn_id: &ConnectionId) -> Option<&PrivilegeMap> {
+    pub fn get_privileges(
+        &self,
+        id: &SystemObjectId,
+        conn_id: &ConnectionId,
+    ) -> Option<&PrivilegeMap> {
         match id {
-            ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
-            ObjectId::Database(id) => Some(self.get_database(id).privileges()),
-            ObjectId::Schema((database_spec, schema_spec)) => Some(
-                self.get_schema(database_spec, schema_spec, conn_id)
-                    .privileges(),
-            ),
-            ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
-            ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+            SystemObjectId::Object(id) => match id {
+                ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
+                ObjectId::Database(id) => Some(self.get_database(id).privileges()),
+                ObjectId::Schema((database_spec, schema_spec)) => Some(
+                    self.get_schema(database_spec, schema_spec, conn_id)
+                        .privileges(),
+                ),
+                ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
+                ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+            },
+            SystemObjectId::System => Some(&self.state.system_privileges),
         }
     }
 
@@ -5472,7 +5528,7 @@ impl Catalog {
                             schemas_by_id: BTreeMap::new(),
                             schemas_by_name: BTreeMap::new(),
                             owner_id,
-                            privileges: MzAclItem::group_by_grantee(database_privileges),
+                            privileges: PrivilegeMap::from_mz_acl_items(database_privileges),
                         },
                     );
                     state
@@ -5503,7 +5559,7 @@ impl Catalog {
                         database_id,
                         DEFAULT_SCHEMA.to_string(),
                         owner_id,
-                        MzAclItem::group_by_grantee(schema_privileges),
+                        PrivilegeMap::from_mz_acl_items(schema_privileges),
                     )?;
                 }
                 Op::CreateSchema {
@@ -5569,7 +5625,7 @@ impl Catalog {
                         database_id,
                         schema_name,
                         owner_id,
-                        MzAclItem::group_by_grantee(privileges),
+                        PrivilegeMap::from_mz_acl_items(privileges),
                     )?;
                 }
                 Op::CreateRole {
@@ -5679,7 +5735,7 @@ impl Catalog {
                         linked_object_id,
                         introspection_sources,
                         owner_id,
-                        MzAclItem::group_by_grantee(privileges),
+                        PrivilegeMap::from_mz_acl_items(privileges),
                         config,
                     );
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
@@ -5886,7 +5942,7 @@ impl Catalog {
                         name,
                         item,
                         owner_id,
-                        MzAclItem::group_by_grantee(privileges),
+                        PrivilegeMap::from_mz_acl_items(privileges),
                     );
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
@@ -6233,77 +6289,103 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdatePrivilege {
-                    object_id,
+                    target_id,
                     privilege,
                     variant,
                 } => {
-                    let update_privilege_fn = |privileges, privilege| match variant {
+                    let update_privilege_fn = |privileges: &mut PrivilegeMap| match variant {
                         UpdatePrivilegeVariant::Grant => {
-                            Self::grant_object_privilege(privileges, privilege)
+                            privileges.grant(privilege);
                         }
                         UpdatePrivilegeVariant::Revoke => {
-                            Self::revoke_object_privilege(privileges, privilege)
+                            privileges.revoke(&privilege);
                         }
                     };
-                    match object_id {
-                        ObjectId::Cluster(id) => {
-                            let cluster_name = state.get_cluster(id).name().to_string();
-                            builtin_table_updates
-                                .push(state.pack_cluster_update(&cluster_name, -1));
-                            let cluster = state.get_cluster_mut(id);
-                            update_privilege_fn(&mut cluster.privileges, privilege);
-                            tx.update_cluster(id, cluster)?;
-                            builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
-                        }
-                        ObjectId::Database(id) => {
-                            let database = state.get_database(&id);
-                            builtin_table_updates.push(state.pack_database_update(database, -1));
-                            let database = state.get_database_mut(&id);
-                            update_privilege_fn(&mut database.privileges, privilege);
-                            let database = state.get_database(&id);
-                            tx.update_database(id, database)?;
-                            builtin_table_updates.push(state.pack_database_update(database, 1));
-                        }
-                        ObjectId::Schema((database_spec, schema_spec)) => {
-                            let schema_id = schema_spec.clone().into();
-                            builtin_table_updates.push(state.pack_schema_update(
-                                &database_spec,
-                                &schema_id,
-                                -1,
-                            ));
-                            let schema = state.get_schema_mut(
-                                &database_spec,
-                                &schema_spec,
-                                session
-                                    .map(|session| session.conn_id())
-                                    .unwrap_or(&SYSTEM_CONN_ID),
-                            );
-                            update_privilege_fn(&mut schema.privileges, privilege);
-                            let database_id = match &database_spec {
-                                ResolvedDatabaseSpecifier::Ambient => None,
-                                ResolvedDatabaseSpecifier::Id(id) => Some(*id),
-                            };
-                            tx.update_schema(database_id, schema_id, schema)?;
-                            builtin_table_updates.push(state.pack_schema_update(
-                                &database_spec,
-                                &schema_spec.into(),
-                                1,
-                            ));
-                        }
-                        ObjectId::Item(id) => {
-                            builtin_table_updates.extend(state.pack_item_update(id, -1));
-                            let entry = state.get_entry_mut(&id);
-                            update_privilege_fn(&mut entry.privileges, privilege);
-                            if !entry.item().is_temporary() {
-                                tx.update_item(
-                                    id,
-                                    &entry.name().item,
-                                    &Self::serialize_item(entry.item()),
-                                )?;
+                    match target_id {
+                        SystemObjectId::Object(object_id) => match object_id {
+                            ObjectId::Cluster(id) => {
+                                let cluster_name = state.get_cluster(id).name().to_string();
+                                builtin_table_updates
+                                    .push(state.pack_cluster_update(&cluster_name, -1));
+                                let cluster = state.get_cluster_mut(id);
+                                update_privilege_fn(&mut cluster.privileges);
+                                tx.update_cluster(id, cluster)?;
+                                builtin_table_updates
+                                    .push(state.pack_cluster_update(&cluster_name, 1));
                             }
-                            builtin_table_updates.extend(state.pack_item_update(id, 1));
+                            ObjectId::Database(id) => {
+                                let database = state.get_database(&id);
+                                builtin_table_updates
+                                    .push(state.pack_database_update(database, -1));
+                                let database = state.get_database_mut(&id);
+                                update_privilege_fn(&mut database.privileges);
+                                let database = state.get_database(&id);
+                                tx.update_database(id, database)?;
+                                builtin_table_updates.push(state.pack_database_update(database, 1));
+                            }
+                            ObjectId::Schema((database_spec, schema_spec)) => {
+                                let schema_id = schema_spec.clone().into();
+                                builtin_table_updates.push(state.pack_schema_update(
+                                    &database_spec,
+                                    &schema_id,
+                                    -1,
+                                ));
+                                let schema = state.get_schema_mut(
+                                    &database_spec,
+                                    &schema_spec,
+                                    session
+                                        .map(|session| session.conn_id())
+                                        .unwrap_or(&SYSTEM_CONN_ID),
+                                );
+                                update_privilege_fn(&mut schema.privileges);
+                                let database_id = match &database_spec {
+                                    ResolvedDatabaseSpecifier::Ambient => None,
+                                    ResolvedDatabaseSpecifier::Id(id) => Some(*id),
+                                };
+                                tx.update_schema(database_id, schema_id, schema)?;
+                                builtin_table_updates.push(state.pack_schema_update(
+                                    &database_spec,
+                                    &schema_spec.into(),
+                                    1,
+                                ));
+                            }
+                            ObjectId::Item(id) => {
+                                builtin_table_updates.extend(state.pack_item_update(id, -1));
+                                let entry = state.get_entry_mut(&id);
+                                update_privilege_fn(&mut entry.privileges);
+                                if !entry.item().is_temporary() {
+                                    tx.update_item(
+                                        id,
+                                        &entry.name().item,
+                                        &Self::serialize_item(entry.item()),
+                                    )?;
+                                }
+                                builtin_table_updates.extend(state.pack_item_update(id, 1));
+                            }
+                            ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
+                        },
+                        SystemObjectId::System => {
+                            if let Some(existing_privilege) = state
+                                .system_privileges
+                                .get_acl_item(&privilege.grantee, &privilege.grantor)
+                            {
+                                builtin_table_updates.push(
+                                    state.pack_system_privileges_update(
+                                        existing_privilege.clone(),
+                                        -1,
+                                    ),
+                                );
+                            }
+                            update_privilege_fn(&mut state.system_privileges);
+                            if let Some(new_privilege) = state
+                                .system_privileges
+                                .get_acl_item(&privilege.grantee, &privilege.grantor)
+                            {
+                                builtin_table_updates.push(
+                                    state.pack_system_privileges_update(new_privilege.clone(), 1),
+                                );
+                            }
                         }
-                        ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     }
                 }
                 Op::UpdateDefaultPrivilege {
@@ -6856,7 +6938,7 @@ impl Catalog {
         new_owner: RoleId,
     ) {
         // TODO(jkosh44) Would be nice not to clone every privilege.
-        let mut flat_privileges = MzAclItem::flatten(privileges);
+        let mut flat_privileges: Vec<_> = privileges.all_values_owned().collect();
 
         let mut new_present = false;
         for privilege in flat_privileges.iter_mut() {
@@ -6907,46 +6989,7 @@ impl Catalog {
                 .collect();
         }
 
-        *privileges = MzAclItem::group_by_grantee(flat_privileges);
-    }
-
-    fn grant_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
-        let grantee_privileges = privileges.0.entry(privilege.grantee).or_default();
-        if let Some(existing_privilege) = grantee_privileges
-            .iter_mut()
-            .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
-        {
-            // sanity check that the catalog data is consistent.
-            assert_eq!(
-                privilege.grantee, existing_privilege.grantee,
-                "catalog privileges out of sync"
-            );
-            existing_privilege.acl_mode = existing_privilege.acl_mode.union(privilege.acl_mode);
-        } else {
-            grantee_privileges.push(privilege);
-        }
-    }
-
-    fn revoke_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
-        let grantee_privileges = privileges.0.entry(privilege.grantee).or_default();
-        if let Some(existing_privilege) = grantee_privileges
-            .iter_mut()
-            .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
-        {
-            // sanity check that the catalog data is consistent.
-            assert_eq!(
-                privilege.grantee, existing_privilege.grantee,
-                "catalog privileges out of sync"
-            );
-            existing_privilege.acl_mode =
-                existing_privilege.acl_mode.difference(privilege.acl_mode);
-        }
-
-        // Remove empty privileges
-        grantee_privileges.retain(|privilege| !privilege.acl_mode.is_empty());
-        if grantee_privileges.is_empty() {
-            privileges.0.remove(&privilege.grantee);
-        }
+        *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
 
     pub async fn consolidate(&self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
@@ -7050,19 +7093,17 @@ impl Catalog {
                 create_sql: source.create_sql,
                 data_source: match source.data_source {
                     mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        DataSourceDesc::Ingestion(Ingestion {
-                            desc: ingestion.desc,
-                            source_imports: ingestion.source_imports,
-                            subsource_exports: ingestion.subsource_exports,
-                            cluster_id: match cluster_config {
+                        DataSourceDesc::ingestion(
+                            id,
+                            ingestion,
+                            match cluster_config {
                                 plan::SourceSinkClusterConfig::Existing { id } => id,
                                 plan::SourceSinkClusterConfig::Linked { .. }
                                 | plan::SourceSinkClusterConfig::Undefined => {
                                     self.state.clusters_by_linked_object_id[&id]
                                 }
                             },
-                            remap_collection_id: ingestion.progress_subsource,
-                        })
+                        )
                     }
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
@@ -7254,6 +7295,10 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
+    pub fn system_privileges(&self) -> &PrivilegeMap {
+        &self.state.system_privileges
+    }
+
     pub fn default_privileges(
         &self,
     ) -> impl Iterator<
@@ -7316,6 +7361,9 @@ impl Catalog {
             keep_n_source_status_history_entries: self
                 .system_config()
                 .keep_n_source_status_history_entries(),
+            keep_n_sink_status_history_entries: self
+                .system_config()
+                .keep_n_source_status_history_entries(),
             upsert_rocksdb_tuning_config: {
                 match mz_rocksdb::RocksDBTuningParameters::from_parameters(
                     self.system_config().upsert_rocksdb_compaction_style(),
@@ -7343,6 +7391,7 @@ impl Catalog {
                     }
                 }
             },
+            finalize_shards: self.system_config().enable_storage_shard_finalization(),
         }
     }
 
@@ -7541,7 +7590,7 @@ pub enum Op {
         new_owner: RoleId,
     },
     UpdatePrivilege {
-        object_id: ObjectId,
+        target_id: SystemObjectId,
         privilege: MzAclItem,
         variant: UpdatePrivilegeVariant,
     },
@@ -7973,6 +8022,10 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
+    fn mz_system_role_id(&self) -> RoleId {
+        MZ_SYSTEM_ROLE_ID
+    }
+
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         self.state.collect_role_membership(id)
     }
@@ -8067,6 +8120,10 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
+    fn get_system_privileges(&self) -> &PrivilegeMap {
+        &self.state.system_privileges
+    }
+
     fn get_default_privileges(
         &self,
     ) -> Vec<(&DefaultPrivilegeObject, Vec<&DefaultPrivilegeAclItem>)> {
@@ -8147,7 +8204,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.item_dependents(id, &mut seen)
     }
 
-    fn all_object_privileges(&self, object_type: mz_sql::catalog::ObjectType) -> AclMode {
+    fn all_object_privileges(&self, object_type: mz_sql::catalog::SystemObjectType) -> AclMode {
         rbac::all_object_privileges(object_type)
     }
 
@@ -8179,6 +8236,22 @@ impl SessionCatalog for ConnCatalog<'_> {
                 let name = self.get_item(id).name();
                 self.resolve_full_name(name).to_string()
             }
+        }
+    }
+
+    fn get_system_object_type(&self, id: &SystemObjectId) -> mz_sql::catalog::SystemObjectType {
+        match id {
+            SystemObjectId::Object(object_id) => {
+                SystemObjectType::Object(self.get_object_type(object_id))
+            }
+            SystemObjectId::System => SystemObjectType::System,
+        }
+    }
+
+    fn get_system_object_name(&self, id: &SystemObjectId) -> String {
+        match id {
+            SystemObjectId::Object(object_id) => self.get_object_name(object_id),
+            SystemObjectId::System => "SYSTEM".to_string(),
         }
     }
 
@@ -8479,8 +8552,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 
-    fn subsources(&self) -> Vec<GlobalId> {
+    fn subsources(&self) -> BTreeSet<GlobalId> {
         self.subsources()
+    }
+
+    fn progress_id(&self) -> Option<GlobalId> {
+        self.progress_id()
     }
 
     fn owner_id(&self) -> RoleId {
@@ -9529,92 +9606,75 @@ mod tests {
         let other_role = RoleId::User(3);
 
         // older owner exists as grantor.
-        let mut privileges = PrivilegeMap::default();
-        privileges.0.insert(
-            other_role,
-            vec![
-                MzAclItem {
-                    grantee: other_role,
-                    grantor: old_owner,
-                    acl_mode: AclMode::UPDATE,
-                },
-                MzAclItem {
-                    grantee: other_role,
-                    grantor: new_owner,
-                    acl_mode: AclMode::SELECT,
-                },
-            ],
-        );
+        let mut privileges = PrivilegeMap::from_mz_acl_items(vec![
+            MzAclItem {
+                grantee: other_role,
+                grantor: old_owner,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: other_role,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT,
+            },
+        ]);
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.0.len());
+        assert_eq!(1, privileges.all_values().count());
         assert_eq!(
-            &vec![MzAclItem {
+            vec![MzAclItem {
                 grantee: other_role,
                 grantor: new_owner,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges
-                .0
-                .get(&other_role)
-                .expect("other_role is grantee")
+            privileges.all_values_owned().collect::<Vec<_>>()
         );
 
         // older owner exists as grantee.
-        let mut privileges = PrivilegeMap::default();
-        privileges.0.insert(
-            old_owner,
-            vec![MzAclItem {
+        let mut privileges = PrivilegeMap::from_mz_acl_items(vec![
+            MzAclItem {
                 grantee: old_owner,
                 grantor: other_role,
                 acl_mode: AclMode::UPDATE,
-            }],
-        );
-        privileges.0.insert(
-            new_owner,
-            vec![MzAclItem {
+            },
+            MzAclItem {
                 grantee: new_owner,
                 grantor: other_role,
                 acl_mode: AclMode::SELECT,
-            }],
-        );
+            },
+        ]);
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.0.len());
+        assert_eq!(1, privileges.all_values().count());
         assert_eq!(
-            &vec![MzAclItem {
+            vec![MzAclItem {
                 grantee: new_owner,
                 grantor: other_role,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.0.get(&new_owner).expect("new_owner is grantee")
+            privileges.all_values_owned().collect::<Vec<_>>()
         );
 
         // older owner exists as grantee and grantor.
-        let mut privileges = PrivilegeMap::default();
-        privileges.0.insert(
-            old_owner,
-            vec![MzAclItem {
+        let mut privileges = PrivilegeMap::from_mz_acl_items(vec![
+            MzAclItem {
                 grantee: old_owner,
                 grantor: old_owner,
                 acl_mode: AclMode::UPDATE,
-            }],
-        );
-        privileges.0.insert(
-            new_owner,
-            vec![MzAclItem {
+            },
+            MzAclItem {
                 grantee: new_owner,
                 grantor: new_owner,
                 acl_mode: AclMode::SELECT,
-            }],
-        );
+            },
+        ]);
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.0.len());
+        assert_eq!(1, privileges.all_values().count());
         assert_eq!(
-            &vec![MzAclItem {
+            vec![MzAclItem {
                 grantee: new_owner,
                 grantor: new_owner,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.0.get(&new_owner).expect("new_owner is grantee")
+            privileges.all_values_owned().collect::<Vec<_>>()
         );
     }
 

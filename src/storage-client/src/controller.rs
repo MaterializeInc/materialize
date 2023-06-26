@@ -485,6 +485,20 @@ pub trait StorageController: Debug + Send {
     /// initial state and the controller can reconcile (i.e. drop) any unclaimed
     /// resources.
     async fn reconcile_state(&mut self);
+
+    /// Exposes the internal state of the data shard for debugging and QA.
+    ///
+    /// We'll be thoughtful about making unnecessary changes, but the **output
+    /// of this method needs to be gated from users**, so that it's not subject
+    /// to our backward compatibility guarantees.
+    ///
+    /// TODO: Ideally this would return `impl Serialize` so the caller can do
+    /// with it what they like, but that doesn't work in traits yet. The
+    /// workaround (an associated type) doesn't work because persist doesn't
+    /// want to make the type public. In the meantime, move the `serde_json`
+    /// call from the single user into this method.
+    async fn inspect_persist_state(&self, id: GlobalId)
+        -> Result<serde_json::Value, anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -747,33 +761,18 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
 /// The subset of [`CollectionMetadata`] that must be durable stored.
 #[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct DurableCollectionMetadata {
-    // MIGRATION: v0.44 This field can be deleted in a future version of
-    // Materialize because we are moving the relationship between a collection
-    // and its remap shard into a relationship between a collection and its
-    // remap collection, i.e. we will use another collection's data shard as our
-    // remap shard, rendering this mapping duplicative.
-    pub remap_shard: Option<ShardId>,
     pub data_shard: ShardId,
 }
 
 impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     fn into_proto(&self) -> ProtoDurableCollectionMetadata {
         ProtoDurableCollectionMetadata {
-            remap_shard: self.remap_shard.into_proto(),
             data_shard: self.data_shard.to_string(),
         }
     }
 
     fn from_proto(value: ProtoDurableCollectionMetadata) -> Result<Self, TryFromProtoError> {
         Ok(DurableCollectionMetadata {
-            remap_shard: value
-                .remap_shard
-                .map(|data_shard| {
-                    data_shard
-                        .parse()
-                        .map_err(TryFromProtoError::InvalidShardId)
-                })
-                .transpose()?,
             data_shard: value
                 .data_shard
                 .parse()
@@ -785,11 +784,6 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
 impl RustType<mz_stash::objects::proto::DurableCollectionMetadata> for DurableCollectionMetadata {
     fn into_proto(&self) -> mz_stash::objects::proto::DurableCollectionMetadata {
         mz_stash::objects::proto::DurableCollectionMetadata {
-            remap_shard: self
-                .remap_shard
-                .map(|id| mz_stash::objects::proto::StringWrapper {
-                    inner: id.into_proto(),
-                }),
             data_shard: self.data_shard.into_proto(),
         }
     }
@@ -797,14 +791,8 @@ impl RustType<mz_stash::objects::proto::DurableCollectionMetadata> for DurableCo
     fn from_proto(
         proto: mz_stash::objects::proto::DurableCollectionMetadata,
     ) -> Result<Self, TryFromProtoError> {
-        let remap_shard = proto
-            .remap_shard
-            .map(|shard| ShardId::from_proto(shard.inner))
-            .transpose()?;
-        let data_shard = proto.data_shard.into_rust()?;
         Ok(DurableCollectionMetadata {
-            remap_shard,
-            data_shard,
+            data_shard: proto.data_shard.into_rust()?,
         })
     }
 }
@@ -1354,7 +1342,6 @@ where
                 *id,
                 DurableCollectionMetadata {
                     data_shard: ShardId::new(),
-                    remap_shard: None,
                 },
             ))
         }
@@ -1385,8 +1372,6 @@ where
             .into_iter()
             .map(|(id, description)| {
                 let collection_shards = durable_metadata.remove(&id).expect("inserted above");
-                // MIGRATION: v0.44
-                assert!(collection_shards.remap_shard.is_none(), "remap shards must be migrated to be the data shard of their remap/progress collections or dropped");
 
                 let status_shard =
                     if let Some(status_collection_id) = description.status_collection_id {
@@ -1626,10 +1611,16 @@ where
                             self.state.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory => {
-                            self.reconcile_source_status_history().await;
+                            self.partially_truncate_status_history(
+                                IntrospectionType::SourceStatusHistory,
+                            )
+                            .await;
                         }
                         IntrospectionType::SinkStatusHistory => {
-                            // nothing to do: these collections are append only
+                            self.partially_truncate_status_history(
+                                IntrospectionType::SinkStatusHistory,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -2295,7 +2286,12 @@ where
                     .await
                     .expect("stash operation must succeed");
 
-                self.finalize_shards().await;
+                if self.state.config.finalize_shards {
+                    info!("triggering shard finalization due to dropped storage object");
+                    self.finalize_shards().await;
+                } else {
+                    info!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false")
+                }
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2427,6 +2423,22 @@ where
 
     async fn reconcile_state(&mut self) {
         self.reconcile_state_inner().await
+    }
+
+    async fn inspect_persist_state(
+        &self,
+        id: GlobalId,
+    ) -> Result<serde_json::Value, anyhow::Error> {
+        let collection = &self.collection(id)?.collection_metadata;
+        let client = self
+            .persist
+            .open(collection.persist_location.clone())
+            .await?;
+        let shard_state = client
+            .inspect_shard::<Self::Timestamp>(&collection.data_shard)
+            .await?;
+        let json_state = serde_json::to_value(shard_state)?;
+        Ok(json_state)
     }
 }
 
@@ -2755,8 +2767,18 @@ where
 
     /// Effectively truncates the source status history shard except for the most recent updates
     /// from each ID.
-    async fn reconcile_source_status_history(&mut self) {
-        let id = self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+    async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
+        let keep_n = match collection {
+            IntrospectionType::SourceStatusHistory => {
+                self.state.config.keep_n_source_status_history_entries
+            }
+            IntrospectionType::SinkStatusHistory => {
+                self.state.config.keep_n_sink_status_history_entries
+            }
+            _ => unreachable!(),
+        };
+
+        let id = self.state.introspection_ids[&collection];
 
         let rows = match self.state.collections[&id]
             .write_frontier
@@ -2809,7 +2831,7 @@ where
 
             // Retain some number of entries, using pop_first to mark the oldest entries for
             // deletion.
-            while entries.len() > self.state.config.keep_n_source_status_history_entries {
+            while entries.len() > keep_n {
                 if let Some((_, r)) = entries.pop_first() {
                     deletions.push(r);
                 }
@@ -2906,46 +2928,16 @@ where
         let mut new_shards = BTreeSet::new();
         let mut dropped_shards = BTreeSet::new();
         let mut data_shards_to_replace = BTreeSet::new();
-        let mut remap_shards_to_replace = BTreeSet::new();
         for (id, new_metadata) in upsert_state.iter() {
-            assert!(
-                new_metadata.remap_shard.is_none(),
-                "must not reintroduce remap shards"
-            );
-
             match all_current_metadata.get(id) {
                 Some(metadata) => {
-                    for (old, new, data_shard) in [
-                        (
-                            Some(metadata.data_shard),
-                            Some(new_metadata.data_shard),
-                            true,
-                        ),
-                        (metadata.remap_shard, new_metadata.remap_shard, false),
-                    ] {
-                        if old != new {
-                            info!(
-                                "replacing {:?}'s {} shard {:?} with {:?}",
-                                id,
-                                if data_shard { "data" } else { "remap" },
-                                old,
-                                new
-                            );
-
-                            if let Some(new) = new {
-                                new_shards.insert(new);
-                            }
-
-                            if let Some(old) = old {
-                                dropped_shards.insert(old);
-                            }
-
-                            if data_shard {
-                                data_shards_to_replace.insert(*id);
-                            } else {
-                                remap_shards_to_replace.insert(*id);
-                            }
-                        }
+                    let old = metadata.data_shard;
+                    let new = new_metadata.data_shard;
+                    if old != new {
+                        info!("replacing {}'s data shard {:?} with {:?}", id, old, new);
+                        new_shards.insert(new);
+                        dropped_shards.insert(old);
+                        data_shards_to_replace.insert(*id);
                     }
                 }
                 // New collections, which might use an another collection's
@@ -2978,16 +2970,6 @@ where
             .await
             .expect("connect to stash");
 
-        // Update in-memory state for remap shards.
-        for id in remap_shards_to_replace {
-            let c = match self.collection_mut(id) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            c.collection_metadata.remap_shard = all_current_metadata[&id].remap_shard;
-        }
-
         // Avoid taking lock if unnecessary
         if data_shards_to_replace.is_empty() {
             return;
@@ -3005,6 +2987,15 @@ where
                 Ok(c) => c,
                 Err(_) => continue,
             };
+
+            assert_ne!(
+                c.description.data_source,
+                DataSource::Progress,
+                "we do not have the logic in place to update a progress collection's shard \
+                to do this, you'll also need to update the in-memory state of the collection \
+                that uses this shard as its progress collection or determine this is set \
+                before that collection is created"
+            );
 
             let data_shard = all_current_metadata[&id].data_shard;
             c.collection_metadata.data_shard = data_shard;

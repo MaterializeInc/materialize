@@ -1297,30 +1297,6 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
-pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_shutdown_durations_histogram_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
-};
-
-pub const MZ_ARRANGEMENT_HEAP_SIZE_RAW: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_heap_size_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
-};
-
-pub const MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_heap_capacity_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
-};
-
-pub const MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_heap_allocations_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
-};
-
 pub const MZ_MESSAGE_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1973,6 +1949,13 @@ pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     is_retained_metrics_object: false,
 });
 
+pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_system_privileges",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2065,9 +2048,8 @@ pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflows_per_worker AS SELECT
-    ops.id,
+    addrs.address[1] AS id,
     ops.worker_id,
-    addrs.address[1] AS local_id,
     ops.name
 FROM
     mz_internal.mz_dataflow_addresses_per_worker addrs,
@@ -2082,7 +2064,7 @@ pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflows AS
-SELECT id, local_id, name
+SELECT id, name
 FROM mz_internal.mz_dataflows_per_worker
 WHERE worker_id = 0",
 };
@@ -2130,7 +2112,7 @@ FROM
 WHERE
     ops.id = addrs.id AND
     ops.worker_id = addrs.worker_id AND
-    dfs.local_id = addrs.address[1] AND
+    dfs.id = addrs.address[1] AND
     dfs.worker_id = addrs.worker_id",
 };
 
@@ -2249,21 +2231,28 @@ pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: BuiltinView = BuiltinView
     name: "mz_records_per_dataflow_operator_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_operator_per_worker AS
+WITH records_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS records
+    FROM
+        mz_internal.mz_arrangement_records_raw
+    GROUP BY
+        operator_id, worker_id
+)
 SELECT
     dod.id,
     dod.name,
     dod.worker_id,
     dod.dataflow_id,
-    ar_size.records,
-    ar_size.size,
-    ar_size.capacity,
-    ar_size.allocations
+    records_cte.records
 FROM
-    mz_internal.mz_arrangement_sizes_per_worker ar_size,
+    records_cte,
     mz_internal.mz_dataflow_operator_dataflows_per_worker dod
 WHERE
-    dod.id = ar_size.operator_id AND
-    dod.worker_id = ar_size.worker_id",
+    dod.id = records_cte.operator_id AND
+    dod.worker_id = records_cte.worker_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2274,10 +2263,7 @@ SELECT
     id,
     name,
     dataflow_id,
-    pg_catalog.sum(records) AS records,
-    pg_catalog.sum(size) AS size,
-    pg_catalog.sum(capacity) AS capacity,
-    pg_catalog.sum(allocations) AS allocations
+    pg_catalog.sum(records) AS records
 FROM mz_internal.mz_records_per_dataflow_operator_per_worker
 GROUP BY id, name, dataflow_id",
 };
@@ -2285,15 +2271,11 @@ GROUP BY id, name, dataflow_id",
 pub const MZ_RECORDS_PER_DATAFLOW_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_per_worker AS
-SELECT
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_per_worker AS SELECT
     rdo.dataflow_id as id,
     dfs.name,
     rdo.worker_id,
-    pg_catalog.SUM(rdo.records) as records,
-    pg_catalog.SUM(rdo.size) as size,
-    pg_catalog.SUM(rdo.capacity) as capacity,
-    pg_catalog.SUM(rdo.allocations) as allocations
+    pg_catalog.SUM(rdo.records) as records
 FROM
     mz_internal.mz_records_per_dataflow_operator_per_worker rdo,
     mz_internal.mz_dataflows_per_worker dfs
@@ -2309,14 +2291,10 @@ GROUP BY
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS
-SELECT
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS SELECT
     id,
     name,
-    pg_catalog.SUM(records) as records,
-    pg_catalog.SUM(size) as size,
-    pg_catalog.SUM(capacity) as capacity,
-    pg_catalog.SUM(allocations) as allocations
+    pg_catalog.SUM(records) as records
 FROM
     mz_internal.mz_records_per_dataflow_per_worker
 GROUP BY
@@ -2698,28 +2676,6 @@ FROM mz_internal.mz_peek_durations_histogram_per_worker
 GROUP BY duration_ns",
 };
 
-pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
-    name: "mz_dataflow_shutdown_durations_histogram_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker AS SELECT
-    worker_id, duration_ns, pg_catalog.count(*) AS count
-FROM
-    mz_internal.mz_dataflow_shutdown_durations_histogram_raw
-GROUP BY
-    worker_id, duration_ns",
-};
-
-pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
-    name: "mz_dataflow_shutdown_durations_histogram",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_dataflow_shutdown_durations_histogram AS
-SELECT
-    duration_ns,
-    pg_catalog.sum(count) AS count
-FROM mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker
-GROUP BY duration_ns",
-};
-
 pub const MZ_SCHEDULING_ELAPSED_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2920,50 +2876,13 @@ records_cte AS (
         mz_internal.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
-),
-heap_size_cte AS (
-    SELECT
-        operator_id,
-        worker_id,
-        pg_catalog.count(*) AS size
-    FROM
-        mz_internal.mz_arrangement_heap_size_raw
-    GROUP BY
-        operator_id, worker_id
-),
-heap_capacity_cte AS (
-    SELECT
-        operator_id,
-        worker_id,
-        pg_catalog.count(*) AS capacity
-    FROM
-        mz_internal.mz_arrangement_heap_capacity_raw
-    GROUP BY
-        operator_id, worker_id
-),
-heap_allocations_cte AS (
-    SELECT
-        operator_id,
-        worker_id,
-        pg_catalog.count(*) AS allocations
-    FROM
-        mz_internal.mz_arrangement_heap_allocations_raw
-    GROUP BY
-        operator_id, worker_id
 )
 SELECT
     batches_cte.operator_id,
     batches_cte.worker_id,
     records_cte.records,
-    batches_cte.batches,
-    heap_size_cte.size,
-    heap_capacity_cte.capacity,
-    heap_allocations_cte.allocations
-FROM batches_cte
-JOIN records_cte USING (operator_id, worker_id)
-JOIN heap_size_cte USING (operator_id, worker_id)
-JOIN heap_capacity_cte USING (operator_id, worker_id)
-JOIN heap_allocations_cte USING (operator_id, worker_id)",
+    batches_cte.batches
+FROM batches_cte JOIN records_cte USING (operator_id, worker_id)",
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
@@ -2973,10 +2892,7 @@ pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
 SELECT
     operator_id,
     pg_catalog.sum(records) AS records,
-    pg_catalog.sum(batches) AS batches,
-    pg_catalog.sum(size) AS size,
-    pg_catalog.sum(capacity) AS capacity,
-    pg_catalog.sum(allocations) AS allocations
+    pg_catalog.sum(batches) AS batches
 FROM mz_internal.mz_arrangement_sizes_per_worker
 GROUP BY operator_id",
 };
@@ -3062,10 +2978,7 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
             mdod.dataflow_id AS id,
             mo.name,
             COALESCE(sum(mas.records), 0) AS records,
-            COALESCE(sum(mas.batches), 0) AS batches,
-            COALESCE(sum(mas.size), 0) AS size,
-            COALESCE(sum(mas.capacity), 0) AS capacity,
-            COALESCE(sum(mas.allocations), 0) AS allocations
+            COALESCE(sum(mas.batches), 0) AS batches
         FROM
             mz_internal.mz_dataflow_operators AS mdo
                 LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdo.id = mas.operator_id
@@ -3954,10 +3867,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
-        Builtin::Log(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW),
-        Builtin::Log(&MZ_ARRANGEMENT_HEAP_CAPACITY_RAW),
-        Builtin::Log(&MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW),
-        Builtin::Log(&MZ_ARRANGEMENT_HEAP_SIZE_RAW),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_RAW),
         Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),
@@ -4010,6 +3919,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::Table(&MZ_SESSIONS),
         Builtin::Table(&MZ_DEFAULT_PRIVILEGES),
+        Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
@@ -4047,8 +3957,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
-        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER),
-        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_SCHEDULING_ELAPSED_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),
@@ -4179,6 +4087,7 @@ mod tests {
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::func::OP_IMPLS;
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
+    use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
@@ -4302,6 +4211,32 @@ mod tests {
             };
 
             let mut all_oids = BTreeSet::new();
+
+            // A function to determine if two oids are equivalent enough for these tests. We don't
+            // support some types, so map exceptions here.
+            let equivalent_types: BTreeSet<(Option<u32>, Option<u32>)> = BTreeSet::from_iter(
+                [
+                    // We don't support NAME.
+                    (Type::NAME, Type::TEXT),
+                    (Type::NAME_ARRAY, Type::TEXT_ARRAY),
+                    // We don't support time with time zone.
+                    (Type::TIME, Type::TIMETZ),
+                    (Type::TIME_ARRAY, Type::TIMETZ_ARRAY),
+                ]
+                .map(|(a, b)| (Some(a.oid()), Some(b.oid()))),
+            );
+            let ignore_return_types: BTreeSet<u32> = BTreeSet::from([
+                1619, // pg_typeof: TODO: We now have regtype and can correctly implement this.
+            ]);
+            let is_same_type = |fn_oid: u32, a: Option<u32>, b: Option<u32>| -> bool {
+                if ignore_return_types.contains(&fn_oid) {
+                    return true;
+                }
+                if equivalent_types.contains(&(a, b)) || equivalent_types.contains(&(b, a)) {
+                    return true;
+                }
+                a == b
+            };
 
             for builtin in BUILTINS::iter() {
                 match builtin {
@@ -4458,19 +4393,18 @@ mod tests {
 
                             let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
 
-                            if imp_return_oid != pg_fn.ret_oid {
-                                println!(
+                            assert!(
+                                is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
                             );
-                            }
 
-                            if imp.return_is_set != pg_fn.ret_set {
-                                panic!(
+                            assert_eq!(
+                                imp.return_is_set,
+                                pg_fn.ret_set,
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
-                            }
                         }
                     }
                     _ => (),

@@ -86,6 +86,7 @@ impl Coordinator {
             .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
+            self,
             &session_catalog,
             ctx.session(),
             &plan,
@@ -199,6 +200,11 @@ impl Coordinator {
                 let result = self.sequence_show_variable(ctx.session(), plan);
                 ctx.retire(result);
             }
+            Plan::InspectShard(plan) => {
+                // TODO: Ideally, this await would happen off the main thread.
+                let result = self.sequence_inspect_shard(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
             Plan::SetVariable(plan) => {
                 let result = self.sequence_set_variable(ctx.session_mut(), plan);
                 ctx.retire(result);
@@ -247,7 +253,7 @@ impl Coordinator {
                 }
                 self.sequence_end_transaction(ctx, action);
             }
-            Plan::Peek(plan) => {
+            Plan::Select(plan) => {
                 self.sequence_peek(ctx, plan, target_cluster).await;
             }
             Plan::Subscribe(plan) => {
@@ -255,6 +261,9 @@ impl Coordinator {
                     .sequence_subscribe(ctx.session_mut(), plan, depends_on, target_cluster)
                     .await;
                 ctx.retire(result);
+            }
+            Plan::SideEffectingFunc(plan) => {
+                ctx.retire(self.sequence_side_effecting_func(plan));
             }
             Plan::ShowCreate(plan) => {
                 ctx.retire(Ok(send_immediate_rows(vec![plan.row])));

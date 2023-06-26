@@ -91,7 +91,7 @@ use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, ObjectId, PartialItemName, QualifiedItemName, RawDatabaseSpecifier,
     ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
-    SchemaSpecifier,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -667,6 +667,7 @@ pub fn plan_create_source(
                     },
                     allow_aggregates: false,
                     allow_subqueries: false,
+                    allow_parameters: false,
                     allow_windows: false,
                 };
 
@@ -1051,12 +1052,10 @@ pub fn plan_create_source(
         timestamp_interval,
     };
 
-    // MIGRATION: v0.44 This can be converted to an unwrap in v0.46
-    let progress_subsource = progress_subsource
-        .as_ref()
-        .map(|name| match name {
+    let progress_subsource = match progress_subsource {
+        Some(name) => match name {
             DeferredItemName::Named(name) => match name {
-                ResolvedItemName::Item { id, .. } => Ok(*id),
+                ResolvedItemName::Item { id, .. } => *id,
                 ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                     sql_bail!("[internal error] invalid target id")
                 }
@@ -1064,8 +1063,9 @@ pub fn plan_create_source(
             DeferredItemName::Deferred(_) => {
                 sql_bail!("[internal error] progress subsource must be named during purification")
             }
-        })
-        .transpose()?;
+        },
+        _ => sql_bail!("[internal error] progress subsource must be named during purification"),
+    };
 
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
@@ -3845,10 +3845,10 @@ pub fn plan_drop_owned(
     let mut default_privilege_revokes = Vec::new();
 
     fn update_privilege_revokes(
-        object_id: ObjectId,
+        object_id: SystemObjectId,
         privileges: &PrivilegeMap,
         role_ids: &BTreeSet<RoleId>,
-        privilege_revokes: &mut Vec<(ObjectId, MzAclItem)>,
+        privilege_revokes: &mut Vec<(SystemObjectId, MzAclItem)>,
     ) {
         privilege_revokes.extend(iter::zip(
             iter::repeat(object_id),
@@ -3878,7 +3878,7 @@ pub fn plan_drop_owned(
             drop_ids.push(cluster.id().into());
         }
         update_privilege_revokes(
-            cluster.id().into(),
+            SystemObjectId::Object(cluster.id().into()),
             cluster.privileges(),
             &role_ids,
             &mut privilege_revokes,
@@ -3921,7 +3921,7 @@ pub fn plan_drop_owned(
             drop_ids.push(item.id().into());
         }
         update_privilege_revokes(
-            item.id().into(),
+            SystemObjectId::Object(item.id().into()),
             item.privileges(),
             &role_ids,
             &mut privilege_revokes,
@@ -3951,7 +3951,7 @@ pub fn plan_drop_owned(
                 drop_ids.push((*schema.database(), *schema.id()).into())
             }
             update_privilege_revokes(
-                (*schema.database(), *schema.id()).into(),
+                SystemObjectId::Object((*schema.database(), *schema.id()).into()),
                 schema.privileges(),
                 &role_ids,
                 &mut privilege_revokes,
@@ -3978,12 +3978,20 @@ pub fn plan_drop_owned(
             drop_ids.push(database.id().into());
         }
         update_privilege_revokes(
-            database.id().into(),
+            SystemObjectId::Object(database.id().into()),
             database.privileges(),
             &role_ids,
             &mut privilege_revokes,
         );
     }
+
+    // System
+    update_privilege_revokes(
+        SystemObjectId::System,
+        scx.catalog.get_system_privileges(),
+        &role_ids,
+        &mut privilege_revokes,
+    );
 
     for (default_privilege_object, default_privilege_acl_items) in
         scx.catalog.get_default_privileges()

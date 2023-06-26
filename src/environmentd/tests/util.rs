@@ -116,7 +116,7 @@ use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
-use tracing_subscriber::filter::Targets;
+use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -355,12 +355,12 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             service_name: "environmentd",
             stderr_log: StderrLogConfig {
                 format: StderrLogFormat::Json,
-                filter: Targets::default(),
+                filter: EnvFilter::default(),
             },
             opentelemetry: Some(OpenTelemetryConfig {
                 endpoint: "http://fake_address_for_testing:8080".to_string(),
                 headers: http::HeaderMap::new(),
-                filter: Targets::default().with_default(tracing_core::Level::DEBUG),
+                filter: EnvFilter::default().add_directive("debug".parse().expect("directive")),
                 resource: opentelemetry::sdk::resource::Resource::default(),
                 start_enabled: true,
             }),

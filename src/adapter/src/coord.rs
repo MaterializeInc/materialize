@@ -97,6 +97,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
@@ -109,7 +110,7 @@ use mz_storage_client::controller::{
 };
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
+use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -310,7 +311,7 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
-    pub plan: mz_sql::plan::PeekPlan,
+    pub plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
 }
 
@@ -461,7 +462,7 @@ pub struct ReplicaMetadata {
 
 /// Metadata about an active connection.
 #[derive(Debug)]
-struct ConnMeta {
+pub struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
     /// cancellation requests. The coordinator sets the contained value to
     /// `Canceled::Canceled` whenever it receives a cancellation request that
@@ -481,6 +482,9 @@ struct ConnMeta {
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+
+    /// The authenticated role of the session, set once at session connection.
+    pub(crate) authenticated_role: RoleId,
 }
 
 #[derive(Debug)]
@@ -945,12 +949,9 @@ impl Coordinator {
                     if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
                     {
                         mz_ore::soft_assert! {{
-                            let mut subsources =  entry.subsources();
-                            subsources.sort();
-                            let mut w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
-                            w.sort();
-
-                            subsources == w
+                            let subsources =  entry.subsources();
+                            let w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
+                            w.iter().all(|w| subsources.contains(w))
                         }, "expect that items are exactly source's subsources"}
 
                         // Re-enqueue objects and continue.
@@ -1005,46 +1006,15 @@ impl Coordinator {
         let mut collections_to_create = Vec::new();
 
         fn source_desc<T>(
-            id: GlobalId,
             source_status_collection_id: Option<GlobalId>,
             source: &Source,
         ) -> CollectionDescription<T> {
             let (data_source, status_collection_id) = match &source.data_source {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => {
-                    let mut source_imports = BTreeMap::new();
-                    for source_import in &ingestion.source_imports {
-                        source_imports.insert(*source_import, ());
-                    }
-
-                    let mut source_exports = BTreeMap::new();
-                    // By convention the first output corresponds to the main source object
-                    let main_export = SourceExport {
-                        output_index: 0,
-                        storage_metadata: (),
-                    };
-                    source_exports.insert(id, main_export);
-                    for (subsource, output_index) in ingestion.subsource_exports.clone() {
-                        let export = SourceExport {
-                            output_index,
-                            storage_metadata: (),
-                        };
-                        source_exports.insert(subsource, export);
-                    }
-                    (
-                        DataSource::Ingestion(IngestionDescription {
-                            desc: ingestion.desc.clone(),
-                            ingestion_metadata: (),
-                            source_imports,
-                            source_exports,
-                            instance_id: ingestion.cluster_id,
-                            remap_collection_id: ingestion.remap_collection_id.expect(
-                                "ingestion-based collection must name remap collection before going to storage",
-                            ),
-                        }),
-                        source_status_collection_id,
-                    )
-                }
+                DataSourceDesc::Ingestion(ingestion) => (
+                    DataSource::Ingestion(ingestion.clone()),
+                    source_status_collection_id,
+                ),
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                 DataSourceDesc::Progress => (DataSource::Progress, None),
@@ -1066,10 +1036,9 @@ impl Coordinator {
                 entries
                     .iter()
                     .filter_map(|entry| match entry.item() {
-                        CatalogItem::Source(source) => Some((
-                            entry.id(),
-                            source_desc(entry.id(), source_status_collection_id, source),
-                        )),
+                        CatalogItem::Source(source) => {
+                            Some((entry.id(), source_desc(source_status_collection_id, source)))
+                        }
                         CatalogItem::Table(table) => {
                             let collection_desc = table.desc.clone().into();
                             Some((entry.id(), collection_desc))
@@ -1098,10 +1067,8 @@ impl Coordinator {
                 // User sources can have dependencies, so do avoid them in the
                 // batch.
                 CatalogItem::Source(source) if entry.id().is_system() => {
-                    collections_to_create.push((
-                        entry.id(),
-                        source_desc(entry.id(), source_status_collection_id, source),
-                    ));
+                    collections_to_create
+                        .push((entry.id(), source_desc(source_status_collection_id, source)));
                 }
                 _ => {
                     // No collections to create.
@@ -1142,8 +1109,7 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     // System sources were created above, add others here.
                     if !entry.id().is_system() {
-                        let source_desc =
-                            source_desc(entry.id(), source_status_collection_id, source);
+                        let source_desc = source_desc(source_status_collection_id, source);
                         self.controller
                             .storage
                             .create_collections(vec![(entry.id(), source_desc)])
@@ -1540,12 +1506,11 @@ impl Coordinator {
                 }
             };
 
-            // All message processing functions trace. Start a parent span for them to make
-            // it easy to find slow messages.
-            let span = span!(Level::DEBUG, "coordinator message processing");
-            let _enter = span.enter();
-
-            self.handle_message(msg).await;
+            self.handle_message(msg)
+                // All message processing functions trace. Start a parent span for them to make
+                // it easy to find slow messages.
+                .instrument(span!(Level::DEBUG, "coordinator message processing"))
+                .await;
         }
     }
 
@@ -1584,6 +1549,10 @@ impl Coordinator {
         for meta in self.active_conns.values() {
             let _ = meta.notice_tx.send(notice.clone());
         }
+    }
+
+    pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
+        &self.active_conns
     }
 }
 

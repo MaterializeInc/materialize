@@ -11,15 +11,19 @@
 
 //! Aggregate statistics about data stored in persist.
 
-use prost::Message;
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
+use proptest_derive::Arbitrary;
+use prost::Message;
 use serde::ser::{SerializeMap, SerializeStruct};
+use serde_json::json;
 
 use crate::columnar::Data;
 use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::ValidityRef;
+use crate::stats::impls::any_struct_stats_cols;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
 
@@ -98,7 +102,7 @@ pub trait StatsFrom<T> {
 }
 
 /// Type-erased aggregate statistics about a column of data.
-pub trait DynStats: std::fmt::Debug + Send + Sync + 'static {
+pub trait DynStats: Debug + Send + Sync + 'static {
     /// Returns self as a `dyn Any` for downcasting.
     fn as_any(&self) -> &dyn Any;
     /// Returns the name of the erased type for use in error messages.
@@ -107,6 +111,8 @@ pub trait DynStats: std::fmt::Debug + Send + Sync + 'static {
     }
     /// See [mz_proto::RustType::into_proto].
     fn into_proto(&self) -> ProtoDynStats;
+    /// Formats these statistics for use in `INSPECT SHARD` and debugging.
+    fn debug_json(&self) -> serde_json::Value;
 }
 
 /// Statistics about a column of some non-optional parquet type.
@@ -127,13 +133,6 @@ pub struct PrimitiveStats<T> {
     pub upper: T,
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for PrimitiveStats<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let PrimitiveStats { lower, upper } = self;
-        f.debug_tuple("p").field(lower).field(upper).finish()
-    }
-}
-
 /// Statistics about a column of some optional type.
 pub struct OptionStats<T> {
     /// Statistics about the `Some` values in the column.
@@ -142,16 +141,9 @@ pub struct OptionStats<T> {
     pub none: usize,
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for OptionStats<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let OptionStats { some, none } = self;
-        f.debug_tuple("o").field(some).field(none).finish()
-    }
-}
-
 /// Statistics about a column of a struct type with a uniform schema (the same
 /// columns and associated `T: Data` types in each instance of the struct).
-#[derive(Debug, Default)]
+#[derive(Arbitrary, Default)]
 pub struct StructStats {
     /// The count of structs in the column.
     pub len: usize,
@@ -159,7 +151,14 @@ pub struct StructStats {
     ///
     /// This will often be all of the columns, but it's not guaranteed. Persist
     /// reserves the right to prune statistics about some or all of the columns.
+    #[proptest(strategy = "any_struct_stats_cols()")]
     pub cols: BTreeMap<String, Box<dyn DynStats>>,
+}
+
+impl std::fmt::Debug for StructStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.debug_json(), f)
+    }
 }
 
 impl serde::Serialize for StructStats {
@@ -178,9 +177,7 @@ impl serde::Serialize for DynStatsCols<'_> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut s = s.serialize_map(Some(self.0.len()))?;
         for (k, v) in self.0.iter() {
-            // TODO: Consider adding an `as_json(&self) -> serde_json::Value`
-            // method to `DynStats` so we can make it easier to use them.
-            let v = v.into_proto();
+            let v = v.debug_json();
             let () = s.serialize_entry(k, &v)?;
         }
         s.end()
@@ -241,7 +238,7 @@ pub enum JsonStats {
     Maps(BTreeMap<String, JsonMapElementStats>),
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 #[cfg_attr(any(test), derive(Clone))]
 pub struct JsonMapElementStats {
     pub len: usize,
@@ -254,20 +251,34 @@ impl Default for JsonStats {
     }
 }
 
-impl std::fmt::Debug for JsonStats {
+impl Debug for JsonStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut f = &mut f.debug_tuple("json");
+        Debug::fmt(&self.debug_json(), f)
+    }
+}
+
+impl JsonStats {
+    pub fn debug_json(&self) -> serde_json::Value {
         match self {
-            JsonStats::None => {}
-            JsonStats::Mixed => f = f.field(&"mixed"),
-            JsonStats::JsonNulls => f = f.field(&"json_null"),
-            JsonStats::Bools(x) => f = f.field(x),
-            JsonStats::Strings(x) => f = f.field(x),
-            JsonStats::Numerics(x) => f = f.field(x),
-            JsonStats::Lists => f = f.field(&"list"),
-            JsonStats::Maps(x) => f = f.field(x),
+            JsonStats::None => json!({}),
+            JsonStats::Mixed => "json_mixed".into(),
+            JsonStats::JsonNulls => "json_nulls".into(),
+            JsonStats::Bools(x) => x.debug_json(),
+            JsonStats::Strings(x) => x.debug_json(),
+            JsonStats::Numerics(x) => x.debug_json(),
+            JsonStats::Lists => "json_lists".into(),
+            JsonStats::Maps(x) => x
+                .iter()
+                .map(|(k, v)| (k.clone(), v.debug_json()))
+                .collect::<serde_json::Map<_, _>>()
+                .into(),
         }
-        f.finish()
+    }
+}
+
+impl JsonMapElementStats {
+    pub fn debug_json(&self) -> serde_json::Value {
+        json!({"len": self.len, "stats": self.stats.debug_json()})
     }
 }
 
@@ -278,16 +289,6 @@ pub enum BytesStats {
     Atomic(AtomicBytesStats),
 }
 
-impl std::fmt::Debug for BytesStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BytesStats::Primitive(x) => std::fmt::Debug::fmt(x, f),
-            BytesStats::Json(x) => std::fmt::Debug::fmt(x, f),
-            BytesStats::Atomic(x) => std::fmt::Debug::fmt(x, f),
-        }
-    }
-}
-
 /// `Vec<u8>` stats that cannot safely be trimmed.
 #[derive(Debug)]
 #[cfg_attr(any(test), derive(Clone))]
@@ -296,6 +297,15 @@ pub struct AtomicBytesStats {
     pub lower: Vec<u8>,
     /// See [PrimitiveStats::upper]
     pub upper: Vec<u8>,
+}
+
+impl AtomicBytesStats {
+    fn debug_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "lower": hex::encode(&self.lower),
+            "upper": hex::encode(&self.upper),
+        })
+    }
 }
 
 /// The length to truncate `Vec<u8>` and `String` stats to.
@@ -546,6 +556,7 @@ pub fn trim_to_budget(
 mod impls {
     use std::any::Any;
     use std::collections::BTreeMap;
+    use std::fmt::Debug;
 
     use arrow2::array::{BinaryArray, BooleanArray, PrimitiveArray, Utf8Array};
     use arrow2::bitmap::Bitmap;
@@ -554,7 +565,8 @@ mod impls {
     use arrow2::types::simd::Simd;
     use arrow2::types::NativeType;
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use proptest::prelude::*;
+    use proptest::strategy::Union;
+    use proptest::{collection, prelude::*};
     use serde::Serialize;
 
     use crate::columnar::Data;
@@ -568,10 +580,20 @@ mod impls {
         ProtoStructStats, StatsFrom, StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
-    impl<T> DynStats for PrimitiveStats<T>
+    impl<T: Serialize> Debug for PrimitiveStats<T>
     where
-        T: Serialize,
-        PrimitiveStats<T>: RustType<ProtoPrimitiveStats> + std::fmt::Debug + Send + Sync + 'static,
+        PrimitiveStats<T>: RustType<ProtoPrimitiveStats>,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let l = serde_json::to_value(&self.lower).expect("valid json");
+            let u = serde_json::to_value(&self.upper).expect("valid json");
+            Debug::fmt(&serde_json::json!({"lower": l, "upper": u}), f)
+        }
+    }
+
+    impl<T: Serialize> DynStats for PrimitiveStats<T>
+    where
+        PrimitiveStats<T>: RustType<ProtoPrimitiveStats> + Send + Sync + 'static,
     {
         fn as_any(&self) -> &dyn Any {
             self
@@ -581,6 +603,17 @@ mod impls {
                 option: None,
                 kind: Some(proto_dyn_stats::Kind::Primitive(RustType::into_proto(self))),
             }
+        }
+        fn debug_json(&self) -> serde_json::Value {
+            let l = serde_json::to_value(&self.lower).expect("valid json");
+            let u = serde_json::to_value(&self.upper).expect("valid json");
+            serde_json::json!({"lower": l, "upper": u})
+        }
+    }
+
+    impl Debug for PrimitiveStats<Vec<u8>> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Debug::fmt(&self.debug_json(), f)
         }
     }
 
@@ -598,6 +631,18 @@ mod impls {
                 })),
             }
         }
+        fn debug_json(&self) -> serde_json::Value {
+            serde_json::json!({
+                "lower": hex::encode(&self.lower),
+                "upper": hex::encode(&self.upper),
+            })
+        }
+    }
+
+    impl<T: DynStats> Debug for OptionStats<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Debug::fmt(&self.debug_json(), f)
+        }
     }
 
     impl<T: DynStats> DynStats for OptionStats<T> {
@@ -614,6 +659,19 @@ mod impls {
             });
             ret
         }
+        fn debug_json(&self) -> serde_json::Value {
+            match self.some.debug_json() {
+                serde_json::Value::Object(mut x) => {
+                    if self.none > 0 {
+                        x.insert("nulls".to_owned(), self.none.into());
+                    }
+                    serde_json::Value::Object(x)
+                }
+                s => {
+                    serde_json::json!({"nulls": self.none, "not nulls": s})
+                }
+            }
+        }
     }
 
     impl DynStats for StructStats {
@@ -626,6 +684,20 @@ mod impls {
                 kind: Some(proto_dyn_stats::Kind::Struct(RustType::into_proto(self))),
             }
         }
+        fn debug_json(&self) -> serde_json::Value {
+            let mut cols = serde_json::Map::new();
+            cols.insert("len".to_owned(), self.len.into());
+            for (name, stats) in self.cols.iter() {
+                cols.insert(name.clone(), stats.debug_json());
+            }
+            cols.into()
+        }
+    }
+
+    impl Debug for BytesStats {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Debug::fmt(&self.debug_json(), f)
+        }
     }
 
     impl DynStats for BytesStats {
@@ -636,6 +708,13 @@ mod impls {
             ProtoDynStats {
                 option: None,
                 kind: Some(proto_dyn_stats::Kind::Bytes(RustType::into_proto(self))),
+            }
+        }
+        fn debug_json(&self) -> serde_json::Value {
+            match self {
+                BytesStats::Primitive(x) => x.debug_json(),
+                BytesStats::Json(x) => x.debug_json(),
+                BytesStats::Atomic(x) => x.debug_json(),
             }
         }
     }
@@ -1190,21 +1269,112 @@ mod impls {
         }
     }
 
-    #[allow(unused_parens)]
-    impl Arbitrary for StructStats {
-        type Parameters = ();
-        type Strategy =
-            proptest::strategy::Map<(<usize as Arbitrary>::Strategy), fn((usize)) -> Self>;
+    pub(crate) fn any_struct_stats_cols(
+    ) -> impl Strategy<Value = BTreeMap<String, Box<dyn DynStats>>> {
+        collection::btree_map(any::<String>(), any_box_dyn_stats(), 1..5)
+    }
 
-        fn arbitrary_with(_: ()) -> Self::Strategy {
-            Strategy::prop_map((any::<usize>()), |(len)| {
-                StructStats {
-                    len,
-                    // TODO: Fill in cols with stats.
-                    cols: Default::default(),
+    fn any_primitive_stats<T>() -> impl Strategy<Value = PrimitiveStats<T>>
+    where
+        T: Arbitrary + Ord + Serialize,
+        PrimitiveStats<T>: RustType<ProtoPrimitiveStats>,
+    {
+        Strategy::prop_map(any::<(T, T)>(), |(x0, x1)| {
+            if x0 <= x1 {
+                PrimitiveStats {
+                    lower: x0,
+                    upper: x1,
                 }
+            } else {
+                PrimitiveStats {
+                    lower: x1,
+                    upper: x0,
+                }
+            }
+        })
+    }
+
+    fn any_primitive_vec_u8_stats() -> impl Strategy<Value = PrimitiveStats<Vec<u8>>> {
+        Strategy::prop_map(any::<(Vec<u8>, Vec<u8>)>(), |(x0, x1)| {
+            if x0 <= x1 {
+                PrimitiveStats {
+                    lower: x0,
+                    upper: x1,
+                }
+            } else {
+                PrimitiveStats {
+                    lower: x1,
+                    upper: x0,
+                }
+            }
+        })
+    }
+
+    fn any_bytes_stats() -> impl Strategy<Value = BytesStats> {
+        Union::new(vec![
+            any_primitive_vec_u8_stats()
+                .prop_map(BytesStats::Primitive)
+                .boxed(),
+            any_json_stats().prop_map(BytesStats::Json).boxed(),
+            any_primitive_vec_u8_stats()
+                .prop_map(|x| {
+                    BytesStats::Atomic(AtomicBytesStats {
+                        lower: x.lower,
+                        upper: x.upper,
+                    })
+                })
+                .boxed(),
+        ])
+    }
+
+    fn any_json_stats() -> impl Strategy<Value = JsonStats> {
+        let leaf = Union::new(vec![
+            any::<()>().prop_map(|_| JsonStats::None).boxed(),
+            any::<()>().prop_map(|_| JsonStats::Mixed).boxed(),
+            any::<()>().prop_map(|_| JsonStats::JsonNulls).boxed(),
+            any_primitive_stats::<bool>()
+                .prop_map(JsonStats::Bools)
+                .boxed(),
+            any_primitive_stats::<String>()
+                .prop_map(JsonStats::Strings)
+                .boxed(),
+            any::<()>().prop_map(|_| JsonStats::Lists).boxed(),
+        ]);
+        leaf.prop_recursive(2, 5, 3, |inner| {
+            (collection::btree_map(any::<String>(), inner, 0..3)).prop_map(|cols| {
+                let cols = cols
+                    .into_iter()
+                    .map(|(k, stats)| (k, JsonMapElementStats { len: 1, stats }))
+                    .collect();
+                JsonStats::Maps(cols)
             })
+        })
+    }
+
+    fn any_box_dyn_stats() -> impl Strategy<Value = Box<dyn DynStats>> {
+        fn into_box_dyn_stats<T: DynStats>(x: T) -> Box<dyn DynStats> {
+            let x: Box<dyn DynStats> = Box::new(x);
+            x
         }
+        let leaf = Union::new(vec![
+            any_primitive_stats::<bool>()
+                .prop_map(into_box_dyn_stats)
+                .boxed(),
+            any_primitive_stats::<i64>()
+                .prop_map(into_box_dyn_stats)
+                .boxed(),
+            any_primitive_stats::<String>()
+                .prop_map(into_box_dyn_stats)
+                .boxed(),
+            any_bytes_stats().prop_map(into_box_dyn_stats).boxed(),
+        ]);
+        leaf.prop_recursive(2, 10, 3, |inner| {
+            (
+                any::<usize>(),
+                collection::btree_map(any::<String>(), inner, 0..3),
+            )
+                .prop_map(|(len, cols)| into_box_dyn_stats(StructStats { len, cols }))
+        })
     }
 }
 
@@ -1351,10 +1521,9 @@ mod tests {
             let stats = T::Stats::stats_from(&col, ValidityRef(None));
             (xs, stats)
         }
-        fn testcase<T: Data + PartialOrd + Clone + std::fmt::Debug, P>(
-            xs_stats: (&[T], PrimitiveStats<T>),
-        ) where
-            PrimitiveStats<T>: RustType<P>,
+        fn testcase<T: Data + PartialOrd + Clone + Debug, P>(xs_stats: (&[T], PrimitiveStats<T>))
+        where
+            PrimitiveStats<T>: RustType<P> + DynStats,
             P: TrimStats,
         {
             let (xs, stats) = xs_stats;
@@ -1363,7 +1532,7 @@ mod tests {
                 assert!(&stats.upper >= x);
             }
 
-            let mut proto_stats = stats.into_proto();
+            let mut proto_stats = RustType::into_proto(&stats);
             let cost_before = proto_stats.encoded_len();
             proto_stats.trim();
             assert!(proto_stats.encoded_len() <= cost_before);

@@ -21,6 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,15 +38,15 @@ use opentelemetry::{global, KeyValue};
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{Event, Level, Subscriber};
+use tracing::{warn, Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{reload, Registry};
+use tracing_subscriber::{reload, EnvFilter, Registry};
 
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
@@ -53,7 +54,7 @@ use crate::netio::SocketAddr;
 /// Application tracing configuration.
 ///
 /// See the [`configure`] function for details.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TracingConfig<F> {
     /// The name of the service.
     pub service_name: &'static str,
@@ -94,12 +95,12 @@ pub struct SentryConfig<F> {
 }
 
 /// Configures the stderr log.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StderrLogConfig {
     /// The format in which to emit messages.
     pub format: StderrLogFormat,
     /// A filter which determines which events are emitted to the log.
-    pub filter: Targets,
+    pub filter: EnvFilter,
 }
 
 /// Specifies the format of a stderr log message.
@@ -119,7 +120,7 @@ pub enum StderrLogFormat {
 }
 
 /// Configuration for the [`opentelemetry`] library.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpenTelemetryConfig {
     /// The [OTLP/HTTP] endpoint to export OpenTelemetry data to.
     ///
@@ -128,7 +129,7 @@ pub struct OpenTelemetryConfig {
     /// Additional headers to send with every request to the endpoint.
     pub headers: HeaderMap,
     /// A filter which determines which events are exported.
-    pub filter: Targets,
+    pub filter: EnvFilter,
     /// `opentelemetry::sdk::resource::Resource` to include with all
     /// traces.
     pub resource: Resource,
@@ -157,7 +158,7 @@ pub struct TokioConsoleConfig {
     pub retention: Duration,
 }
 
-type Reloader = Arc<dyn Fn(Targets) -> Result<(), anyhow::Error> + Send + Sync>;
+type Reloader = Arc<dyn Fn(EnvFilter) -> Result<(), anyhow::Error> + Send + Sync>;
 
 /// A handle to the tracing infrastructure configured with [`configure`].
 #[derive(Clone)]
@@ -178,13 +179,13 @@ impl TracingHandle {
     }
 
     /// Dynamically reloads the stderr log filter.
-    pub fn reload_stderr_log_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
-        (self.stderr_log)(targets)
+    pub fn reload_stderr_log_filter(&self, filter: EnvFilter) -> Result<(), anyhow::Error> {
+        (self.stderr_log)(filter)
     }
 
     /// Dynamically reloads the OpenTelemetry log filter.
-    pub fn reload_opentelemetry_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
-        (self.opentelemetry)(targets)
+    pub fn reload_opentelemetry_filter(&self, filter: EnvFilter) -> Result<(), anyhow::Error> {
+        (self.opentelemetry)(filter)
     }
 }
 
@@ -266,7 +267,7 @@ where
         reload::Layer::new(config.stderr_log.filter);
     let stderr_log_layer = stderr_log_layer.with_filter(stderr_log_filter);
     let stderr_log_reloader =
-        Arc::new(move |targets| Ok(stderr_log_filter_reloader.reload(targets)?));
+        Arc::new(move |filter| Ok(stderr_log_filter_reloader.reload(filter)?));
 
     let (otel_layer, otel_reloader): (_, Reloader) = if let Some(otel_config) = config.opentelemetry
     {
@@ -321,21 +322,20 @@ where
         //
         // Note: folks should feel free to add more crates here if we find more
         // with long lived Spans.
-        let default_targets = [("h2", LevelFilter::OFF), ("hyper", LevelFilter::OFF)];
+        let default_directives: Vec<Directive> = vec![
+            Directive::from_str("h2=off").expect("valid directive"),
+            Directive::from_str("hyper=off").expect("valid directive"),
+        ];
 
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            let new_targets = Targets::default()
-                .with_targets(default_targets)
-                .with_targets(&otel_config.filter);
-
-            if let Some(default_level) = otel_config.filter.default_level() {
-                new_targets.with_default(default_level)
-            } else {
-                new_targets
+            let mut filter = otel_config.filter;
+            for directive in &default_directives {
+                filter = filter.add_directive(directive.clone());
             }
+            filter
         } else {
-            // The default `Targets` has everything disabled.
-            Targets::default()
+            // The default `EnvFilter` has everything disabled.
+            EnvFilter::default()
         });
         let layer = tracing_opentelemetry::layer()
             // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
@@ -345,20 +345,13 @@ where
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
             .max_events_per_span(2048)
             .with_tracer(tracer)
-            .with_filter(filter);
-        let reloader = Arc::new(move |targets: Targets| {
-            // Re-apply our default targets on reload.
-            let new_targets = Targets::default()
-                .with_targets(default_targets)
-                .with_targets(&targets);
-
-            let new_targets = if let Some(default_level) = targets.default_level() {
-                new_targets.with_default(default_level)
-            } else {
-                new_targets
-            };
-
-            Ok(filter_handle.reload(new_targets)?)
+            .and_then(filter);
+        let reloader = Arc::new(move |mut filter: EnvFilter| {
+            // Re-apply our defaults on reload.
+            for directive in &default_directives {
+                filter = filter.add_directive(directive.clone());
+            }
+            Ok(filter_handle.reload(filter)?)
         });
         (Some(layer), reloader)
     } else {
@@ -465,19 +458,41 @@ where
     Ok((handle, guard))
 }
 
-/// Returns the level of a specific target from a [`Targets`].
-pub fn target_level(targets: &Targets, target: &str) -> Level {
-    if targets.would_enable(target, &Level::TRACE) {
-        Level::TRACE
-    } else if targets.would_enable(target, &Level::DEBUG) {
-        Level::DEBUG
-    } else if targets.would_enable(target, &Level::INFO) {
-        Level::INFO
-    } else if targets.would_enable(target, &Level::WARN) {
-        Level::WARN
-    } else {
-        Level::ERROR
+/// Returns the [`Level`] of a crate from an [`EnvFilter`] by performing an
+/// exact match between `crate` and the original `EnvFilter` directive.
+pub fn crate_level(filter: &EnvFilter, crate_name: &'static str) -> Level {
+    // TODO: implement `would_enable` on `EnvFilter` or equivalent
+    // to avoid having to manually parse out the directives. This
+    // would also significantly broaden the lookups the fn is able
+    // to do (modules, spans, fields, etc).
+
+    let mut default_level = Level::ERROR;
+    // EnvFilter roundtrips through its Display fmt, so it
+    // is safe to split out its individual directives here
+    for directive in format!("{}", filter).split(',') {
+        match directive.split('=').collect::<Vec<_>>().as_slice() {
+            [target, level] => {
+                if *target == crate_name {
+                    match Level::from_str(*level) {
+                        Ok(level) => return level,
+                        Err(err) => warn!("invalid level for {}: {}", target, err),
+                    }
+                }
+            }
+            [token] => match Level::from_str(*token) {
+                Ok(level) => default_level = default_level.max(level),
+                Err(_) => {
+                    // a target without a level is interpreted as trace
+                    if *token == crate_name {
+                        default_level = default_level.max(Level::TRACE);
+                    }
+                }
+            },
+            _ => {}
+        }
     }
+
+    default_level
 }
 
 /// A wrapper around a [`FormatEvent`] that adds an optional prefix to each
@@ -583,8 +598,9 @@ impl From<BTreeMap<String, String>> for OpenTelemetryContext {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use tracing::Level;
-    use tracing_subscriber::filter::{LevelFilter, Targets};
+    use tracing_subscriber::filter::{EnvFilter, LevelFilter, Targets};
 
     #[mz_test_macro::test]
     fn overriding_targets() {
@@ -598,5 +614,54 @@ mod tests {
             .with_targets(default)
             .with_targets(user_defined);
         assert!(filters.would_enable("my_crate", &Level::INFO));
+    }
+
+    #[mz_test_macro::test]
+    fn crate_level() {
+        // target=level directives only. should default to ERROR if unspecified
+        let filter = EnvFilter::from_str("abc=trace,def=debug").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(
+            super::crate_level(&filter, "abc::doesnt::exist"),
+            Level::ERROR
+        );
+        assert_eq!(super::crate_level(&filter, "doesnt::exist"), Level::ERROR);
+
+        // add in a global default
+        let filter = EnvFilter::from_str("abc=trace,def=debug,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(
+            super::crate_level(&filter, "abc::doesnt:exist"),
+            Level::INFO
+        );
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "nan"), Level::INFO);
+
+        // a directive with mod path doesn't match the top-level crate
+        let filter = EnvFilter::from_str("abc::def::ghi=trace,debug").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(
+            super::crate_level(&filter, "gets_the_default"),
+            Level::DEBUG
+        );
+
+        // directives with spans and fields don't match the top-level crate
+        let filter =
+            EnvFilter::from_str("abc[s]=trace,def[s{g=h}]=debug,[{s2}]=debug,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::INFO);
+        assert_eq!(super::crate_level(&filter, "def"), Level::INFO);
+        assert_eq!(super::crate_level(&filter, "gets_the_default"), Level::INFO);
+
+        // a bare target without a level is taken as trace
+        let filter = EnvFilter::from_str("abc,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(super::crate_level(&filter, "gets_the_default"), Level::INFO);
+        // the contract of `crate_level` is that it only matches top-level crates.
+        // if we had a proper EnvFilter::would_match impl, this assertion should
+        // be Level::TRACE
+        assert_eq!(super::crate_level(&filter, "abc::def"), Level::INFO);
     }
 }

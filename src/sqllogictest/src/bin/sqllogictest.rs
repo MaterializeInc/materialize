@@ -122,6 +122,10 @@ struct Args {
     /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
     #[clap(long)]
     auto_index_tables: bool,
+    /// Inject `CREATE VIEW <view_name> AS <select_query>` and `CREATE DEFAULT INDEX ON <view_name> ...`
+    /// to redundantly execute a given `SELECT` query and contrast outcomes.
+    #[clap(long)]
+    auto_index_selects: bool,
     /// Inject `BEGIN` and `COMMIT` to create longer running transactions for faster testing of the
     /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
     #[clap(long)]
@@ -149,6 +153,7 @@ async fn main() -> ExitCode {
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
+        auto_index_selects: args.auto_index_selects,
         auto_transactions: args.auto_transactions,
         enable_table_keys: args.enable_table_keys,
         orchestrator_process_wrapper: args.orchestrator_process_wrapper.clone(),

@@ -46,8 +46,8 @@ use crate::catalog::builtin::{
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
     MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
@@ -1311,9 +1311,21 @@ impl CatalogState {
         }
     }
 
+    pub fn pack_system_privileges_update(
+        &self,
+        privileges: MzAclItem,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SYSTEM_PRIVILEGES),
+            row: Row::pack_slice(&[privileges.into()]),
+            diff,
+        }
+    }
+
     fn pack_privilege_array_row(&self, privileges: &PrivilegeMap) -> Row {
         let mut row = Row::default();
-        let flat_privileges = MzAclItem::flatten(privileges);
+        let flat_privileges: Vec<_> = privileges.all_values_owned().collect();
         row.packer()
             .push_array(
                 &[ArrayDimension {

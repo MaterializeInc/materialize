@@ -116,6 +116,10 @@ Select the option that works best for you.
 
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect Materialize to your RDS instance without exposing traffic to the public internet. To use AWS PrivateLink, you create a network load balancer in the same VPC as your RDS instance and a VPC endpoint service that Materialize connects to. The VPC endpoint service then routes requests from Materialize to RDS via the network load balancer.
 
+{{< note >}}
+Materialize provides a Terraform module that automates the creation and configuration of AWS resources for a PrivateLink connection. For more details, see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
+{{</ note >}}
+
 1. Get the IP address of your RDS instance. You'll need this address to register your RDS instance as the target for the network load balancer in the next step.
 
     To get the IP address of your RDS instance:
@@ -166,6 +170,10 @@ Select the option that works best for you.
 {{< tab "Use an SSH tunnel">}}
 
 To create an SSH tunnel from Materialize to your database, you launch an instance to serve as an SSH bastion host, configure the bastion host to allow traffic only from Materialize, and then configure your database's private network to allow traffic from the bastion host.
+
+{{< note >}}
+Materialize provides a Terraform module that automates the creation and configuration of resources for an SSH tunnel. For more details, see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
+{{</ note >}}
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html) to serve as your SSH bastion host.
 

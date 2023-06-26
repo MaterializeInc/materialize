@@ -113,7 +113,7 @@ ORDER BY row_number, x
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
   Project (#2, #0)
     Return
-      Map (row_number() over (#0) order by (#0))
+      Map (row_number() over (partition by [#0] order by [#0 asc nulls_last]))
         Get l0
     With
       cte l0 =
@@ -134,7 +134,7 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
         Project (#3..=#5) // { arity: 3 }
           Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
             FlatMap unnest_list(#1) // { arity: 3 }
-              Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1)], #0))] // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0))] // { arity: 2 }
                 FlatMap wrap2("a", 1, "b", 2, "c", 1) // { arity: 2 }
                   Constant // { arity: 0 }
                     - ()
@@ -202,7 +202,7 @@ With
               Project (#3..=#6) // { arity: 4 }
                 Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
                   FlatMap unnest_list(#1) // { arity: 3 }
-                    Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin // { arity: 3 }
                         Get l1 // { arity: 1 }
                         Get materialize.public.t2 // { arity: 2 }
@@ -236,7 +236,7 @@ Explained Query:
               Filter (integer_to_bigint(record_get[0](record_get[1](#1))) = record_get[0](#1)) // { arity: 2 }
                 FlatMap unnest_list(#0) // { arity: 2 }
                   Project (#1) // { arity: 1 }
-                    Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin type=differential // { arity: 3 }
                         implementation
                           %0[×] » %1:t2[×]
@@ -307,7 +307,7 @@ Return // { arity: 5 }
             Project (#3..=#6) // { arity: 4 }
               Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
                 FlatMap unnest_list(#1) // { arity: 3 }
-                  Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                  Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                     Filter (#2 = #0) // { arity: 3 }
                       CrossJoin // { arity: 3 }
                         Distinct group_by=[#1] // { arity: 1 }
@@ -335,7 +335,7 @@ Return // { arity: 5 }
             Project (#4..=#7) // { arity: 4 }
               Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
                 FlatMap unnest_list(#2) // { arity: 4 }
-                  Reduce group_by=[#0, #1] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 3 }
+                  Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
                     Filter (#2 = #0) // { arity: 3 }
                       CrossJoin // { arity: 3 }
                         Distinct group_by=[#1] // { arity: 1 }
@@ -1984,6 +1984,85 @@ query II
 SELECT f1, lead(0, f1 , 0) OVER (PARTITION BY f1 ORDER BY f1) FROM t4 GROUP BY f1 ORDER BY 1
 ----
 NULL NULL
+
+## lag/lead ignore nulls
+
+statement ok
+create table t6(x int, y int);
+
+statement ok
+insert into t6 values (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18);
+
+query IIIIIIIIIIIIIII
+select
+  x,
+  y,
+  lag(y) over (order by x) as lag1,
+  lag(y) respect nulls over (order by x) as lag1_resp,
+  lag(y) ignore nulls over (order by x) as lag1_ign,
+  lead(y) over (order by x) as lead1,
+  lead(y) ignore nulls over (order by x) as lead1_ign,
+  lag(y, 2) over (order by x) as lag2,
+  lag(y, 2) ignore nulls over (order by x) as lag2_ign,
+  lead(y, 2) over (order by x) as lead2,
+  lead(y, 2) ignore nulls over (order by x) as lead2_ign,
+  lag(y, 2, -1) ignore nulls over (order by x) as lag2_ign_def,
+  lead(y, 2, -1) ignore nulls over (order by x) as lead2_ign_def,
+  lag(y, 2, 16) ignore nulls over (order by x) as lag2_ign_def16,
+  lead(y, 2, 16) ignore nulls over (order by x) as lead2_ign_def16
+from t6
+order by x;
+----
+1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8
+3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8
+5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14
+7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16
+9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16
+11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16
+13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18
+15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16
+17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16
+
+# Same as above, but with a `partition by`
+
+query IIIIIIIIIIIIIII
+select
+  x,
+  y,
+  lag(y) over (partition by x%4 order by x) as lag1,
+  lag(y) respect nulls over (partition by x%4 order by x) as lag1_resp,
+  lag(y) ignore nulls over (partition by x%4 order by x) as lag1_ign,
+  lead(y) over (partition by x%4 order by x) as lead1,
+  lead(y) ignore nulls over (partition by x%4 order by x) as lead1_ign,
+  lag(y, 2) over (partition by x%4 order by x) as lag2,
+  lag(y, 2) ignore nulls over (partition by x%4 order by x) as lag2_ign,
+  lead(y, 2) over (partition by x%4 order by x) as lead2,
+  lead(y, 2) ignore nulls over (partition by x%4 order by x) as lead2_ign,
+  lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
+  lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
+  lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
+  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16
+from t6
+order by x%4, x;
+----
+1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14
+5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18
+9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18
+13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16
+17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16
+3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16
+7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16
+11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16
+15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16
+
+query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+select first_value(x) ignore nulls over() from t6;
+
+query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+select row_number() ignore nulls over();
+
+query error db error: ERROR: Both IGNORE NULLS and RESPECT NULLS were given\.
+select row_number() ignore nulls respect nulls over();
 
 ## window frames
 

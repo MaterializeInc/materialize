@@ -87,7 +87,7 @@ use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::cors::AllowOrigin;
-use tracing_subscriber::filter::Targets;
+use tracing_subscriber::EnvFilter;
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -187,10 +187,10 @@ pub struct DynamicFilterTarget {
 #[allow(clippy::unused_async)]
 pub async fn handle_reload_tracing_filter(
     handle: &TracingHandle,
-    reload: fn(&TracingHandle, Targets) -> Result<(), anyhow::Error>,
+    reload: fn(&TracingHandle, EnvFilter) -> Result<(), anyhow::Error>,
     Json(cfg): Json<DynamicFilterTarget>,
 ) -> impl IntoResponse {
-    match cfg.targets.parse::<Targets>() {
+    match cfg.targets.parse::<EnvFilter>() {
         Ok(targets) => match reload(handle, targets) {
             Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
             Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),

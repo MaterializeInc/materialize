@@ -31,6 +31,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
@@ -38,9 +39,11 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, 
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
-    CatalogTypeDetails, ObjectType, SessionCatalog,
+    CatalogTypeDetails, ObjectType, SessionCatalog, SystemObjectType,
 };
-use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier};
+use mz_sql::names::{
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier, SystemObjectId,
+};
 use mz_sql::plan::{
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
@@ -49,10 +52,11 @@ use mz_sql::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan,
     DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
-    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
+    InsertPlan, InspectShardPlan, MaterializedView, MutationKind, OptimizerConfig, Plan, QueryWhen,
     ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
-    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
+    SelectPlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan,
+    SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
+    VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -156,13 +160,7 @@ impl Coordinator {
                                 session,
                             )
                             .await?;
-                        DataSourceDesc::Ingestion(catalog::Ingestion {
-                            desc: ingestion.desc,
-                            source_imports: ingestion.source_imports,
-                            subsource_exports: ingestion.subsource_exports,
-                            cluster_id,
-                            remap_collection_id: ingestion.progress_subsource,
-                        })
+                        DataSourceDesc::ingestion(source_id, ingestion, cluster_id)
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {
                         assert!(
@@ -210,40 +208,10 @@ impl Coordinator {
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            let mut source_imports = BTreeMap::new();
-                            for source_import in ingestion.source_imports {
-                                source_imports.insert(source_import, ());
-                            }
-
-                            let mut source_exports = BTreeMap::new();
-                            // By convention the first output corresponds to the main source object
-                            let main_export = SourceExport {
-                                output_index: 0,
-                                storage_metadata: (),
-                            };
-                            source_exports.insert(source_id, main_export);
-                            for (subsource, output_index) in ingestion.subsource_exports {
-                                let export = SourceExport {
-                                    output_index,
-                                    storage_metadata: (),
-                                };
-                                source_exports.insert(subsource, export);
-                            }
-                            (
-                                DataSource::Ingestion(IngestionDescription {
-                                    desc: ingestion.desc,
-                                    ingestion_metadata: (),
-                                    source_imports,
-                                    source_exports,
-                                    instance_id: ingestion.cluster_id,
-                                    remap_collection_id: ingestion.remap_collection_id.expect(
-                                        "ingestion-based collection must name remap collection before going to storage",
-                                    ),
-                                }),
-                                source_status_collection_id,
-                            )
-                        }
+                        DataSourceDesc::Ingestion(ingestion) => (
+                            DataSource::Ingestion(ingestion),
+                            source_status_collection_id,
+                        ),
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
@@ -1137,31 +1105,29 @@ impl Coordinator {
             privileges: &PrivilegeMap,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
-            object_type: ObjectType,
+            object_type: SystemObjectType,
             object_name: &str,
             catalog: &Catalog,
         ) {
             let object_type = object_type.to_string().to_lowercase();
-            for (_, privileges) in &privileges.0 {
-                for privilege in privileges {
-                    if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
-                        let grantor_name = catalog.get_role(&privilege.grantor).name();
-                        dependent_objects
-                            .entry(role_name.to_string())
-                            .or_default()
-                            .push(format!(
+            for privilege in privileges.all_values() {
+                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                    let grantor_name = catalog.get_role(&privilege.grantor).name();
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
                             "privileges on {object_type} {object_name} granted by {grantor_name}",
                         ));
-                    }
-                    if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
-                        let grantee_name = catalog.get_role(&privilege.grantee).name();
-                        dependent_objects
-                            .entry(role_name.to_string())
-                            .or_default()
-                            .push(format!(
+                }
+                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                    let grantee_name = catalog.get_role(&privilege.grantee).name();
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
                             "privileges granted on {object_type} {object_name} to {grantee_name}"
                         ));
-                    }
                 }
             }
         }
@@ -1182,7 +1148,7 @@ impl Coordinator {
                 entry.privileges(),
                 dropped_roles,
                 &mut dependent_objects,
-                entry.item().typ().into(),
+                SystemObjectType::Object(entry.item().typ().into()),
                 &entry.name().item,
                 self.catalog(),
             );
@@ -1198,7 +1164,7 @@ impl Coordinator {
                 &database.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                ObjectType::Database,
+                SystemObjectType::Object(ObjectType::Database),
                 database.name(),
                 self.catalog(),
             );
@@ -1213,7 +1179,7 @@ impl Coordinator {
                     &schema.privileges,
                     dropped_roles,
                     &mut dependent_objects,
-                    ObjectType::Schema,
+                    SystemObjectType::Object(ObjectType::Schema),
                     &schema.name().schema,
                     self.catalog(),
                 );
@@ -1230,7 +1196,7 @@ impl Coordinator {
                 &cluster.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                ObjectType::Cluster,
+                SystemObjectType::Object(ObjectType::Cluster),
                 cluster.name(),
                 self.catalog(),
             );
@@ -1243,6 +1209,14 @@ impl Coordinator {
                 }
             }
         }
+        privilege_check(
+            self.catalog().system_privileges(),
+            dropped_roles,
+            &mut dependent_objects,
+            SystemObjectType::System,
+            "SYSTEM",
+            self.catalog(),
+        );
         for (default_privilege_object, default_privilege_acl_items) in
             self.catalog.default_privileges()
         {
@@ -1301,14 +1275,14 @@ impl Coordinator {
                 .map(|(object_id, _)| object_id)
                 .collect();
             for invalid_revoke in invalid_revokes {
-                let name = session_catalog.get_object_name(&invalid_revoke);
+                let name = session_catalog.get_system_object_name(&invalid_revoke);
                 session.add_notice(AdapterNotice::CannotRevoke { name });
             }
         }
 
         let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
             catalog::Op::UpdatePrivilege {
-                object_id,
+                target_id: object_id,
                 privilege,
                 variant: UpdatePrivilegeVariant::Revoke,
             }
@@ -1518,6 +1492,29 @@ impl Coordinator {
             session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
         Ok(send_immediate_rows(vec![row]))
+    }
+
+    pub(super) async fn sequence_inspect_shard(
+        &self,
+        session: &Session,
+        plan: InspectShardPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO: Not thrilled about this rbac special case here, but probably
+        // sufficient for now.
+        if !session.user().is_internal() {
+            return Err(AdapterError::Unauthorized(
+                rbac::UnauthorizedError::MzSystem {
+                    action: "inspect".into(),
+                },
+            ));
+        }
+        let state = self
+            .controller
+            .storage
+            .inspect_persist_state(plan.id)
+            .await?;
+        let jsonb = Jsonb::from_serde_json(state)?;
+        Ok(send_immediate_rows(vec![jsonb.into_row()]))
     }
 
     pub(super) fn sequence_set_variable(
@@ -1732,6 +1729,26 @@ impl Coordinator {
         Ok((None, None))
     }
 
+    pub(super) fn sequence_side_effecting_func(
+        &mut self,
+        plan: SideEffectingFunc,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        match plan {
+            SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let res = if let Some((id_handle, _conn_meta)) =
+                    self.active_conns.get_key_value(&connection_id)
+                {
+                    // check_plan already verified role membership.
+                    self.handle_privileged_cancel(id_handle.clone());
+                    Datum::True
+                } else {
+                    Datum::False
+                };
+                Ok(send_immediate_rows(vec![Row::pack_slice(&[res])]))
+            }
+        }
+    }
+
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
     ///
     /// Peeks are sequenced by assigning a timestamp for evaluation, and then determining and
@@ -1742,7 +1759,7 @@ impl Coordinator {
     pub(super) async fn sequence_peek(
         &mut self,
         ctx: ExecuteContext,
-        plan: PeekPlan,
+        plan: SelectPlan,
         target_cluster: TargetCluster,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
@@ -1811,7 +1828,7 @@ impl Coordinator {
             target_cluster,
         }: PeekStageValidate,
     ) -> Result<PeekStageOptimize, AdapterError> {
-        let PeekPlan {
+        let SelectPlan {
             source,
             when,
             finishing,
@@ -3274,7 +3291,7 @@ impl Coordinator {
         );
         self.sequence_peek(
             peek_ctx,
-            PeekPlan {
+            SelectPlan {
                 source: selection,
                 when: QueryWhen::Freshest,
                 finishing,
@@ -3851,21 +3868,18 @@ impl Coordinator {
 
         for UpdatePrivilege {
             acl_mode,
-            object_id,
+            target_id,
             grantor,
         } in update_privileges
         {
-            self.catalog()
-                .ensure_not_reserved_object(&object_id, session.conn_id())?;
-
-            let actual_object_type = catalog.get_object_type(&object_id);
+            let actual_object_type = catalog.get_system_object_type(&target_id);
             // For all relations we allow all applicable table privileges, but send a warning if the
             // privilege isn't actually applicable to the object type.
             if actual_object_type.is_relation() {
                 let applicable_privileges = rbac::all_object_privileges(actual_object_type);
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
-                    let object_name = catalog.get_object_name(&object_id);
+                    let object_name = catalog.get_system_object_name(&target_id);
                     warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
                         non_applicable_privileges,
                         object_type: actual_object_type,
@@ -3874,9 +3888,14 @@ impl Coordinator {
                 }
             }
 
+            if let SystemObjectId::Object(object_id) = &target_id {
+                self.catalog()
+                    .ensure_not_reserved_object(object_id, session.conn_id())?;
+            }
+
             let privileges = self
                 .catalog()
-                .get_privileges(&object_id, session.conn_id())
+                .get_privileges(&target_id, session.conn_id())
                 // Should be unreachable since the parser will refuse to parse grant/revoke
                 // statements on objects without privileges.
                 .ok_or(AdapterError::Unsupported(
@@ -3886,13 +3905,7 @@ impl Coordinator {
             for grantee in &grantees {
                 self.catalog().ensure_not_system_role(grantee)?;
                 let existing_privilege = privileges
-                    .0
-                    .get(grantee)
-                    .and_then(|privileges| {
-                        privileges
-                            .into_iter()
-                            .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-                    })
+                    .get_acl_item(grantee, &grantor)
                     .map(Cow::Borrowed)
                     .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
 
@@ -3901,7 +3914,7 @@ impl Coordinator {
                         if !existing_privilege.acl_mode.contains(acl_mode) =>
                     {
                         ops.push(catalog::Op::UpdatePrivilege {
-                            object_id: object_id.clone(),
+                            target_id: target_id.clone(),
                             privilege: MzAclItem {
                                 grantee: *grantee,
                                 grantor,
@@ -3917,7 +3930,7 @@ impl Coordinator {
                             .is_empty() =>
                     {
                         ops.push(catalog::Op::UpdatePrivilege {
-                            object_id: object_id.clone(),
+                            target_id: target_id.clone(),
                             privilege: MzAclItem {
                                 grantee: *grantee,
                                 grantor,

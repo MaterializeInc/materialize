@@ -339,6 +339,8 @@ impl Coordinator {
                 secret_key: session.secret_key(),
                 notice_tx: session.retain_notice_transmitter(),
                 drop_sinks: Vec::new(),
+                // TODO: Switch to authenticated role once implemented.
+                authenticated_role: session.session_role_id().clone(),
             },
         );
         let update = self.catalog().state().pack_session_update(&session, 1);
@@ -664,7 +666,7 @@ impl Coordinator {
 
     /// Unconditionally instructs the dataflow layer to cancel any ongoing,
     /// interactive work for the named `conn_id`.
-    fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
+    pub(crate) fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // Cancel pending writes. There is at most one pending write per session.
             let mut maybe_ctx = None;

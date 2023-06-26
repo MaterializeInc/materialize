@@ -18,8 +18,10 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, SessionCatalog};
-use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
+use mz_sql::catalog::{
+    CatalogItemType, ObjectType, RoleAttributes, SessionCatalog, SystemObjectType,
+};
+use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId};
 use mz_sql::plan::{
     AbortTransactionPlan, AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -31,10 +33,11 @@ use mz_sql::plan::{
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
     ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
-    MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
-    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
-    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    StartTransactionPlan, SubscribePlan, UpdatePrivilege,
+    InspectShardPlan, MutationKind, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan,
+    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
+    RotateKeysPlan, SelectPlan, SetTransactionPlan, SetVariablePlan, ShowCreatePlan,
+    ShowVariablePlan, SideEffectingFunc, SourceSinkClusterConfig, StartTransactionPlan,
+    SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -42,7 +45,9 @@ use mz_sql_parser::ast::QualifiedReplica;
 
 use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use crate::catalog::Catalog;
+use crate::client::ConnectionId;
 use crate::command::Command;
+use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
 use crate::AdapterError;
 
@@ -145,6 +150,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
 
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
+    coord: &Coordinator,
     catalog: &impl SessionCatalog,
     session: &Session,
     plan: &Plan,
@@ -182,9 +188,10 @@ pub fn check_plan(
 
     // Validate that the current session has the required role membership to execute the provided
     // plan.
-    let required_membership: BTreeSet<_> = generate_required_role_membership(plan)
-        .into_iter()
-        .collect();
+    let required_membership: BTreeSet<_> =
+        generate_required_role_membership(plan, coord.active_conns())
+            .into_iter()
+            .collect();
     let unheld_membership: Vec<_> = required_membership.difference(&role_membership).collect();
     if !unheld_membership.is_empty() {
         let role_names = unheld_membership
@@ -272,7 +279,10 @@ pub fn is_rbac_enabled_for_system(system_vars: &SystemVars) -> bool {
 }
 
 /// Generates the role membership required to execute a give plan.
-pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
+pub fn generate_required_role_membership(
+    plan: &Plan,
+    active_conns: &BTreeMap<ConnectionId, ConnMeta>,
+) -> Vec<RoleId> {
     match plan {
         Plan::AlterOwner(AlterOwnerPlan { new_owner, .. }) => vec![*new_owner],
         Plan::DropOwned(DropOwnedPlan { role_ids, .. }) => role_ids.clone(),
@@ -291,6 +301,13 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
             .iter()
             .map(|privilege_object| privilege_object.role_id)
             .collect(),
+        Plan::SideEffectingFunc(SideEffectingFunc::PgCancelBackend { connection_id }) => {
+            let mut roles = Vec::new();
+            if let Some(conn) = active_conns.get(connection_id) {
+                roles.push(conn.authenticated_role);
+            }
+            roles
+        }
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -313,13 +330,14 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
         | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
         | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
-        | Plan::Peek(_)
+        | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::CopyFrom(_)
         | Plan::CopyRows(_)
@@ -416,13 +434,14 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
         | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
         | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
-        | Plan::Peek(_)
+        | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::CopyRows(_)
         | Plan::CopyFrom(_)
@@ -451,7 +470,8 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::ReassignOwned(_) => Vec::new(),
+        | Plan::ReassignOwned(_)
+        | Plan::SideEffectingFunc(_) => Vec::new(),
     }
 }
 
@@ -575,12 +595,13 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
+        | Plan::InspectShard(_)
         | Plan::ResetVariable(_)
         | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
-        | Plan::Peek(_)
+        | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::ShowCreate(_)
         | Plan::CopyFrom(_)
@@ -604,7 +625,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::RevokeRole(_)
         | Plan::DropOwned(_)
         | Plan::ReassignOwned(_)
-        | Plan::AlterDefaultPrivileges(_) => Vec::new(),
+        | Plan::AlterDefaultPrivileges(_)
+        | Plan::SideEffectingFunc(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -630,12 +652,14 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::GrantPrivileges(plan) => plan
             .update_privileges
             .iter()
-            .map(|update_privilege| update_privilege.object_id.clone())
+            .filter_map(|update_privilege| update_privilege.target_id.object_id())
+            .cloned()
             .collect(),
         Plan::RevokePrivileges(plan) => plan
             .update_privileges
             .iter()
-            .map(|update_privilege| update_privilege.object_id.clone())
+            .filter_map(|update_privilege| update_privilege.target_id.object_id())
+            .cloned()
             .collect(),
     }
 }
@@ -898,7 +922,7 @@ fn generate_required_privileges(
             )]
         }
 
-        Plan::Peek(PeekPlan {
+        Plan::Select(SelectPlan {
             source,
             when: _,
             finishing: _,
@@ -1122,26 +1146,29 @@ fn generate_required_privileges(
             revokees: _,
         }) => {
             let mut privleges = Vec::with_capacity(update_privileges.len());
-            for UpdatePrivilege { object_id, .. } in update_privileges {
-                match object_id {
-                    ObjectId::ClusterReplica((cluster_id, _)) => {
-                        privleges.push((cluster_id.into(), AclMode::USAGE, role_id));
-                    }
-                    ObjectId::Schema((database_spec, _)) => match database_spec {
-                        ResolvedDatabaseSpecifier::Ambient => {}
-                        ResolvedDatabaseSpecifier::Id(database_id) => {
-                            privleges.push((database_id.into(), AclMode::USAGE, role_id));
+            for UpdatePrivilege { target_id, .. } in update_privileges {
+                match target_id {
+                    SystemObjectId::Object(object_id) => match object_id {
+                        ObjectId::ClusterReplica((cluster_id, _)) => {
+                            privleges.push((cluster_id.into(), AclMode::USAGE, role_id));
                         }
+                        ObjectId::Schema((database_spec, _)) => match database_spec {
+                            ResolvedDatabaseSpecifier::Ambient => {}
+                            ResolvedDatabaseSpecifier::Id(database_id) => {
+                                privleges.push((database_id.into(), AclMode::USAGE, role_id));
+                            }
+                        },
+                        ObjectId::Item(item_id) => {
+                            let item = catalog.get_item(item_id);
+                            privleges.push((
+                                item.name().qualifiers.clone().into(),
+                                AclMode::USAGE,
+                                role_id,
+                            ))
+                        }
+                        ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => {}
                     },
-                    ObjectId::Item(item_id) => {
-                        let item = catalog.get_item(item_id);
-                        privleges.push((
-                            item.name().qualifiers.clone().into(),
-                            AclMode::USAGE,
-                            role_id,
-                        ))
-                    }
-                    ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => {}
+                    SystemObjectId::System => {}
                 }
             }
             privleges
@@ -1195,6 +1222,7 @@ fn generate_required_privileges(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowVariable(ShowVariablePlan { name: _ })
+        | Plan::InspectShard(InspectShardPlan { id: _ })
         | Plan::SetVariable(SetVariablePlan {
             name: _,
             value: _,
@@ -1261,7 +1289,8 @@ fn generate_required_privileges(
             old_roles: _,
             new_role: _,
             reassign_ids: _,
-        }) => Vec::new(),
+        })
+        | Plan::SideEffectingFunc(_) => Vec::new(),
     }
 }
 
@@ -1401,8 +1430,7 @@ fn check_object_privileges(
             .expect("only object types with privileges will generate required privileges");
         let role_privileges = role_membership
             .iter()
-            .filter_map(|role_id| object_privileges.0.get(role_id))
-            .flat_map(|mz_acl_items| mz_acl_items.iter())
+            .flat_map(|role_id| object_privileges.get_acl_items_for_grantee(role_id))
             .map(|mz_acl_item| mz_acl_item.acl_mode)
             .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
         if !role_privileges.contains(acl_mode) {
@@ -1416,29 +1444,33 @@ fn check_object_privileges(
     Ok(())
 }
 
-pub(crate) const fn all_object_privileges(object_type: ObjectType) -> AclMode {
+pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const TABLE_ACL_MODE: AclMode = AclMode::INSERT
         .union(AclMode::SELECT)
         .union(AclMode::UPDATE)
         .union(AclMode::DELETE);
     const USAGE_CREATE_ACL_MODE: AclMode = AclMode::USAGE.union(AclMode::CREATE);
+    const ALL_SYSTEM_PRIVILEGES: AclMode = AclMode::CREATE_ROLE
+        .union(AclMode::CREATE_DB)
+        .union(AclMode::CREATE_CLUSTER);
     const EMPTY_ACL_MODE: AclMode = AclMode::empty();
     match object_type {
-        ObjectType::Table => TABLE_ACL_MODE,
-        ObjectType::View => AclMode::SELECT,
-        ObjectType::MaterializedView => AclMode::SELECT,
-        ObjectType::Source => AclMode::SELECT,
-        ObjectType::Sink => EMPTY_ACL_MODE,
-        ObjectType::Index => EMPTY_ACL_MODE,
-        ObjectType::Type => AclMode::USAGE,
-        ObjectType::Role => EMPTY_ACL_MODE,
-        ObjectType::Cluster => USAGE_CREATE_ACL_MODE,
-        ObjectType::ClusterReplica => EMPTY_ACL_MODE,
-        ObjectType::Secret => AclMode::USAGE,
-        ObjectType::Connection => AclMode::USAGE,
-        ObjectType::Database => USAGE_CREATE_ACL_MODE,
-        ObjectType::Schema => USAGE_CREATE_ACL_MODE,
-        ObjectType::Func => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Table) => TABLE_ACL_MODE,
+        SystemObjectType::Object(ObjectType::View) => AclMode::SELECT,
+        SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
+        SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
+        SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
+        SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
+        SystemObjectType::Object(ObjectType::ClusterReplica) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Secret) => AclMode::USAGE,
+        SystemObjectType::Object(ObjectType::Connection) => AclMode::USAGE,
+        SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
+        SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
 
@@ -1446,11 +1478,11 @@ pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -
     MzAclItem {
         grantee: owner_id,
         grantor: owner_id,
-        acl_mode: all_object_privileges(object_type),
+        acl_mode: all_object_privileges(SystemObjectType::Object(object_type)),
     }
 }
 
-pub(crate) const fn default_catalog_privilege(object_type: ObjectType) -> MzAclItem {
+pub(crate) const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
     let acl_mode = match object_type {
         ObjectType::Table
         | ObjectType::View

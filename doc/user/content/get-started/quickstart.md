@@ -137,7 +137,7 @@ For this guide, you'll use a [built-in load generator](/sql/create-source/load-g
     ```
 
     ```sql
-    SET search_path = qck;
+    SET schema = qck;
     ```
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/load-generator/) command to create the auction house source:
@@ -543,7 +543,7 @@ DROP CLUSTER compute_qck;
 ```
 
 ```sql
-RESET search_path;
+RESET schema;
 ```
 
 ```sql

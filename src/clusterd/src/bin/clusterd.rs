@@ -298,7 +298,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
         SYSTEM_TIME.clone(),
         ConnectionContext::from_cli_args(
-            &args.tracing.log_filter.inner,
+            args.tracing.log_filter.as_ref(),
             args.aws_external_id,
             secrets_reader,
         ),
