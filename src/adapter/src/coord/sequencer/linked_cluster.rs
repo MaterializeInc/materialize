@@ -9,7 +9,6 @@
 
 //! Coordinator functionality to sequence linked-cluster-related plans
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
@@ -23,7 +22,10 @@ use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::SourceSinkClusterConfig;
 
-use crate::catalog::{self, SerializedReplicaLocation, LINKED_CLUSTER_REPLICA_NAME};
+use crate::catalog::{
+    self, ClusterConfig, ClusterVariant, SerializedReplicaLocation, LINKED_CLUSTER_REPLICA_NAME,
+};
+use crate::coord::sequencer::cluster::AzHelper;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::session::Session;
@@ -58,6 +60,9 @@ impl Coordinator {
             linked_object_id: Some(linked_object_id),
             introspection_sources,
             owner_id: *session.current_role_id(),
+            config: ClusterConfig {
+                variant: ClusterVariant::Unmanaged,
+            },
         });
         self.create_linked_cluster_replica_op(id, size, ops, *session.current_role_id())
             .await?;
@@ -75,11 +80,7 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let availability_zone = {
             let azs = self.catalog().state().availability_zones();
-            let n_replicas_per_az = azs
-                .iter()
-                .map(|az| (az.clone(), 0))
-                .collect::<BTreeMap<_, _>>();
-            Self::choose_az(&n_replicas_per_az)
+            AzHelper::new(azs).choose_az()
         };
         let location = SerializedReplicaLocation::Managed {
             size: size.to_string(),

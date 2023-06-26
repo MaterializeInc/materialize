@@ -57,7 +57,6 @@ jobs:
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           channel: eng-design-docs
-          color: blue
           custom_payload: |
             {
               "blocks": [
@@ -72,14 +71,14 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *PR:* <${{ github.event.pull_request.url }}|${{ github.event.pull_request.title }}>"
+                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
                   }
                 },
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *Author:* <${{ github.event.pull_request.user.url }}|${{ github.event.pull_request.user.login }}>"
+                    "text": "• *Author:* <${{ github.event.pull_request.user.html_url }}|${{ github.event.pull_request.user.login }}>"
                   }
                 }
               ]

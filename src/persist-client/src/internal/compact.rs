@@ -72,6 +72,7 @@ pub struct CompactRes<T> {
 #[derive(Debug, Clone)]
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
+    pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
 
@@ -79,6 +80,7 @@ impl From<&PersistConfig> for CompactConfig {
     fn from(value: &PersistConfig) -> Self {
         CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
+            version: value.build_version.clone(),
             batch: BatchBuilderConfig::from(value),
         }
     }
@@ -693,6 +695,7 @@ where
             Arc::clone(&blob),
             cpu_heavy_runtime,
             shard_id.clone(),
+            cfg.version.clone(),
             writer_id,
             desc.since().clone(),
             Some(desc.upper().clone()),

@@ -36,22 +36,22 @@
 //! when running code that requires `async`. This is needed because a timely
 //! main loop cannot run `async` code.
 //!
-//! ## Example flow of commands for `CreateSources`
+//! ## Example flow of commands for `RunIngestions`
 //!
 //! With external commands, internal commands, and the async worker,
 //! understanding where and how commands from the controller are realized can
-//! get complicated. We will follow the complete flow for `CreateSources`, as an
+//! get complicated. We will follow the complete flow for `RunIngestions`, as an
 //! example:
 //!
-//! 1. Worker receives a [`StorageCommand::CreateSources`] command from the
+//! 1. Worker receives a [`StorageCommand::RunIngestions`] command from the
 //!    controller.
 //! 2. This command is processed in [`StorageState::handle_storage_command`].
 //!    This step cannot render dataflows, because it does not have access to the
 //!    timely worker. It will only set up state that stays over the whole
 //!    lifetime of the source, such as the `reported_frontier`. Putting in place
-//!    this reported frontier will enable frontier reporting for that source.
-//!    We will not start reporting when we only see an internal command for
-//!    rendering a dataflow, which can "overtake" the external `CreateSources`
+//!    this reported frontier will enable frontier reporting for that source. We
+//!    will not start reporting when we only see an internal command for
+//!    rendering a dataflow, which can "overtake" the external `RunIngestions`
 //!    command.
 //! 3. During processing of that command, we call
 //!    [`AsyncStorageWorker::calculate_resume_upper`], which causes a command to
@@ -65,9 +65,17 @@
 //! 7. This message will be processed (on each worker) in
 //!    [`Worker::handle_internal_storage_command`]. This is what will cause the
 //!    required dataflow to be rendered on all workers.
+//!
+//! The process described above assumes that the `RunIngestions` is _not_ an
+//! update, i.e. it is in response to a `CREATE SOURCE`-like statement.
+//!
+//! The primary distinction when handling a `RunIngestions` that represents an
+//! update, is that it might fill out new internal state in the mid-level
+//! clients on the way toward being run.
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -78,7 +86,6 @@ use anyhow::Context;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
-use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -87,7 +94,8 @@ use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
+    StorageResponse,
 };
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -977,13 +985,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .collect::<BTreeSet<_>>();
         let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
 
-        // First, we collect all "drop commands". These are `AllowCompaction`
-        // commands that compact to the empty since. Then, later, we make sure
-        // we retain only those `Create*` commands that are not dropped. We
-        // assume that the `AllowCompaction` command is ordered after the
-        // `Create*` commands but don't assert that.
-        // WIP: Should we assert?
         let mut drop_commands = BTreeSet::new();
+        let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
 
         for command in &mut commands {
             match command {
@@ -991,51 +994,73 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     panic!("CreateTimely must be captured before")
                 }
                 StorageCommand::AllowCompaction(sinces) => {
+                    // collect all "drop commands". These are `AllowCompaction`
+                    // commands that compact to the empty since. Then, later, we make sure
+                    // we retain only those `Create*` commands that are not dropped. We
+                    // assume that the `AllowCompaction` command is ordered after the
+                    // `Create*` commands but don't assert that.
+                    // WIP: Should we assert?
                     let drops = sinces.drain_filter_swapping(|(_id, since)| since.is_empty());
                     drop_commands.extend(drops.map(|(id, _since)| id));
                 }
+                StorageCommand::RunIngestions(ingestions) => {
+                    // Ensure that ingestions are forward-rolling alter compatible.
+                    for ingestion in ingestions {
+                        let prev = running_ingestion_descriptions
+                            .insert(ingestion.id, ingestion.description.clone());
+
+                        if let Some(prev_ingest) = prev {
+                            // If the new ingestion is not exactly equal to the currently running
+                            // ingestion, we must either track that we need to synthesize an update
+                            // command to change the ingestion, or panic.
+                            prev_ingest
+                                .alter_compatible(ingestion.id, &ingestion.description)
+                                .expect("only alter compatible ingestions permitted");
+                        }
+                    }
+                }
                 StorageCommand::InitializationComplete
                 | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::CreateSources(_)
                 | StorageCommand::CreateSinks(_) => (),
             }
         }
 
-        for command in &mut commands {
+        let mut seen_most_recent_ingestion = BTreeSet::new();
+
+        // We iterate over this backward to ensure that we keep only the most recent ingestion
+        // description.
+        for command in commands.iter_mut().rev() {
             match command {
                 StorageCommand::CreateTimely { .. } => {
                     panic!("CreateTimely must be captured before")
                 }
-                StorageCommand::CreateSources(ingestions) => {
+                StorageCommand::RunIngestions(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
-                        if drop_commands.remove(&ingestion.id) {
+                        if drop_commands.remove(&ingestion.id)
+                            || self.storage_state.dropped_ids.contains(&ingestion.id)
+                        {
                             // Make sure that we report back that the ID was
                             // dropped.
                             self.storage_state.dropped_ids.insert(ingestion.id);
 
                             false
-                        } else if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
-                            trace!(
-                                worker_id = self.timely_worker.index(),
-                                has_token = self.storage_state.source_tokens.contains_key(&ingestion.id),
-                                "reconciliation, existing ingestion: {}", ingestion.id
-                            );
-
-                            stale_ingestions.remove(&ingestion.id);
-                            // If we've been asked to create an ingestion that is
-                            // already installed, the descriptions must match
-                            // exactly.
-                            if *existing != ingestion.description {
-                                halt!(
-                                    "new ingestion with ID {} does not match existing ingestion:\n{:?}\nvs\n{:?}",
-                                    ingestion.id,
-                                    ingestion.description,
-                                    existing,
-                                );
-                            }
-                            false
                         } else {
-                            true
+                            stale_ingestions.remove(&ingestion.id);
+
+                            let running_ingestion =
+                                self.storage_state.ingestions.get(&ingestion.id);
+
+                            // Ingestion statements are only considered updates if they are
+                            // currently running.
+                            ingestion.update = running_ingestion.is_some();
+
+                            // We keep only:
+                            // - The most recent version of the ingestion, which
+                            //   is why these commands are run in reverse.
+                            // - Ingestions whose descriptions are not exactly
+                            //   those that are currently running.
+                            seen_most_recent_ingestion.insert(ingestion.id)
+                                && running_ingestion != Some(&ingestion.description)
                         }
                     })
                 }
@@ -1141,29 +1166,46 @@ impl StorageState {
                     ))
                 }
             }
-            StorageCommand::CreateSources(ingestions) => {
-                for ingestion in ingestions {
+            StorageCommand::RunIngestions(ingestions) => {
+                for RunIngestionCommand {
+                    id,
+                    description,
+                    update,
+                } in ingestions
+                {
                     // Remember the ingestion description to facilitate possible
                     // reconciliation later.
-                    self.ingestions
-                        .insert(ingestion.id, ingestion.description.clone());
+                    let prev = self.ingestions.insert(id, description.clone());
+
+                    assert!(
+                        prev.is_some() == update,
+                        "can only and must update reported frontiers if RunIngestion is update"
+                    );
 
                     // Initialize shared frontier reporting.
-                    for id in ingestion.description.subsource_ids() {
-                        self.reported_frontiers
-                            .insert(id, Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                    for id in description.subsource_ids() {
+                        match self.reported_frontiers.entry(id) {
+                            Entry::Occupied(_) => {
+                                assert!(update, "tried to re-insert frontier for {}", id)
+                            }
+                            Entry::Vacant(v) => {
+                                v.insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                            }
+                        };
                     }
 
-                    // This needs to be done by one worker, which will
-                    // broadcasts a `CreateIngestionDataflow` command to all
-                    // workers based on the response that contains the
-                    // resumption upper.
+                    // This needs to be done by one worker, which will broadcasts a
+                    // `CreateIngestionDataflow` command to all workers based on the response that
+                    // contains the resumption upper.
                     //
-                    // Doing this separately on each worker could lead to
-                    // differing resume_uppers which might lead to all kinds of
-                    // mayhem.
+                    // Doing this separately on each worker could lead to differing resume_uppers
+                    // which might lead to all kinds of mayhem.
+                    //
+                    // n.b. the ingestion on each worker uses the description from worker 0––not the
+                    // ingestion in the local storage state. This is something we might have
+                    // interest in fixing in the future, e.g. #19907
                     if worker_index == 0 {
-                        async_worker.calculate_resume_upper(ingestion.id, ingestion.description);
+                        async_worker.calculate_resume_upper(id, description);
                     }
                 }
             }
@@ -1189,9 +1231,9 @@ impl StorageState {
                         ),
                     );
 
-                    // This needs to be broadcast by one worker and go through
-                    // the internal command fabric, to ensure consistent
-                    // ordering of dataflow rendering across all workers.
+                    // This needs to be broadcast by one worker and go through the internal command
+                    // fabric, to ensure consistent ordering of dataflow rendering across all
+                    // workers.
                     if worker_index == 0 {
                         internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
                             export.id,

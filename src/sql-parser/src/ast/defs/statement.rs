@@ -60,6 +60,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
+    AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
@@ -121,6 +122,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
+            Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
@@ -1179,14 +1181,37 @@ impl_display_t!(CreateTypeStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClusterOptionName {
+    /// The `AVAILABILITY ZONES [[=] '[' <values> ']' ]` option.
+    AvailabilityZones,
+    /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
+    IntrospectionInterval,
+    /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
+    IntrospectionDebugging,
+    /// The `IDLE ARRANGEMENT MERGE EFFORT [=] <value>` option.
+    IdleArrangementMergeEffort,
+    /// The `MANAGED` option.
+    Managed,
     /// The `REPLICAS` option.
     Replicas,
+    /// The `REPLICATION FACTOR` option.
+    ReplicationFactor,
+    /// The `SIZE` option.
+    Size,
 }
 
 impl AstDisplay for ClusterOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            ClusterOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
+            ClusterOptionName::IdleArrangementMergeEffort => {
+                f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
+            }
+            ClusterOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
+            ClusterOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
+            ClusterOptionName::Managed => f.write_str("MANAGED"),
             ClusterOptionName::Replicas => f.write_str("REPLICAS"),
+            ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
+            ClusterOptionName::Size => f.write_str("SIZE"),
         }
     }
 }
@@ -1248,6 +1273,47 @@ impl<T: AstInfo> AstDisplay for ReplicaDefinition<T> {
     }
 }
 impl_display_t!(ReplicaDefinition);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterClusterAction<T: AstInfo> {
+    SetOptions(Vec<ClusterOption<T>>),
+    ResetOptions(Vec<ClusterOptionName>),
+}
+
+/// `ALTER CLUSTER .. SET ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterClusterStatement<T: AstInfo> {
+    /// The `IF EXISTS` option.
+    pub if_exists: bool,
+    /// Name of the altered cluster.
+    pub name: Ident,
+    /// The action.
+    pub action: AlterClusterAction<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER CLUSTER ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ");
+        match &self.action {
+            AlterClusterAction::SetOptions(options) => {
+                f.write_str("SET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+            AlterClusterAction::ResetOptions(options) => {
+                f.write_str("RESET (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display_t!(AlterClusterStatement);
 
 /// `CREATE CLUSTER REPLICA ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1799,6 +1865,20 @@ impl AstDisplay for ShowVariableStatement {
 }
 impl_display!(ShowVariableStatement);
 
+/// `INSPECT SHARD <id>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InspectShardStatement {
+    pub id: String,
+}
+
+impl AstDisplay for InspectShardStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("INSPECT SHARD ");
+        f.write_str(&self.id);
+    }
+}
+impl_display!(InspectShardStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShowObjectType<T: AstInfo> {
     MaterializedView {
@@ -1822,6 +1902,9 @@ pub enum ShowObjectType<T: AstInfo> {
     Database,
     Schema {
         from: Option<T::DatabaseName>,
+    },
+    Subsource {
+        on_source: T::ItemName,
     },
 }
 /// `SHOW <object>S`
@@ -1859,6 +1942,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Index { .. } => "INDEXES",
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
+            ShowObjectType::Subsource { .. } => "SUBSOURCES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -1889,6 +1973,12 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             }
             _ => (),
         }
+
+        if let ShowObjectType::Subsource { on_source } = &self.object_type {
+            f.write_str(" ON ");
+            f.write_node(on_source);
+        }
+
         if let Some(filter) = &self.filter {
             f.write_str(" ");
             f.write_node(filter);
@@ -2233,6 +2323,7 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
+    Subsource,
 }
 
 impl ObjectType {
@@ -2247,7 +2338,8 @@ impl ObjectType {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => true,
+            | ObjectType::Func
+            | ObjectType::Subsource => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -2275,6 +2367,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
+            ObjectType::Subsource => "SUBSOURCE",
         })
     }
 }
@@ -2837,6 +2930,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowVariable(ShowVariableStatement),
+    InspectShard(InspectShardStatement),
 }
 
 impl<T: AstInfo> AstDisplay for ShowStatement<T> {
@@ -2852,6 +2946,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
+            ShowStatement::InspectShard(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -2860,8 +2955,8 @@ impl_display_t!(ShowStatement);
 /// `GRANT ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GrantRoleStatement<T: AstInfo> {
-    /// The role that is gaining a member.
-    pub role_name: T::RoleName,
+    /// The roles that are gaining members.
+    pub role_names: Vec<T::RoleName>,
     /// The roles that will be added to `role_name`.
     pub member_names: Vec<T::RoleName>,
 }
@@ -2869,7 +2964,7 @@ pub struct GrantRoleStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for GrantRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("GRANT ");
-        f.write_node(&self.role_name);
+        f.write_node(&display::comma_separated(&self.role_names));
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.member_names));
     }
@@ -2879,16 +2974,16 @@ impl_display_t!(GrantRoleStatement);
 /// `REVOKE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RevokeRoleStatement<T: AstInfo> {
-    /// The role that is losing a member.
-    pub role_name: T::RoleName,
-    /// The role that will be removed from `role_name`.
+    /// The roles that are losing members.
+    pub role_names: Vec<T::RoleName>,
+    /// The roles that will be removed from `role_name`.
     pub member_names: Vec<T::RoleName>,
 }
 
 impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("REVOKE ");
-        f.write_node(&self.role_name);
+        f.write_node(&display::comma_separated(&self.role_names));
         f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.member_names));
     }
@@ -2903,6 +2998,9 @@ pub enum Privilege {
     DELETE,
     USAGE,
     CREATE,
+    CREATEROLE,
+    CREATEDB,
+    CREATECLUSTER,
 }
 
 impl AstDisplay for Privilege {
@@ -2914,6 +3012,9 @@ impl AstDisplay for Privilege {
             Privilege::DELETE => "DELETE",
             Privilege::CREATE => "CREATE",
             Privilege::USAGE => "USAGE",
+            Privilege::CREATEROLE => "CREATEROLE",
+            Privilege::CREATEDB => "CREATEDB",
+            Privilege::CREATECLUSTER => "CREATECLUSTER",
         });
     }
 }
@@ -2938,13 +3039,16 @@ impl AstDisplay for PrivilegeSpecification {
 impl_display!(PrivilegeSpecification);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GrantTargetSpecification<T: AstInfo> {
-    /// The type of object.
-    ///
-    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
-    pub object_type: ObjectType,
-    /// Specification of each object affected.
-    pub object_spec_inner: GrantTargetSpecificationInner<T>,
+pub enum GrantTargetSpecification<T: AstInfo> {
+    Object {
+        /// The type of object.
+        ///
+        /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
+        object_type: ObjectType,
+        /// Specification of each object affected.
+        object_spec_inner: GrantTargetSpecificationInner<T>,
+    },
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2960,33 +3064,49 @@ pub enum GrantTargetAllSpecification<T: AstInfo> {
     AllSchemas { schemas: Vec<T::SchemaName> },
 }
 
+impl<T: AstInfo> GrantTargetAllSpecification<T> {
+    pub fn len(&self) -> usize {
+        match self {
+            GrantTargetAllSpecification::All => 1,
+            GrantTargetAllSpecification::AllDatabases { databases } => databases.len(),
+            GrantTargetAllSpecification::AllSchemas { schemas } => schemas.len(),
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match &self.object_spec_inner {
-            GrantTargetSpecificationInner::All(all_spec) => match all_spec {
-                GrantTargetAllSpecification::All => {
-                    f.write_str("ALL ");
-                    f.write_node(&self.object_type);
-                    f.write_str("S");
-                }
-                GrantTargetAllSpecification::AllDatabases { databases } => {
-                    f.write_str("ALL ");
-                    f.write_node(&self.object_type);
-                    f.write_str("S IN DATABASE ");
-                    f.write_node(&display::comma_separated(databases));
-                }
-                GrantTargetAllSpecification::AllSchemas { schemas } => {
-                    f.write_str("ALL ");
-                    f.write_node(&self.object_type);
-                    f.write_str("S IN SCHEMA ");
-                    f.write_node(&display::comma_separated(schemas));
+        match self {
+            GrantTargetSpecification::Object {
+                object_type,
+                object_spec_inner,
+            } => match object_spec_inner {
+                GrantTargetSpecificationInner::All(all_spec) => match all_spec {
+                    GrantTargetAllSpecification::All => {
+                        f.write_str("ALL ");
+                        f.write_node(object_type);
+                        f.write_str("S");
+                    }
+                    GrantTargetAllSpecification::AllDatabases { databases } => {
+                        f.write_str("ALL ");
+                        f.write_node(object_type);
+                        f.write_str("S IN DATABASE ");
+                        f.write_node(&display::comma_separated(databases));
+                    }
+                    GrantTargetAllSpecification::AllSchemas { schemas } => {
+                        f.write_str("ALL ");
+                        f.write_node(object_type);
+                        f.write_str("S IN SCHEMA ");
+                        f.write_node(&display::comma_separated(schemas));
+                    }
+                },
+                GrantTargetSpecificationInner::Objects { names } => {
+                    f.write_node(object_type);
+                    f.write_str(" ");
+                    f.write_node(&display::comma_separated(names));
                 }
             },
-            GrantTargetSpecificationInner::Objects { names } => {
-                f.write_node(&self.object_type);
-                f.write_str(" ");
-                f.write_node(&display::comma_separated(names));
-            }
+            GrantTargetSpecification::System => f.write_str("SYSTEM"),
         }
     }
 }
@@ -3037,6 +3157,27 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegesStatement<T> {
     }
 }
 impl_display_t!(RevokePrivilegesStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TargetRoleSpecification<T: AstInfo> {
+    /// Specific list of roles.
+    Roles(Vec<T::RoleName>),
+    /// The current role executing the statement.
+    CurrentRole,
+    /// All current and future roles.
+    AllRoles,
+}
+
+impl<T: AstInfo> AstDisplay for TargetRoleSpecification<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            TargetRoleSpecification::Roles(roles) => f.write_node(&display::comma_separated(roles)),
+            TargetRoleSpecification::CurrentRole => {}
+            TargetRoleSpecification::AllRoles => f.write_str("ALL ROLES"),
+        }
+    }
+}
+impl_display_t!(TargetRoleSpecification);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AbbreviatedGrantStatement<T: AstInfo> {
@@ -3092,6 +3233,29 @@ pub enum AbbreviatedGrantOrRevokeStatement<T: AstInfo> {
     Revoke(AbbreviatedRevokeStatement<T>),
 }
 
+impl<T: AstInfo> AbbreviatedGrantOrRevokeStatement<T> {
+    pub fn privileges(&self) -> &PrivilegeSpecification {
+        match self {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => &grant.privileges,
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => &revoke.privileges,
+        }
+    }
+
+    pub fn object_type(&self) -> &ObjectType {
+        match self {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => &grant.object_type,
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => &revoke.object_type,
+        }
+    }
+
+    pub fn roles(&self) -> &Vec<T::RoleName> {
+        match self {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => &grant.grantees,
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => &revoke.revokees,
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for AbbreviatedGrantOrRevokeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -3106,7 +3270,7 @@ impl_display_t!(AbbreviatedGrantOrRevokeStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterDefaultPrivilegesStatement<T: AstInfo> {
     /// The roles for which created objects are affected.
-    pub target_roles: Option<Vec<T::RoleName>>,
+    pub target_roles: TargetRoleSpecification<T>,
     /// The objects that are affected by the default privilege.
     pub target_objects: GrantTargetAllSpecification<T>,
     /// The privilege to grant or revoke.
@@ -3116,9 +3280,16 @@ pub struct AlterDefaultPrivilegesStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for AlterDefaultPrivilegesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER DEFAULT PRIVILEGES");
-        if let Some(target_roles) = &self.target_roles {
-            f.write_str(" FOR ");
-            f.write_node(&display::comma_separated(target_roles));
+        match &self.target_roles {
+            TargetRoleSpecification::Roles(_) => {
+                f.write_str(" FOR ROLE ");
+                f.write_node(&self.target_roles);
+            }
+            TargetRoleSpecification::CurrentRole => {}
+            TargetRoleSpecification::AllRoles => {
+                f.write_str(" FOR ");
+                f.write_node(&self.target_roles);
+            }
         }
         match &self.target_objects {
             GrantTargetAllSpecification::All => {}

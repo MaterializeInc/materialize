@@ -803,7 +803,7 @@ dependencies = [
  "lazy_static",
  "lazycell",
  "peeking_take_while",
- "prettyplease",
+ "prettyplease 0.2.4",
  "proc-macro2",
  "quote",
  "regex",
@@ -1673,7 +1673,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7c79e0c1827eec2639aa628ab54722087c00ac86"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#3364c488726435e0ec0ed6f38e6db78094be8391"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1751,7 +1751,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7c79e0c1827eec2639aa628ab54722087c00ac86"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#3364c488726435e0ec0ed6f38e6db78094be8391"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2033,9 +2033,9 @@ dependencies = [
 
 [[package]]
 name = "findshlibs"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d691fdb3f817632d259d09220d4cf0991dbb2c9e59e044a02a59194bf6e14484"
+checksum = "40b9e59cd0f7e0806cca4be089683ecb6434e602038df21fe6bf6711b2f07f64"
 dependencies = [
  "cc",
  "lazy_static",
@@ -3443,6 +3443,7 @@ dependencies = [
  "opentelemetry",
  "prometheus",
  "proptest",
+ "proptest-derive",
  "prost",
  "rand",
  "rdkafka",
@@ -3679,7 +3680,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.58.0-dev"
+version = "0.59.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3713,7 +3714,6 @@ dependencies = [
 name = "mz-compute"
 version = "0.0.0"
 dependencies = [
- "ahash",
  "anyhow",
  "async-trait",
  "bytesize",
@@ -3830,7 +3830,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.58.0-dev"
+version = "0.59.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3937,7 +3937,6 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "columnation",
  "criterion",
  "csv",
  "datadriven",
@@ -3956,6 +3955,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-proto",
  "mz-repr",
+ "mz-sql-parser",
  "num",
  "num_enum",
  "once_cell",
@@ -4247,6 +4247,7 @@ dependencies = [
  "mz-pid-file",
  "mz-repr",
  "mz-secrets",
+ "nix",
  "scopeguard",
  "serde",
  "serde_json",
@@ -4372,7 +4373,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.58.0-dev"
+version = "0.59.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4388,7 +4389,6 @@ dependencies = [
  "futures-util",
  "h2",
  "humantime",
- "moka",
  "mz-build-info",
  "mz-http-util",
  "mz-orchestrator-tracing",
@@ -4428,10 +4428,12 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "hex",
  "mz-ore",
  "mz-proto",
  "parquet2",
  "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4883,6 +4885,7 @@ dependencies = [
  "postgres-protocol",
  "regex",
  "serde_json",
+ "shell-words",
  "tempfile",
  "time",
  "tokio",
@@ -4943,6 +4946,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "similar-asserts",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -5219,6 +5223,7 @@ dependencies = [
 name = "mz-timely-util"
 version = "0.0.0"
 dependencies = [
+ "ahash",
  "differential-dataflow",
  "futures-util",
  "mz-ore",
@@ -5525,9 +5530,9 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.48"
+version = "0.10.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "518915b97df115dd36109bfa429a48b8f737bd05508cf9588977b599648926d2"
+checksum = "345df152bc43501c5eb9e4654ff05f794effb78d4efe3d53abc158baddc0703d"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -5566,11 +5571,10 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.83"
+version = "0.9.90"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "666416d899cf077260dac8698d60a60b435a46d57e82acb1be3d0dad87284e5b"
+checksum = "374533b0e45f3a7ced10fcaeccca020e66656bc03dac384f852e4e5a7a8104a6"
 dependencies = [
- "autocfg",
  "cc",
  "libc",
  "openssl-src",
@@ -6097,6 +6101,16 @@ dependencies = [
 
 [[package]]
 name = "prettyplease"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c8646e95016a7a6c4adea95bafa8a16baab64b583356217f2c85db4a39d9a86"
+dependencies = [
+ "proc-macro2",
+ "syn 1.0.107",
+]
+
+[[package]]
+name = "prettyplease"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ceca8aaf45b5c46ec7ed39fff75f57290368c1846d33d24a122ca81416ab058"
@@ -6207,7 +6221,8 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b82eaa1d779e9a4bc1c3217db8ffbeabaae1dca241bf70183242128d48681cd"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -6216,7 +6231,8 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "119533552c9a7ffacc21e099c24a0ac8bb19c2a2a3f363de84cd9b844feab270"
 dependencies = [
  "bytes",
  "heck",
@@ -6225,11 +6241,11 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prettyplease",
+ "prettyplease 0.1.25",
  "prost",
  "prost-types",
  "regex",
- "syn 2.0.18",
+ "syn 1.0.107",
  "tempfile",
  "which",
 ]
@@ -6237,7 +6253,8 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5d2d8d10f3c6ded6da8b05b5fb3b8a5082514344d56c9f871412d29b4e075b4"
 dependencies = [
  "anyhow",
  "itertools",
@@ -6248,11 +6265,12 @@ dependencies = [
 
 [[package]]
 name = "prost-reflect"
-version = "0.9.2"
+version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d378290cd658b119ce87621931ef448017ef1a0044d7b681159d779e7e07b8f6"
+checksum = "000e1e05ebf7b26e1eba298e66fe4eee6eb19c567d0ffb35e0dd34231cdac4c8"
 dependencies = [
- "base64 0.13.1",
+ "base64 0.21.0",
+ "once_cell",
  "prost",
  "prost-types",
  "serde",
@@ -6262,7 +6280,8 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "213622a1460818959ac1181aaeb2dc9c7f63df720db7d788b3e24eacd1983e13"
 dependencies = [
  "prost",
 ]
@@ -6811,6 +6830,7 @@ dependencies = [
  "sentry-backtrace",
  "sentry-contexts",
  "sentry-core",
+ "sentry-debug-images",
  "sentry-panic",
  "tokio",
  "ureq",
@@ -6853,6 +6873,17 @@ dependencies = [
  "sentry-types",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sentry-debug-images"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3995208135571444b7d5a247f42bd36677553bb64185d85b317acdc1789749b3"
+dependencies = [
+ "findshlibs",
+ "once_cell",
+ "sentry-core",
 ]
 
 [[package]]
@@ -7132,6 +7163,20 @@ name = "similar"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "420acb44afdae038210c99e69aae24109f32f15500aa708e81d46c9f29d55fcf"
+dependencies = [
+ "bstr",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "similar-asserts"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbf644ad016b75129f01a34a355dcb8d66a5bc803e417c7a77cc5d5ee9fa0f18"
+dependencies = [
+ "console",
+ "similar",
+]
 
 [[package]]
 name = "simple_asn1"
@@ -7926,7 +7971,7 @@ name = "tonic-build"
 version = "0.8.2"
 source = "git+https://github.com/MaterializeInc/tonic#76489bf665af99d6e0e83f81648fcac283ea57e1"
 dependencies = [
- "prettyplease",
+ "prettyplease 0.2.4",
  "proc-macro2",
  "prost-build",
  "quote",
@@ -8216,6 +8261,12 @@ checksum = "854cbdc4f7bc6ae19c820d44abdc3277ac3e1b2b93db20a636825d9322fb60e6"
 dependencies = [
  "tinyvec",
 ]
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dd624098567895118886609431a7c3b8f516e41d30e0643f03d94592a147e36"
 
 [[package]]
 name = "unicode-width"
@@ -8669,6 +8720,7 @@ dependencies = [
  "cc",
  "chrono",
  "clap",
+ "console",
  "criterion",
  "crossbeam-channel",
  "crossbeam-deque",
@@ -8701,7 +8753,6 @@ dependencies = [
  "log",
  "lru",
  "memchr",
- "moka",
  "native-tls",
  "nix",
  "nom",
@@ -8736,6 +8787,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "similar",
  "smallvec",
  "syn 1.0.107",
  "syn 2.0.18",

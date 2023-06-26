@@ -17,6 +17,7 @@ use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
 use mz_sql::catalog::ObjectType;
+use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
 
 /// Notices that can occur in the adapter layer.
@@ -105,12 +106,16 @@ pub enum AdapterNotice {
         object_type: ObjectType,
         object_name: String,
     },
+    PlanNotice(PlanNotice),
 }
 
 impl AdapterNotice {
     /// Reports additional details about the notice, if any are available.
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            AdapterNotice::PlanNotice(notice) => notice.detail(),
+            _ => None,
+        }
     }
 
     /// Reports a hint for the user about how the notice could be addressed.
@@ -273,6 +278,13 @@ impl fmt::Display for AdapterNotice {
                     object_name.quoted()
                 )
             }
+            AdapterNotice::PlanNotice(plan) => plan.fmt(f),
         }
+    }
+}
+
+impl From<PlanNotice> for AdapterNotice {
+    fn from(notice: PlanNotice) -> AdapterNotice {
+        AdapterNotice::PlanNotice(notice)
     }
 }

@@ -73,6 +73,7 @@ known_errors = [
     "zero raised to a negative power is undefined",
     "operator does not exist",  # For list types
     "couldn't parse role id",
+    "mz_aclitem grantor cannot be PUBLIC role",
     "unrecognized privilege type:",
     "cannot return complex numbers",
     "statement batch size cannot exceed",
@@ -123,6 +124,13 @@ known_errors = [
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
     "string is not a valid identifier:",  # Expected in parse_ident
+    "invalid datepart",
+    "pg_cancel_backend in this position not yet supported",
+    "unrecognized configuration parameter",
+    "numeric field overflow",
+    "uint8 out of range",
+    "interval out of range",
+    "timezone interval must not contain months or years",
 ]
 
 

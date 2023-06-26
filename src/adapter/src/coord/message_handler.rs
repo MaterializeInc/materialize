@@ -23,7 +23,7 @@ use mz_sql::ast::Statement;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Level};
+use tracing::{event, warn, Instrument, Level};
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
@@ -54,6 +54,14 @@ impl Coordinator {
                 self.message_create_source_statement_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
+            Message::Execute {
+                portal_name,
+                ctx,
+                span,
+            } => {
+                let span = tracing::debug_span!(parent: &span, "message (execute)");
+                self.handle_execute(portal_name, ctx).instrument(span).await;
+            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
@@ -90,6 +98,9 @@ impl Coordinator {
             } => {
                 self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
+            }
+            Message::RetireExecute { data } => {
+                self.retire_execute(data);
             }
         }
     }
@@ -343,12 +354,11 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx, session))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     async fn message_create_source_statement_ready(
         &mut self,
         CreateSourceStatementReady {
-            mut session,
-            tx,
+            mut ctx,
             result,
             params,
             depends_on,
@@ -370,14 +380,13 @@ impl Coordinator {
             .iter()
             .all(|id| self.catalog().try_get_entry(id).is_some())
         {
-            self.handle_execute_inner(original_stmt, params, session, tx)
-                .await;
+            self.handle_execute_inner(original_stmt, params, ctx).await;
             return;
         }
 
         let (subsource_stmts, stmt) = match result {
             Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e), session),
+            Err(e) => return ctx.retire(Err(e)),
         };
 
         let mut plans: Vec<CreateSourcePlans> = vec![];
@@ -388,10 +397,10 @@ impl Coordinator {
             let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
             let source_id = match self.catalog_mut().allocate_user_id().await {
                 Ok(id) => id,
-                Err(e) => return tx.send(Err(e.into()), session),
+                Err(e) => return ctx.retire(Err(e.into())),
             };
             let plan = match self.plan_statement(
-                &mut session,
+                ctx.session_mut(),
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
             ) {
@@ -399,7 +408,7 @@ impl Coordinator {
                 Ok(_) => {
                     unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
                 }
-                Err(e) => return tx.send(Err(e), session),
+                Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
             plans.push((source_id, plan, depends_on).into());
@@ -409,32 +418,33 @@ impl Coordinator {
         // plan it too
         let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
             Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
         let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
         let source_id = match self.catalog_mut().allocate_user_id().await {
             Ok(id) => id,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
-            Ok(Plan::CreateSource(plan)) => plan,
-            Ok(_) => {
-                unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
-            }
-            Err(e) => return tx.send(Err(e), session),
-        };
+        let plan =
+            match self.plan_statement(ctx.session_mut(), Statement::CreateSource(stmt), &params) {
+                Ok(Plan::CreateSource(plan)) => plan,
+                Ok(_) => {
+                    unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
+                }
+                Err(e) => return ctx.retire(Err(e)),
+            };
         plans.push((source_id, plan, depends_on).into());
 
         // Finally, sequence all plans in one go
-        self.sequence_plan(tx, session, Plan::CreateSources(plans), Vec::new())
+        self.sequence_plan(ctx, Plan::CreateSources(plans), Vec::new())
             .await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self, session_and_tx))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     async fn message_sink_connection_ready(
         &mut self,
         SinkConnectionReady {
-            session_and_tx,
+            ctx,
             id,
             oid,
             create_export_token,
@@ -457,7 +467,7 @@ impl Coordinator {
                         oid,
                         connection,
                         create_export_token,
-                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
+                        ctx.as_ref().map(|ctx| ctx.session()),
                     )
                     .await
                     // XXX(chae): I really don't like this -- especially as we're now doing cross
@@ -470,8 +480,8 @@ impl Coordinator {
                     // perspective we did, as there is state (e.g. a
                     // Kafka topic) they need to clean up.
                 }
-                if let Some((session, tx)) = session_and_tx {
-                    tx.send(Ok(ExecuteResponse::CreatedSink), session);
+                if let Some(ctx) = ctx {
+                    ctx.retire(Ok(ExecuteResponse::CreatedSink));
                 }
             }
             Err(e) => {
@@ -483,12 +493,9 @@ impl Coordinator {
                         .into_iter()
                         .map(catalog::Op::DropObject)
                         .collect();
-                    self.catalog_transact(
-                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
-                        ops,
-                    )
-                    .await
-                    .expect("deleting placeholder sink cannot fail");
+                    self.catalog_transact(ctx.as_ref().map(|ctx| ctx.session()), ops)
+                        .await
+                        .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
                     // attempting to create the connection, in which case we don't need to do
@@ -499,8 +506,8 @@ impl Coordinator {
                     .controller
                     .storage
                     .cancel_prepare_export(create_export_token);
-                if let Some((session, tx)) = session_and_tx {
-                    tx.send(Err(e), session);
+                if let Some(ctx) = ctx {
+                    ctx.retire(Err(e));
                 }
             }
         }
@@ -516,12 +523,11 @@ impl Coordinator {
         if let Some(ready) = self.write_lock_wait_group.pop_front() {
             match ready {
                 Deferred::Plan(mut ready) => {
-                    ready.session.grant_write_lock(write_lock_guard);
+                    ready.ctx.session_mut().grant_write_lock(write_lock_guard);
                     // Write statements never need to track catalog
                     // dependencies.
                     let depends_on = vec![];
-                    self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
-                        .await;
+                    self.sequence_plan(ready.ctx, ready.plan, depends_on).await;
                 }
                 Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
             }
@@ -606,7 +612,9 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
             for ready_txn in ready_txns {
-                ready_txn.finish();
+                if let Some((ctx, result)) = ready_txn.finish() {
+                    ctx.retire(result);
+                }
             }
         }
 
@@ -641,36 +649,34 @@ impl Coordinator {
             };
 
         if let Err(err) = validity.check(self.catalog()) {
-            let (tx, session) = real_time_recency_context.take_tx_and_session();
-            tx.send(Err(err), session);
+            let ctx = real_time_recency_context.take_context();
+            ctx.retire(Err(err));
             return;
         }
 
         match real_time_recency_context {
             RealTimeRecencyContext::ExplainTimestamp {
-                tx,
-                mut session,
+                mut ctx,
                 format,
                 cluster_id,
                 optimized_plan,
                 id_bundle,
-            } => tx.send(
-                self.sequence_explain_timestamp_finish(
-                    &mut session,
+            } => {
+                let result = self.sequence_explain_timestamp_finish(
+                    ctx.session_mut(),
                     format,
                     cluster_id,
                     optimized_plan,
                     id_bundle,
                     Some(real_time_recency_ts),
-                ),
-                session,
-            ),
+                );
+                ctx.retire(result);
+            }
             RealTimeRecencyContext::Peek {
-                tx,
+                ctx,
                 finishing,
                 copy_to,
                 dataflow,
-                session,
                 cluster_id,
                 when,
                 target_replica,
@@ -683,8 +689,7 @@ impl Coordinator {
                 typ,
             } => {
                 self.sequence_peek_stage(
-                    tx,
-                    session,
+                    ctx,
                     PeekStage::Finish(PeekStageFinish {
                         validity,
                         finishing,

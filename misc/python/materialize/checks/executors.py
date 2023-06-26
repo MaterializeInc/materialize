@@ -11,7 +11,7 @@ import random
 import threading
 from typing import Any, Optional, Set
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.mzcompose import Composition
 from materialize.util import MzVersion
 

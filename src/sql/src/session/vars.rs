@@ -959,6 +959,21 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     internal: true
 };
 
+/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
+const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("keep_n_sink_status_history_entries"),
+    value: &5,
+    description: "On reboot, truncate all but the last n entries per ID in the sink_status_history collection (Materialize).",
+    internal: true
+};
+
+const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_storage_shard_finalization"),
+    value: &true,
+    description: "Whether to allow the storage client to finalize shards (Materialize).",
+    internal: true,
+};
+
 // Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
 // availability of features.
 //
@@ -966,7 +981,7 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
 // - Belong to `SystemVars`, _not_ `SessionVars`
 // - Default to false and must be explicitly enabled
 macro_rules! feature_flags {
-    ($(($name:expr, $feature_desc:literal)),+) => {
+    ($(($name:expr, $feature_desc:literal)),+ $(,)?) => {
         paste::paste!{
             $(
                 // Note that the ServerVar is not directly exported; we expect these to be
@@ -1096,7 +1111,8 @@ feature_flags!(
     (
         enable_within_timestamp_order_by_in_subscribe,
         "`WITHIN TIMESTAMP ORDER BY ..`"
-    )
+    ),
+    (enable_managed_clusters, "managed clusters"),
 );
 
 /// Represents the input to a variable.
@@ -1720,7 +1736,9 @@ impl SystemVars {
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
-            .with_var(&ENABLE_MZ_JOIN_CORE);
+            .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
+            .with_var(&ENABLE_MZ_JOIN_CORE)
+            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION);
         vars.refresh_internal_state();
         vars
     }
@@ -2198,9 +2216,18 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
 
+    pub fn keep_n_sink_status_history_entries(&self) -> usize {
+        *self.expect_value(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
+    }
+
     /// Returns the `enable_mz_join_core` configuration parameter.
     pub fn enable_mz_join_core(&self) -> bool {
         *self.expect_value(&ENABLE_MZ_JOIN_CORE)
+    }
+
+    /// Returns the `enable_storage_shard_finalization` configuration parameter.
+    pub fn enable_storage_shard_finalization(&self) -> bool {
+        *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
     }
 }
 

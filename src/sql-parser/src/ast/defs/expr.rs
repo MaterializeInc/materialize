@@ -688,15 +688,27 @@ impl<T: AstInfo> AstDisplay for SubscriptPosition<T> {
 impl_display_t!(SubscriptPosition);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
+/// Includes potential IGNORE NULLS or RESPECT NULLS from before the OVER clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowSpec<T: AstInfo> {
     pub partition_by: Vec<Expr<T>>,
     pub order_by: Vec<OrderByExpr<T>>,
     pub window_frame: Option<WindowFrame>,
+    // Note that IGNORE NULLS and RESPECT NULLS are mutually exclusive. We validate that not both
+    // are present during HIR planning.
+    pub ignore_nulls: bool,
+    pub respect_nulls: bool,
 }
 
 impl<T: AstInfo> AstDisplay for WindowSpec<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if self.ignore_nulls {
+            f.write_str(" IGNORE NULLS");
+        }
+        if self.respect_nulls {
+            f.write_str(" RESPECT NULLS");
+        }
+        f.write_str(" OVER (");
         let mut delim = "";
         if !self.partition_by.is_empty() {
             delim = " ";
@@ -724,6 +736,7 @@ impl<T: AstInfo> AstDisplay for WindowSpec<T> {
                 f.write_node(&window_frame.start_bound);
             }
         }
+        f.write_str(")");
     }
 }
 impl_display_t!(WindowSpec);
@@ -819,9 +832,7 @@ impl<T: AstInfo> AstDisplay for Function<T> {
             f.write_str(")");
         }
         if let Some(o) = &self.over {
-            f.write_str(" OVER (");
             f.write_node(o);
-            f.write_str(")");
         }
     }
 }

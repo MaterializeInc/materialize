@@ -77,8 +77,16 @@ impl RoutineMaintenance {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        let mut more_maintenance = RoutineMaintenance::default();
         for future in self.perform_in_background(machine, gc) {
-            let _ = future.await;
+            more_maintenance.merge(future.await);
+        }
+
+        while !more_maintenance.is_empty() {
+            let maintenance = mem::take(&mut more_maintenance);
+            for future in maintenance.perform_in_background(machine, gc) {
+                more_maintenance.merge(future.await);
+            }
         }
     }
 

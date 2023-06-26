@@ -16,6 +16,8 @@ privilege.
 
 {{< alpha />}}
 
+{{< warning >}} The `CREATEROLE`, `CREATEDB`, and `CREATECLUSTER` privileges are not implemented yet. {{< /warning >}}
+
 ## Syntax
 
 {{< diagram "grant-privilege.svg" >}}
@@ -37,6 +39,9 @@ _role_name_                                         | The role name that is gain
 **DELETE**                                          | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
 **CREATE**                                          | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
 **USAGE**                                           | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
+**CREATEROLE**                                      | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. This privilege is very powerful. It allows roles to grant and revoke membership in other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role with this privilege can obtain the privileges of any other role in the system. The abbreviation for this privilege is 'R' (Role).
+**CREATEDB**                                        | Allows creating databases. The abbreviation for this privilege is 'B' (dataBase).
+**CREATECLUSTER**                                   | Allows creating clusters. The abbreviation for this privilege is 'N' (compute Node).
 **ALL PRIVILEGES**                                  | All applicable privileges for the provided object type.
 
 ## Details
@@ -45,6 +50,7 @@ The following table describes which privileges are applicable to which objects:
 
 | Object type           | All privileges |
 |-----------------------|----------------|
+| `SYSTEM`              | RBN            |
 | `DATABASE`            | UC             |
 | `SCHEMA`              | UC             |
 | `TABLE`               | arwd           |
@@ -80,6 +86,10 @@ GRANT USAGE, CREATE ON DATABASE materialize TO joe;
 GRANT ALL ON CLUSTER dev TO joe;
 ```
 
+```sql
+GRANT CREATEDB ON SYSTEM TO joe;
+```
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)
@@ -90,3 +100,4 @@ GRANT ALL ON CLUSTER dev TO joe;
 - [REVOKE ROLE](../revoke-role)
 - [ALTER OWNER](../alter-owner)
 - [REVOKE PRIVILEGE](../revoke-privilege)
+- [ALTER DEFAULT PRIVILEGES](../alter-default-privileges)

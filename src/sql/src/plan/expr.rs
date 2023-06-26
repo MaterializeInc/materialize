@@ -13,6 +13,7 @@
 //! representation via a call to lower().
 
 use std::collections::BTreeMap;
+use std::fmt::{Display, Formatter};
 use std::{fmt, mem};
 
 use itertools::Itertools;
@@ -229,6 +230,9 @@ pub enum HirScalarExpr {
 pub struct WindowExpr {
     pub func: WindowExprType,
     pub partition: Vec<HirScalarExpr>,
+    // ORDER BY is represented in a complicated way: `plan_function_order_by` gave us two things:
+    // - the `ColumnOrder`s we have put in `func` above,
+    // - the `HirScalarExpr`s we have put in the following `order_by` field.
     pub order_by: Vec<HirScalarExpr>,
 }
 
@@ -489,6 +493,16 @@ pub enum ScalarWindowFunc {
     DenseRank,
 }
 
+impl Display for ScalarWindowFunc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ScalarWindowFunc::RowNumber => write!(f, "row_number"),
+            ScalarWindowFunc::Rank => write!(f, "rank"),
+            ScalarWindowFunc::DenseRank => write!(f, "dense_rank"),
+        }
+    }
+}
+
 impl ScalarWindowFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
@@ -502,9 +516,21 @@ impl ScalarWindowFunc {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ValueWindowExpr {
     pub func: ValueWindowFunc,
-    pub expr: Box<HirScalarExpr>,
+    pub args: Box<HirScalarExpr>, // arg list encoded in a record, e.g., `lag(row(#1, 3, null))`
     pub order_by: Vec<ColumnOrder>,
     pub window_frame: WindowFrame,
+    pub ignore_nulls: bool,
+}
+
+impl Display for ValueWindowFunc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueWindowFunc::Lag => write!(f, "lag"),
+            ValueWindowFunc::Lead => write!(f, "lead"),
+            ValueWindowFunc::FirstValue => write!(f, "first_value"),
+            ValueWindowFunc::LastValue => write!(f, "last_value"),
+        }
+    }
 }
 
 impl ValueWindowExpr {
@@ -513,7 +539,7 @@ impl ValueWindowExpr {
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
     {
-        f(&self.expr)
+        f(&self.args)
     }
 
     #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_mut_children` instead."]
@@ -521,7 +547,7 @@ impl ValueWindowExpr {
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
-        f(&mut self.expr)
+        f(&mut self.args)
     }
 
     fn typ(
@@ -530,7 +556,7 @@ impl ValueWindowExpr {
         inner: &RelationType,
         params: &BTreeMap<usize, ScalarType>,
     ) -> ColumnType {
-        self.func.output_type(self.expr.typ(outers, inner, params))
+        self.func.output_type(self.args.typ(outers, inner, params))
     }
 
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
@@ -539,10 +565,12 @@ impl ValueWindowExpr {
             ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
                 order_by: self.order_by,
                 lag_lead: mz_expr::LagLeadType::Lag,
+                ignore_nulls: self.ignore_nulls,
             },
             ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
                 order_by: self.order_by,
                 lag_lead: mz_expr::LagLeadType::Lead,
+                ignore_nulls: self.ignore_nulls,
             },
             ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
                 order_by: self.order_by,
@@ -561,14 +589,14 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     where
         F: FnMut(&HirScalarExpr),
     {
-        f(&self.expr)
+        f(&self.args)
     }
 
     fn visit_mut_children<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut HirScalarExpr),
     {
-        f(&mut self.expr)
+        f(&mut self.args)
     }
 
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
@@ -576,7 +604,7 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
         F: FnMut(&HirScalarExpr) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        f(&self.expr)
+        f(&self.args)
     }
 
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
@@ -584,7 +612,7 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
         F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        f(&mut self.expr)
+        f(&mut self.args)
     }
 }
 

@@ -594,6 +594,10 @@ impl DynamicConfig {
         self.compaction_memory_bound_bytes
             .store(val, Self::LOAD_ORDERING);
     }
+    #[cfg(test)]
+    pub fn set_rollup_threshold(&self, threshold: usize) {
+        self.rollup_threshold.store(threshold, Self::STORE_ORDERING);
+    }
 }
 
 // TODO: Replace with dynamic values when PersistConfig is integrated with LD

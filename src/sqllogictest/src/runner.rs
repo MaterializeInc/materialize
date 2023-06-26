@@ -881,7 +881,10 @@ impl RunnerInner {
                 suppress_output: false,
                 environment_id: environment_id.to_string(),
                 secrets_dir: temp_dir.path().join("secrets"),
-                command_wrapper: vec![],
+                command_wrapper: config
+                    .orchestrator_process_wrapper
+                    .as_ref()
+                    .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
                 scratch_directory: None,
@@ -952,6 +955,8 @@ impl RunnerInner {
             launchdarkly_key_map: Default::default(),
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
+            deploy_generation: None,
+            waiting_on_leader_promotion: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1436,6 +1441,7 @@ pub struct RunConfig<'a> {
     pub auto_index_tables: bool,
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
+    pub orchestrator_process_wrapper: Option<String>,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

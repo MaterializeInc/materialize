@@ -445,6 +445,85 @@ EOF
 
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
+SELECT lag(b, 3) OVER ()
+FROM t;
+----
+Project (#2)
+  Map (lag(row(#1, 3, null)) over (order by []))
+    Get materialize.public.t
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT lag(b, 333) RESPECT NULLS OVER ()
+FROM t;
+----
+Project (#2)
+  Map (lag(row(#1, 333, null)) over (order by []))
+    Get materialize.public.t
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT lag(b, 333) IGNORE NULLS OVER ()
+FROM t;
+----
+Project (#2)
+  Map (lag(row(#1, 333, null)) ignore nulls over (order by []))
+    Get materialize.public.t
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT row_number() OVER (ORDER BY r DESC)
+FROM (
+    SELECT row_number() OVER (PARTITION BY l) as r
+    FROM (
+        SELECT lag(b, 3) OVER (PARTITION BY b%2, a%3 ORDER BY a DESC, -b, 2*b + a NULLS FIRST) as l
+        FROM t
+    )
+);
+----
+Project (#1)
+  Map (row_number() over (order by [#0 desc nulls_first]))
+    Project (#1)
+      Map (row_number() over (partition by [#0] order by []))
+        Project (#2)
+          Map (lag(row(#1, 3, null)) over (partition by [(#1 % 2), (#0 % 3)] order by [#0 desc nulls_first, -(#1) asc nulls_last, ((2 * #1) + #0) asc nulls_first]))
+            Get materialize.public.t
+
+EOF
+
+# Default frame is not printed (even when explicitly specified by the user).
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT
+    first_value(b) over (partition by b%6 order by b + 33 asc range between unbounded preceding and current row)
+FROM t;
+----
+Project (#2)
+  Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last]))
+    Get materialize.public.t
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT
+    first_value(b) over (partition by b%6 order by b + 33 asc rows between 2 preceding and current row)
+FROM t;
+----
+Project (#2)
+  Map (first_value(#1) over (partition by [(#1 % 6)] order by [(#1 + 33) asc nulls_last] rows between 2 preceding and current row))
+    Get materialize.public.t
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)

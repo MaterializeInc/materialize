@@ -10,6 +10,7 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
+use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
@@ -50,7 +52,8 @@ use timely::progress::{PathSummary, Timestamp};
 use uuid::Uuid;
 
 use crate::controller::{
-    CollectionMetadata, CreateResumptionFrontierCalc, ResumptionFrontierCalculator, UpperState,
+    CollectionMetadata, CreateResumptionFrontierCalc, ResumptionFrontierCalculator, StorageError,
+    UpperState,
 };
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
@@ -76,6 +79,12 @@ pub struct IngestionDescription<S = (), C = GenericSourceConnection> {
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
+    ///
+    /// This field includes the primary source's ID, which must be filtered out
+    /// to understand which exports are data-bearing subsources.
+    ///
+    /// Note that this does _not_ include the remap collection, which is tracked
+    /// in its own field.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
@@ -101,6 +110,61 @@ impl<S> IngestionDescription<S> {
             .keys()
             .copied()
             .chain(std::iter::once(*remap_collection_id))
+    }
+}
+
+impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
+    /// Determines if `self` is compatible with another `IngestionDescription`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// SOURCE`).
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &IngestionDescription<S>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        let IngestionDescription {
+            desc,
+            source_imports,
+            ingestion_metadata,
+            source_exports,
+            instance_id,
+            remap_collection_id,
+        } = self;
+
+        self.desc.alter_compatible(id, desc)?;
+
+        let compatibility_checks = [
+            source_imports == &other.source_imports,
+            ingestion_metadata == &other.ingestion_metadata,
+            source_exports
+                .iter()
+                .merge_join_by(&other.source_exports, |(l_key, _), (r_key, _)| {
+                    l_key.cmp(r_key)
+                })
+                .all(|r| match r {
+                    Both((_, l_val), (_, r_val)) => l_val == r_val,
+                    _ => true,
+                }),
+            instance_id == &other.instance_id,
+            remap_collection_id == &other.remap_collection_id,
+        ];
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "IngestionDescription incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1327,7 +1391,7 @@ impl UnplannedSourceEnvelope {
 }
 
 /// A connection to an external system
-pub trait SourceConnection: Clone {
+pub trait SourceConnection: Debug + Clone + PartialEq {
     /// The name of the external system (e.g kafka, postgres, etc).
     fn name(&self) -> &'static str;
 
@@ -1349,6 +1413,27 @@ pub trait SourceConnection: Clone {
     /// The available metadata columns in the order specified by the user. This only identifies the
     /// kinds of columns that this source offers without any further information.
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
+
+    /// Determines if `self` is compatible with another `SourceConnection`, in
+    /// such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// SOURCE`).
+    ///
+    /// Note that the default implementation errors unless the two are equal. To
+    /// support any modifying transformations, you must specify the
+    /// implementation.
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            Ok(())
+        } else {
+            tracing::warn!(
+                "SourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(StorageError::InvalidAlterSource { id })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1708,6 +1793,45 @@ impl SourceDesc<GenericSourceConnection> {
     pub fn envelope(&self) -> &SourceEnvelope {
         &self.envelope
     }
+
+    /// Determines if `self` is compatible with another `SourceDesc`, in such a
+    /// way that it is possible to turn `self` into `other` through a valid
+    /// series of transformations (e.g. no transformation or `ALTER SOURCE`).
+    pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        let Self {
+            connection,
+            encoding,
+            envelope,
+            metadata_columns,
+            timestamp_interval,
+        } = &self;
+        connection.alter_compatible(id, &other.connection)?;
+
+        let compatibility_checks = [
+            connection == &other.connection,
+            encoding == &other.encoding,
+            envelope == &other.envelope,
+            metadata_columns == &other.metadata_columns,
+            timestamp_interval == &other.timestamp_interval,
+        ];
+
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SourceDesc<GenericSourceConnection> incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1794,6 +1918,21 @@ impl SourceConnection for GenericSourceConnection {
             Self::Postgres(conn) => conn.metadata_column_types(),
             Self::LoadGenerator(conn) => conn.metadata_column_types(),
             Self::TestScript(conn) => conn.metadata_column_types(),
+        }
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        match (self, other) {
+            (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
+            (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
+            (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
+                conn.alter_compatible(id, other)
+            }
+            (Self::TestScript(conn), Self::TestScript(other)) => conn.alter_compatible(id, other),
+            _ => Err(StorageError::InvalidAlterSource { id }),
         }
     }
 }
@@ -1899,6 +2038,50 @@ impl SourceConnection for PostgresSourceConnection {
 
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let PostgresSourceConnection {
+            connection_id,
+            connection,
+            table_casts,
+            publication,
+            publication_details,
+        } = self;
+
+        let compatibility_checks = [
+            connection_id == &other.connection_id,
+            connection == &other.connection,
+            table_casts
+                .iter()
+                .merge_join_by(&other.table_casts, |(l_key, _), (r_key, _)| {
+                    l_key.cmp(r_key)
+                })
+                .all(|r| match r {
+                    Both((_, l_val), (_, r_val)) => l_val == r_val,
+                    _ => true,
+                }),
+            publication == &other.publication,
+            publication_details == &other.publication_details,
+        ];
+
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "PostgresSourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -2521,6 +2704,7 @@ impl Codec for SourceData {
 /// an Err column.
 #[derive(Debug)]
 pub struct SourceDataEncoder<'a> {
+    len: &'a mut usize,
     ok_validity: ValidityMut<'a>,
     ok: RowEncoder<'a>,
     err: &'a mut <Option<Vec<u8>> as Data>::Mut,
@@ -2528,9 +2712,11 @@ pub struct SourceDataEncoder<'a> {
 
 impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
     fn encode(&mut self, val: &SourceData) {
+        *self.len += 1;
         match val.as_ref() {
             Ok(row) => {
                 self.ok_validity.push(true);
+                self.ok.inc_len();
                 for (encoder, datum) in self.ok.col_encoders().iter_mut().zip(row.iter()) {
                     encoder.encode(datum);
                 }
@@ -2538,6 +2724,7 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
             }
             Err(err) => {
                 self.ok_validity.push(false);
+                self.ok.inc_len();
                 for encoder in self.ok.col_encoders() {
                     encoder.encode_default();
                 }
@@ -2638,9 +2825,10 @@ impl Schema<SourceData> for RelationDesc {
     ) -> Result<Self::Encoder<'a>, String> {
         let ok = cols.col::<Option<DynStruct>>("ok")?;
         let err = cols.col::<Option<Vec<u8>>>("err")?;
-        let () = cols.finish()?;
+        let (len, ()) = cols.finish()?;
         let (ok_validity, ok) = RelationDesc::encoder(self, ok.as_opt_mut())?;
         Ok(SourceDataEncoder {
+            len,
             ok_validity,
             ok,
             err,
@@ -2671,10 +2859,7 @@ mod tests {
     }
 
     fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
-        // Skip types that we don't keep stats for (yet).
-        if is_no_stats_type(&scalar_type) {
-            return;
-        }
+        let skip_decode = is_no_stats_type(&scalar_type);
 
         use mz_persist_types::columnar::validate_roundtrip;
         let mut rows = Vec::new();
@@ -2688,14 +2873,14 @@ mod tests {
         // Non-nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
         for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+            assert_eq!(validate_roundtrip(&schema, row, skip_decode), Ok(()));
         }
 
         // Nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
         rows.push(SourceData(Ok(Row::pack(std::iter::once(Datum::Null)))));
         for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+            assert_eq!(validate_roundtrip(&schema, row, skip_decode), Ok(()));
         }
     }
 

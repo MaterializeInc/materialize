@@ -13,7 +13,8 @@
 //! like `DISCARD` and `SET`.
 
 use mz_repr::adt::interval::Interval;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_sql_parser::ast::InspectShardStatement;
 use uncased::UncasedStr;
 
 use crate::ast::display::AstDisplay;
@@ -27,8 +28,8 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
-    VariableValue,
+    FetchPlan, InspectShardPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan,
+    ShowVariablePlan, VariableValue,
 };
 use crate::session::vars::SCHEMA_ALIAS;
 
@@ -117,6 +118,22 @@ pub fn plan_show_variable(
             name: variable.to_string(),
         }))
     }
+}
+
+pub fn describe_inspect_shard(
+    _: &StatementContext,
+    InspectShardStatement { .. }: InspectShardStatement,
+) -> Result<StatementDesc, PlanError> {
+    let desc = RelationDesc::empty().with_column("state", ScalarType::Jsonb.nullable(false));
+    Ok(StatementDesc::new(Some(desc)))
+}
+
+pub fn plan_inspect_shard(
+    _: &StatementContext,
+    InspectShardStatement { id }: InspectShardStatement,
+) -> Result<Plan, PlanError> {
+    let id: GlobalId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
+    Ok(Plan::InspectShard(InspectShardPlan { id }))
 }
 
 pub fn describe_discard(

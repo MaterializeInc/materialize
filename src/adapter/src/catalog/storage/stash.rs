@@ -30,7 +30,10 @@ use crate::catalog::storage::{
 use crate::rbac;
 
 /// The key used within the "config" collection where we store the Stash version.
-const USER_VERSION: &str = "user_version";
+pub(crate) const USER_VERSION: &str = "user_version";
+
+/// The key used within the "config" collection where we store the deploy generation.
+pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 
 pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
     TypedCollection::new("setting");
@@ -74,6 +77,8 @@ pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
     proto::DefaultPrivilegesKey,
     proto::DefaultPrivilegesValue,
 > = TypedCollection::new("default_privileges");
+pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<proto::SystemPrivilegesKey, ()> =
+    TypedCollection::new("system_privileges");
 // If you add a new collection, then don't forget to write a migration that initializes the
 // collection either with some initial values or as empty. See
 // [`mz_stash::upgrade::v17_to_v18`] as an example.
@@ -105,6 +110,7 @@ pub async fn initialize(
     tx: &mut Transaction<'_>,
     options: &BootstrapArgs,
     now: EpochMillis,
+    deploy_generation: Option<u64>,
 ) -> Result<(), StashError> {
     // During initialization we need to allocate IDs for certain things. We'll track what IDs we've
     // allocated, persisting the "next ids" at the end.
@@ -382,6 +388,7 @@ pub async fn initialize(
                     linked_object_id: None,
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     privileges: cluster_privileges,
+                    config: Some(default_cluster_config(options)),
                 },
             )],
         )
@@ -567,6 +574,26 @@ pub async fn initialize(
             )],
         )
         .await?;
+    SYSTEM_PRIVILEGES_COLLECTION
+        .initialize(
+            tx,
+            vec![(
+                proto::SystemPrivilegesKey {
+                    privileges: Some(proto::MzAclItem {
+                        grantee: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                        grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                        acl_mode: Some(
+                            AclMode::CREATE_CLUSTER
+                                .union(AclMode::CREATE_DB)
+                                .union(AclMode::CREATE_ROLE)
+                                .into_proto(),
+                        ),
+                    }),
+                },
+                (),
+            )],
+        )
+        .await?;
 
     // Initialize all other collections to be empty.
     SETTING_COLLECTION.initialize(tx, vec![]).await?;
@@ -584,18 +611,49 @@ pub async fn initialize(
     CONFIG_COLLECTION
         .initialize(
             tx,
-            [(
-                proto::ConfigKey {
-                    key: USER_VERSION.to_string(),
-                },
-                proto::ConfigValue {
-                    value: STASH_VERSION,
-                },
-            )],
+            [
+                (
+                    proto::ConfigKey {
+                        key: USER_VERSION.to_string(),
+                    },
+                    proto::ConfigValue {
+                        value: STASH_VERSION,
+                    },
+                ),
+                (
+                    proto::ConfigKey {
+                        key: DEPLOY_GENERATION.to_string(),
+                    },
+                    proto::ConfigValue {
+                        value: deploy_generation.unwrap_or(0),
+                    },
+                ),
+            ],
         )
         .await?;
 
     Ok(())
+}
+
+pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, StashError> {
+    let config = CONFIG_COLLECTION.from_tx(tx).await?;
+    let value = tx
+        .peek_key_one(
+            config,
+            &proto::ConfigKey {
+                key: DEPLOY_GENERATION.into(),
+            },
+        )
+        .await?;
+    Ok(value.map(|v| v.value))
+}
+
+/// Defines the default config for a Cluster.
+pub fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
+    // TODO: Use managed clusters by default.
+    proto::ClusterConfig {
+        variant: Some(proto::cluster_config::Variant::Unmanaged(proto::Empty {})),
+    }
 }
 
 /// Defines the default config for a Cluster Replica.
@@ -608,7 +666,7 @@ pub fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
                 az_user_specified: false,
             },
         )),
-        logging: Some(proto::replica_config::Logging {
+        logging: Some(proto::ReplicaLogging {
             log_logging: false,
             interval: Some(proto::Duration::from_secs(1)),
         }),

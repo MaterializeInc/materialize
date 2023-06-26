@@ -104,8 +104,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     InitializationComplete,
     /// Update storage instance configuration.
     UpdateConfiguration(StorageParameters),
-    /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<CreateSourceCommand<T>>),
+    /// Run the enumerated sources, each associated with its identifier.
+    RunIngestions(Vec<RunIngestionCommand>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -116,17 +116,21 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
 
 /// A command that starts ingesting the given ingestion description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CreateSourceCommand<T> {
+pub struct RunIngestionCommand {
     /// The id of the storage collection being ingested.
     pub id: GlobalId,
     /// The description of what source type should be ingested and what post-processing steps must
     /// be applied to the data before writing them down into the storage collection
     pub description: IngestionDescription<CollectionMetadata>,
-    /// The upper frontier that this ingestion should resume at
-    pub resume_upper: Antichain<T>,
+    /// Whether or not this ingestion command should be allowed to/required to update an existing
+    /// ingestion.
+    ///
+    /// Essentially, if update, the command came from `ALTER SOURCE`; if not, it came from `CREATE
+    /// SOURCE`.
+    pub update: bool,
 }
 
-impl Arbitrary for CreateSourceCommand<mz_repr::Timestamp> {
+impl Arbitrary for RunIngestionCommand {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -134,35 +138,33 @@ impl Arbitrary for CreateSourceCommand<mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<IngestionDescription<CollectionMetadata>>(),
-            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4).prop_map(Antichain::from),
+            any::<bool>(),
         )
-            .prop_map(|(id, description, resume_upper)| Self {
+            .prop_map(|(id, description, update)| Self {
                 id,
                 description,
-                resume_upper,
+                update,
             })
             .boxed()
     }
 }
 
-impl RustType<ProtoCreateSourceCommand> for CreateSourceCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoCreateSourceCommand {
-        ProtoCreateSourceCommand {
+impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
+    fn into_proto(&self) -> ProtoRunIngestionCommand {
+        ProtoRunIngestionCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            resume_upper: Some(self.resume_upper.into_proto()),
+            update: self.update,
         }
     }
 
-    fn from_proto(proto: ProtoCreateSourceCommand) -> Result<Self, TryFromProtoError> {
-        Ok(CreateSourceCommand {
-            id: proto.id.into_rust_if_some("ProtoCreateSourceCommand::id")?,
+    fn from_proto(proto: ProtoRunIngestionCommand) -> Result<Self, TryFromProtoError> {
+        Ok(RunIngestionCommand {
+            id: proto.id.into_rust_if_some("ProtoRunIngestionCommand::id")?,
             description: proto
                 .description
-                .into_rust_if_some("ProtoCreateSourceCommand::description")?,
-            resume_upper: proto
-                .resume_upper
-                .into_rust_if_some("ProtoCreateSourceCommand::resume_upper")?,
+                .into_rust_if_some("ProtoRunIngestionCommand::description")?,
+            update: proto.update,
         })
     }
 }
@@ -220,14 +222,14 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
                 }
-                StorageCommand::CreateSources(sources) => CreateSources(ProtoCreateSources {
-                    sources: sources.into_proto(),
-                }),
                 StorageCommand::AllowCompaction(collections) => {
                     AllowCompaction(ProtoAllowCompaction {
                         collections: collections.into_proto(),
                     })
                 }
+                StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
+                    sources: sources.into_proto(),
+                }),
                 StorageCommand::CreateSinks(sinks) => CreateSinks(ProtoCreateSinks {
                     sinks: sinks.into_proto(),
                 }),
@@ -250,7 +252,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
             }
             Some(CreateSources(ProtoCreateSources { sources })) => {
-                Ok(StorageCommand::CreateSources(sources.into_rust()?))
+                Ok(StorageCommand::RunIngestions(sources.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
@@ -272,8 +274,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
             // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
-            proptest::collection::vec(any::<CreateSourceCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::CreateSources)
+            proptest::collection::vec(any::<RunIngestionCommand>(), 1..4)
+                .prop_map(StorageCommand::RunIngestions)
                 .boxed(),
             proptest::collection::vec(any::<CreateSinkCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::CreateSinks)
@@ -529,45 +531,57 @@ where
         // to self-coordinate how commands and internal commands are ordered.
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
-        match command {
+        let _ = match command {
             StorageCommand::CreateTimely { .. } => {
                 // Similarly, we don't reset state here like compute, because,
                 // until we are required to manage multiple replicas, we can handle
                 // keeping track of state across restarts of storage server(s).
+                Ok(())
             }
-            StorageCommand::CreateSources(ingestions) => {
-                for ingestion in ingestions {
-                    for export_id in ingestion.description.subsource_ids() {
-                        let mut frontier = MutableAntichain::new();
-                        // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
-                        // merging the types that compute and storage use.
-                        #[allow(clippy::as_conversions)]
-                        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                        let part_frontiers =
-                            vec![Some(Antichain::from_elem(T::minimum())); self.parts];
-                        let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
-                        assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
-                    }
-                }
-            }
-            StorageCommand::CreateSinks(exports) => {
-                for export in exports {
-                    let mut frontier = MutableAntichain::new();
-                    // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
-                    // merging the types that compute and storage use.
-                    #[allow(clippy::as_conversions)]
-                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
-                    let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
-                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
-                }
-            }
+            StorageCommand::RunIngestions(ingestions) => ingestions
+                .iter()
+                .try_for_each(|i| self.insert_new_uppers(i.description.subsource_ids(), i.update)),
+            StorageCommand::CreateSinks(exports) => exports
+                .iter()
+                .try_for_each(|e| self.insert_new_uppers([e.id], false)),
             StorageCommand::InitializationComplete
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_) => {
                 // Other commands have no known impact on frontier tracking.
+                Ok(())
             }
         }
+        .map_err(|id| panic!("Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command));
+    }
+
+    /// Shared implementation for commands that install uppers with controllable behavior with
+    /// encountering existing uppers.
+    ///
+    /// If any ID was previously tracked in `self` and `skip_existing` is `false`, we return the ID
+    /// as an error.
+    fn insert_new_uppers<I: IntoIterator<Item = GlobalId>>(
+        &mut self,
+        ids: I,
+        skip_existing: bool,
+    ) -> Result<(), GlobalId> {
+        for id in ids {
+            if self.uppers.contains_key(&id) && skip_existing {
+                continue;
+            }
+
+            let mut frontier = MutableAntichain::new();
+            // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+            // merging the types that compute and storage use.
+            #[allow(clippy::as_conversions)]
+            frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+            let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
+            let previous = self.uppers.insert(id, (frontier, part_frontiers));
+            if previous.is_some() {
+                return Err(id);
+            }
+        }
+
+        Ok(())
     }
 }
 

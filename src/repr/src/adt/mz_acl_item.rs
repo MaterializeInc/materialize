@@ -20,18 +20,33 @@ use bitflags::bitflags;
 use columnation::{CloneRegion, Columnation};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
+use proptest::arbitrary::Arbitrary;
+use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::role_id::RoleId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.mz_acl_item.rs"));
 
+// Append
 const INSERT_CHAR: char = 'a';
+// Read
 const SELECT_CHAR: char = 'r';
+// Write
 const UPDATE_CHAR: char = 'w';
+// Delete
 const DELETE_CHAR: char = 'd';
+// Usage
 const USAGE_CHAR: char = 'U';
+// Create
 const CREATE_CHAR: char = 'C';
+// Role
+const CREATE_ROLE_CHAR: char = 'R';
+// dataBase
+const CREATE_DB_CHAR: char = 'B';
+// compute Node
+const CREATE_CLUSTER_CHAR: char = 'N';
 
 const INSERT_STR: &str = "INSERT";
 const SELECT_STR: &str = "SELECT";
@@ -39,20 +54,41 @@ const UPDATE_STR: &str = "UPDATE";
 const DELETE_STR: &str = "DELETE";
 const USAGE_STR: &str = "USAGE";
 const CREATE_STR: &str = "CREATE";
+const CREATE_ROLE_STR: &str = "CREATEROLE";
+const CREATE_DB_STR: &str = "CREATEDB";
+const CREATE_CLUSTER_STR: &str = "CREATECLUSTER";
 
 bitflags! {
     /// A bit flag representing all the privileges that can be granted to a role.
     ///
     /// Modeled after:
     /// https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101
+    ///
+    /// The lower 32 bits are used for different privilege types.
+    ///
+    /// The upper 32 bits indicate a grant option on the privilege for the current bit shifted
+    /// right by 32 bits (Currently unimplemented in Materialize).
+    ///
+    /// Privileges that exist in Materialize but not PostgreSQL start at the highest available bit
+    /// and move down towards the PostgreSQL compatible bits. This is try to avoid collisions with
+    /// privileges that PostgreSQL may add in the future.
     #[derive(Serialize, Deserialize)]
     pub struct AclMode: u64 {
+        // PostgreSQL compatible privileges.
         const INSERT = 1 << 0;
         const SELECT = 1 << 1;
         const UPDATE = 1 << 2;
         const DELETE = 1 << 3;
         const USAGE = 1 << 8;
         const CREATE = 1 << 9;
+
+        // Materialize custom privileges.
+        const CREATE_CLUSTER = 1 << 29;
+        const CREATE_DB = 1 << 30;
+        const CREATE_ROLE = 1 << 31;
+
+        // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
+        // reserved for grant options.
     }
 }
 
@@ -65,6 +101,9 @@ impl AclMode {
             DELETE_STR => Ok(AclMode::DELETE),
             USAGE_STR => Ok(AclMode::USAGE),
             CREATE_STR => Ok(AclMode::CREATE),
+            CREATE_ROLE_STR => Ok(AclMode::CREATE_ROLE),
+            CREATE_DB_STR => Ok(AclMode::CREATE_DB),
+            CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
             _ => Err(anyhow!("unrecognized privilege type: {}", s.quoted())),
         }
     }
@@ -98,6 +137,15 @@ impl AclMode {
         if self.contains(AclMode::CREATE) {
             privileges.push(CREATE_STR);
         }
+        if self.contains(AclMode::CREATE_ROLE) {
+            privileges.push(CREATE_ROLE_STR);
+        }
+        if self.contains(AclMode::CREATE_DB) {
+            privileges.push(CREATE_DB_STR);
+        }
+        if self.contains(AclMode::CREATE_CLUSTER) {
+            privileges.push(CREATE_CLUSTER_STR);
+        }
         privileges.join(", ")
     }
 }
@@ -115,6 +163,9 @@ impl FromStr for AclMode {
                 DELETE_CHAR => acl_mode.bitor_assign(AclMode::DELETE),
                 USAGE_CHAR => acl_mode.bitor_assign(AclMode::USAGE),
                 CREATE_CHAR => acl_mode.bitor_assign(AclMode::CREATE),
+                CREATE_ROLE_CHAR => acl_mode.bitor_assign(AclMode::CREATE_ROLE),
+                CREATE_DB_CHAR => acl_mode.bitor_assign(AclMode::CREATE_DB),
+                CREATE_CLUSTER_CHAR => acl_mode.bitor_assign(AclMode::CREATE_CLUSTER),
                 _ => return Err(anyhow!("invalid privilege '{c}' in acl mode '{s}'")),
             }
         }
@@ -144,6 +195,15 @@ impl fmt::Display for AclMode {
         if self.contains(AclMode::CREATE) {
             write!(f, "{CREATE_CHAR}")?;
         }
+        if self.contains(AclMode::CREATE_ROLE) {
+            write!(f, "{CREATE_ROLE_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_DB) {
+            write!(f, "{CREATE_DB_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_CLUSTER) {
+            write!(f, "{CREATE_CLUSTER_CHAR}")?;
+        }
         Ok(())
     }
 }
@@ -161,8 +221,20 @@ impl RustType<ProtoAclMode> for AclMode {
         })
     }
 }
+
 impl Columnation for AclMode {
     type InnerRegion = CloneRegion<AclMode>;
+}
+
+impl Arbitrary for AclMode {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<AclMode>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        proptest::bits::BitSetStrategy::masked(AclMode::all().bits)
+            .prop_map(|bits| AclMode::from_bits(bits).expect("invalid proptest implementation"))
+            .boxed()
+    }
 }
 
 /// A list of privileges granted to a role in Materialize.
@@ -171,7 +243,9 @@ impl Columnation for AclMode {
 /// because we don't use OID as persistent identifiers for roles.
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+)]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
     pub grantee: RoleId,
@@ -224,30 +298,6 @@ impl MzAclItem {
 
     pub const fn binary_size() -> usize {
         RoleId::binary_size() + RoleId::binary_size() + size_of::<u64>()
-    }
-
-    pub fn group_by_grantee(items: Vec<MzAclItem>) -> PrivilegeMap {
-        PrivilegeMap::new(
-            items
-                .into_iter()
-                .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
-                    accum
-                        .entry(mz_acl_item.grantee)
-                        .or_default()
-                        .push(mz_acl_item);
-                    accum
-                }),
-        )
-    }
-
-    pub fn flatten(items: &PrivilegeMap) -> Vec<MzAclItem> {
-        items
-            .0
-            .values()
-            .map(|items| items.into_iter())
-            .flatten()
-            .cloned()
-            .collect()
     }
 }
 
@@ -311,25 +361,115 @@ impl Columnation for MzAclItem {
     type InnerRegion = CloneRegion<MzAclItem>;
 }
 
-/// Key is the role that granted the privilege, value is the privilege itself.
+/// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub struct PrivilegeMap(pub BTreeMap<RoleId, Vec<MzAclItem>>);
+pub struct PrivilegeMap(BTreeMap<RoleId, Vec<MzAclItem>>);
 
 impl PrivilegeMap {
-    pub fn new(privilege_map: BTreeMap<RoleId, Vec<MzAclItem>>) -> PrivilegeMap {
-        PrivilegeMap(privilege_map)
+    /// Creates a new empty `PrivilegeMap`.
+    pub fn new() -> PrivilegeMap {
+        PrivilegeMap(BTreeMap::new())
     }
 
+    /// Creates a new `PrivilegeMap` from a collection of [`MzAclItem`]s.
+    pub fn from_mz_acl_items(items: impl IntoIterator<Item = MzAclItem>) -> PrivilegeMap {
+        let mut map = PrivilegeMap::new();
+        map.grant_all(items);
+        map
+    }
+
+    /// Get the acl item granted to `grantee` by `grantor`.
+    pub fn get_acl_item(&self, grantee: &RoleId, grantor: &RoleId) -> Option<&MzAclItem> {
+        self.0.get(grantee).and_then(|privileges| {
+            privileges
+                .into_iter()
+                .find(|mz_acl_item| &mz_acl_item.grantor == grantor)
+        })
+    }
+
+    /// Get all acl items granted to `grantee`.
+    pub fn get_acl_items_for_grantee(&self, grantee: &RoleId) -> impl Iterator<Item = &MzAclItem> {
+        self.0
+            .get(grantee)
+            .into_iter()
+            .flat_map(|privileges| privileges.into_iter())
+    }
+
+    /// Returns references to all contained [`MzAclItem`].
     pub fn all_values(&self) -> impl Iterator<Item = &MzAclItem> {
         self.0
             .values()
             .flat_map(|privileges| privileges.into_iter())
     }
+
+    /// Returns clones of all contained [`MzAclItem`].
+    pub fn all_values_owned(&self) -> impl Iterator<Item = MzAclItem> + '_ {
+        self.all_values().cloned()
+    }
+
+    /// Adds an [`MzAclItem`] to this map.
+    pub fn grant(&mut self, privilege: MzAclItem) {
+        let grantee_privileges = self.0.entry(privilege.grantee).or_default();
+        if let Some(existing_privilege) = grantee_privileges
+            .iter_mut()
+            .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
+        {
+            // sanity check that the key is consistent.
+            assert_eq!(
+                privilege.grantee, existing_privilege.grantee,
+                "PrivilegeMap out of sync"
+            );
+            existing_privilege.acl_mode = existing_privilege.acl_mode.union(privilege.acl_mode);
+        } else {
+            grantee_privileges.push(privilege);
+        }
+    }
+
+    /// Grant multiple [`MzAclItem`]s to this map.
+    pub fn grant_all(&mut self, mz_acl_items: impl IntoIterator<Item = MzAclItem>) {
+        for mz_acl_item in mz_acl_items {
+            self.grant(mz_acl_item);
+        }
+    }
+
+    /// Removes an [`MzAclItem`] from this map.
+    pub fn revoke(&mut self, privilege: &MzAclItem) {
+        let grantee_privileges = self.0.entry(privilege.grantee).or_default();
+        if let Some(existing_privilege) = grantee_privileges
+            .iter_mut()
+            .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
+        {
+            // sanity check that the key is consistent.
+            assert_eq!(
+                privilege.grantee, existing_privilege.grantee,
+                "PrivilegeMap out of sync"
+            );
+            existing_privilege.acl_mode =
+                existing_privilege.acl_mode.difference(privilege.acl_mode);
+        }
+
+        // Remove empty privileges.
+        grantee_privileges.retain(|privilege| !privilege.acl_mode.is_empty());
+        if grantee_privileges.is_empty() {
+            self.0.remove(&privilege.grantee);
+        }
+    }
+
+    /// Returns a `PrivilegeMap` formatted as a `serde_json::Value` that is suitable for debugging. For
+    /// example `CatalogState::dump`.
+    pub fn debug_json(&self) -> serde_json::Value {
+        let privileges_by_str: BTreeMap<String, _> = self
+            .0
+            .iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+        serde_json::json!(privileges_by_str)
+    }
 }
 
 impl Default for PrivilegeMap {
     fn default() -> PrivilegeMap {
-        PrivilegeMap::new(BTreeMap::new())
+        PrivilegeMap::new()
     }
 }
 
@@ -360,6 +500,9 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=UC/u4";
@@ -372,6 +515,9 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "s7=/s12";
@@ -384,6 +530,9 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=/u100";
@@ -396,6 +545,24 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
     assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert_eq!(s, mz_acl.to_string());
+
+    let s = "u1=RBN/u2";
+    let mz_acl: MzAclItem = s.parse().unwrap();
+    assert_eq!(RoleId::User(1), mz_acl.grantee);
+    assert_eq!(RoleId::User(2), mz_acl.grantor);
+    assert!(!mz_acl.acl_mode.contains(AclMode::INSERT));
+    assert!(!mz_acl.acl_mode.contains(AclMode::SELECT));
+    assert!(!mz_acl.acl_mode.contains(AclMode::UPDATE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::DELETE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::USAGE));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
     assert!("u32=C/".parse::<MzAclItem>().is_err());

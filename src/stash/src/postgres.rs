@@ -548,11 +548,12 @@ impl Stash {
                 .get(0);
             if !fence_exists {
                 if !matches!(self.txn_mode, TransactionMode::Writeable) {
-                    return Err(format!(
-                        "stash tables do not exist; will not create in {:?} mode",
-                        self.txn_mode
-                    )
-                    .into());
+                    return Err(StashError {
+                        inner: InternalStashError::StashNotWritable(format!(
+                            "stash tables do not exist; will not create in {:?} mode",
+                            self.txn_mode
+                        )),
+                    });
                 }
                 tx.batch_execute(SCHEMA).await?;
             }
@@ -946,6 +947,10 @@ impl Stash {
                             15 => upgrade::v15_to_v16::upgrade(&mut tx).await?,
                             16 => upgrade::v16_to_v17::upgrade(),
                             17 => upgrade::v17_to_v18::upgrade(&mut tx).await?,
+                            18 => upgrade::v18_to_v19::upgrade(&mut tx).await?,
+                            19 => upgrade::v19_to_v20::upgrade(&mut tx).await?,
+                            20 => upgrade::v20_to_v21::upgrade(&mut tx).await?,
+                            21 => upgrade::v21_to_v22::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),

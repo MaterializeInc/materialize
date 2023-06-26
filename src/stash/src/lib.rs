@@ -102,7 +102,7 @@ pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 /// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
 /// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
 /// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 18;
+pub const STASH_VERSION: u64 = 22;
 
 /// The minimum [`Stash`] version number that we support migrating from.
 ///
@@ -209,6 +209,14 @@ impl StashError {
             _ => false,
         }
     }
+
+    /// Reports whether the error can be recovered if we opened the stash in writeable
+    pub fn can_recover_with_write_mode(&self) -> bool {
+        match &self.inner {
+            InternalStashError::StashNotWritable(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -220,6 +228,7 @@ enum InternalStashError {
     Proto(TryFromProtoError),
     Decoding(prost::DecodeError),
     Uninitialized,
+    StashNotWritable(String),
     Other(String),
 }
 
@@ -236,6 +245,7 @@ impl fmt::Display for StashError {
                 write!(f, "incompatible Stash version {v}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}")
             }
             InternalStashError::Uninitialized => write!(f, "uninitialized"),
+            InternalStashError::StashNotWritable(e) => f.write_str(e),
             InternalStashError::Other(e) => f.write_str(e),
         }
     }

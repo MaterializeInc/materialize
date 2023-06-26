@@ -23,7 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
@@ -46,12 +46,12 @@ use crate::catalog::builtin::{
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
     MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    AwsPrincipalContext, CatalogItem, CatalogState, Connection, DataSourceDesc, Database,
-    DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
+    AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
+    Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
     StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::session::Session;
@@ -185,6 +185,12 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
+        let (size, replication_factor) = match &cluster.config.variant {
+            ClusterVariant::Managed(config) => {
+                (Some(config.size.as_str()), Some(config.replication_factor))
+            }
+            ClusterVariant::Unmanaged => (None, None),
+        };
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row: Row::pack_slice(&[
@@ -192,6 +198,9 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&cluster.owner_id.to_string()),
                 privileges,
+                cluster.is_managed().into(),
+                size.into(),
+                replication_factor.into(),
             ]),
             diff,
         }
@@ -1273,40 +1282,50 @@ impl CatalogState {
         &self,
         default_privilege_object: &DefaultPrivilegeObject,
         grantee: &RoleId,
+        acl_mode: &AclMode,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let privileges = self
-            .default_privileges
-            .get_privileges_for_grantee(default_privilege_object, grantee)
-            .expect("catalog out of sync");
-        let database_id = default_privilege_object
-            .database_id
-            .map(|database_id| database_id.to_string());
-        let schema_id = default_privilege_object
-            .schema_id
-            .map(|schema_id| schema_id.to_string());
-
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DEFAULT_PRIVILEGES),
             row: Row::pack_slice(&[
                 default_privilege_object.role_id.to_string().as_str().into(),
-                database_id.as_deref().into(),
-                schema_id.as_deref().into(),
+                default_privilege_object
+                    .database_id
+                    .map(|database_id| database_id.to_string())
+                    .as_deref()
+                    .into(),
+                default_privilege_object
+                    .schema_id
+                    .map(|schema_id| schema_id.to_string())
+                    .as_deref()
+                    .into(),
                 default_privilege_object
                     .object_type
                     .to_string()
                     .as_str()
                     .into(),
                 grantee.to_string().as_str().into(),
-                privileges.to_string().as_str().into(),
+                acl_mode.to_string().as_str().into(),
             ]),
+            diff,
+        }
+    }
+
+    pub fn pack_system_privileges_update(
+        &self,
+        privileges: MzAclItem,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SYSTEM_PRIVILEGES),
+            row: Row::pack_slice(&[privileges.into()]),
             diff,
         }
     }
 
     fn pack_privilege_array_row(&self, privileges: &PrivilegeMap) -> Row {
         let mut row = Row::default();
-        let flat_privileges = MzAclItem::flatten(privileges);
+        let flat_privileges: Vec<_> = privileges.all_values_owned().collect();
         row.packer()
             .push_array(
                 &[ArrayDimension {

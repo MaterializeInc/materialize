@@ -472,8 +472,8 @@ GROUP BY a
 ----
 Explained Query:
   Reduce::Basic
-    aggrs[0]=(0, string_agg(row(row((integer_to_text(#1) || "1"), ","))))
-    aggrs[1]=(1, string_agg(row(row((integer_to_text(#1) || "2"), ","))))
+    aggrs[0]=(0, string_agg[order_by=[]](row(row((integer_to_text(#1) || "1"), ","))))
+    aggrs[1]=(1, string_agg[order_by=[]](row(row((integer_to_text(#1) || "2"), ","))))
     val_plan
       project=(#3, #4)
       map=(integer_to_text(#1), row(row((#2 || "1"), ",")), row(row((#2 || "2"), ",")))
@@ -521,8 +521,8 @@ Explained Query:
   With
     cte l0 =
       Reduce::Basic
-        aggrs[0]=(0, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
-        aggrs[1]=(1, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
+        aggrs[0]=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
+        aggrs[1]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
         val_plan
           project=(#2, #3)
           map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
@@ -564,8 +564,8 @@ Explained Query:
       skips=[2, 0]
       buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
     basic
-      aggrs[0]=(1, string_agg(row(row((integer_to_text(#1) || "1"), ","))))
-      aggrs[1]=(5, string_agg(row(row((integer_to_text(#1) || "2"), ","))))
+      aggrs[0]=(1, string_agg[order_by=[]](row(row((integer_to_text(#1) || "1"), ","))))
+      aggrs[1]=(5, string_agg[order_by=[]](row(row((integer_to_text(#1) || "2"), ","))))
     val_plan
       project=(#1, #3, #1, #1, #1, #4)
       map=(integer_to_text(#1), row(row((#2 || "1"), ",")), row(row((#2 || "2"), ",")))
@@ -626,8 +626,8 @@ Explained Query:
           skips=[2, 0]
           buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
         basic
-          aggrs[0]=(1, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
-          aggrs[1]=(5, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
+          aggrs[0]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
+          aggrs[1]=(5, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
         val_plan
           project=(#0, #2, #0, #0, #0, #3)
           map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
@@ -906,5 +906,61 @@ Explained Query:
           key_plan=id
           Get::PassArrangements l0
             raw=true
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT lead(b, 3, -5) IGNORE NULLS OVER () as l
+FROM t;
+----
+Explained Query:
+  FlatMap unnest_list(#0)
+    project=(#2)
+    map=(record_get[0](#1))
+    input_key=
+    Reduce::Basic
+      aggr=(0, lag[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1, 3, -5)))))
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#1, 3, -5))))
+      key_plan
+        project=()
+      input_key=#0
+      Get::PassArrangements materialize.public.t
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT lag(b, 3, -5) IGNORE NULLS OVER (PARTITION BY b, a ORDER BY b+8, a-7) as l
+FROM t;
+----
+Explained Query:
+  FlatMap unnest_list(#0)
+    project=(#2)
+    map=(record_get[0](#1))
+    Mfp
+      project=(#2)
+      input_key=#0, #1
+      Reduce::Basic
+        aggr=(0, lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1, 3, -5)), (#1 + 8), (#0 - 7))))
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(#1, 3, -5)), (#1 + 8), (#0 - 7)))
+        key_plan
+          project=(#1, #0)
+        input_key=#0
+        Get::PassArrangements materialize.public.t
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
 
 EOF

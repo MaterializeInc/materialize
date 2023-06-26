@@ -17,7 +17,7 @@ from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.wait import wait
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs

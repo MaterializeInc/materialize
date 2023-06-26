@@ -30,6 +30,7 @@ use tokio::sync::{oneshot, watch};
 
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
+use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::util::Transmittable;
@@ -97,6 +98,7 @@ pub enum Command {
         rows: Vec<Row>,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        ctx_extra: ExecuteContextExtra,
     },
 
     GetSystemVars {
@@ -148,33 +150,6 @@ impl Command {
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
             Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
-        }
-    }
-
-    pub fn send_error(self, e: AdapterError) {
-        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
-            let _ = tx.send(Response::<T> {
-                result: Err(e),
-                session,
-            });
-        }
-        match self {
-            Command::Startup { tx, session, .. } => send(tx, session, e),
-            Command::Declare { tx, session, .. } => send(tx, session, e),
-            Command::Prepare { tx, session, .. } => send(tx, session, e),
-            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
-            Command::Execute { tx, session, .. } => send(tx, session, e),
-            Command::Commit { tx, session, .. } => send(tx, session, e),
-            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
-            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
-            Command::CopyRows { tx, session, .. } => send(tx, session, e),
-            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::Terminate { tx, session, .. } => {
-                if let Some(tx) = tx {
-                    send(tx, session, e)
-                }
-            }
         }
     }
 }
@@ -294,6 +269,8 @@ impl IntoIterator for GetVariablesResponse {
 #[derivative(Debug)]
 #[enum_kind(ExecuteResponseKind)]
 pub enum ExecuteResponse {
+    /// The default privileges were altered.
+    AlteredDefaultPrivileges,
     /// The requested object was altered.
     AlteredObject(ObjectType),
     /// The index was altered.
@@ -314,6 +291,7 @@ pub enum ExecuteResponse {
         id: GlobalId,
         columns: Vec<usize>,
         params: CopyFormatParams<'static>,
+        ctx_extra: ExecuteContextExtra,
     },
     /// The requested connection was created.
     CreatedConnection,
@@ -424,6 +402,7 @@ impl ExecuteResponse {
     pub fn tag(&self) -> Option<String> {
         use ExecuteResponse::*;
         match self {
+            AlteredDefaultPrivileges => Some("ALTER DEFAULT PRIVILEGES".into()),
             AlteredObject(o) => Some(format!("ALTER {}", o)),
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
             AlteredRole => Some("ALTER ROLE".into()),
@@ -494,6 +473,7 @@ impl ExecuteResponse {
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
             AlterClusterRename
+            | AlterCluster
             | AlterClusterReplicaRename
             | AlterOwner
             | AlterItemRename
@@ -504,6 +484,7 @@ impl ExecuteResponse {
             | RotateKeys => {
                 vec![AlteredObject]
             }
+            AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }
@@ -535,7 +516,7 @@ impl ExecuteResponse {
             DropObjects => vec![DroppedObject],
             DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            Explain | Peek | ShowAllVariables | ShowCreate | ShowVariable => {
+            Explain | Select | ShowAllVariables | ShowCreate | ShowVariable | InspectShard => {
                 vec![CopyTo, SendingRows]
             }
             Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
@@ -554,6 +535,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
+            SideEffectingFunc => vec![SendingRows],
         }
     }
 }

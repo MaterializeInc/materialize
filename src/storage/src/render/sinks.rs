@@ -174,9 +174,6 @@ where
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
     let collection = match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
-            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
-            // TODO(#17413): Revisit with cluster unification.
-            #[allow(clippy::disallowed_methods)]
             let combined = combine_at_timestamp(
                 keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
             );
@@ -207,9 +204,6 @@ where
             collection
         }
         Some(SinkEnvelope::Upsert) => {
-            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
-            // TODO(#17413): Revisit with cluster unification.
-            #[allow(clippy::disallowed_methods)]
             let combined = combine_at_timestamp(
                 keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Upsert"),
             );

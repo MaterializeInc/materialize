@@ -78,6 +78,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
+use std::fmt::Formatter;
 use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(feature = "tokio-console")]
@@ -105,7 +106,7 @@ use mz_ore::tracing::{
 };
 use opentelemetry::sdk::resource::Resource;
 use opentelemetry::KeyValue;
-use tracing_subscriber::filter::Targets;
+use tracing_subscriber::EnvFilter;
 
 /// Command line arguments for application tracing.
 ///
@@ -149,7 +150,7 @@ pub struct TracingCliArgs {
         value_name = "FILTER",
         default_value = "info"
     )]
-    pub log_filter: SerializableTargets,
+    pub log_filter: CloneableEnvFilter,
     /// The format to use for stderr log messages.
     #[clap(long, env = "LOG_FORMAT", default_value_t, value_enum)]
     pub log_format: LogFormat,
@@ -207,7 +208,7 @@ pub struct TracingCliArgs {
         // TODO(guswynn): switch tokio_postgres logging to `trace` upstream
         default_value = "tokio_postgres=info,debug"
     )]
-    pub opentelemetry_filter: SerializableTargets,
+    pub opentelemetry_filter: CloneableEnvFilter,
     /// Additional key-value pairs to send with all opentelemetry traces.
     ///
     /// Requires that the `--opentelemetry-endpoint` option is specified.
@@ -287,7 +288,7 @@ impl TracingCliArgs {
                     },
                     LogFormat::Json => StderrLogFormat::Json,
                 },
-                filter: self.log_filter.inner.clone(),
+                filter: self.log_filter.clone().into(),
             },
             opentelemetry: self.opentelemetry_endpoint.clone().map(|endpoint| {
                 OpenTelemetryConfig {
@@ -297,7 +298,7 @@ impl TracingCliArgs {
                         .iter()
                         .map(|header| (header.key.clone(), header.value.clone()))
                         .collect(),
-                    filter: self.opentelemetry_filter.inner.clone(),
+                    filter: self.opentelemetry_filter.clone().into(),
                     resource: Resource::new(
                         self.opentelemetry_resource
                             .iter()
@@ -488,29 +489,56 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
     }
 }
 
-/// Wraps [`Targets`] to provide a [`Display`](fmt::Display) implementation.
 #[derive(Debug, Clone)]
-pub struct SerializableTargets {
-    /// The parsed targets.
-    pub inner: Targets,
-    /// A string representation of `inner`.
-    pub raw: String,
+struct ValidatedEnvFilterString(String);
+
+/// Wraps [`EnvFilter`] to provide a [`Clone`] implementation.
+#[derive(Debug)]
+pub struct CloneableEnvFilter {
+    filter: EnvFilter,
+    validated: ValidatedEnvFilterString,
 }
 
-impl FromStr for SerializableTargets {
+impl AsRef<EnvFilter> for CloneableEnvFilter {
+    fn as_ref(&self) -> &EnvFilter {
+        &self.filter
+    }
+}
+
+impl From<CloneableEnvFilter> for EnvFilter {
+    fn from(value: CloneableEnvFilter) -> Self {
+        value.filter
+    }
+}
+
+impl Clone for CloneableEnvFilter {
+    fn clone(&self) -> Self {
+        // TODO: implement Clone on `EnvFilter` upstream
+        Self {
+            // While EnvFilter has the undocumented property of roundtripping through
+            // its String format, it seems safer to always create a new EnvFilter from
+            // the same validated input when cloning.
+            filter: EnvFilter::from_str(&self.validated.0).expect("validated"),
+            validated: self.validated.clone(),
+        }
+    }
+}
+
+impl FromStr for CloneableEnvFilter {
     type Err = tracing_subscriber::filter::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(SerializableTargets {
-            inner: s.parse()?,
-            raw: s.into(),
+        let filter: EnvFilter = s.parse()?;
+        Ok(CloneableEnvFilter {
+            filter,
+            validated: ValidatedEnvFilterString(s.to_string()),
         })
     }
 }
 
-impl fmt::Display for SerializableTargets {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.raw)
+impl std::fmt::Display for CloneableEnvFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.filter)
     }
 }
 
@@ -534,5 +562,26 @@ impl fmt::Display for LogFormat {
             LogFormat::Text => f.write_str("text"),
             LogFormat::Json => f.write_str("json"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::CloneableEnvFilter;
+    use std::str::FromStr;
+
+    #[mz_ore::test]
+    fn roundtrips() {
+        let filter = CloneableEnvFilter::from_str(
+            "abc=debug,def=trace,[123],foo,baz[bar{a=b}]=debug,[{13=37}]=trace,info",
+        )
+        .expect("valid");
+        assert_eq!(
+            format!("{}", filter),
+            format!(
+                "{}",
+                CloneableEnvFilter::from_str(&format!("{}", filter)).expect("valid")
+            )
+        );
     }
 }

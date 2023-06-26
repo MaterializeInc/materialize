@@ -31,9 +31,14 @@ perf.data*
 **/*.orig
 **/*.profraw
 **/*.profdata
+**/*.debug
 
-# This is un-orthodox, but adding it to the repo would "tie" it to each users
+# This is un-orthodox, but adding it to the repo would "tie" it to each user's
 # local version of nixpkgs. This way, we can all use the flake and have a
 # flake.lock that works well with the rest of the package versions on our
 # system.
 **/flake.lock
+
+/misc/python/materialize/build/
+/misc/python/materialize/mz_test_base.egg-info/
+/misc/python/materialize/dist/

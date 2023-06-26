@@ -94,7 +94,7 @@ pub enum PlanError {
     InvalidPrivilegeTypes {
         invalid_privileges: AclMode,
         object_type: ObjectType,
-        object_name: String,
+        object_name: Option<String>,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
@@ -161,6 +161,9 @@ pub enum PlanError {
     ModifyLinkedCluster {
         cluster_name: String,
         linked_object_name: String,
+    },
+    ManagedCluster {
+        cluster_name: String,
     },
     EmptyPublication(String),
     SubsourceNameConflict {
@@ -371,7 +374,8 @@ impl fmt::Display for PlanError {
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
             Self::InvalidPrivilegeTypes{ invalid_privileges, object_type, object_name} => {
-                write!(f, "invalid privilege types {} for {} {}", invalid_privileges.to_error_string(), object_type, object_name.quoted())
+                let object_name = object_name.as_ref().map(|object_name| format!(" {}", object_name.quoted())).unwrap_or_else(||"".to_string());
+                write!(f, "invalid privilege types {} for {}{}", invalid_privileges.to_error_string(), object_type, object_name)
             },
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
@@ -439,6 +443,7 @@ impl fmt::Display for PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
+            Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
             Self::SubsourceNameConflict { name, upstream_references } => {

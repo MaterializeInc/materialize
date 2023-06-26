@@ -76,9 +76,13 @@ To authenticate using a token, send an initial text or binary message containing
 }
 ```
 
-Successful authentication will result in an initial `ReadyForQuery` response from the server.
-Otherwise an error is indicated by a websocket Close message.
+Successful authentication will result in:
 
+- Some `ParameterStatus` messages indicating the values of some initial session settings.
+- One `BackendKeyData` message that can be used for cancellation.
+- One `ReadyForQuery`message, at which point the server is ready to receive requests.
+
+An error during authentication is indicated by a websocket Close message.
 HTTP `Authorization` headers are ignored.
 
 ### Messages
@@ -135,7 +139,8 @@ The response messages are WebSocket Text messages containing a JSON object that 
 `Error` | Executing a statement resulted in an error.
 `Rows` | A rows-returning statement is executing, and some `Row` messages may follow.
 `Row` | A single row result.
-`ParameterStatus` | Executing a statement caused some session parameters to change.
+`ParameterStatus` | Announces the value of a session setting.
+`BackendKeyData` | Information used to cancel queries.
 
 #### `ReadyForQuery`
 
@@ -212,12 +217,26 @@ The payload is an array of JSON values corresponding to the columns from the `Ro
 
 #### `ParameterStatus`
 
-Executing a statement caused a session parameter to change. The payload has the following structure:
+Announces the value of a session setting.
+These are sent during startup and when a statement caused a session parameter to change.
+The payload has the following structure:
 
 ```
 {
     "name": <name of parameter>,
     "value": <new value of parameter>,
+}
+```
+
+#### `BackendKeyData`
+
+Information used to cancel queries.
+The payload has the following structure:
+
+```
+{
+    "conn_id": <connection id>,
+    "secret_key": <secret key>,
 }
 ```
 
@@ -270,6 +289,11 @@ interface CommandStarting {
 	is_streaming: boolean;
 }
 
+interface BackendKeyData {
+	conn_id: number; // u32
+	secret_key: number; // u32
+}
+
 type WebSocketResult =
     | { type: "ReadyForQuery"; payload: string }
     | { type: "Notice"; payload: Notice }
@@ -279,6 +303,7 @@ type WebSocketResult =
     | { type: "Row"; payload: any[] }
     | { type: "ParameterStatus"; payload: ParameterStatus }
     | { type: "CommandStarting"; payload: CommandStarting }
+    | { type: "BackendKeyData"; payload: BackendKeyData }
     ;
 ```
 

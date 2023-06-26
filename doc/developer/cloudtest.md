@@ -129,7 +129,7 @@ See the examples in `test/clustertest/test_smoke.py`.
 The tests folow pytest conventions:
 
 ```python
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 def test_something(mz: MaterializeApplication) -> None:
     assert ...

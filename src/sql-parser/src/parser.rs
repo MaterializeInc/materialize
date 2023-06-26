@@ -308,6 +308,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(GRANT) => Ok(self.parse_grant()?),
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
                 Token::Keyword(REASSIGN) => Ok(self.parse_reassign_owned()?),
+                Token::Keyword(INSPECT) => Ok(Statement::Show(self.parse_inspect()?)),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -629,36 +630,45 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let over = if self.parse_keyword(OVER) {
-            // TBD: support window names (`OVER mywin`) in place of inline specification
-            self.expect_token(&Token::LParen)?;
-            let partition_by = if self.parse_keywords(&[PARTITION, BY]) {
-                // a list of possibly-qualified column names
-                self.parse_comma_separated(Parser::parse_expr)?
-            } else {
-                vec![]
-            };
-            let order_by = if self.parse_keywords(&[ORDER, BY]) {
-                self.parse_comma_separated(Parser::parse_order_by_expr)?
-            } else {
-                vec![]
-            };
-            let window_frame = if !self.consume_token(&Token::RParen) {
-                let window_frame = self.parse_window_frame()?;
-                self.expect_token(&Token::RParen)?;
-                Some(window_frame)
+        let over =
+            if self.peek_keyword(OVER) || self.peek_keyword(IGNORE) || self.peek_keyword(RESPECT) {
+                // TBD: support window names (`OVER mywin`) in place of inline specification
+                // https://github.com/MaterializeInc/materialize/issues/19755
+
+                let ignore_nulls = self.parse_keywords(&[IGNORE, NULLS]);
+                let respect_nulls = self.parse_keywords(&[RESPECT, NULLS]);
+                self.expect_keyword(OVER)?;
+
+                self.expect_token(&Token::LParen)?;
+                let partition_by = if self.parse_keywords(&[PARTITION, BY]) {
+                    // a list of possibly-qualified column names
+                    self.parse_comma_separated(Parser::parse_expr)?
+                } else {
+                    vec![]
+                };
+                let order_by = if self.parse_keywords(&[ORDER, BY]) {
+                    self.parse_comma_separated(Parser::parse_order_by_expr)?
+                } else {
+                    vec![]
+                };
+                let window_frame = if !self.consume_token(&Token::RParen) {
+                    let window_frame = self.parse_window_frame()?;
+                    self.expect_token(&Token::RParen)?;
+                    Some(window_frame)
+                } else {
+                    None
+                };
+
+                Some(WindowSpec {
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    ignore_nulls,
+                    respect_nulls,
+                })
             } else {
                 None
             };
-
-            Some(WindowSpec {
-                partition_by,
-                order_by,
-                window_frame,
-            })
-        } else {
-            None
-        };
 
         Ok(Function {
             name,
@@ -3117,8 +3127,54 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
+        let option = self.expect_one_of_keywords(&[
+            AVAILABILITY,
+            IDLE,
+            INTROSPECTION,
+            MANAGED,
+            REPLICAS,
+            REPLICATION,
+            SIZE,
+        ])?;
+        let name = match option {
+            AVAILABILITY => {
+                self.expect_keyword(ZONES)?;
+                ClusterOptionName::AvailabilityZones
+            }
+            IDLE => {
+                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
+                ClusterOptionName::IdleArrangementMergeEffort
+            }
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
+                DEBUGGING => ClusterOptionName::IntrospectionDebugging,
+                INTERVAL => ClusterOptionName::IntrospectionInterval,
+                _ => unreachable!(),
+            },
+            MANAGED => ClusterOptionName::Managed,
+            REPLICAS => ClusterOptionName::Replicas,
+            REPLICATION => {
+                self.expect_keyword(FACTOR)?;
+                ClusterOptionName::ReplicationFactor
+            }
+            SIZE => ClusterOptionName::Size,
+            _ => unreachable!(),
+        };
+        Ok(name)
+    }
+
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        self.expect_keyword(REPLICAS)?;
+        let name = self.parse_cluster_option_name()?;
+
+        if name == ClusterOptionName::Replicas {
+            return self.parse_cluster_option_replicas();
+        }
+
+        let value = self.parse_optional_option_value()?;
+        Ok(ClusterOption { name, value })
+    }
+
+    fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let replicas = if self.consume_token(&Token::RParen) {
             vec![]
@@ -3279,7 +3335,10 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Schema => {
-                let name = UnresolvedObjectName::Schema(self.parse_schema_name()?);
+                let names = self.parse_comma_separated(|parser| {
+                    Ok(UnresolvedObjectName::Schema(parser.parse_schema_name()?))
+                })?;
+
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
@@ -3287,7 +3346,7 @@ impl<'a> Parser<'a> {
                 Ok(Statement::DropObjects(DropObjectsStatement {
                     object_type: ObjectType::Schema,
                     if_exists,
-                    names: vec![name],
+                    names,
                     cascade,
                 }))
             }
@@ -3327,7 +3386,7 @@ impl<'a> Parser<'a> {
                     cascade,
                 }))
             }
-            ObjectType::Func => parser_err!(
+            ObjectType::Func | ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported DROP on {object_type}")
@@ -3711,33 +3770,7 @@ impl<'a> Parser<'a> {
                     new_owner,
                 }))
             }
-            ObjectType::Cluster => {
-                let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedObjectName::Cluster(self.parse_identifier()?);
-                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
-                self.expect_keyword(TO)?;
-                match action {
-                    OWNER => {
-                        let new_owner = self.parse_identifier()?;
-                        Ok(Statement::AlterOwner(AlterOwnerStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            new_owner,
-                        }))
-                    }
-                    RENAME => {
-                        let to_item_name = self.parse_identifier()?;
-                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            to_item_name,
-                        }))
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            ObjectType::Cluster => self.parse_alter_cluster(object_type),
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
                 let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
@@ -3789,11 +3822,65 @@ impl<'a> Parser<'a> {
                     new_owner,
                 }))
             }
-            ObjectType::Func => parser_err!(
+            ObjectType::Func | ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
             ),
+        }
+    }
+
+    fn parse_alter_cluster(
+        &mut self,
+        object_type: ObjectType,
+    ) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_identifier()?;
+        let action = self.expect_one_of_keywords(&[OWNER, RENAME, RESET, SET])?;
+        match action {
+            OWNER => {
+                self.expect_keyword(TO)?;
+                let new_owner = self.parse_identifier()?;
+                let name = UnresolvedObjectName::Cluster(name);
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+                let name = UnresolvedObjectName::Cluster(name);
+                Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    to_item_name,
+                }))
+            }
+            RESET => {
+                self.expect_token(&Token::LParen)?;
+                let names = self.parse_comma_separated(Parser::parse_cluster_option_name)?;
+                self.expect_token(&Token::RParen)?;
+                Ok(Statement::AlterCluster(AlterClusterStatement {
+                    if_exists,
+                    name,
+                    action: AlterClusterAction::ResetOptions(names),
+                }))
+            }
+            SET => {
+                self.expect_token(&Token::LParen)?;
+                let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
+                self.expect_token(&Token::RParen)?;
+                Ok(Statement::AlterCluster(AlterClusterStatement {
+                    if_exists,
+                    name,
+                    action: AlterClusterAction::SetOptions(options),
+                }))
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -4077,10 +4164,18 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
         let target_roles = if self.parse_keyword(FOR) {
-            let _ = self.parse_one_of_keywords(&[ROLE, USER]);
-            Some(self.parse_comma_separated(Parser::parse_identifier)?)
+            match self.expect_one_of_keywords(&[ROLE, USER, ALL])? {
+                ROLE | USER => TargetRoleSpecification::Roles(
+                    self.parse_comma_separated(Parser::parse_identifier)?,
+                ),
+                ALL => {
+                    self.expect_keyword(ROLES)?;
+                    TargetRoleSpecification::AllRoles
+                }
+                _ => unreachable!(),
+            }
         } else {
-            None
+            TargetRoleSpecification::CurrentRole
         };
         let target_objects = if self.parse_keyword(IN) {
             match self.expect_one_of_keywords(&[SCHEMA, DATABASE])? {
@@ -4586,6 +4681,7 @@ impl<'a> Parser<'a> {
             | ObjectType::View
             | ObjectType::MaterializedView
             | ObjectType::Source
+            | ObjectType::Subsource
             | ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -5252,6 +5348,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+
             let show_object_type = match object_type {
                 ObjectType::Database => ShowObjectType::Database,
                 ObjectType::Schema => {
@@ -5265,6 +5362,13 @@ impl<'a> Parser<'a> {
                 ObjectType::Table => ShowObjectType::Table,
                 ObjectType::View => ShowObjectType::View,
                 ObjectType::Source => ShowObjectType::Source,
+                ObjectType::Subsource => {
+                    self.expect_keyword(ON)?;
+
+                    ShowObjectType::Subsource {
+                        on_source: self.parse_raw_name()?,
+                    }
+                }
                 ObjectType::Sink => ShowObjectType::Sink,
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
@@ -5385,6 +5489,12 @@ impl<'a> Parser<'a> {
         } else {
             Ok(None)
         }
+    }
+
+    fn parse_inspect(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
+        self.expect_keyword(SHARD)?;
+        let id = self.parse_literal_string()?;
+        Ok(ShowStatement::InspectShard(InspectShardStatement { id }))
     }
 
     fn parse_table_and_joins(&mut self) -> Result<TableWithJoins<Raw>, ParserError> {
@@ -6168,11 +6278,11 @@ impl<'a> Parser<'a> {
     /// Parse a `GRANT ROLE` statement, assuming that the `GRANT` token
     /// has already been consumed.
     fn parse_grant_role(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let role_name = self.parse_identifier()?;
+        let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
         self.expect_keyword(TO)?;
         let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::GrantRole(GrantRoleStatement {
-            role_name,
+            role_names,
             member_names,
         }))
     }
@@ -6206,11 +6316,11 @@ impl<'a> Parser<'a> {
     /// Parse a `REVOKE ROLE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke_role(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let role_name = self.parse_identifier()?;
+        let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
         self.expect_keyword(FROM)?;
         let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::RevokeRole(RevokeRoleStatement {
-            role_name,
+            role_names,
             member_names,
         }))
     }
@@ -6219,6 +6329,10 @@ impl<'a> Parser<'a> {
         &mut self,
         statement_type: &str,
     ) -> Result<GrantTargetSpecification<Raw>, ParserError> {
+        if self.parse_keyword(SYSTEM) {
+            return Ok(GrantTargetSpecification::System);
+        }
+
         let (object_type, object_spec_inner) = if self.parse_keyword(ALL) {
             let object_type = self.expect_grant_revoke_plural_object_type(statement_type)?;
             let object_spec_inner = if self.parse_keyword(IN) {
@@ -6261,7 +6375,7 @@ impl<'a> Parser<'a> {
             (object_type, object_spec_inner)
         };
 
-        Ok(GrantTargetSpecification {
+        Ok(GrantTargetSpecification::Object {
             object_type,
             object_spec_inner,
         })
@@ -6314,7 +6428,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::ClusterReplica
             | ObjectType::Role
-            | ObjectType::Func => {
+            | ObjectType::Func
+            | ObjectType::Subsource => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -6504,6 +6619,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS,
                 DATABASES,
                 SCHEMAS,
+                SUBSOURCES,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -6533,6 +6649,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS => ObjectType::Connection,
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
+                SUBSOURCES => ObjectType::Subsource,
                 _ => unreachable!(),
             },
         )
@@ -6541,13 +6658,26 @@ impl<'a> Parser<'a> {
     /// Look for a privilege and return it if it matches.
     fn parse_privilege(&mut self) -> Option<Privilege> {
         Some(
-            match self.parse_one_of_keywords(&[INSERT, SELECT, UPDATE, DELETE, USAGE, CREATE])? {
+            match self.parse_one_of_keywords(&[
+                INSERT,
+                SELECT,
+                UPDATE,
+                DELETE,
+                USAGE,
+                CREATE,
+                CREATEROLE,
+                CREATEDB,
+                CREATECLUSTER,
+            ])? {
                 INSERT => Privilege::INSERT,
                 SELECT => Privilege::SELECT,
                 UPDATE => Privilege::UPDATE,
                 DELETE => Privilege::DELETE,
                 USAGE => Privilege::USAGE,
                 CREATE => Privilege::CREATE,
+                CREATEROLE => Privilege::CREATEROLE,
+                CREATEDB => Privilege::CREATEDB,
+                CREATECLUSTER => Privilege::CREATECLUSTER,
                 _ => unreachable!(),
             },
         )

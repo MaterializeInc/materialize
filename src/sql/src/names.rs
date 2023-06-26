@@ -295,6 +295,15 @@ impl From<DatabaseId> for ResolvedDatabaseSpecifier {
     }
 }
 
+impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
+    fn from(id: Option<DatabaseId>) -> Self {
+        match id {
+            Some(id) => Self::Id(id),
+            None => Self::Ambient,
+        }
+    }
+}
+
 /*
  * TODO(jkosh44) It's possible that in order to fix
  * https://github.com/MaterializeInc/materialize/issues/8805 we will need to assign temporary
@@ -636,7 +645,7 @@ impl AstDisplay for ResolvedDataType {
 impl ResolvedDataType {
     /// Return the name of `self`'s item without qualification or IDs.
     ///
-    /// This is used to generate to generate default column names for cast operations.
+    /// This is used to generate default column names for cast operations.
     pub fn unqualified_item_name(&self) -> String {
         let mut res = String::new();
         match self {
@@ -655,6 +664,40 @@ impl ResolvedDataType {
                 res += "]";
             }
             ResolvedDataType::Named { full_name, .. } => {
+                res += &full_name.item;
+            }
+            ResolvedDataType::Error => {}
+        }
+        res
+    }
+
+    /// Return the name of `self`'s without IDs or modifiers.
+    ///
+    /// This is used for error messages.
+    pub fn human_readable_name(&self) -> String {
+        let mut res = String::new();
+        match self {
+            ResolvedDataType::AnonymousList(element_type) => {
+                res += &element_type.human_readable_name();
+                res += " list";
+            }
+            ResolvedDataType::AnonymousMap {
+                key_type,
+                value_type,
+            } => {
+                res += "map[";
+                res += &key_type.human_readable_name();
+                res += "=>";
+                res += &value_type.human_readable_name();
+                res += "]";
+            }
+            ResolvedDataType::Named { full_name, .. } => {
+                if let RawDatabaseSpecifier::Name(database) = &full_name.database {
+                    res += database;
+                    res += ".";
+                }
+                res += &full_name.schema;
+                res += ".";
                 res += &full_name.item;
             }
             ResolvedDataType::Error => {}

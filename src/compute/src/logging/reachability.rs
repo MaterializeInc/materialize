@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
 
+use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
@@ -26,7 +27,6 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Filter;
 
-use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -95,8 +95,14 @@ pub(super) fn construct<A: Allocate>(
                             .try_into()
                             .expect("must fit");
                         for (source, port, update_type, ts, diff) in massaged {
-                            let datum = (update_type, addr.clone(), source, port, worker, ts);
-                            updates_session.give(&cap, ((datum, ()), time_ms, diff));
+                            updates_session.give(
+                                &cap,
+                                (
+                                    (update_type, addr.clone(), source, port, worker, ts),
+                                    time_ms,
+                                    diff,
+                                ),
+                            );
                         }
                     }
                 });
@@ -105,7 +111,7 @@ pub(super) fn construct<A: Allocate>(
 
         let updates = updates
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely reachability",
             );
@@ -148,7 +154,7 @@ pub(super) fn construct<A: Allocate>(
                 );
 
                 let trace = updates
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
+                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }

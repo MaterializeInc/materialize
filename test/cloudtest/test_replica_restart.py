@@ -14,7 +14,7 @@ from textwrap import dedent
 
 from pg8000 import Connection
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
 def query(conn: Connection, sql: str) -> None:

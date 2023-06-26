@@ -1,0 +1,123 @@
+# Test various NOTICE expectations.
+
+# Test dropping objects that do not exist
+send
+Query {"query": "create table t()"}
+Query {"query": "drop table if exists t, s, t"}
+Query {"query": "drop table if exists t, s, t"}
+Query {"query": "create database t"}
+Query {"query": "drop database if exists t"}
+Query {"query": "drop database if exists t"}
+Query {"query": "create schema t"}
+Query {"query": "drop schema if exists t, s, t"}
+Query {"query": "drop schema if exists t, s, t"}
+Query {"query": "create role t"}
+Query {"query": "drop role if exists t, s, t"}
+Query {"query": "drop role if exists t, s, t"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"TABLE \"s\" does not exist, skipping"}]}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"TABLE \"t\" does not exist, skipping"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"TABLE \"s\" does not exist, skipping"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"TABLE \"t\" does not exist, skipping"}]}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE DATABASE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP DATABASE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"DATABASE \"t\" does not exist, skipping"}]}
+CommandComplete {"tag":"DROP DATABASE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE SCHEMA"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SCHEMA \"s\" does not exist, skipping"}]}
+CommandComplete {"tag":"DROP SCHEMA"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SCHEMA \"t\" does not exist, skipping"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SCHEMA \"s\" does not exist, skipping"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SCHEMA \"t\" does not exist, skipping"}]}
+CommandComplete {"tag":"DROP SCHEMA"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"RBAC is disabled so no role attributes or object ownership will be considered when executing statements"}]}
+CommandComplete {"tag":"CREATE ROLE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"ROLE \"s\" does not exist, skipping"}]}
+CommandComplete {"tag":"DROP ROLE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"ROLE \"t\" does not exist, skipping"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"ROLE \"s\" does not exist, skipping"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"ROLE \"t\" does not exist, skipping"}]}
+CommandComplete {"tag":"DROP ROLE"}
+ReadyForQuery {"status":"I"}
+
+# AlterNoop
+
+send
+Query {"query": "CREATE ROLE joe"}
+Query {"query": "ALTER DATABASE IF EXISTS d OWNER TO joe"}
+Query {"query": "ALTER SCHEMA IF EXISTS d OWNER TO joe"}
+Query {"query": "ALTER TABLE IF EXISTS t RENAME to x"}
+Query {"query": "ALTER CLUSTER REPLICA IF EXISTS c.r OWNER to joe"}
+Query {"query": "ALTER CLUSTER IF EXISTS c OWNER to joe"}
+Query {"query": "ALTER SINK IF EXISTS s OWNER to joe"}
+Query {"query": "ALTER SECRET IF EXISTS s OWNER to joe"}
+Query {"query": "ALTER CONNECTION IF EXISTS c OWNER to joe"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"RBAC is disabled so no role attributes or object ownership will be considered when executing statements"}]}
+CommandComplete {"tag":"CREATE ROLE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"DATABASE \"d\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER DATABASE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SCHEMA \"d\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER SCHEMA"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"TABLE \"t\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER TABLE"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER REPLICA \"c.r\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER CLUSTER REPLICA"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER \"c\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER CLUSTER"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SINK \"s\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER SINK"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SECRET \"s\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER SECRET"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CONNECTION \"c\" does not exist, skipping"}]}
+CommandComplete {"tag":"ALTER CONNECTION"}
+ReadyForQuery {"status":"I"}

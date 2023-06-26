@@ -49,6 +49,15 @@ division by zero)
 * Generate expressions with aggregation functions
 * Generate nested expressions
 
+## Handle test failures
+If there are any failures, validate them and create a ticket if appropriate.
+
+Then, until the ticket is resolved, you can
+* add ignores for inconsistencies in `misc/python/materialize/output_consistency/ignore_filter/inconsistency_ignore_filter.py`
+* normalize error messages in `misc/python/materialize/output_consistency/validation/error_message_normalizer.py`
+
+Mention ignored entries or normalizations in the ticket so that they can be reverted when the ticket is resolved.
+
 ## Implementation
 
 ### UML Overview

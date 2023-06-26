@@ -38,6 +38,10 @@ skip = [
     # Waiting for <https://github.com/blackbeam/rust_mysql_common/commit/2a6419aef2ff609cd35a5ce41a9eb48253a8214d>
     # to be released.
     { name = "bindgen", version = "0.59.2" },
+
+    # Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
+    # release. (not yet in v0.11.9)
+    { name = "prettyplease", version = "0.1.25" },
 ]
 
 # Use `tracing` instead.

@@ -535,9 +535,57 @@ SELECT row_number() OVER (ORDER BY dt DESC),
            RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
        max(baz) OVER (ORDER BY a
            ROWS UNBOUNDED PRECEDING)
-       FROM foo
+FROM foo
 ----
 SELECT row_number() OVER (ORDER BY dt DESC), sum(foo) OVER (PARTITION BY a, b ORDER BY c, d ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), avg(bar) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), max(baz) OVER (ORDER BY a ROWS UNBOUNDED PRECEDING) FROM foo
+
+parse-statement roundtrip
+SELECT lag(x, 1) OVER (ORDER BY dt DESC) FROM foo
+----
+SELECT lag(x, 1) OVER (ORDER BY dt DESC) FROM foo
+
+parse-statement roundtrip
+SELECT lag(x, 1) IGNORE NULLS OVER (ORDER BY dt DESC) FROM foo
+----
+SELECT lag(x, 1) IGNORE NULLS OVER (ORDER BY dt DESC) FROM foo
+
+parse-statement roundtrip
+SELECT lag(x, 1) RESPECT NULLS OVER (ORDER BY dt DESC) FROM foo
+----
+SELECT lag(x, 1) RESPECT NULLS OVER (ORDER BY dt DESC) FROM foo
+
+parse-statement roundtrip
+SELECT lag(x, 1) IGNORE NULLS RESPECT NULLS OVER (ORDER BY dt DESC) FROM foo
+----
+SELECT lag(x, 1) IGNORE NULLS RESPECT NULLS OVER (ORDER BY dt DESC) FROM foo
+
+parse-statement roundtrip
+SELECT lag(x, 1) RESPECT NULLS IGNORE NULLS OVER (ORDER BY dt DESC) FROM foo
+----
+error: Expected OVER, found IGNORE
+SELECT lag(x, 1) RESPECT NULLS IGNORE NULLS OVER (ORDER BY dt DESC) FROM foo
+                               ^
+
+parse-statement roundtrip
+SELECT lag(x, 1) IGNORE OVER (ORDER BY dt DESC) FROM foo
+----
+error: Expected OVER, found IGNORE
+SELECT lag(x, 1) IGNORE OVER (ORDER BY dt DESC) FROM foo
+                 ^
+
+parse-statement roundtrip
+SELECT lag(x, 1) NULLS OVER (ORDER BY dt DESC) FROM foo
+----
+error: Expected end of statement, found OVER
+SELECT lag(x, 1) NULLS OVER (ORDER BY dt DESC) FROM foo
+                       ^
+
+parse-statement roundtrip
+SELECT lag(x, 1) OVER IGNORE NULLS (ORDER BY dt DESC) FROM foo
+----
+error: Expected left parenthesis, found IGNORE
+SELECT lag(x, 1) OVER IGNORE NULLS (ORDER BY dt DESC) FROM foo
+                      ^
 
 parse-statement roundtrip
 SELECT a, count(1), min(b), max(b) FROM foo GROUP BY a

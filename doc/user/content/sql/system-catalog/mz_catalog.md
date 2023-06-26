@@ -75,12 +75,15 @@ Field               | Type      | Meaning
 
 The `mz_clusters` table contains a row for each cluster in the system.
 
-Field          | Type                 | Meaning
----------------|----------------------|--------
-`id`           | [`text`]             | Materialize's unique ID for the cluster.
-`name`         | [`text`]             | The name of the cluster.
-`owner_id`     | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
-`privileges`   | [`mz_aclitem array`] | The privileges belonging to the cluster.
+| Field                | Type                 | Meaning                                                                                                            |
+|----------------------|----------------------|--------------------------------------------------------------------------------------------------------------------|
+| `id`                 | [`text`]             | Materialize's unique ID for the cluster.                                                                           |
+| `name`               | [`text`]             | The name of the cluster.                                                                                           |
+| `owner_id`           | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles). |
+| `privileges`         | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                           |
+| `managed`            | [`boolean`]          | Whether the cluster has automatically managed replicas.                                                            |
+| `size`               | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. If the cluster is unmanaged, `NULL`.        |
+| `replication_factor` | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. If the cluster is unmanaged, `NULL`.     |
 
 ### `mz_columns`
 
@@ -296,10 +299,10 @@ Field            | Type       | Meaning
 `id`             | [`text`]   | Materialize's unique ID for the role.
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
 `name`           | [`text`]   | The name of the role.
-`inherit`        | [`bool`]   | Indicates whether the role has inheritance of privileges.
-`create_role`    | [`bool`]   | Indicates whether the role is allowed to create, alter, drop, grant, and revoke roles.
-`create_db`      | [`bool`]   | Indicates whether the role is allowed to create databases.
-`create_cluster` | [`bool`]   | Indicates whether the role is allowed to create clusters.
+`inherit`        | [`boolean`]   | Indicates whether the role has inheritance of privileges.
+`create_role`    | [`boolean`]   | Indicates whether the role is allowed to create, alter, drop, grant, and revoke roles.
+`create_db`      | [`boolean`]   | Indicates whether the role is allowed to create databases.
+`create_cluster` | [`boolean`]   | Indicates whether the role is allowed to create clusters.
 
 ### `mz_role_members`
 
@@ -394,6 +397,14 @@ Field                  | Type                         | Meaning
 `size_bytes`           | [`uint8`]                    | The number of storage bytes used by the object.
 `collection_timestamp` | [`timestamp with time zone`] | The time at which storage usage of the object was assessed.
 
+### `mz_system_privileges`
+
+The `mz_system_privileges` table contains information on system privileges.
+
+Field         | Type     | Meaning
+--------------|----------|--------
+`privileges` | [`mz_aclitem array`] | The privileges belonging to the system.
+
 ### `mz_tables`
 
 The `mz_tables` table contains a row for each table in the system.
@@ -444,3 +455,5 @@ Field          | Type                 | Meaning
 [`text array`]: /sql/types/array
 [`record`]: /sql/types/record
 [`uint8`]: /sql/types/uint8
+[`uint4`]: /sql/types/uint4
+[`mz_aclitem array`]: /sql/types/mz_aclitem

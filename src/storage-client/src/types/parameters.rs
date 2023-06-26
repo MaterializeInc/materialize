@@ -29,8 +29,13 @@ pub struct StorageParameters {
     pub persist: PersistParameters,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
     pub keep_n_source_status_history_entries: usize,
+    pub keep_n_sink_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBTuningParameters,
+    /// Whether or not to allow shard finalization to occur. Note that this will
+    /// only disable the actual finalization of shards, not registering them for
+    /// finalization.
+    pub finalize_shards: bool,
 }
 
 impl StorageParameters {
@@ -41,13 +46,17 @@ impl StorageParameters {
             persist,
             pg_replication_timeouts,
             keep_n_source_status_history_entries,
+            keep_n_sink_status_history_entries,
             upsert_rocksdb_tuning_config,
+            finalize_shards,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
+        self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
+        self.finalize_shards = finalize_shards
     }
 }
 
@@ -59,7 +68,11 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
             ),
+            keep_n_sink_status_history_entries: u64::cast_from(
+                self.keep_n_sink_status_history_entries,
+            ),
             upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
+            finalize_shards: self.finalize_shards,
         }
     }
 
@@ -74,9 +87,13 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_source_status_history_entries: usize::cast_from(
                 proto.keep_n_source_status_history_entries,
             ),
+            keep_n_sink_status_history_entries: usize::cast_from(
+                proto.keep_n_sink_status_history_entries,
+            ),
             upsert_rocksdb_tuning_config: proto
                 .upsert_rocksdb_tuning_config
                 .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
+            finalize_shards: proto.finalize_shards,
         })
     }
 }
