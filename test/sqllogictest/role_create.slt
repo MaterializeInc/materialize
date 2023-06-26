@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 # Loosely based on https://github.com/postgres/postgres/blob/master/src/test/regress/expected/create_role.out
+# We have replaced role attributes with system privileges so we had to make a lot of changes to
+# this test to reflect that.
 
 mode cockroach
 
@@ -25,6 +27,11 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 CREATE ROLE regress_role_admin CREATEDB CREATECLUSTER CREATEROLE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB, CREATECLUSTER, CREATEROLE ON SYSTEM TO regress_role_admin;
 ----
 COMPLETE 0
 
@@ -49,6 +56,11 @@ CREATE ROLE regress_role_limited_admin CREATEROLE;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO regress_role_limited_admin;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 CREATE ROLE regress_role_normal;
 ----
 COMPLETE 0
@@ -61,14 +73,12 @@ db error: ERROR: SUPERUSER attribute is not supported, for more information cons
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createdb CREATEDB;
 ----
-db error: ERROR: permission denied to create role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to create role with attribute CREATEDB
+db error: ERROR: permission denied for SYSTEM
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createcluster CREATECLUSTER;
 ----
-db error: ERROR: permission denied to create role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to create role with attribute CREATECLUSTER
+db error: ERROR: permission denied for SYSTEM
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_role_limited;
@@ -78,14 +88,12 @@ COMPLETE 0
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 ALTER ROLE regress_role_limited CREATEDB;
 ----
-db error: ERROR: permission denied to alter role with attribute CREATEDB
-DETAIL: You must have the CREATEDB attribute to alter role with attribute CREATEDB
+db error: ERROR: permission denied for SYSTEM
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 ALTER ROLE regress_role_limited CREATECLUSTER;
 ----
-db error: ERROR: permission denied to alter role with attribute CREATECLUSTER
-DETAIL: You must have the CREATECLUSTER attribute to alter role with attribute CREATECLUSTER
+db error: ERROR: permission denied for SYSTEM
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_createdb CREATEDB;

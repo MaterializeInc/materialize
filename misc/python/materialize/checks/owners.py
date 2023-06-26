@@ -22,6 +22,8 @@ class Owners(Check):
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
             GRANT CREATE ON CLUSTER default TO {role}
+            $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            ALTER ROLE {role} CREATEDB CREATECLUSTER
             $ postgres-execute connection=postgres://{role}@materialized:6875/materialize
             CREATE DATABASE owner_db{i}
             CREATE SCHEMA owner_schema{i}
@@ -89,7 +91,12 @@ class Owners(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            "> CREATE ROLE owner_role_01 CREATEDB CREATECLUSTER"
+            dedent(
+                """
+                > CREATE ROLE owner_role_01
+                > GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
+                """
+            )
             + self._create_objects("owner_role_01", 1, expensive=True)
         )
 
@@ -98,10 +105,20 @@ class Owners(Check):
             Testdrive(s)
             for s in [
                 self._create_objects("owner_role_01", 2)
-                + "> CREATE ROLE owner_role_02 CREATEDB CREATECLUSTER",
+                + dedent(
+                    """
+                    > CREATE ROLE owner_role_02
+                    > GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
+                    """
+                ),
                 self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_02", 4)
-                + "> CREATE ROLE owner_role_03 CREATEDB CREATECLUSTER",
+                + dedent(
+                    """
+                    > CREATE ROLE owner_role_03
+                    > GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
+                    """
+                ),
             ]
         ]
 

@@ -342,7 +342,7 @@ impl State {
         // Alter materialize user with all attributes.
         inner_client
             .batch_execute(&format!(
-                "ALTER ROLE {} WITH CREATEDB CREATECLUSTER CREATEROLE",
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
                 self.materialize_user
             ))
             .await?;

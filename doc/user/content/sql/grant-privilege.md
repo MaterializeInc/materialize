@@ -16,8 +16,6 @@ privilege.
 
 {{< alpha />}}
 
-{{< warning >}} The `CREATEROLE`, `CREATEDB`, and `CREATECLUSTER` privileges are not implemented yet. {{< /warning >}}
-
 ## Syntax
 
 {{< diagram "grant-privilege.svg" >}}

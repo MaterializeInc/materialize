@@ -93,7 +93,6 @@ tests_without_views=(
     test/sqllogictest/role_membership.slt
     test/sqllogictest/schemas.slt
     test/sqllogictest/subquery.slt
-    test/sqllogictest/system_privileges.slt
     test/sqllogictest/table_func.slt
     test/sqllogictest/temporal.slt
     test/sqllogictest/timedomain.slt

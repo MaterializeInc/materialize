@@ -22,11 +22,6 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
-----
-COMPLETE 0
-
 # Test mz_aclitem type and functions
 
 statement ok
@@ -185,6 +180,11 @@ NULL
 
 # Test default privileges
 
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
+----
+COMPLETE 0
+
 ## Create some helper views
 
 statement ok
@@ -262,6 +262,11 @@ SELECT privileges::text FROM mz_system_privileges
 mz_system=RBN/mz_system
 
 ## Test user created objects
+
+simple conn=mz_system,user=mz_system
+GRANT ALL PRIVILEGES ON SYSTEM TO materialize;
+----
+COMPLETE 0
 
 statement ok
 CREATE TABLE t (a INT);
@@ -1849,6 +1854,11 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 sch  materialize=UC/materialize
 
 ## System
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
+----
+COMPLETE 0
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')

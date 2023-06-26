@@ -26,7 +26,8 @@ class DefaultPrivileges(Check):
             > SET DATABASE = defpriv_db
             > CREATE SCHEMA defpriv_schema
             > SET SCHEMA defpriv_schema
-            > CREATE ROLE defpriv_role1 CREATEDB CREATECLUSTER
+            > CREATE ROLE defpriv_role1
+            > GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role1
             > CREATE TABLE defpriv_table1 (c int)
             """
             )
@@ -40,14 +41,16 @@ class DefaultPrivileges(Check):
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role1;
-                > CREATE ROLE defpriv_role2 CREATEDB CREATECLUSTER
+                > CREATE ROLE defpriv_role2
+                > GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role2
                 > CREATE TABLE defpriv_table2 (c int)
                 """,
                 """
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role2;
-                > CREATE ROLE defpriv_role3 CREATEDB CREATECLUSTER
+                > CREATE ROLE defpriv_role3
+                > GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role3
                 > CREATE TABLE defpriv_table3 (c int)
                 """,
             ]

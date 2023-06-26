@@ -73,7 +73,7 @@ class ConfigureMz(MzcomposeAction):
         input = dedent(
             """
             # Run any query to have the materialize user implicitly created if
-            # it didn't exist yet. Required for the ALTER ROLE later.
+            # it didn't exist yet. Required for the GRANT later.
             > SELECT 1;
             1
             """
@@ -92,9 +92,7 @@ class ConfigureMz(MzcomposeAction):
         if e.current_mz_version >= MzVersion(0, 45, 0):
             # Since we already test with RBAC enabled, we have to give materialize
             # user the relevant attributes so the existing tests keep working.
-            system_settings.add(
-                "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
-            )
+            system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
         if e.current_mz_version >= MzVersion(0, 47, 0):
             system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")

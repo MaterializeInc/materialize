@@ -24,7 +24,7 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE ROLE joe CREATEDB CREATECLUSTER;
+CREATE ROLE joe;
 ----
 COMPLETE 0
 
@@ -39,7 +39,7 @@ GRANT other TO joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE ROLE child CREATEDB CREATECLUSTER;
+CREATE ROLE child;
 ----
 COMPLETE 0
 
@@ -95,6 +95,70 @@ REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+# CREATE DATABASE
+
+simple conn=joe,user=joe
+CREATE DATABASE d;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE DATABASE d;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE d;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE DATABASE d1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# CREATE CLUSTER
+
+simple conn=joe,user=joe
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
 # CREATE SCHEMA
 
 simple conn=joe,user=joe
@@ -127,6 +191,120 @@ REVOKE CREATE ON DATABASE materialize FROM joe;
 ----
 COMPLETE 0
 
+# CREATE ROLE
+
+simple conn=joe,user=joe
+CREATE ROLE r;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE ROLE r;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE ROLE r;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE ROLE r1;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE ROLE rr CREATEDB;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE ROLE rr CREATEDB;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE ROLE rr CREATEDB;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE ROLE rr1 CREATEDB;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE, CREATEDB ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# ALTER ROLE
+
+simple conn=joe,user=joe
+ALTER ROLE r NOCREATEDB;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+ALTER ROLE r1 NOCREATEDB;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE r NOCREATEDB;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+ALTER ROLE r1 NOCREATEDB;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE rr CREATECLUSTER;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+ALTER ROLE rr1 CREATECLUSTER;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE rr CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+ALTER ROLE rr1 CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE, CREATECLUSTER ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
 # CREATE SOURCE
 
 simple conn=joe,user=joe
@@ -141,6 +319,21 @@ db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE SOURCE s3 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
 ----
 COMPLETE 0
 
@@ -186,6 +379,11 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -578,6 +776,30 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+# DROP DATABASE
+
+simple conn=joe,user=joe
+DROP DATABASE d;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP DATABASE d1;
+----
+COMPLETE 0
+
+# DROP CLUSTER
+
+simple conn=joe,user=joe
+DROP CLUSTER c;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP CLUSTER c1;
+----
+COMPLETE 0
+
 # DROP SCHEMA
 
 simple conn=joe,user=joe
@@ -607,6 +829,33 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON DATABASE materialize FROM joe;
+----
+COMPLETE 0
+
+# DROP ROLE
+
+simple conn=joe,user=joe
+DROP ROLE r, rr;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+DROP ROLE r1, rr1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE r, rr;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP ROLE r1, rr1;
 ----
 COMPLETE 0
 
@@ -2259,6 +2508,11 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
@@ -2271,6 +2525,11 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2318,8 +2577,18 @@ COMPLETE 0
 
 ## Cluster
 
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -2377,8 +2646,18 @@ COMPLETE 0
 
 ## Database
 
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE DATABASE db;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2476,12 +2755,22 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
-# GRANT/REVOKE
+# GRANT/REVOKE privilege
 
 ## Cluster
 
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2502,8 +2791,18 @@ COMPLETE 0
 
 ## Database
 
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE DATABASE db;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2633,6 +2932,98 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+# GRANT/REVOKE role
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r1
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r2
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r3
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT r1, r2 TO joe
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+GRANT r2 TO r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+GRANT r2 TO r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+GRANT r2 TO r1;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+GRANT r3 TO r1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+REVOKE r2 FROM r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+REVOKE r3 FROM r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+REVOKE r2 FROM r1;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+REVOKE r3 FROM r1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE r1, r2, r3;
 ----
 COMPLETE 0
 

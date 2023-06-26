@@ -99,22 +99,42 @@ statement ok
 CREATE ROLE r5
 
 statement ok
-CREATE ROLE r6 CREATECLUSTER CREATEDB
+CREATE ROLE r6
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r6;
+----
+COMPLETE 0
 
 statement ok
-CREATE ROLE r7 CREATECLUSTER CREATEDB
+CREATE ROLE r7
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r7;
+----
+COMPLETE 0
 
 statement ok
 CREATE ROLE r8
 
 statement ok
-CREATE ROLE r9 CREATECLUSTER CREATEDB
+CREATE ROLE r9
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r9;
+----
+COMPLETE 0
 
 statement ok
 CREATE ROLE r10
 
 statement ok
-CREATE ROLE r11 CREATECLUSTER CREATEDB
+CREATE ROLE r11
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r11;
+----
+COMPLETE 0
 
 statement ok
 CREATE ROLE r12
@@ -4750,8 +4770,18 @@ DROP ROLE r4
 statement ok
 DROP ROLE r5
 
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r6;
+----
+COMPLETE 0
+
 statement ok
 DROP ROLE r6
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r7;
+----
+COMPLETE 0
 
 statement ok
 DROP ROLE r7
@@ -4759,11 +4789,21 @@ DROP ROLE r7
 statement ok
 DROP ROLE r8
 
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r9;
+----
+COMPLETE 0
+
 statement ok
 DROP ROLE r9
 
 statement ok
 DROP ROLE r10
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r11;
+----
+COMPLETE 0
 
 statement ok
 DROP ROLE r11
