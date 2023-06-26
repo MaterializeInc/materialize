@@ -474,33 +474,58 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     fn describe(&self, extended: bool) -> String {
         match (extended, self) {
             (false, SpineBatch::Merged(x)) => format!(
-                "{:?}{:?}{}",
-                x.desc.lower().elements(),
-                x.desc.upper().elements(),
-                x.len
+                "[{}-{}]{:?}{:?}{}",
+                x.id.0,
+                x.id.1,
+                x.batch.desc.lower().elements(),
+                x.batch.desc.upper().elements(),
+                x.batch.len
             ),
-            (false, SpineBatch::Fueled { parts, desc, len }) => format!(
-                "{:?}{:?}{}/{}",
+            (
+                false,
+                SpineBatch::Fueled {
+                    id,
+                    parts,
+                    desc,
+                    len,
+                },
+            ) => format!(
+                "[{}-{}]{:?}{:?}{}/{}",
+                id.0,
+                id.1,
                 desc.lower().elements(),
                 desc.upper().elements(),
                 parts.len(),
                 len
             ),
             (true, SpineBatch::Merged(b)) => format!(
-                "{:?}{:?}{:?} {}{}",
-                b.desc.lower().elements(),
-                b.desc.upper().elements(),
-                b.desc.since().elements(),
-                b.len,
-                b.parts
+                "[{}-{}]{:?}{:?}{:?} {}{}",
+                b.id.0,
+                b.id.1,
+                b.batch.desc.lower().elements(),
+                b.batch.desc.upper().elements(),
+                b.batch.desc.since().elements(),
+                b.batch.len,
+                b.batch
+                    .parts
                     .iter()
                     .map(|x| format!(" {}", x.key))
                     .collect::<Vec<_>>()
                     .join(""),
             ),
-            (true, SpineBatch::Fueled { desc, parts, len }) => {
+            (
+                true,
+                SpineBatch::Fueled {
+                    id,
+                    desc,
+                    parts,
+                    len,
+                },
+            ) => {
                 format!(
-                    "{:?}{:?}{:?} {}/{}{}",
+                    "[{}-{}]{:?}{:?}{:?} {}/{}{}",
+                    id.0,
+                    id.1,
                     desc.lower().elements(),
                     desc.upper().elements(),
                     desc.since().elements(),
@@ -508,7 +533,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                     len,
                     parts
                         .iter()
-                        .flat_map(|x| x.parts.iter())
+                        .flat_map(|x| x.batch.parts.iter())
                         .map(|x| format!(" {}", x.key))
                         .collect::<Vec<_>>()
                         .join("")

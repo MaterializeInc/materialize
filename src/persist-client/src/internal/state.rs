@@ -171,7 +171,7 @@ pub struct HollowBatchPart {
 /// A [Batch] but with the updates themselves stored externally.
 ///
 /// [Batch]: differential_dataflow::trace::BatchReader
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
@@ -189,11 +189,36 @@ pub struct HollowBatch<T> {
     pub runs: Vec<usize>,
 }
 
+impl<T: Debug> Debug for HollowBatch<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let HollowBatch {
+            desc,
+            parts,
+            len,
+            runs,
+        } = self;
+        f.debug_struct("HollowBatch")
+            .field(
+                "desc",
+                &(
+                    desc.lower().elements(),
+                    desc.upper().elements(),
+                    desc.since().elements(),
+                ),
+            )
+            .field("parts", &parts)
+            .field("len", &len)
+            .field("runs", &runs)
+            .finish()
+    }
+}
+
 impl<T: Serialize> serde::Serialize for HollowBatch<T> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let HollowBatch {
             desc,
             len,
+            // Both parts and runs are covered by the self.runs call.
             parts: _,
             runs: _,
         } = self;
