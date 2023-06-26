@@ -16,7 +16,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
-use mz_sql::catalog::ObjectType;
+use mz_sql::catalog::SystemObjectType;
 use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
 
@@ -103,7 +103,7 @@ pub enum AdapterNotice {
     },
     NonApplicablePrivilegeTypes {
         non_applicable_privileges: AclMode,
-        object_type: ObjectType,
+        object_type: SystemObjectType,
         object_name: String,
     },
     PlanNotice(PlanNotice),

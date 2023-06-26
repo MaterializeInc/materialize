@@ -1087,6 +1087,27 @@ impl From<&GlobalId> for ObjectId {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum SystemObjectId {
+    Object(ObjectId),
+    System,
+}
+
+impl SystemObjectId {
+    pub fn object_id(&self) -> Option<&ObjectId> {
+        match self {
+            SystemObjectId::Object(object_id) => Some(object_id),
+            SystemObjectId::System => None,
+        }
+    }
+}
+
+impl From<ObjectId> for SystemObjectId {
+    fn from(id: ObjectId) -> Self {
+        SystemObjectId::Object(id)
+    }
+}
+
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,

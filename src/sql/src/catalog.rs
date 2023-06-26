@@ -42,7 +42,7 @@ use uuid::Uuid;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -168,6 +168,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Gets all roles.
     fn get_roles(&self) -> Vec<&dyn CatalogRole>;
 
+    /// Gets the id of the `mz_system` role.
+    fn mz_system_role_id(&self) -> RoleId;
+
     /// Collects all role IDs that `id` is transitively a member of.
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId>;
 
@@ -236,6 +239,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Gets all cluster replicas.
     fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
 
+    /// Gets all system privileges.
+    fn get_system_privileges(&self) -> &PrivilegeMap;
+
     /// Gets all default privileges.
     fn get_default_privileges(
         &self,
@@ -296,13 +302,19 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
 
     /// Returns all possible privileges associated with an object type.
-    fn all_object_privileges(&self, object_type: ObjectType) -> AclMode;
+    fn all_object_privileges(&self, object_type: SystemObjectType) -> AclMode;
 
     /// Returns the object type of `object_id`.
     fn get_object_type(&self, object_id: &ObjectId) -> ObjectType;
 
     /// Returns the name of `object_id`. For use only in error messages and notices.
     fn get_object_name(&self, object_id: &ObjectId) -> String;
+
+    /// Returns the system object type of `id`.
+    fn get_system_object_type(&self, id: &SystemObjectId) -> SystemObjectType;
+
+    /// Returns the name of `id`. For use only in error messages and notices.
+    fn get_system_object_name(&self, id: &SystemObjectId) -> String;
 
     /// Returns the minimal qualification required to unambiguously specify
     /// `qualified_name`.
@@ -1385,6 +1397,34 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+/// The types of objects in the system.
+pub enum SystemObjectType {
+    /// Catalog object type.
+    Object(ObjectType),
+    /// Entire system.
+    System,
+}
+
+impl SystemObjectType {
+    /// Reports if the object type can be treated as a relation.
+    pub fn is_relation(&self) -> bool {
+        match self {
+            SystemObjectType::Object(object_type) => object_type.is_relation(),
+            SystemObjectType::System => false,
+        }
+    }
+}
+
+impl Display for SystemObjectType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SystemObjectType::Object(object_type) => std::fmt::Display::fmt(&object_type, f),
+            SystemObjectType::System => f.write_str("SYSTEM"),
         }
     }
 }
