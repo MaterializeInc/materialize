@@ -617,7 +617,6 @@ pub fn describe_alter_default_privileges(
     Ok(StatementDesc::new(None))
 }
 
-/// TODO(jkosh44) Handle system privileges.
 pub fn plan_alter_default_privileges(
     scx: &StatementContext,
     AlterDefaultPrivilegesStatement {
