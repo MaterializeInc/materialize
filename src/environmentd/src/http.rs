@@ -720,11 +720,7 @@ async fn auth(
             };
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
             User {
-                external_metadata: Some(ExternalUserMetadata {
-                    user_id: claims.best_user_id(),
-                    group_id: claims.tenant_id,
-                    admin: claims.admin(frontegg.admin_role()),
-                }),
+                external_metadata: Some(ExternalUserMetadata::from(&claims)),
                 name: claims.email,
             }
         }

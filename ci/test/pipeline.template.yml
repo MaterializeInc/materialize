@@ -154,9 +154,10 @@ steps:
       queue: builder-linux-x86_64
 
   - id: miri-test
-    label: Miri test
+    label: Miri test %n
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     inputs: [src]
+    parallelism: 2
     timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
@@ -546,7 +547,7 @@ steps:
           args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres, --check=PgCdc]
 
   - id: cloudtest
-    label: Cloudtest
+    label: Cloudtest %n
     depends_on: build-x86_64
     parallelism: 3
     timeout_in_minutes: 30
