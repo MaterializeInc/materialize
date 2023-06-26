@@ -261,6 +261,28 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
         ret
     }
+
+    #[allow(dead_code)]
+    pub fn describe(&self) -> String {
+        let mut s = Vec::new();
+        for b in self.spine.merging.iter().rev() {
+            match b {
+                MergeState::Vacant
+                | MergeState::Single(None)
+                | MergeState::Double(MergeVariant::Complete(None)) => s.push("_".to_owned()),
+                MergeState::Single(Some(x))
+                | MergeState::Double(MergeVariant::Complete(Some(x))) => s.push(x.describe(false)),
+                MergeState::Double(MergeVariant::InProgress(b0, b1, m)) => s.push(format!(
+                    "f{}/{}({}+{})",
+                    m.remaining_work,
+                    b0.len() + b1.len(),
+                    b0.describe(false),
+                    b1.describe(false),
+                )),
+            }
+        }
+        s.join(" ")
+    }
 }
 
 /// A log of what transitively happened during a Spine operation: e.g.
@@ -446,6 +468,52 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 }
             }
             _ => ApplyMergeResult::NotAppliedNoMatch,
+        }
+    }
+
+    fn describe(&self, extended: bool) -> String {
+        match (extended, self) {
+            (false, SpineBatch::Merged(x)) => format!(
+                "{:?}{:?}{}",
+                x.desc.lower().elements(),
+                x.desc.upper().elements(),
+                x.len
+            ),
+            (false, SpineBatch::Fueled { parts, desc, len }) => format!(
+                "{:?}{:?}{}/{}",
+                desc.lower().elements(),
+                desc.upper().elements(),
+                parts.len(),
+                len
+            ),
+            (true, SpineBatch::Merged(b)) => format!(
+                "{:?}{:?}{:?} {}{}",
+                b.desc.lower().elements(),
+                b.desc.upper().elements(),
+                b.desc.since().elements(),
+                b.len,
+                b.parts
+                    .iter()
+                    .map(|x| format!(" {}", x.key))
+                    .collect::<Vec<_>>()
+                    .join(""),
+            ),
+            (true, SpineBatch::Fueled { desc, parts, len }) => {
+                format!(
+                    "{:?}{:?}{:?} {}/{}{}",
+                    desc.lower().elements(),
+                    desc.upper().elements(),
+                    desc.since().elements(),
+                    parts.len(),
+                    len,
+                    parts
+                        .iter()
+                        .flat_map(|x| x.parts.iter())
+                        .map(|x| format!(" {}", x.key))
+                        .collect::<Vec<_>>()
+                        .join("")
+                )
+            }
         }
     }
 }
@@ -1220,38 +1288,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let mut s = String::new();
         datadriven.trace.spine.map_batches(|b| {
-            let b = match b {
-                SpineBatch::Merged(b) => format!(
-                    "{:?}{:?}{:?} {}{}\n",
-                    b.desc.lower().elements(),
-                    b.desc.upper().elements(),
-                    b.desc.since().elements(),
-                    b.len,
-                    b.parts
-                        .iter()
-                        .map(|x| format!(" {}", x.key))
-                        .collect::<Vec<_>>()
-                        .join(""),
-                ),
-                SpineBatch::Fueled { desc, parts, len } => {
-                    assert_eq!(*len, parts.iter().map(|x| x.len).sum::<usize>());
-                    format!(
-                        "{:?}{:?}{:?} {}/{}{}\n",
-                        desc.lower().elements(),
-                        desc.upper().elements(),
-                        desc.since().elements(),
-                        parts.len(),
-                        len,
-                        parts
-                            .iter()
-                            .flat_map(|x| x.parts.iter())
-                            .map(|x| format!(" {}", x.key))
-                            .collect::<Vec<_>>()
-                            .join("")
-                    )
-                }
-            };
-            s.push_str(&b);
+            s.push_str(b.describe(true).as_str());
+            s.push('\n');
         });
         Ok(s)
     }
