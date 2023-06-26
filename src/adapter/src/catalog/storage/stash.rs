@@ -362,6 +362,11 @@ pub async fn initialize(
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
+        proto::MzAclItem {
+            grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
+        },
         rbac::owner_privilege(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
