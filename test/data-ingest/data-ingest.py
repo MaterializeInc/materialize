@@ -87,7 +87,7 @@ class PrintExecutor(Executor):
 
 
 class KafkaExecutor(Executor):
-    kafka_producer: Producer
+    producer: Producer
     kafka_topic: str
 
     def __init__(self):
@@ -110,7 +110,7 @@ class KafkaExecutor(Executor):
 
         # docker port data-ingest-kafka-1 9092
         producer_conf = {"bootstrap.servers": "kafka:9092"}
-        kafka_producer = Producer(producer_conf)
+        producer = Producer(producer_conf)
 
         # Have to copy
         self.kafka_topic = "testdrive-upsert-insert-2074592892"
@@ -120,15 +120,29 @@ class KafkaExecutor(Executor):
 
 
 class PgExecutor(Executor):
-    pg_conn: pg8000.Connection
+    conn: pg8000.Connection
 
     def __init__(self):
-        self.pg_conn = pg8000.connect(
+        self.conn = pg8000.connect(
             host="postgres", user="postgres", password="postgres"
         )
+        #with conn.cursor() as cur:
+        #    cur.execute("DROP TABLE IF EXISTS table1")
+        #    cur.execute("CREATE TABLE table1 (col1 int, col2 int)")
 
     def run(self, transactions: List[Transaction]):
-        pass
+        for transaction in transactions:
+            with self.conn.cursor() as cur:
+                for row_list in transaction.row_lists:
+                    for row in row_list.rows:
+                        if row.operation == Operation.INSERT or row.operation == Operation.UPSERT:
+                            #cur.execute(f"INSERT INTO table1 VALUES ({row.key}, {row.value}) ON CONFLICT (col1) DO UPDATE SET col2 = EXCLUDED.col2")
+                            cur.execute("INSERT INTO table1 VALUES (1, 2) ON CONFLICT (col1) DO UPDATE SET col2 = EXCLUDED.col2")
+                        elif row.operation == Operation.DELETE:
+                            cur.execute(f"DELETE FROM table1 WHERE col1 = {row.key}")
+                        else:
+                            raise ValueError(f"Unexpected operation {row.operation}")
+        self.conn.commit()
 
 
 class Records(Enum):

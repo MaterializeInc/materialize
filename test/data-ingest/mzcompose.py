@@ -92,15 +92,53 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
         > CREATE SOURCE upsert_insert
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-insert-${testdrive.seed}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE UPSERT
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-insert-${testdrive.seed}')
+          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+          ENVELOPE UPSERT
 
         > CREATE MATERIALIZED VIEW upsert_insert_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert;
+
+        > CREATE SECRET pgpass1 AS 'postgres';
+
+        > CREATE CONNECTION pg1 FOR POSTGRES
+          HOST 'postgres',
+          DATABASE postgres,
+          USER postgres1,
+          PASSWORD SECRET pgpass1
+
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
+        CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
+        ALTER USER postgres1 WITH replication;
+        DROP PUBLICATION IF EXISTS postgres_source;
+
+        DROP TABLE IF EXISTS table1;
+
+        CREATE TABLE table1 (col1 INT, col2 INT, PRIMARY KEY (col1));
+
+        ALTER TABLE table1 REPLICA IDENTITY FULL;
+
+        CREATE PUBLICATION postgres_source FOR ALL TABLES;
+
+        > CREATE SOURCE postgres_source1
+          FROM POSTGRES CONNECTION pg1
+          (PUBLICATION 'postgres_source')
+          FOR TABLES (table1 AS pg_table1);
+
+        > CREATE DEFAULT INDEX ON pg_table1;
         """
         )
     )
 
     c.run("data-ingest")
+
+    c.testdrive(
+        dedent(
+            """
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            SELECT * from table1;
+
+            > SELECT * FROM pg_table1
+            1 2
+            """))
 
     c.down(destroy_volumes=True)
