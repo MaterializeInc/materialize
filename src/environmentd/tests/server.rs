@@ -262,11 +262,7 @@ fn test_http_sql() {
 
     datadriven::walk("tests/testdata/http", |f| {
         let server = util::start_server(util::Config::default()).unwrap();
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
+        let ws_url = server.ws_addr();
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",
             server.inner.http_local_addr()
@@ -988,11 +984,7 @@ fn test_max_request_size() {
     {
         let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
+        let ws_url = server.ws_addr();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
         util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json =
@@ -1060,11 +1052,7 @@ fn test_max_statement_batch_size() {
 
     // ws
     {
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
+        let ws_url = server.ws_addr();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
         util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
@@ -1112,11 +1100,7 @@ fn test_ws_passes_options() {
     let server = util::start_server(util::Config::default()).unwrap();
 
     // Create our WebSocket.
-    let ws_url = Url::parse(&format!(
-        "ws://{}/api/experimental/sql",
-        server.inner.http_local_addr()
-    ))
-    .unwrap();
+    let ws_url = server.ws_addr();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     let options = BTreeMap::from([(
         "application_name".to_string(),
@@ -1163,11 +1147,7 @@ fn test_ws_notifies_for_bad_options() {
     let server = util::start_server(util::Config::default()).unwrap();
 
     // Create our WebSocket.
-    let ws_url = Url::parse(&format!(
-        "ws://{}/api/experimental/sql",
-        server.inner.http_local_addr()
-    ))
-    .unwrap();
+    let ws_url = server.ws_addr();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     let options = BTreeMap::from([("bad_var_name".to_string(), "i_do_not_exist".to_string())]);
     util::auth_with_ws(&mut ws, options).unwrap();
@@ -1296,12 +1276,7 @@ fn test_max_connections_on_all_interfaces() {
 
     let client = server.connect(postgres::NoTls).unwrap();
 
-    let ws_url: Url = Url::parse(&format!(
-        "ws://{}/api/experimental/sql",
-        server.inner.http_local_addr()
-    ))
-    .unwrap();
-
+    let ws_url = server.ws_addr();
     let http_url = Url::parse(&format!(
         "http://{}/api/sql",
         server.inner.http_local_addr()
@@ -1617,4 +1592,49 @@ fn test_leader_promotion_always_using_deploy_generation() {
             }
         );
     }
+}
+
+// Test that websockets observe cancellation.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_ws() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (i INT);").unwrap();
+
+    // Start a thread to perform the cancel while the SUBSCRIBE is running in this thread.
+    let handle = thread::spawn(move || {
+        // Wait for the subscription to start.
+        let conn_id = Retry::default()
+            .retry(|_| {
+                let conn_id: String = client
+                    .query_one(
+                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        &[],
+                    )?
+                    .get(0);
+                Ok::<_, postgres::Error>(conn_id)
+            })
+            .unwrap();
+
+        client
+            .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+            .unwrap();
+    });
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
+
+    loop {
+        let msg = ws.read_message().unwrap();
+        if let Ok(msg) = msg.into_text() {
+            if msg.contains("query canceled") {
+                break;
+            }
+        }
+    }
+    handle.join().unwrap();
 }
