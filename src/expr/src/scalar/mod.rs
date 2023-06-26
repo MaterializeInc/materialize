@@ -2124,8 +2124,6 @@ impl FilterCharacteristics {
             factor *= 0.9;
         }
 
-        println!("{self:?} has scaling factor {factor}");
-
         factor
     }
 }

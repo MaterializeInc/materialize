@@ -65,6 +65,7 @@ the information and rendering style of the generated explanation output.
 Modifier | Description
 ------|-----
 **arity** | Annotate each subplan with its number of produced columns. This is useful due to the use of offset-based column names.
+**cardinality** | Annotate each subplan with a symbolic estimate of its cardinality.
 **join_impls** | Render details about the implementation strategy of optimized MIR `Join` nodes.
 **keys** | Annotate each subplan with its unique keys.
 **types** | Annotate each subplan with its inferred type.

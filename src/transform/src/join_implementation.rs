@@ -213,10 +213,6 @@ impl JoinImplementation {
                 }
             };
 
-            // TODO(mgree): debugging...
-            if have_stats_for_all_inputs {
-                println!("computing join with non-trivial stats {cardinality_stats:?}");
-            }
             // The first fundamental question is whether we should employ a delta query or not.
             //
             // Here we conservatively use the rule that if sufficient arrangements exist we will
@@ -326,7 +322,6 @@ impl JoinImplementation {
                             .expect("positive and representable cardinality estimate"),
                     );
 
-                    println!("input {index} with symbolic cardinality {} adjusted cardinality {estimate}*{push_down_factor} = {estimate} rounds to {rounded} flattens to {flattened}", &symbolic_cardinalities[index]);
                     cardinalities.push(Some(flattened));
                 } else {
                     cardinalities.push(None);
@@ -909,7 +904,6 @@ fn optimize_orders(
         .collect::<Vec<_>>()
 }
 
-#[allow(dead_code)]
 struct Orderer<'a> {
     inputs: usize,
     equivalences: &'a [Vec<MirScalarExpr>],
@@ -999,6 +993,7 @@ impl<'a> Orderer<'a> {
         for index in 0..self.equivalences.len() {
             self.equivalences_active[index] = false;
         }
+
         // Introduce cross joins as a possibility.
         for input in 0..self.inputs {
             let cardinality = self.cardinalities[input];
@@ -1197,6 +1192,8 @@ impl<'a> Orderer<'a> {
                                         }
                                     }
                                 }
+
+                                // does the relation we're joining on have a unique key wrt what's already bound?
                                 let is_unique = self.unique_keys[rel].iter().any(|cols| {
                                     cols.iter().all(|c| {
                                         self.bound[rel].contains(&MirScalarExpr::Column(*c))

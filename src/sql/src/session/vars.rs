@@ -927,10 +927,10 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 
 pub const ENABLE_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_cardinality_estimates"),
-    value: &true,
+    value: &false,
     description:
         "User facing session boolean flag indicating whether to use cardinality estimates \
-    when planning optimizing queries (Materialize).",
+    when planning optimizing queries; Does not affect EXPLAIN WITH(cardinality) (Materialize).",
     internal: false,
 };
 
