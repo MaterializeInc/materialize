@@ -38,6 +38,7 @@ TimeZone                            UTC                     "Sets the time zone 
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
 emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
+enable_cardinality_estimates        off                     "User facing session boolean flag indicating whether to use cardinality estimates when planning optimizing queries; does not affect EXPLAIN WITH(cardinality) (Materialize)."
 auto_route_introspection_queries    on                      "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize)."
 enable_session_rbac_checks          off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 mz_version                          <VARIES>                "Shows the Materialize server version (Materialize)."

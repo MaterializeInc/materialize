@@ -930,7 +930,7 @@ pub const ENABLE_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     value: &false,
     description:
         "User facing session boolean flag indicating whether to use cardinality estimates \
-    when planning optimizing queries; Does not affect EXPLAIN WITH(cardinality) (Materialize).",
+    when planning optimizing queries; does not affect EXPLAIN WITH(cardinality) (Materialize).",
     internal: false,
 };
 
