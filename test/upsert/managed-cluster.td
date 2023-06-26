@@ -43,6 +43,8 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 > CREATE CONNECTION c_conn
   FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}'
 
+> DROP CLUSTER IF EXISTS storage_cluster CASCADE;
+
 > CREATE CLUSTER storage_cluster SIZE '2-2', REPLICATION FACTOR 1, DISK = true
 
 > CREATE SOURCE upsert
