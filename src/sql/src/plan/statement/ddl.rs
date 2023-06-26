@@ -397,14 +397,6 @@ pub fn plan_create_source(
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     let allowed_with_options = vec![CreateSourceOptionName::Size];
-    /*
-    if scx
-        .require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)
-        .is_ok()
-    {
-        allowed_with_options.push(CreateSourceOptionName::Disk);
-    }*/
-
     if let Some(op) = with_options
         .iter()
         .find(|op| !allowed_with_options.contains(&op.name))

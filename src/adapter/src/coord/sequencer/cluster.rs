@@ -621,8 +621,7 @@ impl Coordinator {
                 }
                 match &options.disk {
                     Set(d) => *disk = *d,
-                    // TODO(guswynn|pH14): this should be `disk_cluster_replicas_default`
-                    Reset => *disk = false,
+                    Reset => *disk = self.catalog.system_config().disk_cluster_replicas_default(),
                     Unchanged => {}
                 }
                 match &options.availability_zones {
