@@ -34,8 +34,8 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::command::{
-    Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse, Response,
-    StartupResponse,
+    AppendWebhookResponse, Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse,
+    Response, StartupResponse,
 };
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
@@ -225,6 +225,32 @@ impl Client {
     /// Returns the metrics associated with the adapter layer.
     pub fn metrics(&self) -> &Metrics {
         &self.metrics
+    }
+
+    pub async fn append_webhook(
+        &self,
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+    ) -> Result<Option<AppendWebhookResponse>, AdapterError> {
+        let (tx, rx) = oneshot::channel();
+
+        // Send our request.
+        self.send(Command::AppendWebhook {
+            database,
+            schema,
+            name,
+            conn_id,
+            tx,
+        });
+
+        // Using our one shot channel to get the result, returning an error if the sender dropped.
+        let response = rx.await.map_err(|_| {
+            AdapterError::Internal("failed to receive webhook response".to_string())
+        })?;
+
+        response
     }
 
     fn send(&self, cmd: Command) {
@@ -547,6 +573,7 @@ impl SessionClient {
             match cmd {
                 Command::Declare { .. } => typ = Some("declare"),
                 Command::Execute { .. } => typ = Some("execute"),
+                Command::AppendWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
                 | Command::Prepare { .. }
                 | Command::VerifyPreparedStatement { .. }
