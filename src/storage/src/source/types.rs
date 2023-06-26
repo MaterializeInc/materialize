@@ -314,8 +314,8 @@ impl SourcePersistSinkMetrics {
 pub struct SourceMetrics {
     /// Value of the capability associated with this source
     pub(crate) capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    /// The resume_upper for a source.
-    pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    /// The as_of for a source.
+    pub(crate) as_of: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Per-partition Prometheus metrics.
     pub(crate) partition_metrics: BTreeMap<PartitionId, PartitionMetrics>,
     source_name: String,
@@ -341,9 +341,9 @@ impl SourceMetrics {
                 .source_specific
                 .capability
                 .get_delete_on_drop_gauge(labels.to_vec()),
-            resume_upper: base
+            as_of: base
                 .source_specific
-                .resume_upper
+                .as_of
                 .get_delete_on_drop_gauge(vec![source_id.to_string()]),
             partition_metrics: Default::default(),
             source_name: source_name.to_string(),

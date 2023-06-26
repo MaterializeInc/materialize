@@ -236,7 +236,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             trace!(
                 %id,
                 "timely-{worker_id} initializing table reader with {} and {} tables to snapshot",
-                config.resume_upper.pretty(),
+                config.as_of.pretty(),
                 reader_snapshot_table_info.len()
             );
 

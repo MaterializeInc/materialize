@@ -270,7 +270,7 @@ where
                 let async_storage_worker = Rc::clone(&worker.storage_state.async_worker);
                 let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
-                let source_resumption_frontier = std::iter::once((
+                let export_resume_uppers = std::iter::once((
                     id,
                     match &desc.connection {
                         GenericSourceConnection::Kafka(c) => minimum_frontier(c),
@@ -308,8 +308,8 @@ where
                                 remap_collection_id: GlobalId::User(99),
                             },
                         // TODO: test resumption as well!
-                        resumption_frontier: Antichain::from_elem(Timestamp::minimum()),
-                        source_resumption_frontier,
+                        ingestion_as_of: Antichain::from_elem(Timestamp::minimum()),
+                        export_resume_uppers,
                     },
                 );
             }

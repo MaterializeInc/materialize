@@ -64,7 +64,7 @@ where
     // don't produce any real data.
     let (_resume_output, resume_stream) = resume_op.new_output();
 
-    let mut upper = Antichain::from_elem(Timestamp::minimum());
+    let mut resumption_frontier = Antichain::from_elem(Timestamp::minimum());
 
     let button = resume_op.build(move |mut capabilities| async move {
         if !active_worker {
@@ -84,21 +84,20 @@ where
         let mut calc =
             ResumptionFrontierCalculator::new(&persist_clients, ingestion_description).await;
 
-        while !upper.is_empty() {
+        while !resumption_frontier.is_empty() {
             interval.tick().await;
 
             // Get a new lower bound for the resumption frontier
-            let new_upper = calc.calculate_ingestion_as_of().await;
+            let as_of = calc.calculate_ingestion_as_of().await;
 
-            if PartialOrder::less_than(&upper, &new_upper) {
+            if PartialOrder::less_than(&resumption_frontier, &as_of) {
                 tracing::debug!(
-                    resumption_frontier = ?new_upper,
-                    "resumption({id}) {worker_id}/{worker_count}: calculated \
-                    new resumption frontier",
+                    as_of = ?as_of,
+                    "resumption({id}) {worker_id}/{worker_count}: calculated new as of",
                 );
 
-                cap_set.downgrade(&*new_upper);
-                upper = new_upper;
+                cap_set.downgrade(&*as_of);
+                resumption_frontier = as_of;
             }
         }
     });

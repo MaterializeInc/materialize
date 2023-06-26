@@ -205,7 +205,7 @@ impl<T: TimestampManipulation + Codec64 + Display> AsyncStorageWorker<T> {
                         }
 
                         // Create a specialized description to be able to call the generic method
-                        let source_resume_upper = match ingestion.desc.connection {
+                        let export_resume_uppers = match ingestion.desc.connection {
                             GenericSourceConnection::Kafka(_) => {
                                 let uppers = reclock_resume_frontier::<KafkaSourceConnection, _>(
                                     &persist_clients,
@@ -252,7 +252,7 @@ impl<T: TimestampManipulation + Codec64 + Display> AsyncStorageWorker<T> {
                                 id,
                                 ingestion,
                                 ingestion_as_of,
-                                source_resume_upper,
+                                export_resume_uppers,
                             ),
                         );
 
@@ -273,7 +273,7 @@ impl<T: TimestampManipulation + Codec64 + Display> AsyncStorageWorker<T> {
     }
 
     /// Calculates a recent resume upper for the given `IngestionDescription`.
-    pub fn calculate_resume_upper(
+    pub fn calculate_as_of(
         &self,
         id: GlobalId,
         ingestion: IngestionDescription<CollectionMetadata>,

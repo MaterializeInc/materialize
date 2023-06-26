@@ -73,7 +73,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     dataflow_debug_name: &String,
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<mz_repr::Timestamp>,
+    as_of: Antichain<mz_repr::Timestamp>,
     source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
@@ -114,7 +114,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         now: storage_state.now.clone(),
         // TODO(guswynn): avoid extra clones here
         base_metrics: storage_state.source_metrics.clone(),
-        resume_upper: resume_upper.clone(),
+        as_of: as_of.clone(),
         source_resume_upper,
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
@@ -211,7 +211,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             id,
             ok_source,
             description.clone(),
-            resume_upper.clone(),
+            as_of.clone(),
             error_collections,
             storage_state,
             base_source_config.clone(),
@@ -232,7 +232,7 @@ fn render_source_stream<G>(
     id: GlobalId,
     ok_source: SourceType<G>,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<G::Timestamp>,
+    as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
@@ -330,8 +330,6 @@ where
                                 .expect("dependent source missing from ingestion description")
                                 .clone();
                             let persist_clients = Arc::clone(&storage_state.persist_clients);
-                            let upper_ts = resume_upper.as_option().copied().unwrap();
-                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
@@ -363,19 +361,13 @@ where
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
 
-                    let upper_ts = resume_upper
-                        .as_option()
-                        .expect("resuming an already finished ingestion")
-                        .clone();
-                    let (previous, previous_token) = if Timestamp::minimum() < upper_ts {
-                        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-
+                    let (previous, previous_token) = if *as_of != [Timestamp::minimum()] {
                         let (stream, tok) = persist_source::persist_source_core(
                             scope,
                             id,
                             persist_clients,
                             description.ingestion_metadata,
-                            Some(as_of),
+                            Some(as_of.clone()),
                             Antichain::new(),
                             None,
                             None,
@@ -386,6 +378,15 @@ where
                     } else {
                         (Collection::new(empty(scope)), None)
                     };
+
+                    // TODO: can we rewrite the upsert logic in terms of as of rather than resume_upper?
+                    let resume_upper_ts = as_of
+                        .as_option()
+                        .cloned()
+                        .expect("not closed")
+                        .step_forward();
+                    let resume_upper = Antichain::from_elem(resume_upper_ts);
+
                     let (upsert, health_update) = crate::render::upsert::upsert(
                         &upsert_input,
                         upsert_envelope.clone(),

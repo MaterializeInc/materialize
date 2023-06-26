@@ -1414,8 +1414,8 @@ mod tests {
             partitioned_frontier([(0, MzOffset::from(5))])
         );
 
-        // (rewrite comment) If we compact too far, we get an error. Note we compact
-        // to the previous UPPER we were checking.
+        // If we compact too far and start reading at the since, we get the
+        // minimum timestamp.
         remap_read_handle
             .downgrade_since(&Antichain::from_elem(2001.into()))
             .await;

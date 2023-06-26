@@ -62,9 +62,10 @@ pub enum InternalStorageCommand {
         /// The description of the ingestion/source.
         ingestion_description: IngestionDescription<CollectionMetadata>,
         /// The frontier at which we should (re-)start ingestion.
-        resumption_frontier: Antichain<mz_repr::Timestamp>,
-        /// The frontier at which we should (re-)start ingestion in the source time domain.
-        source_resumption_frontier: BTreeMap<GlobalId, Vec<Row>>,
+        ingestion_as_of: Antichain<mz_repr::Timestamp>,
+        /// The frontier at which we should (re-)start ingestion in the source
+        /// time domain for each export.
+        export_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     },
     /// Render a sink dataflow.
     CreateSinkDataflow(

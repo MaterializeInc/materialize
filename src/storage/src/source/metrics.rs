@@ -29,7 +29,7 @@ use prometheus::core::{AtomicI64, GenericCounterVec};
 #[derive(Clone, Debug)]
 pub(super) struct SourceSpecificMetrics {
     pub(super) capability: UIntGaugeVec,
-    pub(super) resume_upper: IntGaugeVec,
+    pub(super) as_of: IntGaugeVec,
     /// A timestamp gauge representing forward progress
     /// in the data shard.
     pub(super) progress: IntGaugeVec,
@@ -51,8 +51,8 @@ impl SourceSpecificMetrics {
                 help: "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",
                 var_labels: ["topic", "source_id", "worker_id"],
             )),
-            resume_upper: registry.register(metric!(
-                name: "mz_resume_upper",
+            as_of: registry.register(metric!(
+                name: "mz_as_of",
                 // TODO(guswynn): should this also track the resumption frontier operator?
                 help: "The timestamp-domain resumption frontier chosen for a source's ingestion",
                 var_labels: ["source_id"],

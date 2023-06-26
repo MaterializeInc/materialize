@@ -121,8 +121,8 @@ pub struct RawSourceCreationConfig {
     pub base_metrics: SourceBaseMetrics,
     /// Storage Metadata
     pub storage_metadata: CollectionMetadata,
-    /// The upper frontier this source should resume ingestion at
-    pub resume_upper: Antichain<mz_repr::Timestamp>,
+    /// The frontier this source should resume ingestion at
+    pub as_of: Antichain<mz_repr::Timestamp>,
     /// For each source export, the upper frontier this source should resume ingestion at in the
     /// source time domain.
     ///
@@ -189,18 +189,13 @@ where
     let id = config.id;
     info!(
         %id,
-        resume_upper = %config.resume_upper.pretty(),
+        as_of = %config.as_of.pretty(),
         "timely-{worker_id} building source pipeline",
     );
     let (resume_stream, resume_token) =
         super::resumption::resumption_operator(scope, config.clone(), ingestion_description);
 
-    let reclock_follower = {
-        let upper_ts = config.resume_upper.as_option().copied().unwrap();
-        // Same value as our use of `derive_new_compaction_since`.
-        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        ReclockFollower::new(as_of)
-    };
+    let reclock_follower = ReclockFollower::new(config.as_of.clone());
 
     let (resume_tx, resume_rx) = tokio::sync::mpsc::unbounded_channel();
     let (source_tx, source_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -398,7 +393,7 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    resume_upper: Antichain<mz_repr::Timestamp>,
+    as_of: Antichain<mz_repr::Timestamp>,
     primary_source_id: GlobalId,
     health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
@@ -470,7 +465,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
             .collect();
 
         // Write the initial starting state to the status shard for all managed sources
-        if is_active_worker && !resume_upper.is_empty() {
+        if is_active_worker && !as_of.is_empty() {
             for state in health_states.values() {
                 if let Some((status_shard, persist_client)) = state.persist_details {
                     let status = HealthStatus::Starting;
@@ -684,7 +679,7 @@ where
         timestamp_interval,
         encoding: _,
         storage_metadata,
-        resume_upper,
+        as_of,
         source_resume_upper: _,
         base_metrics: _,
         now,
@@ -711,10 +706,6 @@ where
 
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
-        let upper_ts = resume_upper.as_option().copied().unwrap();
-
-        // Same value as our use of `derive_new_compaction_since`.
-        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
         let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
             storage_metadata.clone(),
@@ -843,7 +834,7 @@ where
         timestamp_interval: _,
         encoding: _,
         storage_metadata: _,
-        resume_upper,
+        as_of,
         source_resume_upper: _,
         base_metrics,
         now: _,
@@ -875,7 +866,7 @@ where
 
         let mut source_metrics = SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
 
-        source_metrics.resume_upper.set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
+        source_metrics.as_of.set(mz_persist_client::metrics::encode_ts_metric(&as_of));
 
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
