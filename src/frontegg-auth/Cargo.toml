@@ -12,6 +12,7 @@ base64 = "0.13.1"
 derivative = "2.2.0"
 jsonwebtoken = "8.2.0"
 mz-ore = { path = "../ore", features = ["network"] }
+mz-sql = { path = "../sql" }
 reqwest = { version = "0.11.13", features = ["json"] }
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.37"
