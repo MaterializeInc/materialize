@@ -224,7 +224,7 @@ SELECT * FROM cluster_privileges ORDER BY name
 default           =U/mz_system
 default           mz_system=UC/mz_system
 default           materialize=UC/mz_system
-default           mz_introspection=UC/mz_system
+default           mz_introspection=U/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
