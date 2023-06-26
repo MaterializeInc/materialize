@@ -125,7 +125,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "run",
                 "--profile=ci",
                 # Most tests don't use 100% of a CPU core, so run two tests per CPU.
-                f"--test-threads={cpu_count * 2}",
+                # TODO(def-): Reenable when #19931 is fixed
+                # f"--test-threads={cpu_count * 2}",
                 *args.args,
             ],
             env=env,

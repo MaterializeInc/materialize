@@ -967,22 +967,22 @@ def _wait_for_pg(
             )
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True
-            cur = conn.cursor()
-            cur.execute(query)
-            if expected == "any" and cur.rowcount == -1:
-                ui.progress(" success!", finish=True)
-                return
-            result = list(cur.fetchall())
-            if expected == "any" or result == expected:
-                if print_result:
-                    say(f"query result: {result}")
-                else:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                if expected == "any" and cur.rowcount == -1:
                     ui.progress(" success!", finish=True)
-                return
-            else:
-                say(
-                    f"host={host} port={port} did not return rows matching {expected} got: {result}"
-                )
+                    return
+                result = list(cur.fetchall())
+                if expected == "any" or result == expected:
+                    if print_result:
+                        say(f"query result: {result}")
+                    else:
+                        ui.progress(" success!", finish=True)
+                    return
+                else:
+                    say(
+                        f"host={host} port={port} did not return rows matching {expected} got: {result}"
+                    )
         except Exception as e:
             ui.progress(f"{e if print_result else ''} {int(remaining)}")
             error = e
