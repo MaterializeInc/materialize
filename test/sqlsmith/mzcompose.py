@@ -128,6 +128,7 @@ known_errors = [
     "pg_cancel_backend in this position not yet supported",
     "unrecognized configuration parameter",
     "numeric field overflow",
+    "bigint out of range",
     "uint8 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
