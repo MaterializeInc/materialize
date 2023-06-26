@@ -131,6 +131,7 @@ known_errors = [
     "uint8 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
+    "not supported for type time",
 ]
 
 
