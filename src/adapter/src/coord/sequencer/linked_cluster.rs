@@ -49,7 +49,10 @@ impl Coordinator {
             SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
             SourceSinkClusterConfig::Existing { id } => return Ok(*id),
         };
-        let disk = self.catalog().system_config().disk_cluster_replicas_default();
+        let disk = self
+            .catalog()
+            .system_config()
+            .disk_cluster_replicas_default();
         let id = self.catalog().allocate_user_cluster_id().await?;
         let name = self.catalog().resolve_full_name(name, None);
         let name = format!("{}_{}_{}", name.database, name.schema, name.item);
@@ -149,7 +152,10 @@ impl Coordinator {
                         coord_bail!("cannot change the cluster of a source or sink")
                     }
                 };
-                let disk = self.catalog().system_config().disk_cluster_replicas_default();
+                let disk = self
+                    .catalog()
+                    .system_config()
+                    .disk_cluster_replicas_default();
                 self.create_linked_cluster_replica_op(
                     linked_cluster.id,
                     size,

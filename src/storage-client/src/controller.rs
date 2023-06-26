@@ -2392,14 +2392,8 @@ where
 
         Self {
             build_info,
-            state: StorageControllerState::new(
-                postgres_url,
-                tx,
-                now,
-                postgres_factory,
-                envd_epoch,
-            )
-            .await,
+            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
+                .await,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
