@@ -64,7 +64,12 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{CreateIndexStatement, RawItemName, Statement as AstStatement};
+use mz_sql_parser::ast::{
+    CreateIndexStatement, CreateViewStatement, CteBlock, Distinct, DropObjectsStatement, Ident,
+    IfExistsBehavior, ObjectType, OrderByExpr, Query, RawItemName, Select, SelectItem,
+    SelectStatement, SetExpr, Statement as AstStatement, TableFactor, TableWithJoins,
+    UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
+};
 use mz_sql_parser::parser;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -78,6 +83,7 @@ use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
+use uuid::fmt::Simple;
 use uuid::Uuid;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -122,6 +128,11 @@ pub enum Outcome<'a> {
         actual_output: Output,
         location: Location,
     },
+    InconsistentViewOutcome {
+        query_outcome: Box<Outcome<'a>>,
+        view_outcome: Box<Outcome<'a>>,
+        location: Location,
+    },
     Bail {
         cause: Box<Outcome<'a>>,
         location: Location,
@@ -129,7 +140,7 @@ pub enum Outcome<'a> {
     Success,
 }
 
-const NUM_OUTCOMES: usize = 10;
+const NUM_OUTCOMES: usize = 11;
 const SUCCESS_OUTCOME: usize = NUM_OUTCOMES - 1;
 
 impl<'a> Outcome<'a> {
@@ -144,7 +155,8 @@ impl<'a> Outcome<'a> {
             Outcome::WrongColumnNames { .. } => 6,
             Outcome::OutputFailure { .. } => 7,
             Outcome::Bail { .. } => 8,
-            Outcome::Success => 9,
+            Outcome::InconsistentViewOutcome { .. } => 9,
+            Outcome::Success => 10,
         }
     }
 
@@ -251,6 +263,15 @@ impl fmt::Display for Outcome<'_> {
                 location, INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
+            InconsistentViewOutcome {
+                query_outcome,
+                view_outcome,
+                location,
+            } => write!(
+                f,
+                "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
+                location, INDENT, query_outcome, INDENT, view_outcome, INDENT
+            ),
             Success => f.write_str("Success"),
         }
     }
@@ -282,7 +303,8 @@ impl Outcomes {
             "wrong_column_names": self.0[6],
             "output_failure": self.0[7],
             "bail": self.0[8],
-            "success": self.0[9],
+            "inconsistent_view_outcome": self.0[9],
+            "success": self.0[10],
         })
     }
 
@@ -324,6 +346,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                 "wrong-column-names",
                 "output-failure",
                 "bail",
+                "inconsistent-view-outcome",
                 "success",
                 "total",
             ]
@@ -337,12 +360,22 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
     }
 }
 
-pub struct Runner<'a> {
-    config: &'a RunConfig<'a>,
-    inner: Option<RunnerInner>,
+struct QueryInfo {
+    is_select: bool,
+    num_attributes: Option<usize>,
 }
 
-pub struct RunnerInner {
+enum PrepareQueryOutcome<'a> {
+    QueryPrepared(QueryInfo),
+    Outcome(Outcome<'a>),
+}
+
+pub struct Runner<'a> {
+    config: &'a RunConfig<'a>,
+    inner: Option<RunnerInner<'a>>,
+}
+
+pub struct RunnerInner<'a> {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
@@ -350,8 +383,11 @@ pub struct RunnerInner {
     system_client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
+    auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
+    verbosity: usize,
+    stdout: &'a dyn WriteFmt,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
@@ -834,8 +870,8 @@ impl<'a> Runner<'a> {
     }
 }
 
-impl RunnerInner {
-    pub async fn start(config: &RunConfig<'_>) -> Result<RunnerInner, anyhow::Error> {
+impl<'a> RunnerInner<'a> {
+    pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
@@ -1009,8 +1045,11 @@ impl RunnerInner {
             system_client,
             clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
+            auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
             enable_table_keys: config.enable_table_keys,
+            verbosity: config.verbosity,
+            stdout: config.stdout,
         })
     }
 
@@ -1095,13 +1134,13 @@ impl RunnerInner {
         }
     }
 
-    async fn run_statement<'a>(
-        &mut self,
-        expected_error: Option<&'a str>,
+    async fn run_statement<'r>(
+        &self,
+        expected_error: Option<&'r str>,
         expected_rows_affected: Option<u64>,
-        sql: &'a str,
+        sql: &'r str,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         static UNSUPPORTED_INDEX_STATEMENT_REGEX: Lazy<Regex> =
             Lazy::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
         if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
@@ -1146,31 +1185,31 @@ impl RunnerInner {
         }
     }
 
-    async fn run_query<'a>(
-        &mut self,
-        sql: &'a str,
-        output: &'a Result<QueryOutput<'_>, &'a str>,
+    async fn prepare_query<'r>(
+        &self,
+        sql: &str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
         in_transaction: &mut bool,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<PrepareQueryOutcome<'r>, anyhow::Error> {
         // get statement
         let statements = match mz_sql::parse::parse(sql) {
             Ok(statements) => statements,
             Err(e) => match output {
                 Ok(_) => {
-                    return Ok(Outcome::ParseFailure {
+                    return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
                         error: e.into(),
                         location,
-                    });
+                    }));
                 }
                 Err(expected_error) => {
                     if Regex::new(expected_error)?.is_match(&format!("{:#}", e)) {
-                        return Ok(Outcome::Success);
+                        return Ok(PrepareQueryOutcome::Outcome(Outcome::Success));
                     } else {
-                        return Ok(Outcome::ParseFailure {
+                        return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
                             error: e.into(),
                             location,
-                        });
+                        }));
                     }
                 }
             },
@@ -1179,6 +1218,10 @@ impl RunnerInner {
             [] => bail!("Got zero statements?"),
             [statement] => statement,
             _ => bail!("Got multiple statements: {:?}", statements),
+        };
+        let (is_select, num_attributes) = match statement {
+            Statement::Select(stmt) => (true, derive_num_attributes(&stmt.query.body)),
+            _ => (false, None),
         };
 
         match output {
@@ -1209,7 +1252,18 @@ impl RunnerInner {
             }
             _ => (),
         }
+        Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo {
+            is_select,
+            num_attributes,
+        }))
+    }
 
+    async fn execute_query<'r>(
+        &self,
+        sql: &str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
@@ -1342,6 +1396,141 @@ impl RunnerInner {
         Ok(Outcome::Success)
     }
 
+    async fn execute_view_inner<'r>(
+        &self,
+        sql: &str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+    ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
+        print_sql_if(self.stdout, sql, self.verbosity >= 2);
+        let sql_result = self.client.execute(sql, &[]).await;
+
+        // Evaluate if we already reached an outcome or not.
+        let tentative_outcome = if let Err(view_error) = sql_result {
+            if let Err(expected_error) = output {
+                if Regex::new(expected_error)?.is_match(&format!("{:#}", view_error)) {
+                    Some(Outcome::Success)
+                } else {
+                    Some(Outcome::PlanFailure {
+                        error: view_error.into(),
+                        location: location.clone(),
+                    })
+                }
+            } else {
+                Some(Outcome::PlanFailure {
+                    error: view_error.into(),
+                    location: location.clone(),
+                })
+            }
+        } else {
+            None
+        };
+        Ok(tentative_outcome)
+    }
+
+    async fn execute_view<'r>(
+        &self,
+        sql: &str,
+        num_attributes: Option<usize>,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        // Create indexed view SQL commands and execute `CREATE VIEW`.
+        let expected_column_names = if let Ok(QueryOutput { column_names, .. }) = output {
+            column_names.clone()
+        } else {
+            None
+        };
+        let (create_view, create_index, view_sql, drop_view) = generate_view_sql(
+            sql,
+            Uuid::new_v4().as_simple(),
+            num_attributes,
+            expected_column_names,
+        );
+        let tentative_outcome = self
+            .execute_view_inner(create_view.as_str(), output, location.clone())
+            .await?;
+
+        // Either we already have an outcome or alternatively,
+        // we proceed to index and query the view.
+        if let Some(view_outcome) = tentative_outcome {
+            return Ok(view_outcome);
+        }
+
+        let tentative_outcome = self
+            .execute_view_inner(create_index.as_str(), output, location.clone())
+            .await?;
+
+        let view_outcome;
+        if let Some(outcome) = tentative_outcome {
+            view_outcome = outcome;
+        } else {
+            print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+            view_outcome = self
+                .execute_query(view_sql.as_str(), output, location.clone())
+                .await?;
+        }
+
+        // Remember to clean up after ourselves by dropping the view.
+        print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
+        self.client.execute(drop_view.as_str(), &[]).await?;
+
+        Ok(view_outcome)
+    }
+
+    async fn run_query<'r>(
+        &self,
+        sql: &'r str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+        in_transaction: &mut bool,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        let prepare_outcome = self
+            .prepare_query(sql, output, location.clone(), in_transaction)
+            .await?;
+        match prepare_outcome {
+            PrepareQueryOutcome::QueryPrepared(QueryInfo {
+                is_select,
+                num_attributes,
+            }) => {
+                let query_outcome = self.execute_query(sql, output, location.clone()).await?;
+                if is_select && self.auto_index_selects {
+                    let view_outcome = self
+                        .execute_view(sql, None, output, location.clone())
+                        .await?;
+
+                    // We compare here the query-based and view-based outcomes.
+                    // We only produce a test failure if the outcomes are of different
+                    // variant types, thus accepting smaller deviations in the details
+                    // produced for each variant.
+                    if std::mem::discriminant::<Outcome>(&query_outcome)
+                        != std::mem::discriminant::<Outcome>(&view_outcome)
+                    {
+                        // Before producing a failure outcome, we try to obtain a new
+                        // outcome for view-based execution exploiting analysis of the
+                        // number of attributes. This two-level strategy can avoid errors
+                        // produced by column ambiguity in the `SELECT`.
+                        let view_outcome = self
+                            .execute_view(sql, num_attributes, output, location.clone())
+                            .await?;
+
+                        if std::mem::discriminant::<Outcome>(&query_outcome)
+                            != std::mem::discriminant::<Outcome>(&view_outcome)
+                        {
+                            return Ok(Outcome::InconsistentViewOutcome {
+                                query_outcome: Box::new(query_outcome),
+                                view_outcome: Box::new(view_outcome),
+                                location: location.clone(),
+                            });
+                        }
+                    }
+                }
+                Ok(query_outcome)
+            }
+            PrepareQueryOutcome::Outcome(outcome) => Ok(outcome),
+        }
+    }
+
     async fn get_conn(
         &mut self,
         name: Option<&str>,
@@ -1364,14 +1553,14 @@ impl RunnerInner {
         }
     }
 
-    async fn run_simple<'a>(
+    async fn run_simple<'r>(
         &mut self,
-        conn: Option<&'a str>,
-        user: Option<&'a str>,
-        sql: &'a str,
-        output: &'a Output,
+        conn: Option<&'r str>,
+        user: Option<&'r str>,
+        sql: &'r str,
+        output: &'r Output,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         let client = self.get_conn(conn, user).await;
         let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => result
@@ -1439,6 +1628,7 @@ pub struct RunConfig<'a> {
     pub no_fail: bool,
     pub fail_fast: bool,
     pub auto_index_tables: bool,
+    pub auto_index_selects: bool,
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
@@ -1446,11 +1636,19 @@ pub struct RunConfig<'a> {
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
-        Record::Statement { sql, .. } | Record::Query { sql, .. } => {
-            writeln!(config.stdout, "{}", crate::util::indent(sql, 4))
-        }
+        Record::Statement { sql, .. } | Record::Query { sql, .. } => print_sql(config.stdout, sql),
         _ => (),
     }
+}
+
+fn print_sql_if<'a>(stdout: &'a dyn WriteFmt, sql: &str, cond: bool) {
+    if cond {
+        print_sql(stdout, sql)
+    }
+}
+
+fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
+    writeln!(stdout, "{}", crate::util::indent(sql, 4))
 }
 
 pub async fn run_string(
@@ -1739,6 +1937,298 @@ impl<'a> RewriteBuffer<'a> {
     }
 }
 
+/// Generates view creation, view indexing, view querying, and view
+/// dropping SQL commands for a given `SELECT` query. If the number
+/// of attributes produced by the query is known, the view commands
+/// are specialized to avoid issues with column ambiguity. This
+/// function is a helper for `--auto_index_selects` and assumes that
+/// the provided input SQL has already been run through the parser,
+/// resulting in a valid `SELECT` statement.
+fn generate_view_sql(
+    sql: &str,
+    view_uuid: &Simple,
+    num_attributes: Option<usize>,
+    expected_column_names: Option<Vec<ColumnName>>,
+) -> (String, String, String, String) {
+    // To create the view, re-parse the sql; note that we must find exactly
+    // one statement and it must be a `SELECT`.
+    // NOTE(vmarcos): Direct string manipulation was attempted while
+    // prototyping the code below, which avoids the extra parsing and
+    // data structure cloning. However, running DDL is so slow that
+    // it did not matter in terms of runtime. We can revisit this if
+    // DDL cost drops dramatically in the future.
+    let stmts = parser::parse_statements(sql).unwrap_or_default();
+    assert!(stmts.len() == 1);
+    let query = match &stmts[0] {
+        Statement::Select(stmt) => &stmt.query,
+        _ => unreachable!("This function should only be called for SELECTs"),
+    };
+
+    // Prior to creating the view, process the `ORDER BY` clause of
+    // the `SELECT` query, if any. Ordering is not preserved when a
+    // view includes an `ORDER BY` clause and must be re-enforced by
+    // an external `ORDER BY` clause when querying the view.
+    let (view_order_by, extra_columns, distinct) = if num_attributes.is_none() {
+        (query.order_by.clone(), vec![], None)
+    } else {
+        derive_order_by(&query.body, &query.order_by)
+    };
+
+    // Since one-shot SELECT statements may contain ambiguous column names,
+    // we either use the expected column names, if that option was
+    // provided, or else just rename the output schema of the view
+    // using numerically increasing attribute names, whenever possible.
+    // This strategy makes it possible to use `CREATE INDEX`, thus
+    // matching the behavior of the option `auto_index_tables`. However,
+    // we may be presented with a `SELECT *` query, in which case the parser
+    // does not produce sufficient information to allow us to compute
+    // the number of output columns. In the latter case, we are supplied
+    // with `None` for `num_attributes` and just employ the command
+    // `CREATE DEFAULT INDEX` instead. Additionally, the view is created
+    // without schema renaming. This strategy is insufficient to dodge
+    // column name ambiguity in all cases, but we assume here that we
+    // can adjust the (hopefully) small number of tests that eventually
+    // challenge us in this particular way.
+    let name = UnresolvedItemName(vec![Ident::new(format!("v{}", view_uuid))]);
+    let projection = expected_column_names.map_or(
+        num_attributes.map_or(vec![], |n| {
+            (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
+        }),
+        |cols| cols.iter().map(|c| Ident::new(c.as_str())).collect(),
+    );
+    let columns: Vec<Ident> = projection
+        .iter()
+        .cloned()
+        .chain(extra_columns.iter().map(|item| {
+            if let SelectItem::Expr {
+                expr: _,
+                alias: Some(ident),
+            } = item
+            {
+                ident.clone()
+            } else {
+                unreachable!("alias must be given for extra column")
+            }
+        }))
+        .collect();
+
+    // Build a `CREATE VIEW` with the columns computed above.
+    let mut query = query.clone();
+    if extra_columns.len() > 0 {
+        match &mut query.body {
+            SetExpr::Select(stmt) => stmt.projection.extend(extra_columns.iter().cloned()),
+            _ => unimplemented!("cannot yet rewrite projections of nested queries"),
+        }
+    }
+    let create_view = AstStatement::<Raw>::CreateView(CreateViewStatement {
+        if_exists: IfExistsBehavior::Error,
+        temporary: false,
+        definition: ViewDefinition {
+            name: name.clone(),
+            columns: columns.clone(),
+            query,
+        },
+    })
+    .to_ast_string_stable();
+
+    // We then create either a `CREATE INDEX` or a `CREATE DEFAULT INDEX`
+    // statement, depending on whether we could obtain the number of
+    // attributes from the original `SELECT`.
+    let create_index = AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
+        name: None,
+        in_cluster: None,
+        on_name: RawItemName::Name(name.clone()),
+        key_parts: if columns.len() == 0 {
+            None
+        } else {
+            Some(
+                columns
+                    .iter()
+                    .map(|ident| Expr::Identifier(vec![ident.clone()]))
+                    .collect(),
+            )
+        },
+        with_options: Vec::new(),
+        if_not_exists: false,
+    })
+    .to_ast_string_stable();
+
+    // Assert if DISTINCT semantics are unchanged from view
+    let distinct_unneeded = extra_columns.len() == 0
+        || match distinct {
+            None | Some(Distinct::On(_)) => true,
+            Some(Distinct::EntireRow) => false,
+        };
+    let distinct = if distinct_unneeded { None } else { distinct };
+
+    // `SELECT [* | {projection}] FROM {name} [ORDER BY {view_order_by}]`
+    let view_sql = AstStatement::<Raw>::Select(SelectStatement {
+        query: Query {
+            ctes: CteBlock::Simple(vec![]),
+            body: SetExpr::Select(Box::new(Select {
+                distinct,
+                projection: if projection.len() == 0 {
+                    vec![SelectItem::Wildcard]
+                } else {
+                    projection
+                        .iter()
+                        .map(|ident| SelectItem::Expr {
+                            expr: Expr::Identifier(vec![ident.clone()]),
+                            alias: None,
+                        })
+                        .collect()
+                },
+                from: vec![TableWithJoins {
+                    relation: TableFactor::Table {
+                        name: RawItemName::Name(name.clone()),
+                        alias: None,
+                    },
+                    joins: vec![],
+                }],
+                selection: None,
+                group_by: vec![],
+                having: None,
+                options: vec![],
+            })),
+            order_by: view_order_by,
+            limit: None,
+            offset: None,
+        },
+        as_of: None,
+    })
+    .to_ast_string_stable();
+
+    // `DROP VIEW {name}`
+    let drop_view = AstStatement::<Raw>::DropObjects(DropObjectsStatement {
+        object_type: ObjectType::View,
+        if_exists: false,
+        names: vec![UnresolvedObjectName::Item(name)],
+        cascade: false,
+    })
+    .to_ast_string_stable();
+
+    (create_view, create_index, view_sql, drop_view)
+}
+
+/// Analyzes the provided query `body` to derive the number of
+/// attributes in the query. We only consider syntactic cues,
+/// so we may end up deriving `None` for the number of attributes
+/// as a conservative approximation.
+fn derive_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
+    let Some((projection, _)) = find_projection(body) else { return None };
+    derive_num_attributes_from_projection(projection)
+}
+
+/// Analyzes a query's `ORDER BY` clause to derive an `ORDER BY`
+/// clause that makes numeric references to any expressions in
+/// the projection and generated-attribute references to expressions
+/// that need to be added as extra columns to the projection list.
+/// The rewritten `ORDER BY` clause is then usable when querying a
+/// view that contains the same `SELECT` as the given query.
+/// This function returns both the rewritten `ORDER BY` clause
+/// as well as a list of extra columns that need to be added
+/// to the query's projection for the `ORDER BY` clause to
+/// succeed.
+fn derive_order_by(
+    body: &SetExpr<Raw>,
+    order_by: &Vec<OrderByExpr<Raw>>,
+) -> (
+    Vec<OrderByExpr<Raw>>,
+    Vec<SelectItem<Raw>>,
+    Option<Distinct<Raw>>,
+) {
+    let Some((projection, distinct)) = find_projection(body) else { return (vec![], vec![], None) };
+    let (view_order_by, extra_columns) = derive_order_by_from_projection(projection, order_by);
+    (view_order_by, extra_columns, distinct.clone())
+}
+
+/// Finds the projection list in a `SELECT` query body.
+fn find_projection(body: &SetExpr<Raw>) -> Option<(&Vec<SelectItem<Raw>>, &Option<Distinct<Raw>>)> {
+    // Iterate to peel off the query body until the query's
+    // projection list is found.
+    let mut set_expr = body;
+    loop {
+        match set_expr {
+            SetExpr::Select(select) => {
+                return Some((&select.projection, &select.distinct));
+            }
+            SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
+            SetExpr::Query(query) => set_expr = &query.body,
+            _ => return None,
+        }
+    }
+}
+
+/// Computes the number of attributes that are obtained by the
+/// projection of a `SELECT` query. The projection may include
+/// wildcards, in which case the analysis just returns `None`.
+fn derive_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
+    let mut num_attributes = 0usize;
+    for item in projection.iter() {
+        let SelectItem::Expr { expr, .. } = item else { return None };
+        match expr {
+            Expr::QualifiedWildcard(..) | Expr::WildcardAccess(..) => {
+                return None;
+            }
+            _ => {
+                num_attributes += 1;
+            }
+        }
+    }
+    Some(num_attributes)
+}
+
+/// Computes an `ORDER BY` clause with only numeric references
+/// from given projection and `ORDER BY` of a `SELECT` query.
+/// If the derivation fails to match a given expression, the
+/// matched prefix is returned. Note that this could be empty.
+fn derive_order_by_from_projection(
+    projection: &Vec<SelectItem<Raw>>,
+    order_by: &Vec<OrderByExpr<Raw>>,
+) -> (Vec<OrderByExpr<Raw>>, Vec<SelectItem<Raw>>) {
+    let mut view_order_by: Vec<OrderByExpr<Raw>> = vec![];
+    let mut extra_columns: Vec<SelectItem<Raw>> = vec![];
+    for order_by_expr in order_by.iter() {
+        let query_expr = &order_by_expr.expr;
+        let view_expr = match query_expr {
+            Expr::Value(mz_sql_parser::ast::Value::Number(_)) => query_expr.clone(),
+            _ => {
+                // Find expression in query projection, if we can.
+                if let Some(i) = projection.iter().position(|item| match item {
+                    SelectItem::Expr { expr, alias } => {
+                        expr == query_expr
+                            || match query_expr {
+                                Expr::Identifier(ident) => {
+                                    ident.len() == 1 && Some(&ident[0]) == alias.as_ref()
+                                }
+                                _ => false,
+                            }
+                    }
+                    SelectItem::Wildcard => false,
+                }) {
+                    Expr::Value(mz_sql_parser::ast::Value::Number((i + 1).to_string()))
+                } else {
+                    // If the expression is not found in the
+                    // projection, add extra column.
+                    let ident =
+                        Ident::new(format!("a{}", (projection.len() + extra_columns.len() + 1)));
+                    extra_columns.push(SelectItem::Expr {
+                        expr: query_expr.clone(),
+                        alias: Some(ident.clone()),
+                    });
+                    Expr::Identifier(vec![ident])
+                }
+            }
+        };
+        view_order_by.push(OrderByExpr {
+            expr: view_expr,
+            asc: order_by_expr.asc,
+            nulls_last: order_by_expr.nulls_last,
+        });
+    }
+    (view_order_by, extra_columns)
+}
+
 /// Returns extra statements to execute after `stmt` is executed.
 fn mutate(sql: &str) -> Vec<String> {
     let stmts = parser::parse_statements(sql).unwrap_or_default();
@@ -1767,6 +2257,90 @@ fn mutate(sql: &str) -> Vec<String> {
         }
     }
     additional
+}
+
+#[mz_ore::test]
+fn test_generate_view_sql() {
+    let uuid = Uuid::parse_str("67e5504410b1426f9247bb680e5fe0c8").unwrap();
+    let cases = vec![
+        (("SELECT * FROM t", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM "t""#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c")])),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c")"#.to_string(),
+            r#"SELECT "a", "b", "c" FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, c FROM t1, t2", Some(3), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2", "a3" FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        // A case with ambiguity that is accepted by the function, illustrating that
+        // our measures to dodge this issue are imperfect.
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a)", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a")"#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c"), ColumnName::from("d")])),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d") AS SELECT "a", "b", "b" + "d" AS "c", "a" + "b" AS "d" FROM "t1", "t2" ORDER BY "a", "c", "a" + "b""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d")"#.to_string(),
+            r#"SELECT "a", "b", "c", "d" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, 3, 4"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("((SELECT 1 AS a UNION SELECT 2 AS b) UNION SELECT 3 AS c) ORDER BY a", Some(1), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1") AS (SELECT 1 AS "a" UNION SELECT 2 AS "b") UNION SELECT 3 AS "c" ORDER BY "a""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1")"#.to_string(),
+            r#"SELECT "a1" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY 1", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a") ORDER BY 1"#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY a", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a") ORDER BY "a""#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY "a""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, sum(b) AS a FROM t GROUP BY a, c ORDER BY a, c", Some(2), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "sum"("b") AS "a", "c" AS "a3" FROM "t" GROUP BY "a", "c" ORDER BY "a", "c""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, "a3""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, sum(b) AS a FROM t GROUP BY a, c ORDER BY c, a", Some(2), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "sum"("b") AS "a", "c" AS "a3" FROM "t" GROUP BY "a", "c" ORDER BY "c", "a""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY "a3", 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+    ];
+    for ((sql, num_attributes, expected_column_names), expected) in cases {
+        let view_sql =
+            generate_view_sql(sql, uuid.as_simple(), num_attributes, expected_column_names);
+        assert_eq!(expected, view_sql);
+    }
 }
 
 #[mz_ore::test]
