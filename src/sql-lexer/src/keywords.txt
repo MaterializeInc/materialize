@@ -44,6 +44,7 @@ Aws
 Begin
 Between
 Bigint
+Body
 Boolean
 Both
 Bpchar
@@ -397,6 +398,7 @@ Varying
 View
 Views
 Warning
+Webhook
 When
 Where
 Window

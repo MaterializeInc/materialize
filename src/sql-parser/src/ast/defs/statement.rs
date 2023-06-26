@@ -49,6 +49,7 @@ pub enum Statement<T: AstInfo> {
     CreateConnection(CreateConnectionStatement<T>),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
+    CreateWebhookSource(CreateWebhookSourceStatement<T>),
     CreateSource(CreateSourceStatement<T>),
     CreateSubsource(CreateSubsourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
@@ -112,6 +113,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateConnection(stmt) => f.write_node(stmt),
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
+            Statement::CreateWebhookSource(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
             Statement::CreateSubsource(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
@@ -584,6 +586,35 @@ impl<T: AstInfo> AstDisplay for ValidateConnectionStatement<T> {
     }
 }
 impl_display_t!(ValidateConnectionStatement);
+
+/// `CREATE SOURCE <name> FROM WEBHOOK`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceStatement<T: AstInfo> {
+    pub name: UnresolvedItemName,
+    pub if_not_exists: bool,
+    pub body_format: Format<T>,
+    pub include_headers: bool,
+}
+
+impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE SOURCE ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" FROM WEBHOOK ");
+
+        f.write_str("BODY FORMAT ");
+        f.write_node(&self.body_format);
+
+        if self.include_headers {
+            f.write_str(" INCLUDE HEADERS");
+        }
+    }
+}
+
+impl_display_t!(CreateWebhookSourceStatement);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

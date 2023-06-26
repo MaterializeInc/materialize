@@ -137,6 +137,8 @@ pub enum DataSource {
     Introspection(IntrospectionType),
     /// Data comes from the source's remapping/reclock operator.
     Progress,
+    /// Data comes from external HTTP requests pushed to Materialize.
+    Webhook,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
     // TODO? Add a means to track some data sources' GlobalIds.
@@ -183,9 +185,13 @@ impl<T> CollectionDescription<T> {
                 }
                 result.push(ingestion.remap_collection_id);
             }
-            DataSource::Introspection(_) | DataSource::Progress => {
-                // Introspection, Progress sources have no dependencies, for
-                // now.
+            DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
+                // Introspection, Progress, and Webhook sources have no dependencies, for now.
+                //
+                // TODO(parkmycar): Once webhook sources support validation, then they will have
+                // dependencies.
+                //
+                // See <https://github.com/MaterializeInc/materialize/issues/20211>.
             }
             DataSource::Other => {
                 // We don't know anything about it's dependencies.
@@ -1437,7 +1443,10 @@ where
                         &storage_dependencies,
                     )?;
                 }
-                DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
+                DataSource::Webhook
+                | DataSource::Introspection(_)
+                | DataSource::Progress
+                | DataSource::Other => {
                     // No since to patch up and no read holds to install on
                     // dependencies!
                 }
@@ -1529,6 +1538,10 @@ where
                             .await;
                         }
                     }
+                }
+                DataSource::Webhook => {
+                    // Register the collection so our manager knows about it.
+                    self.state.collection_manager.register_collection(id).await;
                 }
                 DataSource::Progress | DataSource::Other => {}
             }
@@ -3284,7 +3297,10 @@ impl<T: Timestamp> CollectionState<T> {
     fn cluster_id(&self) -> Option<StorageInstanceId> {
         match &self.description.data_source {
             DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Introspection(_) | DataSource::Other | DataSource::Progress => None,
+            DataSource::Webhook
+            | DataSource::Introspection(_)
+            | DataSource::Other
+            | DataSource::Progress => None,
         }
     }
 }
