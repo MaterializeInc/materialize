@@ -155,6 +155,7 @@ tests_without_views=(
     test/sqllogictest/subscribe_outputs.slt
     test/sqllogictest/subsource.slt
     test/sqllogictest/system-cluster.slt
+    test/sqllogictest/system_privileges.slt
     test/sqllogictest/table_func.slt
     test/sqllogictest/temporal.slt
     test/sqllogictest/timedomain.slt
