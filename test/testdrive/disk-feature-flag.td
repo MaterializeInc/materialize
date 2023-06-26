@@ -9,23 +9,25 @@
 
 # Test that with `enable_create_source_denylist_with_options` off, if
 # `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
-# Note that `WITH(DISK)` is not tested in `test/testdrive`, so we use a source
-# type that will show that we allow the with option overall, but fail later on in
-# `plan_create_source`.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = false
 ALTER SYSTEM SET enable_disk_cluster_replicas = true
 
-! CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
-  WITH (DISK)
-contains:ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE not yet supported
+> DROP CLUSTER IF EXISTS c;
+
+> CREATE CLUSTER c REPLICAS (dff_1 (SIZE '1', DISK), dff_2 (SIZE '1'))
+
+> SELECT name, size, disk FROM mz_catalog.mz_cluster_replicas WHERE name LIKE '%dff_%'
+dff_1 1 true
+dff_2 1 false
+
+> DROP CLUSTER IF EXISTS c;
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_disk_cluster_replicas = false
 
-! CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
-  WITH (DISK)
-contains:CREATE SOURCE...WITH (DISK..) is not supported
+! CREATE CLUSTER c REPLICAS (dff_3 (size '1', disk))
+contains:`WITH (DISK)` for cluster replicas is not supported
 
 # The following test that we don't crash envd with bad parameters, and instead just fallback
 # to safe parameters.
