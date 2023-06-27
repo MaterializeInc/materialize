@@ -23,26 +23,17 @@ and [documentation](https://materialize.com/docs/lts/).
 
 ## Schedule
 
-We release a new version of Materialize approximately every week. Each
-version includes both new features and bug fixes.
+Each week, Materialize upgrades all accounts to the latest version.
 
-On weeks with a scheduled release, we deploy the release to Materialize accounts
-during the scheduled maintenance window on Wednesday from 4-6pm ET.
+- Accounts in the eu-west-1 region are upgraded between 4-6 pm ET on Wednesdays.
+- Accounts in the us-east-1 region are upgraded between 5-7am ET on Thursdays.
 
-We may occasionally deploy unscheduled releases to fix urgent bugs during
-unplanned maintenance windows. Due to the unexpected nature of these bugs, we
-cannot provide advance notice of these releases.
+Materialize may occasionally deploy unscheduled releases to fix urgent bugs as well.
 
-The deployment of a new release of Materialize causes an interruption in
-service. The length of the service interruption is proportional to the size of
-your sources, sinks, and indexes. We plan to support zero-downtime deployments
-in a future release of Materialize.
+You can find details about upcoming and current maintenance on the [status
+page](https://status.materialize.com). You can also use the [status page API](https://status.materialize.com/api) to programmatically access this information.
 
-We announce both planned and unplanned maintenance windows on our [status
-page](https://status.materialize.com).
-
-You can also use our [status page API](https://status.materialize.com/api) to
-programmatically access the information on our status page.
+When your region is upgraded, you’ll experience just a few minutes of downtime. After the initial downtime, the new version of Materialize will begin rehydrating your indexes and materialized views. This takes time proportional to data volume and query complexity. Indexes and materialized views with large amounts of data will take longer to rehydrate than indexes and materialized views with small amounts of data. Similarly, indexes and materialized views for complex queries will take longer to rehydrate than indexes and materialized views for simple queries.
 
 ## Versioning
 
