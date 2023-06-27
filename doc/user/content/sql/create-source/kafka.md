@@ -150,7 +150,11 @@ Note that:
 
 #### Headers
 
-Message headers are exposed via the `INCLUDE HEADERS` option, and are included as a column (named `headers` by default) containing a [`list`](/sql/types/list/) of ([`text`](/sql/types/text/), [`bytea`](/sql/types/bytea/)) pairs.
+Message headers can be exposed via the `INCLUDE HEADERS` option. They are included
+as a column (named `headers` by default) containing a [`list`](/sql/types/list/)
+of records of type `(key text, value bytea)`.
+
+The following example demonstrates use of the `INCLUDE HEADERS` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
@@ -161,9 +165,12 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the individual headers in a message, you can unpack and decode their values.
-The following example parses the UTF-8 encoded `client_id` header of the messages from the Kafka topic.
-Messages without a `client_id` header result in null values (`"\N"`) for the parsed attribute.
+To retrieve the value of an individual header in a message, you can use standard
+SQL techniques for working with [`list`](/sql/types/list) and
+[`bytea`](/sql/types/bytea) types. The following example parses the UTF-8
+encoded `client_id` header of the messages from the Kafka topic. Messages
+without a `client_id` header result in null values (`"\N"`) for the parsed
+attribute.
 
 ```sql
 SELECT

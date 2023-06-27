@@ -49,14 +49,60 @@ Decimal octet value | Description | Escaped input representation | Example | Hex
 
 #### From `bytea`
 
-You can [cast](../../functions/cast) `bytea` to [text](../text) by assignment. Casts from `bytea`
-will error if the string is not valid input for the destination type.
+You can [cast](../../functions/cast) `bytea` to [`text`](../text) by assignment.
+
+{{< warning >}}
+Casting a `bytea` value to `text` unconditionally returns a
+[hex-formatted](#hex-format) string, even if the byte array consists entirely of
+printable characters. See [handling character data](#handling-character-data)
+for alternatives.
+{{< /warning >}}
 
 #### To `bytea`
 
-You can explicitly [cast](../../functions/cast) [text](../text) to `bytea`.
+You can explicitly [cast](../../functions/cast) [`text`](../text) to `bytea`.
+
+### Handling character data
+
+Unless a `text` value is a [hex-formatted](#hex-format) string, casting to
+`bytea` will encode characters using UTF-8:
+
+```sql
+SELECT 'hello 👋'::bytea;
+```
+```text
+         bytea
+------------------------
+ \x68656c6c6f20f09f918b
+```
+
+The reverse, however, is not true. Casting a `bytea` value to `text` will not
+decode UTF-8 bytes into characters. Instead, the cast unconditionally produces a
+[hex-formatted](#hex-format) string:
+
+```sql
+SELECT '\x68656c6c6f20f09f918b'::bytea::text
+```
+```text
+           text
+----------------------------
+ \x68656c6c6f2c20776f726c6
+```
+
+To decode UTF-8 bytes into characters, use the
+[`convert_from`](../../functions#convert_from) function instead of casting:
+
+```sql
+SELECT convert_from('\x68656c6c6f20f09f918b', 'utf8') AS text;
+```
+```sql
+  text
+---------
+ hello 👋
+```
 
 ## Examples
+
 
 ```sql
 SELECT '\xDEADBEEF'::bytea AS bytea_val;
@@ -73,7 +119,7 @@ SELECT '\xDEADBEEF'::bytea AS bytea_val;
 SELECT '\000'::bytea AS bytea_val;
 ```
 ```nofmt
-   text_val
+   bytea_val
 -----------------
  \x00
 ```
