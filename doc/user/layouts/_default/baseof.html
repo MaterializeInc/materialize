@@ -83,16 +83,26 @@ Apache License, Version 2.0. */}}
       );
 
       /* Copy anchor links to clipboard on click */
-      $('.anchorjs-link').click(function (e) {
-        e.preventDefault();
-        var copyText = $(this).prop('href');
-
-        document.addEventListener('copy', function(e) {
-          e.clipboardData.setData('text/plain', copyText);
+      document.addEventListener("click", function (e) {
+        const target = e.target;
+        if (target.classList.contains("anchorjs-link")) {
+          const initialIcon =  e.target.getAttribute("data-anchorjs-icon");
+          e.target.setAttribute("data-anchorjs-icon", "\u2713");
+          setTimeout(() => {
+            e.target.setAttribute("data-anchorjs-icon", initialIcon);
+          }, 1000)
           e.preventDefault();
-        }, true);
+          const copyText = target.href;
 
-        document.execCommand('copy');
+          const copyHandler = function(e) {
+            e.clipboardData.setData('text/plain', copyText);
+            e.preventDefault();
+            document.removeEventListener('copy', copyHandler);
+          }
+
+          document.addEventListener('copy', copyHandler, true);
+          document.execCommand("copy");
+        }
       });
 
       $(".content ol:has(p)").addClass("has-p");
