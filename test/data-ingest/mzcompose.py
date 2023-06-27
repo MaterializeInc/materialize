@@ -28,15 +28,14 @@ from materialize.mzcompose.services import (
     Materialized,
     Postgres,
     SchemaRegistry,
+    Zookeeper,
 )
-from materialize.mzcompose.services import Zookeeper
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromGit
 
 SERVICES = [
     Postgres(),
     Zookeeper(),
-    #Kafka(auto_create_topics=True),
     Kafka(auto_create_topics=False),
     SchemaRegistry(),
     Materialized(),

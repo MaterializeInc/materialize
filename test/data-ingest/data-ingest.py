@@ -7,14 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
+import random
+import time
 from enum import Enum
 from typing import List
-import random
 
 import pg8000
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
-from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry import Schema, SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.serialization import (
     MessageField,
@@ -44,7 +46,7 @@ class Row:
     value: List[str]
     operation: Operation
 
-    def __init__(self, key: List[str], value: List[str], operation: Operation):
+    def __init__(self, key: List[str], operation: Operation, value: List[str] = None):
         self.key = key
         self.value = value
         self.operation = operation
@@ -90,55 +92,96 @@ class PrintExecutor(Executor):
 
 class KafkaExecutor(Executor):
     producer: Producer
-    kafka_topic: str
+    topic: str
+    table: str
 
-    def __init__(self):
-        with open(f"data-ingest/user.avsc") as f:
-            schema_str = f.read()
+    def __init__(self, num: int, conn: pg8000.Connection):
+        self.topic = f"data-ingest-{num}"
+        self.table = f"kafka_table{num}"
 
-        with open(f"data-ingest/key.avsc") as f:
-            key_schema_str = f.read()
+        schema = {
+            "type": "record",
+            "name": "test",
+            "fields": [
+                # {"name":"f1", "type": "string"}
+                {"name": "f1", "type": "int"}
+            ],
+        }
 
-        a = AdminClient({'bootstrap.servers': 'kafka'})
-        fs = a.create_topics([NewTopic("testdrive-upsert-insert-0", num_partitions=1, replication_factor=1)])
+        key_schema = {
+            "type": "record",
+            "name": "Key",
+            "fields": [
+                # {"name": "key1", "type": "string"}
+                {"name": "key1", "type": "int"}
+            ],
+        }
+
+        kafka_conf = {"bootstrap.servers": "kafka:9092"}
+
+        a = AdminClient(kafka_conf)
+        fs = a.create_topics(
+            [NewTopic(self.topic, num_partitions=1, replication_factor=1)]
+        )
         for topic, f in fs.items():
             f.result()
             print(f"Topic {topic} created")
 
         schema_registry_conf = {"url": "http://schema-registry:8081"}
-        schema_registry_client = SchemaRegistryClient(schema_registry_conf)
-        # Can call register_schema and get_schema: https://github.com/confluentinc/confluent-kafka-python/blob/842e2df13b3eebc5ae5562f050008c1932c8332d/src/confluent_kafka/schema_registry/schema_registry_client.py#L252
-        # Should happen automatically in AvroSerializer
-        #schema_registry_client.register_schema("testdrive-upsert-insert-0-key", key_schema_str)
-        #schema_registry_client.register_schema("testdrive-upsert-insert-0-value", schema_str)
+        registry = SchemaRegistryClient(schema_registry_conf)
 
-        self.avro_serializer = AvroSerializer(schema_registry_client, schema_str, idfn)
+        self.avro_serializer = AvroSerializer(registry, json.dumps(schema), idfn)
 
         self.key_avro_serializer = AvroSerializer(
-            schema_registry_client, key_schema_str, idfn
+            registry, json.dumps(key_schema), idfn
         )
 
-        # docker port data-ingest-kafka-1 9092
-        producer_conf = {"bootstrap.servers": "kafka:9092"}
-        self.producer = Producer(producer_conf)
+        registry.register_schema(
+            f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
+        )
+        registry.register_schema(
+            f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
+        )
 
-        # Have to copy
-        self.kafka_topic = "testdrive-upsert-insert-0"
+        self.producer = Producer(kafka_conf)
+
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                f"CREATE SOURCE {self.table} FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT"
+            )
+        conn.autocommit = False
 
     def run(self, transactions: List[Transaction]):
         for transaction in transactions:
             for row_list in transaction.row_lists:
                 for row in row_list.rows:
-                    if row.operation == Operation.INSERT or row.operation == Operation.UPSERT:
-                        self.producer.produce(topic=self.kafka_topic,
-                                              key=self.key_avro_serializer({"key1": str(row.key)}, SerializationContext(self.kafka_topic, MessageField.KEY)),
-                                              value=self.avro_serializer({"f1": str(row.value)}, SerializationContext(self.kafka_topic, MessageField.VALUE)),
-                                              on_delivery=delivery_report)
+                    if (
+                        row.operation == Operation.INSERT
+                        or row.operation == Operation.UPSERT
+                    ):
+                        self.producer.produce(
+                            topic=self.topic,
+                            key=self.key_avro_serializer(
+                                {"key1": row.key},
+                                SerializationContext(self.topic, MessageField.KEY),
+                            ),
+                            value=self.avro_serializer(
+                                {"f1": row.value},
+                                SerializationContext(self.topic, MessageField.VALUE),
+                            ),
+                            on_delivery=delivery_report,
+                        )
                     elif row.operation == Operation.DELETE:
-                        self.producer.produce(topic=self.kafka_topic,
-                                              key=self.key_avro_serializer({"key1": str(row.key)}, SerializationContext(self.kafka_topic, MessageField.KEY)),
-                                              value=None,
-                                              on_delivery=delivery_report)
+                        self.producer.produce(
+                            topic=self.topic,
+                            key=self.key_avro_serializer(
+                                {"key1": row.key},
+                                SerializationContext(self.topic, MessageField.KEY),
+                            ),
+                            value=None,
+                            on_delivery=delivery_report,
+                        )
                     else:
                         raise ValueError(f"Unexpected operation {row.operation}")
             self.producer.flush()
@@ -146,28 +189,90 @@ class KafkaExecutor(Executor):
 
 class PgExecutor(Executor):
     conn: pg8000.Connection
+    table: str
 
-    def __init__(self):
+    def __init__(self, num: int):
         self.conn = pg8000.connect(
             host="postgres", user="postgres", password="postgres"
         )
+        self.table = f"table{num}"
         with self.conn.cursor() as cur:
-            cur.execute("CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres'")
-            cur.execute("ALTER USER postgres1 WITH replication")
-            cur.execute("DROP PUBLICATION IF EXISTS postgres_source")
-            cur.execute("DROP TABLE IF EXISTS table1")
-            cur.execute("CREATE TABLE table1 (col1 int, col2 int, PRIMARY KEY (col1))")
-            cur.execute("CREATE PUBLICATION postgres_source FOR ALL TABLES")
+            cur.execute(f"DROP TABLE IF EXISTS {self.table}")
+            cur.execute(
+                f"CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1))"
+            )
 
     def run(self, transactions: List[Transaction]):
         for transaction in transactions:
             with self.conn.cursor() as cur:
                 for row_list in transaction.row_lists:
                     for row in row_list.rows:
-                        if row.operation == Operation.INSERT or row.operation == Operation.UPSERT:
-                            cur.execute(f"INSERT INTO table1 VALUES ({row.key}, {row.value}) ON CONFLICT (col1) DO UPDATE SET col2 = EXCLUDED.col2")
+                        if (
+                            row.operation == Operation.INSERT
+                            or row.operation == Operation.UPSERT
+                        ):
+                            cur.execute(
+                                f"INSERT INTO {self.table} VALUES ({row.key}, {row.value}) ON CONFLICT (col1) DO UPDATE SET col2 = EXCLUDED.col2"
+                            )
                         elif row.operation == Operation.DELETE:
-                            cur.execute(f"DELETE FROM table1 WHERE col1 = {row.key}")
+                            cur.execute(
+                                f"DELETE FROM {self.table} WHERE col1 = {row.key}"
+                            )
+                        else:
+                            raise ValueError(f"Unexpected operation {row.operation}")
+        self.conn.commit()
+
+
+class PgCdcExecutor(Executor):
+    conn: pg8000.Connection
+    table: str
+
+    def __init__(self, num: int, conn: pg8000.Connection):
+        self.conn = pg8000.connect(
+            host="postgres", user="postgres", password="postgres"
+        )
+        self.table = f"cdc{num}"
+        self.conn.autocommit = True
+        with self.conn.cursor() as cur:
+            cur.execute(f"DROP TABLE IF EXISTS {self.table}")
+            cur.execute(
+                f"CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1))"
+            )
+            cur.execute(f"ALTER TABLE {self.table} REPLICA IDENTITY FULL")
+            cur.execute(f"CREATE USER postgres{num} WITH SUPERUSER PASSWORD 'postgres'")
+            cur.execute(f"ALTER USER postgres{num} WITH replication")
+
+            cur.execute("DROP PUBLICATION IF EXISTS postgres_source")
+            cur.execute("CREATE PUBLICATION postgres_source FOR ALL TABLES")
+        self.conn.autocommit = False
+
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f"CREATE SECRET pgpass{num} AS 'postgres'")
+            cur.execute(
+                f"CREATE CONNECTION pg{num} FOR POSTGRES HOST 'postgres', DATABASE postgres, USER postgres{num}, PASSWORD SECRET pgpass{num}"
+            )
+            cur.execute(
+                f"CREATE SOURCE postgres_source{num} FROM POSTGRES CONNECTION pg{num} (PUBLICATION 'postgres_source') FOR TABLES ({self.table} AS {self.table});"
+            )
+        conn.autocommit = False
+
+    def run(self, transactions: List[Transaction]):
+        for transaction in transactions:
+            with self.conn.cursor() as cur:
+                for row_list in transaction.row_lists:
+                    for row in row_list.rows:
+                        if (
+                            row.operation == Operation.INSERT
+                            or row.operation == Operation.UPSERT
+                        ):
+                            cur.execute(
+                                f"INSERT INTO {self.table} VALUES ({row.key}, {row.value}) ON CONFLICT (col1) DO UPDATE SET col2 = EXCLUDED.col2"
+                            )
+                        elif row.operation == Operation.DELETE:
+                            cur.execute(
+                                f"DELETE FROM {self.table} WHERE col1 = {row.key}"
+                            )
                         else:
                             raise ValueError(f"Unexpected operation {row.operation}")
         self.conn.commit()
@@ -207,9 +312,39 @@ class Insert(Definition):
     def __init__(self, count: Records, record_size: RecordSize):
         self.count = count
         self.record_size = record_size
+        self.current_key = 1
 
     def generate(self) -> List[Transaction]:
-        return Row(key=1, value="value1", operation=Operation.INSERT)
+        key = self.current_key
+        self.current_key += 1
+
+        if self.count == Records.ONE:
+            count = 1
+        elif self.count == Records.MANY:
+            count = 1000
+        else:
+            raise ValueError(f"Unexpected count {self.count}")
+
+        if self.record_size == RecordSize.TINY:
+            value = random.randint(-127, 128)
+        elif self.record_size == RecordSize.SMALL:
+            value = random.randint(-32768, 32767)
+        elif self.record_size == RecordSize.MEDIUM:
+            value = random.randint(-2147483648, 2147483647)
+        elif self.record_size == RecordSize.LARGE:
+            value = random.randint(-9223372036854775808, 9223372036854775807)
+        else:
+            raise ValueError(f"Unexpected count {self.count}")
+
+        transactions = []
+        for i in range(count):
+            transactions.append(
+                Transaction(
+                    [RowList([Row(key=key, value=value, operation=Operation.INSERT)])]
+                )
+            )
+
+        return transactions
 
 
 class Upsert(Definition):
@@ -217,7 +352,6 @@ class Upsert(Definition):
         self.keyspace = keyspace
         self.count = count
         self.record_size = record_size
-
 
     def generate(self) -> List[Transaction]:
         if self.keyspace == Keyspace.SINGLE_VALUE:
@@ -247,7 +381,11 @@ class Upsert(Definition):
 
         transactions = []
         for i in range(count):
-            transactions.append(Transaction([RowList([Row(key=key, value=value, operation=Operation.UPSERT)])]))
+            transactions.append(
+                Transaction(
+                    [RowList([Row(key=key, value=value, operation=Operation.UPSERT)])]
+                )
+            )
 
         return transactions
 
@@ -257,7 +395,21 @@ class Delete(Definition):
         self.number_of_records = number_of_records
 
     def generate(self) -> List[Transaction]:
-        return Row(key=1, value="value1", operation=Operation.DELETE)
+        transactions = []
+
+        if self.number_of_records == Records.ONE:
+            raise NotImplementedError
+        elif self.number_of_records == Records.MANY:
+            raise NotImplementedError
+        elif self.number_of_records == Records.ALL:
+            for key in range(1000):
+                transactions.append(
+                    Transaction([RowList([Row(key=key, operation=Operation.DELETE)])])
+                )
+        else:
+            raise ValueError(f"Unexpected number of records {self.number_of_records}")
+
+        return transactions
 
 
 class Workload:
@@ -268,7 +420,7 @@ class Workload:
         for i in range(100):
             for definition in self.cycle:
                 transactions.extend(definition.generate())
-            return transactions
+        return transactions
 
 
 class SingleSensorUpdating(Workload):
@@ -282,71 +434,76 @@ class SingleSensorUpdating(Workload):
         ]
 
 
-def main():
-    conn = pg8000.connect(host="materialized", port=6875, user="materialize")
+class DeleteDataAtEndOfDay(Workload):
+    def __init__(self):
+        self.cycle: List[Definition] = [
+            Insert(
+                count=Records.MANY,
+                record_size=RecordSize.SMALL,
+            ),
+            Delete(number_of_records=Records.ALL),
+        ]
 
-    workload = SingleSensorUpdating()
+
+class ProgressivelyEnrichRecords(Workload):
+    def __init__(self):
+        self.cycle: List[Definition] = [
+            # TODO
+        ]
+
+
+def execute_workload(
+    executor_classes, workload: Workload, conn: pg8000.Connection, num: int
+):
     transactions = workload.generate()
     print(transactions)
-    print_executor = PrintExecutor()
-    print_executor.run(transactions)
-    kafka_executor = KafkaExecutor()
-    kafka_executor.run(transactions)
-    pg_executor = PgExecutor()
-    pg_executor.run(transactions)
 
+    pg_executor = PgExecutor(num)
+    print_executor = PrintExecutor()
+    executors = [executor_class(num, conn) for executor_class in executor_classes]
+
+    for executor in [print_executor, pg_executor] + executors:
+        executor.run(transactions)
+
+    with pg_executor.conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM {pg_executor.table}")
+        expected_result = cur.fetchall()
+        print(f"Expected (via Postgres): {expected_result}")
+
+    for executor in executors:
+        sleep_time = 0.1
+        while sleep_time < 60:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT * FROM {executor.table}")
+                actual_result = cur.fetchall()
+            conn.autocommit = False
+            print(f"{type(executor).__name__}: {actual_result}")
+            if actual_result == expected_result:
+                break
+            print(f"Results don't match, sleeping for {sleep_time}s")
+            time.sleep(sleep_time)
+            sleep_time *= 2
+        else:
+            raise ValueError(f"Unexpected result {actual_result} != {expected_result}")
+
+
+def main():
+    conn = pg8000.connect(host="materialized", port=6875, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute("CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092'")
-        cur.execute("CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'")
-        cur.execute("CREATE SOURCE kafka_table1 FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-insert-0') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT")
-        cur.execute("CREATE SECRET pgpass1 AS 'postgres'")
-        cur.execute("CREATE CONNECTION pg1 FOR POSTGRES HOST 'postgres', DATABASE postgres, USER postgres1, PASSWORD SECRET pgpass1")
-        cur.execute("CREATE SOURCE postgres_source1 FROM POSTGRES CONNECTION pg1 (PUBLICATION 'postgres_source') FOR TABLES (table1 AS pg_table1);")
+        cur.execute(
+            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092'"
+        )
+        cur.execute(
+            "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+        )
     conn.autocommit = False
 
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM kafka_table1")
-        print(cur.fetchall())
-        cur.execute(f"SELECT * FROM pg_table1")
-        print(cur.fetchall())
+    executor_classes = [KafkaExecutor, PgCdcExecutor]
 
-    # with open(f"data-ingest/user.avsc") as f:
-    #    schema_str = f.read()
-
-    # with open(f"data-ingest/key.avsc") as f:
-    #    key_schema_str = f.read()
-
-    # schema_registry_conf = {'url': "http://schema-registry:8081/"}
-    # schema_registry_client = SchemaRegistryClient(schema_registry_conf)
-    ## Can call register_schema and get_schema: https://github.com/confluentinc/confluent-kafka-python/blob/842e2df13b3eebc5ae5562f050008c1932c8332d/src/confluent_kafka/schema_registry/schema_registry_client.py#L252
-
-    # avro_serializer = AvroSerializer(schema_registry_client,
-    #                                 schema_str,
-    #                                 idfn)
-
-    # key_avro_serializer = AvroSerializer(schema_registry_client,
-    #                                     key_schema_str,
-    #                                     idfn)
-
-    ## docker port data-ingest-kafka-1 9092
-    # producer_conf = {'bootstrap.servers': "kafka:9092"}
-    # producer = Producer(producer_conf)
-
-    # producer.poll(0.0)
-    ## Have to copy
-    # topic = "testdrive-upsert-insert-2074592892"
-    ## 6 seconds for 1 million productions, 18k/s, should be performant enough
-    ## 1 Python thread can load 15 clusterd threads at ~100% each
-    # for i in range(1000):
-    #    producer.produce(topic=topic,
-    #                     #partition=0,
-    #                     key=key_avro_serializer({"key1": f"A{i}"}, SerializationContext(topic, MessageField.KEY)),
-    #                    value=avro_serializer({"f1": f"A{i*2}"}, SerializationContext(topic, MessageField.VALUE)),
-    #                    on_delivery=delivery_report)
-    #    if i % 100_000 == 0:
-    #        producer.flush()
-    # producer.flush()
+    for i, workload in enumerate([SingleSensorUpdating(), DeleteDataAtEndOfDay()]):
+        execute_workload(executor_classes, workload, conn, i)
 
 
 main()
