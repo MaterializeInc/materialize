@@ -131,9 +131,12 @@ known_errors = [
     "numeric field overflow",
     "bigint out of range",
     "uint8 out of range",
+    "uint4 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
     "not supported for type time",
+    "coalesce types text and text list cannot be matched",  # Bad typing for ||
+    "coalesce types text list and text cannot be matched",  # Bad typing for ||
 ]
 
 
