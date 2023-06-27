@@ -650,21 +650,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     }
 }
 
-/// A trait that is used to calculate safe _resumption frontiers_ for a source.
-///
-/// Use [`CreateResumptionFrontierCalc::create_calc`] to create a [`ResumptionFrontierCalculator`].
-/// Then repeatedly call [`ResumptionFrontierCalculator::calculate_resumption_frontier`] to
-/// efficiently calculate an up-to-date frontier.
-#[async_trait]
-pub trait CreateResumptionFrontierCalc<T: Timestamp + Lattice + Codec64> {
-    /// Creates a [`ResumptionFrontierCalculator`], which can be used to efficiently calculate a new
-    /// _resumption frontier_ when needed.
-    async fn create_calc(
-        &self,
-        client_cache: &PersistClientCache,
-    ) -> ResumptionFrontierCalculator<T>;
-}
-
 /// Holds both the [`WriteHandle`] and the last effective upper we want to use for that handle.
 ///
 /// We use the term "effective upper" because we might want to "move the upper backward" so that the
@@ -707,10 +692,45 @@ pub struct ResumptionFrontierCalculator<T: Timestamp + Lattice + Codec64> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
-    pub fn new(
-        initial_frontier: Antichain<T>,
-        upper_states: BTreeMap<GlobalId, UpperState<T>>,
+    pub async fn new(
+        client_cache: &PersistClientCache,
+        ingestion_description: IngestionDescription<CollectionMetadata>,
     ) -> Self {
+        let mut upper_states = BTreeMap::new();
+        for (id, export) in ingestion_description.source_exports.iter() {
+            // Explicit destructuring to force a compile error when the metadata change
+            let CollectionMetadata {
+                persist_location,
+                remap_shard: _,
+                data_shard,
+                // The status shard only contains non-definite status updates
+                status_shard: _,
+                relation_desc,
+            } = &export.storage_metadata;
+            let handle = client_cache
+                .open(persist_location.clone())
+                .await
+                .expect("error creating persist client")
+                .open_writer::<SourceData, (), T, Diff>(
+                    *data_shard,
+                    &format!("resumption data {}", id),
+                    Arc::new(relation_desc.clone()),
+                    Arc::new(UnitSchema),
+                )
+                .await
+                .unwrap();
+            upper_states.insert(*id, UpperState::new(handle));
+        }
+
+        let initial_frontier = match ingestion_description.desc.envelope {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) => Antichain::new(),
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+
         ResumptionFrontierCalculator {
             initial_frontier,
             upper_states,

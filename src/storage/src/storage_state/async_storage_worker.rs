@@ -15,7 +15,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -25,7 +24,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::local::Activatable;
-use mz_storage_client::controller::{CollectionMetadata, CreateResumptionFrontierCalc};
+use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
@@ -186,10 +185,10 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                         ingestion_description,
                         _phantom_data,
                     ) => {
-                        let mut calc = ingestion_description
-                            .create_calc(&persist_clients)
-                            .instrument(span.clone())
-                            .await;
+                        let mut calc =
+                            ResumptionFrontierCalculator::new(&persist_clients, ingestion.clone())
+                                .instrument(span.clone())
+                                .await;
 
                         let resume_upper =
                             calc.calculate_resumption_frontier().instrument(span).await;

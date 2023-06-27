@@ -18,7 +18,8 @@ use std::rc::Rc;
 use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_repr::Timestamp;
-use mz_storage_client::controller::CreateResumptionFrontierCalc;
+use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use mz_storage_client::types::sources::IngestionDescription;
 use mz_timely_util::builder_async::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
@@ -37,14 +38,13 @@ use crate::source::source_reader_pipeline::RawSourceCreationConfig;
 /// frontier becomes the empty antichain.
 ///
 /// This is useful when a source is finite or finishes for other reasons.
-pub fn resumption_operator<G, R>(
+pub fn resumption_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
-    calc: R,
+    ingestion_description: IngestionDescription<CollectionMetadata>,
 ) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp> + Clone,
-    R: CreateResumptionFrontierCalc<Timestamp> + 'static,
 {
     let RawSourceCreationConfig {
         id,
@@ -81,7 +81,8 @@ where
         // See <https://docs.rs/tokio/latest/tokio/time/struct.Interval.html#method.tick>
         interval.tick().await;
 
-        let mut calc = calc.create_calc(&persist_clients).await;
+        let mut calc =
+            ResumptionFrontierCalculator::new(&persist_clients, ingestion_description).await;
 
         while !upper.is_empty() {
             interval.tick().await;

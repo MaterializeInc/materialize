@@ -52,13 +52,13 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::{CollectionMetadata, CreateResumptionFrontierCalc};
+use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{
-    MzOffset, SourceConnection, SourceExport, SourceTimestamp,
+    IngestionDescription, MzOffset, SourceConnection, SourceExport, SourceTimestamp,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -168,12 +168,12 @@ pub struct SourceCreationParams {
 ///
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
-pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
+pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    calc: R,
+    ingestion_description: IngestionDescription<CollectionMetadata>,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
@@ -184,7 +184,6 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
-    R: CreateResumptionFrontierCalc<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
     let id = config.id;
@@ -194,7 +193,7 @@ where
         "timely-{worker_id} building source pipeline",
     );
     let (resume_stream, resume_token) =
-        super::resumption::resumption_operator(scope, config.clone(), calc);
+        super::resumption::resumption_operator(scope, config.clone(), ingestion_description);
 
     let reclock_follower = {
         let upper_ts = config.resume_upper.as_option().copied().unwrap();
