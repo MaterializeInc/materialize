@@ -10,3 +10,4 @@
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 CREATE ROLE r1;
 GRANT CREATEDB ON SYSTEM TO r1;
+REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
