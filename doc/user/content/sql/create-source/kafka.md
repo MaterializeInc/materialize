@@ -171,7 +171,7 @@ SELECT
     seller,
     item,
     (
-        SELECT convert_from((h).value, 'utf8')::bigint AS client_id
+        SELECT convert_from((h).value, 'utf8') AS client_id
         FROM unnest(headers) AS h
         WHERE (h).key = 'client_id'
     )
