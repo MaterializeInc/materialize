@@ -161,40 +161,27 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the headers in a message, you can unpack the value:
+To retrieve the individual headers in a message, you can unpack and decode their values.
+The following example parses the UTF-8 encoded `client_id` header of the messages from the Kafka topic.
+Messages without a `client_id` header result in null values (`"\N"`) for the parsed attribute.
 
 ```sql
-SELECT key,
-       field1,
-       field2,
-       headers[1].value AS kafka_header
-FROM mv_kafka_metadata;
+SELECT
+    id,
+    seller,
+    item,
+    (
+        SELECT convert_from((h).value, 'utf8') AS client_id
+        FROM unnest(headers) AS h
+        WHERE (h).key = 'client_id'
+    )
+FROM kafka_metadata;
 
-  key  |  field1  |  field2  |  kafka_header
--------+----------+----------+----------------
-  foo  |  fooval  |   1000   |     hvalue
-  bar  |  barval  |   5000   |     <null>
-```
-
-, or lookup by key:
-
-```sql
-SELECT key,
-       field1,
-       field2,
-       thekey,
-       value
-FROM (SELECT key,
-             field1,
-             field2,
-             unnest(headers).key AS thekey,
-             unnest(headers).value AS value
-      FROM mv_kafka_metadata) AS km
-WHERE thekey = 'kvalue';
-
-  key  |  field1  |  field2  |  thekey  |  value
--------+----------+----------+----------+--------
-  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+ id | seller |        item        | client_id
+----+--------+--------------------+-----------
+  2 |   1592 | Custom Art         |        23
+  7 |   1509 | Custom Art         |        42
+  3 |   1411 | City Bar Crawl     |      "\N"
 ```
 
 Note that:
