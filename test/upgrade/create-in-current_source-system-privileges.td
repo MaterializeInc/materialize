@@ -8,5 +8,5 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-CREATE ROLE r1
-GRANT CREATEDB TO r1
+CREATE ROLE r1;
+GRANT CREATEDB ON SYSTEM TO r1;
