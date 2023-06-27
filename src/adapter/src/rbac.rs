@@ -19,7 +19,8 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogItemType, ObjectType, RoleAttributes, SessionCatalog, SystemObjectType,
+    CatalogItemType, ErrorMessageObjectDescription, ObjectType, RoleAttributes, SessionCatalog,
+    SystemObjectType,
 };
 use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId};
 use mz_sql::plan::{
@@ -70,10 +71,9 @@ pub enum UnauthorizedError {
     #[error("must be a member of {}", role_names.iter().map(|role| role.quoted()).join(", "))]
     RoleMembership { role_names: Vec<String> },
     /// The action requires one or more privileges.
-    #[error("permission denied for {object_type} {object_name}")]
+    #[error("permission denied for {object_description}")]
     Privilege {
-        object_type: ObjectType,
-        object_name: String,
+        object_description: ErrorMessageObjectDescription,
     },
     // TODO(jkosh44) When we implement parameter privileges, this can be replaced with a regular
     //  privilege error.
@@ -1435,8 +1435,10 @@ fn check_object_privileges(
             .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
         if !role_privileges.contains(acl_mode) {
             return Err(UnauthorizedError::Privilege {
-                object_type: catalog.get_object_type(&object_id),
-                object_name: catalog.get_object_name(&object_id),
+                object_description: ErrorMessageObjectDescription::from_id(
+                    &SystemObjectId::Object(object_id),
+                    catalog,
+                ),
             });
         }
     }

@@ -29,7 +29,9 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::parser::ParserError;
 
-use crate::catalog::{CatalogError, CatalogItemType, SystemObjectType};
+use crate::catalog::{
+    CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
+};
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
@@ -93,8 +95,7 @@ pub enum PlanError {
     },
     InvalidPrivilegeTypes {
         invalid_privileges: AclMode,
-        object_type: SystemObjectType,
-        object_name: Option<String>,
+        object_description: ErrorMessageObjectDescription,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
@@ -373,9 +374,8 @@ impl fmt::Display for PlanError {
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
-            Self::InvalidPrivilegeTypes{ invalid_privileges, object_type, object_name} => {
-                let object_name = object_name.as_ref().map(|object_name| format!(" {}", object_name.quoted())).unwrap_or_else(||"".to_string());
-                write!(f, "invalid privilege types {} for {}{}", invalid_privileges.to_error_string(), object_type, object_name)
+            Self::InvalidPrivilegeTypes{ invalid_privileges, object_description, } => {
+                write!(f, "invalid privilege types {} for {}", invalid_privileges.to_error_string(), object_description)
             },
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
