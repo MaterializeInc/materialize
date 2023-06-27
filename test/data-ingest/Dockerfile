@@ -25,5 +25,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY . data-ingest/
 
-#ENTRYPOINT ["python3", "data-ingest/data-ingest.py"]
-ENTRYPOINT ["bash", "-c", "python3 data-ingest/data-ingest.py || bash"]
+ENTRYPOINT ["python3", "data-ingest/data-ingest.py"]
+#ENTRYPOINT ["bash", "-c", "python3 data-ingest/data-ingest.py || bash"]
