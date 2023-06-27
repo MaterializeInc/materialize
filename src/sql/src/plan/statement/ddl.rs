@@ -2789,6 +2789,9 @@ pub fn plan_create_cluster(
         if size.is_some() {
             sql_bail!("SIZE not supported for unmanaged clusters");
         }
+        if disk.is_some() {
+            sql_bail!("DISK not supported for unmanaged clusters");
+        }
         let mut replicas = vec![];
         for ReplicaDefinition { name, options } in replica_defs {
             replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
