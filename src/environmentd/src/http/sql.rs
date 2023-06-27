@@ -17,6 +17,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
+use futures::future::BoxFuture;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
@@ -453,25 +454,49 @@ pub struct CommandStarting {
 /// accumulate into a Vec and send all at once. WebSocket clients send each
 /// message as they occur.
 #[async_trait]
-trait ResultSender {
-    /// Adds a result to the client. Returns Err if sending to the client
-    /// produced an error and the server should disconnect. Returns Ok(Err) if
-    /// the statement produced an error and should error the transaction, but
-    /// remain connected. Returns Ok(Ok(())) if the statement succeeded.
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error>;
-    /// Awaits a future while also able to check the status of the client
-    /// connection. Should return an error if the client connection has gone
-    /// away.
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
+trait ResultSender: Send {
+    /// Adds a result to the client. `canceled` is a function that returns a future that resolves if
+    /// a cancellation request was issued for this connection. Returns Err if sending to the client
+    /// produced an error and the server should disconnect. Returns Ok(Err) if the statement
+    /// produced an error and should error the transaction, but remain connected. Returns Ok(Ok(()))
+    /// if the statement succeeded.
+    async fn add_result<C, F>(
+        &mut self,
+        canceled: C,
+        res: StatementResult,
+    ) -> Result<Result<(), ()>, anyhow::Error>
     where
-        F: Future<Output = R> + Send;
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send;
+    /// Returns a future that resolves only when the client connection has gone away.
+    fn connection_error(&mut self) -> BoxFuture<anyhow::Error>;
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
+
+    async fn await_rows<C, F, R>(&mut self, cancelled: C, f: F) -> Result<R, anyhow::Error>
+    where
+        C: Future<Output = ()> + Send,
+        F: Future<Output = R> + Send,
+    {
+        tokio::select! {
+            _ = cancelled => anyhow::bail!("query canceled"),
+            e = self.connection_error() => Err(e),
+            r = f => Ok(r),
+        }
+    }
 }
 
 #[async_trait]
 impl ResultSender for SqlResponse {
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
+    async fn add_result<C, F>(
+        &mut self,
+        _canceled: C,
+        res: StatementResult,
+    ) -> Result<Result<(), ()>, anyhow::Error>
+    where
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send,
+    {
         Ok(match res {
             StatementResult::SqlResult(res) => {
                 let is_err = matches!(res, SqlResult::Err { .. });
@@ -492,11 +517,8 @@ impl ResultSender for SqlResponse {
         })
     }
 
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
-    where
-        F: Future<Output = R> + Send,
-    {
-        Ok(f.await)
+    fn connection_error(&mut self) -> BoxFuture<anyhow::Error> {
+        Box::pin(futures::future::pending())
     }
 
     fn allow_subscribe(&self) -> bool {
@@ -506,7 +528,15 @@ impl ResultSender for SqlResponse {
 
 #[async_trait]
 impl ResultSender for WebSocket {
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
+    async fn add_result<C, F>(
+        &mut self,
+        canceled: C,
+        res: StatementResult,
+    ) -> Result<Result<(), ()>, anyhow::Error>
+    where
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send,
+    {
         async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), anyhow::Error> {
             let msg = serde_json::to_string(&msg).expect("must serialize");
             Ok(ws.send(Message::Text(msg)).await?)
@@ -570,7 +600,7 @@ impl ResultSender for WebSocket {
 
                 let mut datum_vec = mz_repr::DatumVec::new();
                 loop {
-                    match self.await_rows(rx.recv()).await? {
+                    match self.await_rows(canceled(), rx.recv()).await? {
                         Some(PeekResponseUnary::Rows(rows)) => {
                             for row in rows {
                                 let datums = datum_vec.borrow_with(&row);
@@ -610,25 +640,17 @@ impl ResultSender for WebSocket {
 
     // Send a websocket Ping every second to verify the client is still
     // connected.
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
-    where
-        F: Future<Output = R> + Send,
-    {
-        let pinger = async {
+    fn connection_error(&mut self) -> BoxFuture<anyhow::Error> {
+        Box::pin(async {
             let mut tick = time::interval(Duration::from_secs(1));
             tick.tick().await;
             loop {
                 tick.tick().await;
                 if let Err(err) = self.send(Message::Ping(Vec::new())).await {
-                    return err;
+                    return anyhow::anyhow!(err);
                 }
             }
-        };
-
-        tokio::select! {
-            err = pinger => Err(err.into()),
-            data = f => Ok(data),
-        }
+        })
     }
 
     fn allow_subscribe(&self) -> bool {
@@ -650,21 +672,23 @@ async fn execute_stmt_group<S: ResultSender>(
 
         let is_aborted_txn = matches!(client.session().transaction(), TransactionStatus::Failed(_));
         if is_aborted_txn && !is_txn_exit_stmt(&stmt) {
-            let _ = sender.add_result(SqlResult::err(
+            let err = SqlResult::err(
                 client,
                 "current transaction is aborted, commands ignored until end of transaction block",
-            ).into()).await?;
+            );
+            let _ = sender.add_result(|| client.canceled(), err.into()).await?;
             return Ok(Err(()));
         }
 
         // Mirror the behavior of the PostgreSQL simple query protocol.
         // See the pgwire::protocol::StateMachine::query method for details.
         if let Err(e) = client.start_transaction(Some(num_stmts)) {
-            let _ = sender.add_result(SqlResult::err(client, e).into()).await?;
+            let err = SqlResult::err(client, e);
+            let _ = sender.add_result(|| client.canceled(), err.into()).await?;
             return Ok(Err(()));
         }
         let res = execute_stmt(client, sender, stmt, params).await?;
-        let is_err = sender.add_result(res).await?;
+        let is_err = sender.add_result(|| client.canceled(), res).await?;
         if is_err.is_err() {
             // Mirror StateMachine::error, which sometimes will clean up the
             // transaction state instead of always leaving it in Failed.
@@ -676,9 +700,8 @@ async fn execute_stmt_group<S: ResultSender>(
                 // In Started (i.e., a single statement) and implicit transactions cleanup themselves.
                 TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => {
                     if let Err(err) = client.end_transaction(EndTransactionAction::Rollback).await {
-                        let _ = sender
-                            .add_result(SqlResult::err(client, err.to_string()).into())
-                            .await?;
+                        let err = SqlResult::err(client, err.to_string());
+                        let _ = sender.add_result(|| client.canceled(), err.into()).await?;
                     }
                 }
                 // Explicit transactions move to failed.
@@ -962,7 +985,7 @@ async fn execute_stmt<S: ResultSender>(
             future: rows,
             span: _,
         } => {
-            let rows = match sender.await_rows(rows).await? {
+            let rows = match sender.await_rows(client.canceled(), rows).await? {
                 PeekResponseUnary::Rows(rows) => rows,
                 PeekResponseUnary::Error(e) => {
                     return Ok(SqlResult::err(client, e).into());
