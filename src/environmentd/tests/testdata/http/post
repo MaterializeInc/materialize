@@ -12,28 +12,28 @@ http
 {"query":"select 1+2 as col"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Multiple queries are ok.
 http
 {"query":"select 1; select 2"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"tag":"SELECT 1","rows":[[2]],"col_names":["?column?"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Arrays + lists work
 http
 {"query":"select array[1], list[2]"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[[1],[2]]],"col_names":["array","list"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[[1],[2]]],"desc":{"columns":[{"name":"array","type_oid":1007,"type_len":-1,"type_mod":-1},{"name":"list","type_oid":16384,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
 
 # Succeeding and failing queries can mix and match.
 http
 {"query":"select 1; select * from noexist;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"error":{"message":"unknown catalog item 'noexist'","code":"XX000"},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"error":{"message":"unknown catalog item 'noexist'","code":"XX000"},"notices":[]}]}
 
 # CREATEs should work when provided alone.
 http
@@ -80,7 +80,7 @@ http
 {"query":"select * from t;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"query":"delete from t"}
@@ -99,19 +99,19 @@ http
 {"query":"begin; select 1; commit"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]}]}
 
 http
 {"query":"begin; select 1; commit; select 2;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"tag":"SELECT 1","rows":[[2]],"col_names":["?column?"],"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"query":"select 1; begin; select 2; commit;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[2]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]}]}
 
 http
 {"query":"begin; select 1/0; commit; select 2;"}
@@ -123,7 +123,7 @@ http
 {"query":"begin; select 1; commit; select 1/0;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"select 1/0; begin; select 2; commit;"}
@@ -135,7 +135,7 @@ http
 {"query":"select 1; begin; select 1/0; commit;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 # Txns w/ writes
 
@@ -151,7 +151,7 @@ http
 {"query":"select * from t;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 0","rows":[],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 0","rows":[],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Explicit txn invocation commits values w/in txn, irrespective of results outside txn
 http
@@ -164,7 +164,7 @@ http
 {"query":"select * from t;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"query":"delete from t;"}
@@ -188,7 +188,7 @@ http
 {"query":"select * from t;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"query":"delete from t;"}
@@ -207,7 +207,7 @@ http
 {"query":"select * from t;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 0","rows":[],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 0","rows":[],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Empty query OK.
 http
@@ -239,13 +239,13 @@ http
 {"query":"EXPLAIN SELECT 1"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n"]],"col_names":["Optimized Plan"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n"]],"desc":{"columns":[{"name":"Optimized Plan","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"query":"SHOW VIEWS"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["v"]],"col_names":["name"],"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]}]}
+{"results":[{"tag":"SELECT 1","rows":[["v"]],"desc":{"columns":[{"name":"name","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]}]}
 
 http
 {"query":"SET cluster = default"}
@@ -258,47 +258,47 @@ http
 {"queries":[{"query":"select $1+$2::int as col","params":["1","2"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
  # Parameters can be present and empty
 http
 {"queries":[{"query":"select 3 as col","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Multiple statements
 http
 {"queries":[{"query":"select 1 as col","params":[]},{"query":"select $1+$2::int as col","params":["1","2"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["col"],"notices":[]},{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"queries":[{"query":"select $1+$2::int as col","params":["1","2"]},{"query":"select 1 as col","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"queries":[{"query":"select $1+$2::int as col","params":["1","2"]},{"query":"select $1*$2::int as col","params":["2","3"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]},{"tag":"SELECT 1","rows":[[6]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[6]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Quotes escaped
 http
 {"queries":[{"query":"select length($1), length($2)","params":["abc","'abc'"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3,5]],"col_names":["length","length"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3,5]],"desc":{"columns":[{"name":"length","type_oid":23,"type_len":4,"type_mod":-1},{"name":"length","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # All parameters values treated as strings
 http
 {"queries":[{"query":"select length($1), length($2)","params":["sum(a)","SELECT * FROM t;"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[6,16]],"col_names":["length","length"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[6,16]],"desc":{"columns":[{"name":"length","type_oid":23,"type_len":4,"type_mod":-1},{"name":"length","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Too many parameters
 http
@@ -319,14 +319,14 @@ http
 {"queries":[{"query":"select $1::decimal+2 as col","params":["nan"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["NaN"]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[["NaN"]],"desc":{"columns":[{"name":"col","type_oid":1700,"type_len":-1,"type_mod":2555947}]},"notices":[]}]}
 
 # Null string value parameters
 http
 {"queries":[{"query":"select $1+$2::int as col","params":["1",null]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[null]],"col_names":["col"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[null]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Empty query
 http
@@ -387,7 +387,7 @@ http
 {"queries":[{"query":"select * from t","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 0","rows":[],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 0","rows":[],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 # Writes
 http
@@ -400,7 +400,7 @@ http
 {"queries":[{"query":"select * from t","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"queries":[{"query":"insert into t values ($1);","params":["4"]},{"query":"begin;","params":[]},{"query":"select 1/0;","params":[]},{"query":"commit;","params":[]}]}
@@ -412,7 +412,7 @@ http
 {"queries":[{"query":"select * from t","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"queries":[{"query":"subscribe (select * from t)","params":[]}]}
