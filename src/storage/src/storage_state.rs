@@ -1274,10 +1274,16 @@ impl StorageState {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         //
                         // This handler removes state that is put in place by
-                        // the handler for `CreateSources`/`CreateSinks`, while
+                        // the handler for `RunIngestions`/`CreateSinks`, while
                         // the handler for the internal command does the same
                         // for the state put in place by its corresponding
                         // creation command.
+
+                        // Cleanup exports and ingestions immediately to ensure
+                        // they are not re-rendered in the case of
+                        // reconciliation.
+                        self.exports.remove(&id);
+                        self.ingestions.remove(&id);
 
                         // This will stop reporting of frontiers.
                         self.reported_frontiers.remove(&id);

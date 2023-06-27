@@ -29,7 +29,7 @@ REVOKE CREATE ON CLUSTER default FROM materialize;
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:permission denied for SCHEMA materialize.public
+contains:permission denied for SCHEMA "materialize.public"
 
 $ postgres-execute connection=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO materialize;
@@ -38,7 +38,7 @@ GRANT CREATE ON SCHEMA materialize.public TO materialize;
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:permission denied for TABLE materialize.public.t
+contains:permission denied for TABLE "materialize.public.t"
 
 $ postgres-execute connection=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO materialize;
@@ -47,7 +47,7 @@ GRANT USAGE ON SCHEMA materialize.public TO materialize;
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:permission denied for TABLE materialize.public.t
+contains:permission denied for TABLE "materialize.public.t"
 
 $ postgres-execute connection=mz_system
 GRANT SELECT ON TABLE t TO materialize;
@@ -64,7 +64,7 @@ REVOKE CREATE ON schema materialize.public FROM materialize;
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:permission denied for SCHEMA materialize.public
+contains:permission denied for SCHEMA "materialize.public"
 
 $ postgres-execute connection=mz_system
 REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM materialize;

@@ -20,7 +20,8 @@
 
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
+use mz_sql::names::SystemObjectId;
 use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
@@ -310,11 +311,10 @@ pub fn user_privilege_hack(
         let item = catalog.get_item(id);
         let full_name = catalog.resolve_full_name(item.name());
         if !catalog.is_system_schema(&full_name.schema) {
+            let object_description =
+                ErrorMessageObjectDescription::from_id(&SystemObjectId::Object(id.into()), catalog);
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege {
-                    object_type: item.item_type().into(),
-                    object_name: full_name.to_string(),
-                },
+                rbac::UnauthorizedError::Privilege { object_description },
             ));
         }
     }

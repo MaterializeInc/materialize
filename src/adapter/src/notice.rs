@@ -16,7 +16,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
-use mz_sql::catalog::SystemObjectType;
+use mz_sql::catalog::ErrorMessageObjectDescription;
 use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
 
@@ -99,12 +99,11 @@ pub enum AdapterNotice {
         name: String,
     },
     CannotRevoke {
-        name: String,
+        object_description: ErrorMessageObjectDescription,
     },
     NonApplicablePrivilegeTypes {
         non_applicable_privileges: AclMode,
-        object_type: SystemObjectType,
-        object_name: String,
+        object_description: ErrorMessageObjectDescription,
     },
     PlanNotice(PlanNotice),
 }
@@ -262,20 +261,18 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::AlterIndexOwner { name } => {
                 write!(f, "cannot change owner of {}", name.quoted())
             }
-            AdapterNotice::CannotRevoke { name } => {
-                write!(f, "no privileges could be revoked for {}", name.quoted())
+            AdapterNotice::CannotRevoke { object_description } => {
+                write!(f, "no privileges could be revoked for {object_description}")
             }
             AdapterNotice::NonApplicablePrivilegeTypes {
                 non_applicable_privileges,
-                object_type,
-                object_name,
+                object_description,
             } => {
                 write!(
                     f,
-                    "non-applicable privilege types {} for {} {}",
+                    "non-applicable privilege types {} for {}",
                     non_applicable_privileges.to_error_string(),
-                    object_type,
-                    object_name.quoted()
+                    object_description,
                 )
             }
             AdapterNotice::PlanNotice(plan) => plan.fmt(f),

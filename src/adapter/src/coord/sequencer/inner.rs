@@ -38,8 +38,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
-    CatalogTypeDetails, ObjectType, SessionCatalog, SystemObjectType,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError, CatalogItemType,
+    CatalogRole, CatalogSchema, CatalogTypeDetails, ErrorMessageObjectDescription, ObjectType,
+    SessionCatalog,
 };
 use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier, SystemObjectId,
@@ -73,7 +74,7 @@ use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op,
+    self, Catalog, CatalogItem, Cluster, ConnCatalog, Connection, DataSourceDesc, Op,
     StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
 use crate::command::{ExecuteResponse, Response};
@@ -1097,113 +1098,126 @@ impl Coordinator {
 
     fn validate_dropped_role_ownership(
         &self,
+        session: &Session,
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
             privileges: &PrivilegeMap,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
-            object_type: SystemObjectType,
-            object_name: &str,
-            catalog: &Catalog,
+            object_id: &SystemObjectId,
+            catalog: &ConnCatalog,
         ) {
-            let object_type = object_type.to_string().to_lowercase();
             for privilege in privileges.all_values() {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
                     let grantor_name = catalog.get_role(&privilege.grantor).name();
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
                         .push(format!(
-                            "privileges on {object_type} {object_name} granted by {grantor_name}",
+                            "privileges on {object_description} granted by {grantor_name}",
                         ));
                 }
                 if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
                     let grantee_name = catalog.get_role(&privilege.grantee).name();
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
                         .push(format!(
-                            "privileges granted on {object_type} {object_name} to {grantee_name}"
+                            "privileges granted on {object_description} to {grantee_name}"
                         ));
                 }
             }
         }
 
+        let catalog = self.catalog().for_session(session);
         let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for entry in self.catalog.entries() {
+            let id = SystemObjectId::Object(entry.id().into());
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
+                let object_description = ErrorMessageObjectDescription::from_id(&id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!(
-                        "owner of {} {}",
-                        entry.item().typ(),
-                        entry.name().item
-                    ));
+                    .push(format!("owner of {object_description}"));
             }
             privilege_check(
                 entry.privileges(),
                 dropped_roles,
                 &mut dependent_objects,
-                SystemObjectType::Object(entry.item().typ().into()),
-                &entry.name().item,
-                self.catalog(),
+                &id,
+                &catalog,
             );
         }
         for database in self.catalog.databases() {
+            let database_id = SystemObjectId::Object(database.id().into());
             if let Some(role_name) = dropped_roles.get(&database.owner_id) {
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&database_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("owner of database {}", database.name()));
+                    .push(format!("owner of {object_description}"));
             }
             privilege_check(
                 &database.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                SystemObjectType::Object(ObjectType::Database),
-                database.name(),
-                self.catalog(),
+                &database_id,
+                &catalog,
             );
             for schema in database.schemas_by_id.values() {
+                let schema_id = SystemObjectId::Object(
+                    (ResolvedDatabaseSpecifier::Id(database.id()), *schema.id()).into(),
+                );
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&schema_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("owner of schema {}", schema.name().schema));
+                        .push(format!("owner of {object_description}"));
                 }
                 privilege_check(
                     &schema.privileges,
                     dropped_roles,
                     &mut dependent_objects,
-                    SystemObjectType::Object(ObjectType::Schema),
-                    &schema.name().schema,
-                    self.catalog(),
+                    &schema_id,
+                    &catalog,
                 );
             }
         }
         for cluster in self.catalog.clusters() {
+            let cluster_id = SystemObjectId::Object(cluster.id().into());
             if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&cluster_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("owner of cluster {}", cluster.name()));
+                    .push(format!("owner of {object_description}"));
             }
             privilege_check(
                 &cluster.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                SystemObjectType::Object(ObjectType::Cluster),
-                cluster.name(),
-                self.catalog(),
+                &cluster_id,
+                &catalog,
             );
             for replica in cluster.replicas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
+                    let replica_id =
+                        SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&replica_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("owner of cluster replica {}", replica.name));
+                        .push(format!("owner of {object_description}"));
                 }
             }
         }
@@ -1211,9 +1225,8 @@ impl Coordinator {
             self.catalog().system_privileges(),
             dropped_roles,
             &mut dependent_objects,
-            SystemObjectType::System,
-            "SYSTEM",
-            self.catalog(),
+            &SystemObjectId::System,
+            &catalog,
         );
         for (default_privilege_object, default_privilege_acl_items) in
             self.catalog.default_privileges()
@@ -1273,8 +1286,9 @@ impl Coordinator {
                 .map(|(object_id, _)| object_id)
                 .collect();
             for invalid_revoke in invalid_revokes {
-                let name = session_catalog.get_system_object_name(&invalid_revoke);
-                session.add_notice(AdapterNotice::CannotRevoke { name });
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&invalid_revoke, &session_catalog);
+                session.add_notice(AdapterNotice::CannotRevoke { object_description });
             }
         }
 
@@ -1344,7 +1358,7 @@ impl Coordinator {
         for role_id in dropped_roles.keys() {
             self.catalog().ensure_not_reserved_role(role_id)?;
         }
-        self.validate_dropped_role_ownership(&dropped_roles)?;
+        self.validate_dropped_role_ownership(session, &dropped_roles)?;
         // If any role is a member of a dropped role, then we must revoke that membership.
         let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
         for role in self.catalog().user_roles() {
@@ -3819,11 +3833,11 @@ impl Coordinator {
                 let applicable_privileges = rbac::all_object_privileges(actual_object_type);
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
-                    let object_name = catalog.get_system_object_name(&target_id);
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&target_id, &catalog);
                     warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
                         non_applicable_privileges,
-                        object_type: actual_object_type,
-                        object_name,
+                        object_description,
                     })
                 }
             }

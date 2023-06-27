@@ -25,6 +25,7 @@ use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
@@ -307,14 +308,8 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the object type of `object_id`.
     fn get_object_type(&self, object_id: &ObjectId) -> ObjectType;
 
-    /// Returns the name of `object_id`. For use only in error messages and notices.
-    fn get_object_name(&self, object_id: &ObjectId) -> String;
-
     /// Returns the system object type of `id`.
     fn get_system_object_type(&self, id: &SystemObjectId) -> SystemObjectType;
-
-    /// Returns the name of `id`. For use only in error messages and notices.
-    fn get_system_object_name(&self, id: &SystemObjectId) -> String;
 
     /// Returns the minimal qualification required to unambiguously specify
     /// `qualified_name`.
@@ -1425,6 +1420,88 @@ impl Display for SystemObjectType {
         match self {
             SystemObjectType::Object(object_type) => std::fmt::Display::fmt(&object_type, f),
             SystemObjectType::System => f.write_str("SYSTEM"),
+        }
+    }
+}
+
+/// Enum used to format object names in error messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorMessageObjectDescription {
+    /// The name of a specific object.
+    Object {
+        /// Type of object.
+        object_type: ObjectType,
+        /// Name of object.
+        object_name: Option<String>,
+    },
+    /// The name of the entire system.
+    System,
+}
+
+impl ErrorMessageObjectDescription {
+    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectId`].
+    pub fn from_id(
+        object_id: &SystemObjectId,
+        catalog: &dyn SessionCatalog,
+    ) -> ErrorMessageObjectDescription {
+        match object_id {
+            SystemObjectId::Object(object_id) => {
+                let object_name = match object_id {
+                    ObjectId::Cluster(cluster_id) => {
+                        catalog.get_cluster(*cluster_id).name().to_string()
+                    }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => catalog
+                        .get_cluster_replica(*cluster_id, *replica_id)
+                        .name()
+                        .to_string(),
+                    ObjectId::Database(database_id) => {
+                        catalog.get_database(database_id).name().to_string()
+                    }
+                    ObjectId::Schema((database_spec, schema_spec)) => {
+                        let name = catalog.get_schema(database_spec, schema_spec).name();
+                        catalog.resolve_full_schema_name(name).to_string()
+                    }
+                    ObjectId::Role(role_id) => catalog.get_role(role_id).name().to_string(),
+                    ObjectId::Item(id) => {
+                        let name = catalog.get_item(id).name();
+                        catalog.resolve_full_name(name).to_string()
+                    }
+                };
+                ErrorMessageObjectDescription::Object {
+                    object_type: catalog.get_object_type(object_id),
+                    object_name: Some(object_name),
+                }
+            }
+            SystemObjectId::System => ErrorMessageObjectDescription::System,
+        }
+    }
+
+    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectType`].
+    pub fn from_object_type(object_type: SystemObjectType) -> ErrorMessageObjectDescription {
+        match object_type {
+            SystemObjectType::Object(object_type) => ErrorMessageObjectDescription::Object {
+                object_type,
+                object_name: None,
+            },
+            SystemObjectType::System => ErrorMessageObjectDescription::System,
+        }
+    }
+}
+
+impl Display for ErrorMessageObjectDescription {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorMessageObjectDescription::Object {
+                object_type,
+                object_name,
+            } => {
+                let object_name = object_name
+                    .as_ref()
+                    .map(|object_name| format!(" {}", object_name.quoted()))
+                    .unwrap_or_else(|| "".to_string());
+                write!(f, "{object_type}{object_name}")
+            }
+            ErrorMessageObjectDescription::System => f.write_str("SYSTEM"),
         }
     }
 }
