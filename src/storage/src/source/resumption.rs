@@ -88,7 +88,7 @@ where
             interval.tick().await;
 
             // Get a new lower bound for the resumption frontier
-            let new_upper = calc.calculate_resumption_frontier().await;
+            let new_upper = calc.calculate_ingestion_as_of().await;
 
             if PartialOrder::less_than(&upper, &new_upper) {
                 tracing::debug!(

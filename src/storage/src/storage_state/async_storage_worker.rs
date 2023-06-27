@@ -22,7 +22,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_service::local::Activatable;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::types::sources::{
@@ -42,7 +42,7 @@ use crate::source::types::SourceRender;
 /// responses on another channel. This is useful in places where we can't
 /// normally run async code, such as the timely main loop.
 #[derive(Debug)]
-pub struct AsyncStorageWorker<T: Timestamp + Lattice + Codec64> {
+pub struct AsyncStorageWorker<T: TimestampManipulation + Codec64> {
     tx: mpsc::UnboundedSender<(tracing::Span, AsyncStorageWorkerCommand)>,
     rx: crossbeam_channel::Receiver<AsyncStorageWorkerResponse<T>>,
 }
@@ -74,21 +74,22 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
 async fn reclock_resume_frontier<C, IntoTime>(
     persist_clients: &PersistClientCache,
     ingestion_description: &IngestionDescription<CollectionMetadata>,
-    resume_upper: &Antichain<IntoTime>,
     source_resume_uppers: &BTreeMap<GlobalId, Antichain<IntoTime>>,
 ) -> BTreeMap<GlobalId, Antichain<C::Time>>
 where
     C: SourceConnection + SourceRender,
     IntoTime: Timestamp + Lattice + Codec64 + Display,
 {
-    if **resume_upper == [IntoTime::minimum()] {
-        mz_ore::soft_assert!(
-            source_resume_uppers
-                .iter()
-                .all(|(_, upper)| **upper == [IntoTime::minimum()]),
-            "resumer upper is IntoTime::minimum(), but some collections have moved beyond it"
-        );
+    let mut resume_upper = Antichain::from_elem(IntoTime::minimum());
+    for source_resume_upper in source_resume_uppers.values() {
+        // TODO: this needs to account for some subset having uppers at the
+        // empty anitchain.
+        resume_upper.join_assign(source_resume_upper);
+    }
 
+    // Special-cased to allow starting up before anything has the chance to
+    // write to the remap shard.
+    if *resume_upper == [IntoTime::minimum()] {
         // Every ID's resume upper is min.
         return source_resume_uppers
             .keys()
@@ -123,7 +124,7 @@ where
         .expect("always valid to read at since");
 
     let mut upper = as_of.clone();
-    while PartialOrder::less_than(&upper, resume_upper) {
+    while PartialOrder::less_than(&upper, &resume_upper) {
         for event in subscription.fetch_next().await {
             match event {
                 ListenEvent::Updates(updates) => {
@@ -162,7 +163,7 @@ where
         .collect()
 }
 
-impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
+impl<T: TimestampManipulation + Codec64 + Display> AsyncStorageWorker<T> {
     /// Creates a new [`AsyncStorageWorker`].
     ///
     /// IMPORTANT: The passed in `activatable` is activated when new responses
@@ -187,10 +188,8 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 .instrument(span.clone())
                                 .await;
 
-                        let resume_upper =
-                            calc.calculate_resumption_frontier().instrument(span).await;
-
-                        let export_uppers = calc.get_uppers();
+                        let (ingestion_as_of, export_uppers) =
+                            calc.get_resumption_frontiers().await;
 
                         /// Convenience function to convert `BTreeMap<GlobalId, Antichain<C>>` to
                         /// `BTreeMap<GlobalId, Vec<Row>>`.
@@ -211,7 +210,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 let uppers = reclock_resume_frontier::<KafkaSourceConnection, _>(
                                     &persist_clients,
                                     &ingestion,
-                                    &resume_upper,
                                     &export_uppers,
                                 )
                                 .await;
@@ -222,21 +220,19 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     reclock_resume_frontier::<PostgresSourceConnection, _>(
                                         &persist_clients,
                                         &ingestion,
-                                        &resume_upper,
                                         &export_uppers,
                                     )
                                     .await;
                                 to_vec_row(uppers)
                             }
                             GenericSourceConnection::LoadGenerator(_) => {
-                                let uppers =
-                                    reclock_resume_frontier::<LoadGeneratorSourceConnection, _>(
-                                        &persist_clients,
-                                        &ingestion,
-                                        &resume_upper,
-                                        &export_uppers,
-                                    )
-                                    .await;
+                                let uppers = reclock_resume_frontier::<
+                                    LoadGeneratorSourceConnection,
+                                    _,
+                                >(
+                                    &persist_clients, &ingestion, &export_uppers
+                                )
+                                .await;
                                 to_vec_row(uppers)
                             }
                             GenericSourceConnection::TestScript(_) => {
@@ -244,7 +240,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     reclock_resume_frontier::<TestScriptSourceConnection, _>(
                                         &persist_clients,
                                         &ingestion,
-                                        &resume_upper,
                                         &export_uppers,
                                     )
                                     .await;
@@ -256,7 +251,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper(
                                 id,
                                 ingestion,
-                                resume_upper,
+                                ingestion_as_of,
                                 source_resume_upper,
                             ),
                         );

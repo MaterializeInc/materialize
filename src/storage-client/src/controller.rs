@@ -650,53 +650,59 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     }
 }
 
-/// Holds both the [`WriteHandle`] and the last effective upper we want to use for that handle.
-///
-/// We use the term "effective upper" because we might want to "move the upper backward" so that the
-/// shard's upper appears to be the resumption frontier. This upper, then, is _not_ appropriate to
-/// use with [`WriteHandle::compare_and_append`] (i.e. it is not appropriate to use as the
-/// `expected_upper` argument), but is meant to be used in contexts where [`WriteHandle::append`] is
-/// appropriate.
-pub struct UpperState<T: Timestamp + Lattice + Codec64> {
-    handle: WriteHandle<SourceData, (), T, Diff>,
+/// Holds  [`WriteHandle`], [`ReadHandle`] and caches the most recently seen
+/// value for the frontier each handle represents.
+pub struct CalcCollectionState<T: Timestamp + Lattice + Codec64> {
+    write_handle: WriteHandle<SourceData, (), T, Diff>,
     last_upper: Antichain<T>,
+    read_handle: ReadHandle<SourceData, (), T, Diff>,
+    last_since: Antichain<T>,
 }
 
-impl<T: Timestamp + Lattice + Codec64> UpperState<T> {
-    pub fn new(handle: WriteHandle<SourceData, (), T, Diff>) -> Self {
-        UpperState {
-            handle,
+impl<T: Timestamp + Lattice + Codec64> CalcCollectionState<T> {
+    pub fn new(
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        read_handle: ReadHandle<SourceData, (), T, Diff>,
+    ) -> Self {
+        CalcCollectionState {
+            write_handle,
             last_upper: Antichain::from_elem(T::minimum()),
+            read_handle,
+            last_since: Antichain::from_elem(T::minimum()),
         }
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> std::fmt::Debug for UpperState<T> {
+impl<T: Timestamp + Lattice + Codec64> std::fmt::Debug for CalcCollectionState<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UpperState")
-            .field("handle", &"<omitted>")
+            .field("write_handle", &"<omitted>")
             .field("last_upper", &self.last_upper)
+            .field("read_handle", &"<omitted>")
+            .field("last_since", &self.last_since)
             .finish()
     }
 }
 
 #[derive(Debug)]
-/// Provides convenience method to to efficiently calculate a new _resumption frontier_ from the
-/// shards desribed by its `upper_states.
+/// Calculate new resumption frontiers for the ingestions.
 ///
 /// For details about the resumption frontier calculation logic, see
-/// [`Self::calculate_resumption_frontier`]'s implementation.
-pub struct ResumptionFrontierCalculator<T: Timestamp + Lattice + Codec64> {
-    initial_frontier: Antichain<T>,
-    upper_states: BTreeMap<GlobalId, UpperState<T>>,
+/// [`Self::get_resumption_frontiers`]'s implementation.
+pub struct ResumptionFrontierCalculator<T: TimestampManipulation + Codec64> {
+    /// Describes what the initial resumption frontier of the collection should
+    /// be whenever we're asked to calculate it. If this is `true`, we always
+    /// calculate the resumption frontiers to be the minimum.
+    snapshot_on_resume: bool,
+    collection_states: BTreeMap<GlobalId, CalcCollectionState<T>>,
 }
 
-impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
+impl<T: TimestampManipulation + Codec64> ResumptionFrontierCalculator<T> {
     pub async fn new(
         client_cache: &PersistClientCache,
         ingestion_description: IngestionDescription<CollectionMetadata>,
     ) -> Self {
-        let mut upper_states = BTreeMap::new();
+        let mut collection_states = BTreeMap::new();
         for (id, export) in ingestion_description.source_exports.iter() {
             // Explicit destructuring to force a compile error when the metadata change
             let CollectionMetadata {
@@ -707,11 +713,11 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
                 status_shard: _,
                 relation_desc,
             } = &export.storage_metadata;
-            let handle = client_cache
+            let (write_handle, read_handle) = client_cache
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff>(
+                .open::<SourceData, (), T, Diff>(
                     *data_shard,
                     &format!("resumption data {}", id),
                     Arc::new(relation_desc.clone()),
@@ -719,62 +725,101 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
                 )
                 .await
                 .unwrap();
-            upper_states.insert(*id, UpperState::new(handle));
+            collection_states.insert(*id, CalcCollectionState::new(write_handle, read_handle));
         }
-
-        let initial_frontier = match ingestion_description.desc.envelope {
-            // We can only resume with the None envelope, which is stateless,
-            // or with the [Debezium] Upsert envelope, which is easy
-            //   (re-ingest the last emitted state)
-            SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) => Antichain::new(),
-            // Otherwise re-ingest everything
-            _ => Antichain::from_elem(T::minimum()),
-        };
 
         ResumptionFrontierCalculator {
-            initial_frontier,
-            upper_states,
+            snapshot_on_resume: match ingestion_description.desc.envelope {
+                // We can only resume with the None envelope, which is stateless,
+                // or with the [Debezium] Upsert envelope, which is easy
+                //   (re-ingest the last emitted state)
+                SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) => false,
+                // Otherwise re-ingest everything
+                _ => true,
+            },
+            collection_states,
         }
     }
 
-    /// Determine the resumption frontier of an ingestion comprised of the shards described by
-    /// `upper_states`.
-    pub async fn calculate_resumption_frontier(&mut self) -> Antichain<T> {
-        // Refresh all write handles' uppers.
-        for UpperState { handle, last_upper } in self.upper_states.values_mut() {
-            *last_upper = handle.fetch_recent_upper().await.clone();
-        }
-
-        let mut resume_upper = self.initial_frontier.clone();
-
-        // The resumption frontier is the min of (the stored initial frontier, all uppers).
-        for t in self
-            .upper_states
-            .values()
-            .map(|UpperState { last_upper, .. }| last_upper.elements())
-            .flatten()
+    /// Determine the time an ingestion can be resumed as a function of the
+    /// shards it's comprised of.
+    ///
+    /// n.b. in Materialize you can "restart" ingestions at any time between its
+    /// since and upper because ingestions will ignore any data written at times
+    /// less than its upper under the assumption that Materialize's ingestions
+    /// are deterministic.
+    pub async fn calculate_ingestion_as_of(&mut self) -> Antichain<T> {
+        // Refresh all collections' states handles' uppers.
+        for CalcCollectionState {
+            write_handle,
+            last_upper,
+            read_handle,
+            last_since,
+        } in self.collection_states.values_mut()
         {
-            resume_upper.insert(t.clone());
+            *last_upper = write_handle.fetch_recent_upper().await.clone();
+            *last_since = read_handle.since().clone()
         }
 
-        // Ensure no upper exceeds the resume upper; however, uppers are permitted to be below it;
-        // this is currently the same as setting each upper to the resume upper, but will, in the
-        // future, let us add collections whose uppers are beneath the resume upper.
-        for UpperState { last_upper, .. } in self.upper_states.values_mut() {
-            if PartialOrder::less_than(&resume_upper, last_upper) {
-                *last_upper = resume_upper.clone();
-            }
+        let mut as_of = Antichain::new();
+
+        // The as of is the
+        // meet(uppers.map(step_back)).advance_by(join(sinces)), i.e. the
+        // maximum of:
+        // - minimum of all written-at times
+        // - maximum of all readable times
+        for CalcCollectionState {
+            last_upper,
+            last_since,
+            ..
+        } in self.collection_states.values()
+        {
+            as_of.extend(last_upper.elements().iter().map(|t| {
+                // Written-at times are on the lower side of the upper frontier,
+                // so adjust down.
+                let mut t = t.step_back().unwrap_or(T::minimum());
+                // Readable times are on the upper side of the since frontier,
+                // leave be.
+                t.advance_by(last_since.borrow());
+                t
+            }));
         }
 
-        resume_upper
+        as_of
     }
 
-    /// Get the most recent uppers of the shards used to generate the last resumption frontier.
-    pub fn get_uppers(&self) -> BTreeMap<GlobalId, Antichain<T>> {
-        self.upper_states
-            .iter()
-            .map(|(id, state)| (*id, state.last_upper.clone()))
-            .collect()
+    /// Get the resumption frontiers for this ingestion as `(as_of,
+    /// subsource_exports)`.
+    ///
+    /// - The `as_of` is the time at which the ingestion itself should be
+    /// resumed.
+    /// - The `subsource_exports` are the effective uppers of the ingestion's
+    ///   export's persist shards.
+    pub async fn get_resumption_frontiers(
+        &mut self,
+    ) -> (Antichain<T>, BTreeMap<GlobalId, Antichain<T>>) {
+        let as_of = if self.snapshot_on_resume {
+            let as_of = Antichain::from_elem(T::minimum());
+            // When we calculate the per-export resume upper this is the moment
+            // to set it to the minimum if the ingestion dataflow requires a
+            // snapshot (i.e. its initial ingestion is zero). In other words
+            // it's the per-export upper that gets affected by whether or not
+            // the pipeline needs a snapshot
+            for CalcCollectionState { last_upper, .. } in self.collection_states.values_mut() {
+                *last_upper = as_of.clone();
+            }
+            as_of
+        } else {
+            self.calculate_ingestion_as_of().await
+        };
+
+        (
+            as_of,
+            self.collection_states
+                .iter()
+                .map(|(id, state)| (*id, state.last_upper.clone()))
+                .collect(),
+        )
     }
 }
 
