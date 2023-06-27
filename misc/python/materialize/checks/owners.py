@@ -106,6 +106,16 @@ class Owners(Check):
         ]
 
     def validate(self) -> Testdrive:
+        # If the cluster was already created at a version without
+        # mz_introspection USAGE privilege on clusters, then it will be granted
+        # during object upgrade, and thus be granted by mz_system, not by
+        # owner_role_01.
+        cluster_grantor = (
+            "owner_role_01"
+            if self.base_version >= MzVersion.parse("0.59.0-dev")
+            else "mz_system"
+        )
+
         return Testdrive(
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
@@ -124,7 +134,7 @@ class Owners(Check):
             + self._create_objects("owner_role_02", 6)
             + self._create_objects("owner_role_03", 7)
             + dedent(
-                """
+                f"""
                 $ psql-execute command="\\l owner_db*"
                 \\                             List of databases
                    Name    |     Owner     | Encoding | Collate | Ctype | Access privileges
@@ -320,7 +330,7 @@ class Owners(Check):
                 contains: column "privileges" does not exist
 
                 > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
-                owner_cluster1 mz_introspection=U/owner_role_01
+                owner_cluster1 mz_introspection=U/{cluster_grantor}
                 owner_cluster1 owner_role_01=UC/owner_role_01
 
                 > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'
