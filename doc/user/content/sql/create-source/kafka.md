@@ -161,40 +161,27 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-The following example assumes that each message has two `utf8` encoded headers: `client_id` and `trace_id`. To retrieve the headers in a message, you can unpack the value:
+To retrieve the individual headers in a message, you can unpack and decode their values.
+The following example parses the UTF-8 encoded `client_id` header of the messages from the Kafka topic.
+Messages without a `client_id` header result in null values (`"\N"`) for the parsed attribute.
 
 ```sql
-SELECT key,
-       field1,
-       field2,
-       convert_from(headers[1].value, 'utf8')::bigint AS client_id
-FROM mv_kafka_metadata;
+SELECT
+    id,
+    seller,
+    item,
+    (
+        SELECT convert_from((h).value, 'utf8')::bigint AS client_id
+        FROM unnest(headers) AS h
+        WHERE (h).key = 'client_id'
+    )
+FROM kafka_metadata;
 
-  key  |  field1  |  field2  |  client_id
--------+----------+----------+-------------
-  foo  |  fooval  |    1000  |         42
-  bar  |  barval  |    5000  |     <null>
-```
-
-You can also lookup headers by key:
-
-```sql
-SELECT key,
-       field1,
-       field2,
-       thekey,
-       value
-FROM (SELECT key,
-             field1,
-             field2,
-             unnest(headers).key AS header_key,
-             convert_from(unnest(headers).value, 'utf8') AS header_value
-      FROM mv_kafka_metadata) AS km
-WHERE header_key = 'trace_id';
-
-  key  |  field1  |  field2  |  header_key  |       header_value      
--------+----------+----------+--------------+--------------------------
-  foo  |  fooval  |   1000   |   trace_id   |  xxx;yyy-yyyyy-yy;zzzzz
+ id | seller |        item        | client_id
+----+--------+--------------------+-----------
+  2 |   1592 | Custom Art         |        23
+  7 |   1509 | Custom Art         |        42
+  3 |   1411 | City Bar Crawl     |      "\N"
 ```
 
 Note that:
@@ -491,7 +478,7 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
     (data->>'field3')::float AS field_3
-  FROM (SELECT convert_from(data, 'utf8')::jsonb AS data FROM json_source);
+  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
 ```
 
 {{< /tab >}}
