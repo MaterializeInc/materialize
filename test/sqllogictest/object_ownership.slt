@@ -2091,6 +2091,11 @@ COMPLETE 0
 # Test DROP OWNED
 
 simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 GRANT CREATE ON DATABASE materialize TO PUBLIC;
 ----
 COMPLETE 0

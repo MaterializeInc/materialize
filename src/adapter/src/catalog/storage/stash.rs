@@ -601,25 +601,32 @@ pub async fn initialize(
             ],
         )
         .await?;
+    let system_privileges: Vec<_> = vec![proto::SystemPrivilegesKey {
+        privileges: Some(proto::MzAclItem {
+            grantee: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(rbac::all_object_privileges(SystemObjectType::System).into_proto()),
+        }),
+    }]
+    .into_iter()
+    // Optionally add system privileges for the bootstrap role.
+    .chain(
+        bootstrap_role
+            .as_ref()
+            .map(|(role_id, _)| proto::SystemPrivilegesKey {
+                privileges: Some(proto::MzAclItem {
+                    grantee: Some(role_id.clone()),
+                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                    acl_mode: Some(
+                        rbac::all_object_privileges(SystemObjectType::System).into_proto(),
+                    ),
+                }),
+            }),
+    )
+    .map(|key| (key, ()))
+    .collect();
     SYSTEM_PRIVILEGES_COLLECTION
-        .initialize(
-            tx,
-            vec![(
-                proto::SystemPrivilegesKey {
-                    privileges: Some(proto::MzAclItem {
-                        grantee: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                        grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                        acl_mode: Some(
-                            AclMode::CREATE_CLUSTER
-                                .union(AclMode::CREATE_DB)
-                                .union(AclMode::CREATE_ROLE)
-                                .into_proto(),
-                        ),
-                    }),
-                },
-                (),
-            )],
-        )
+        .initialize(tx, system_privileges)
         .await?;
 
     // Initialize all other collections to be empty.
