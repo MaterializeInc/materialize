@@ -823,8 +823,6 @@ fn generate_required_privileges(
             ));
             if let Some(id) = cluster_config.cluster_id() {
                 privileges.push((id.into(), AclMode::CREATE, role_id));
-            } else if let Ok(cluster) = catalog.resolve_cluster(None) {
-                privileges.push((cluster.id().into(), AclMode::CREATE, role_id));
             }
             privileges
         }
