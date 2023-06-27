@@ -52,15 +52,6 @@ contains:permission denied for TABLE "materialize.public.t"
 $ postgres-execute connection=mz_system
 GRANT SELECT ON TABLE t TO materialize;
 
-! CREATE SINK s FROM t
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:permission denied for CLUSTER "default"
-
-$ postgres-execute connection=mz_system
-GRANT CREATE ON CLUSTER default TO materialize;
-
 > CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -78,7 +69,6 @@ contains:permission denied for SCHEMA "materialize.public"
 $ postgres-execute connection=mz_system
 REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM materialize;
 REVOKE SELECT ON TABLE t FROM materialize;
-REVOKE CREATE ON CLUSTER default FROM materialize;
 DROP SINK s;
 DROP TABLE t;
 DROP CONNECTION csr_conn;
