@@ -1089,7 +1089,9 @@ impl From<&GlobalId> for ObjectId {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum SystemObjectId {
+    /// The ID of a specific object.
     Object(ObjectId),
+    /// Identifier for the entire system.
     System,
 }
 

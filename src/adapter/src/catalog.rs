@@ -8219,39 +8219,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
-    fn get_object_name(&self, object_id: &ObjectId) -> String {
-        match object_id {
-            ObjectId::Cluster(cluster_id) => self.get_cluster(*cluster_id).name().to_string(),
-            ObjectId::ClusterReplica((cluster_id, replica_id)) => self
-                .get_cluster_replica(*cluster_id, *replica_id)
-                .name()
-                .to_string(),
-            ObjectId::Database(database_id) => self.get_database(database_id).name().to_string(),
-            ObjectId::Schema((database_spec, schema_spec)) => {
-                let name = self.get_schema(database_spec, schema_spec).name();
-                self.resolve_full_schema_name(name).to_string()
-            }
-            ObjectId::Role(role_id) => self.get_role(role_id).name().to_string(),
-            ObjectId::Item(id) => {
-                let name = self.get_item(id).name();
-                self.resolve_full_name(name).to_string()
-            }
-        }
-    }
-
     fn get_system_object_type(&self, id: &SystemObjectId) -> mz_sql::catalog::SystemObjectType {
         match id {
             SystemObjectId::Object(object_id) => {
                 SystemObjectType::Object(self.get_object_type(object_id))
             }
             SystemObjectId::System => SystemObjectType::System,
-        }
-    }
-
-    fn get_system_object_name(&self, id: &SystemObjectId) -> String {
-        match id {
-            SystemObjectId::Object(object_id) => self.get_object_name(object_id),
-            SystemObjectId::System => "SYSTEM".to_string(),
         }
     }
 
