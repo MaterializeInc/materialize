@@ -17,9 +17,6 @@ pub mod objects_v23 {
     include!(concat!(env!("OUT_DIR"), "/objects_v23.rs"));
 }
 
-const MZ_SYSTEM_ROLE_ID: objects_v23::RoleId = objects_v23::RoleId {
-    value: Some(objects_v23::role_id::Value::System(1)),
-};
 const MZ_INTROSPECTION_ROLE_ID: objects_v23::RoleId = objects_v23::RoleId {
     value: Some(objects_v23::role_id::Value::System(2)),
 };
@@ -71,7 +68,7 @@ pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
                 let mut new_value: objects_v23::ClusterValue = value.clone().into();
                 new_value.privileges.push(objects_v23::MzAclItem {
                     grantee: Some(MZ_INTROSPECTION_ROLE_ID),
-                    grantor: Some(MZ_SYSTEM_ROLE_ID),
+                    grantor: value.owner_id.clone().map(Into::into),
                     acl_mode: Some(ACL_MODE_USAGE),
                 });
                 updates.push(MigrationAction::Update(key.clone(), (new_key, new_value)));
@@ -317,8 +314,7 @@ mod tests {
     use super::upgrade;
 
     use crate::upgrade::v22_to_v23::{
-        objects_v22, objects_v23, ACL_MODE_USAGE, MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID,
-        PUBLIC_ROLE_ID,
+        objects_v22, objects_v23, ACL_MODE_USAGE, MZ_INTROSPECTION_ROLE_ID, PUBLIC_ROLE_ID,
     };
     use crate::{DebugStashFactory, TypedCollection};
 
@@ -326,8 +322,11 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test() {
         const ACL_MODE_USAGE_V22: objects_v22::AclMode = objects_v22::AclMode { bitflags: 1 << 8 };
-        const MZ_SYSTEM_ROLE_ID_V22: objects_v22::RoleId = objects_v22::RoleId {
-            value: Some(objects_v22::role_id::Value::System(1)),
+        const OWNER_ROLE_ID_V22: objects_v22::RoleId = objects_v22::RoleId {
+            value: Some(objects_v22::role_id::Value::User(1)),
+        };
+        const OWNER_ROLE_ID_V23: objects_v23::RoleId = objects_v23::RoleId {
+            value: Some(objects_v23::role_id::Value::User(1)),
         };
 
         // Connect to the Stash.
@@ -348,14 +347,12 @@ mod tests {
                     },
                     objects_v22::ClusterValue {
                         name: "dev".into(),
-                        owner_id: Some(objects_v22::RoleId {
-                            value: Some(objects_v22::role_id::Value::User(1)),
-                        }),
+                        owner_id: Some(OWNER_ROLE_ID_V22),
                         privileges: vec![objects_v22::MzAclItem {
                             grantee: Some(objects_v22::RoleId {
                                 value: Some(objects_v22::role_id::Value::User(2)),
                             }),
-                            grantor: Some(MZ_SYSTEM_ROLE_ID_V22),
+                            grantor: Some(OWNER_ROLE_ID_V22),
                             acl_mode: Some(ACL_MODE_USAGE_V22),
                         }],
                         linked_object_id: None,
@@ -427,20 +424,18 @@ mod tests {
                 },
                 objects_v23::ClusterValue {
                     name: "dev".into(),
-                    owner_id: Some(objects_v23::RoleId {
-                        value: Some(objects_v23::role_id::Value::User(1)),
-                    }),
+                    owner_id: Some(OWNER_ROLE_ID_V23),
                     privileges: vec![
                         objects_v23::MzAclItem {
                             grantee: Some(objects_v23::RoleId {
                                 value: Some(objects_v23::role_id::Value::User(2)),
                             }),
-                            grantor: Some(MZ_SYSTEM_ROLE_ID),
+                            grantor: Some(OWNER_ROLE_ID_V23),
                             acl_mode: Some(ACL_MODE_USAGE),
                         },
                         objects_v23::MzAclItem {
                             grantee: Some(MZ_INTROSPECTION_ROLE_ID),
-                            grantor: Some(MZ_SYSTEM_ROLE_ID),
+                            grantor: Some(OWNER_ROLE_ID_V23),
                             acl_mode: Some(ACL_MODE_USAGE),
                         }
                     ],
