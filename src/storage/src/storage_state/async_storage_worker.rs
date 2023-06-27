@@ -43,19 +43,20 @@ use crate::source::types::SourceRender;
 /// normally run async code, such as the timely main loop.
 #[derive(Debug)]
 pub struct AsyncStorageWorker<T: Timestamp + Lattice + Codec64> {
-    tx: mpsc::UnboundedSender<(tracing::Span, AsyncStorageWorkerCommand<T>)>,
+    tx: mpsc::UnboundedSender<(tracing::Span, AsyncStorageWorkerCommand)>,
     rx: crossbeam_channel::Receiver<AsyncStorageWorkerResponse<T>>,
 }
 
 /// Commands for [AsyncStorageWorker].
 #[derive(Debug)]
-pub enum AsyncStorageWorkerCommand<T: Timestamp + Lattice + Codec64> {
+pub enum AsyncStorageWorkerCommand {
     /// Calculate a recent resumption frontier for the ingestion.
-    CalculateResumeFrontier(
-        GlobalId,
-        IngestionDescription<CollectionMetadata>,
-        PhantomData<T>,
-    ),
+    UpdateFrontiers {
+        /// The ID of the collection whose frontiers you want to update.
+        id: GlobalId,
+        /// The description of the ingestion whose frontiers you want to update.
+        ingestion: IngestionDescription<CollectionMetadata>,
+    },
 }
 
 /// Responses from [AsyncStorageWorker].
@@ -180,11 +181,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
         mz_ore::task::spawn(|| "AsyncStorageWorker", async move {
             while let Some((span, command)) = command_rx.recv().await {
                 match command {
-                    AsyncStorageWorkerCommand::CalculateResumeFrontier(
-                        id,
-                        ingestion_description,
-                        _phantom_data,
-                    ) => {
+                    AsyncStorageWorkerCommand::UpdateFrontiers { id, ingestion } => {
                         let mut calc =
                             ResumptionFrontierCalculator::new(&persist_clients, ingestion.clone())
                                 .instrument(span.clone())
@@ -209,11 +206,11 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                         }
 
                         // Create a specialized description to be able to call the generic method
-                        let source_resume_upper = match ingestion_description.desc.connection {
+                        let source_resume_upper = match ingestion.desc.connection {
                             GenericSourceConnection::Kafka(_) => {
                                 let uppers = reclock_resume_frontier::<KafkaSourceConnection, _>(
                                     &persist_clients,
-                                    &ingestion_description,
+                                    &ingestion,
                                     &resume_upper,
                                     &export_uppers,
                                 )
@@ -224,7 +221,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 let uppers =
                                     reclock_resume_frontier::<PostgresSourceConnection, _>(
                                         &persist_clients,
-                                        &ingestion_description,
+                                        &ingestion,
                                         &resume_upper,
                                         &export_uppers,
                                     )
@@ -235,7 +232,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 let uppers =
                                     reclock_resume_frontier::<LoadGeneratorSourceConnection, _>(
                                         &persist_clients,
-                                        &ingestion_description,
+                                        &ingestion,
                                         &resume_upper,
                                         &export_uppers,
                                     )
@@ -246,7 +243,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 let uppers =
                                     reclock_resume_frontier::<TestScriptSourceConnection, _>(
                                         &persist_clients,
-                                        &ingestion_description,
+                                        &ingestion,
                                         &resume_upper,
                                         &export_uppers,
                                     )
@@ -258,7 +255,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                         let res = response_tx.send(
                             AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper(
                                 id,
-                                ingestion_description,
+                                ingestion,
                                 resume_upper,
                                 source_resume_upper,
                             ),
@@ -286,14 +283,10 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
         id: GlobalId,
         ingestion: IngestionDescription<CollectionMetadata>,
     ) {
-        self.send(AsyncStorageWorkerCommand::CalculateResumeFrontier(
-            id,
-            ingestion,
-            PhantomData,
-        ))
+        self.send(AsyncStorageWorkerCommand::UpdateFrontiers { id, ingestion })
     }
 
-    fn send(&self, cmd: AsyncStorageWorkerCommand<T>) {
+    fn send(&self, cmd: AsyncStorageWorkerCommand) {
         self.tx
             .send((tracing::Span::current(), cmd))
             .expect("persist worker exited while its handle was alive")
