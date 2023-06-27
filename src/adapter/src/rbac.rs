@@ -1268,7 +1268,12 @@ fn generate_required_privileges(
         })
         | Plan::Execute(ExecutePlan { name: _, params: _ })
         | Plan::Deallocate(DeallocatePlan { name: _ })
-        | Plan::Raise(RaisePlan { severity: _ })
+        | Plan::Raise(RaisePlan {
+            severity: _,
+            code: _,
+            detail: _,
+            hint: _,
+        })
         | Plan::GrantRole(GrantRolePlan {
             role_ids: _,
             member_ids: _,

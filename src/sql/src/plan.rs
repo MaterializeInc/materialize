@@ -940,6 +940,9 @@ pub struct DeallocatePlan {
 #[derive(Debug)]
 pub struct RaisePlan {
     pub severity: NoticeSeverity,
+    pub code: Option<String>,
+    pub detail: Option<String>,
+    pub hint: Option<String>,
 }
 
 #[derive(Debug)]

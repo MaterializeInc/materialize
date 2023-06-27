@@ -2824,12 +2824,30 @@ impl_display!(DeallocateStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RaiseStatement {
     pub severity: NoticeSeverity,
+    pub code: Option<String>,
+    pub detail: Option<String>,
+    pub hint: Option<String>,
 }
 
 impl AstDisplay for RaiseStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("RAISE ");
         f.write_node(&self.severity);
+        if let Some(code) = &self.code {
+            f.write_str(" CODE '");
+            f.write_node(&display::escape_single_quote_string(code));
+            f.write_str("'");
+        }
+        if let Some(detail) = &self.detail {
+            f.write_str(" DETAIL '");
+            f.write_node(&display::escape_single_quote_string(detail));
+            f.write_str("'");
+        }
+        if let Some(hint) = &self.hint {
+            f.write_str(" HINT '");
+            f.write_node(&display::escape_single_quote_string(hint));
+            f.write_str("'");
+        }
     }
 }
 impl_display!(RaiseStatement);

@@ -67,6 +67,7 @@ Close
 Cluster
 Clusters
 Coalesce
+Code
 Collate
 Columns
 Commit
@@ -107,6 +108,7 @@ Delete
 Delimited
 Delimiter
 Desc
+Detail
 Details
 Discard
 Disk
@@ -155,6 +157,7 @@ Groups
 Having
 Header
 Headers
+Hint
 Hold
 Host
 Hour

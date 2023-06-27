@@ -24,5 +24,8 @@ pub fn plan_raise(scx: &StatementContext, r: RaiseStatement) -> Result<Plan, Pla
     scx.require_feature_flag(&crate::session::vars::ENABLE_RAISE_STATEMENT)?;
     Ok(Plan::Raise(RaisePlan {
         severity: r.severity,
+        code: r.code,
+        detail: r.detail,
+        hint: r.hint,
     }))
 }

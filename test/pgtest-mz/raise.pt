@@ -11,16 +11,15 @@ ReadyForQuery
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 
-
 send
 Query {"query": "RAISE DEBUG"}
 ----
 
-until err_field_typs=S
+until
 CommandComplete
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"DEBUG"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"DEBUG"},{"typ":"C","value":"01000"},{"typ":"M","value":"raised a test debug"}]}
 CommandComplete {"tag":"RAISE"}
 ReadyForQuery {"status":"I"}
 
@@ -28,10 +27,10 @@ send
 Query {"query": "RAISE INFO"}
 ----
 
-until err_field_typs=S
+until
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"INFO"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"INFO"},{"typ":"C","value":"01000"},{"typ":"M","value":"raised a test info"}]}
 CommandComplete {"tag":"RAISE"}
 ReadyForQuery {"status":"I"}
 
@@ -39,10 +38,10 @@ send
 Query {"query": "RAISE LOG"}
 ----
 
-until err_field_typs=S
+until
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"LOG"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"LOG"},{"typ":"C","value":"01000"},{"typ":"M","value":"raised a test log"}]}
 CommandComplete {"tag":"RAISE"}
 ReadyForQuery {"status":"I"}
 
@@ -50,10 +49,10 @@ send
 Query {"query": "RAISE NOTICE"}
 ----
 
-until err_field_typs=S
+until
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"raised a test notice"}]}
 CommandComplete {"tag":"RAISE"}
 ReadyForQuery {"status":"I"}
 
@@ -61,9 +60,21 @@ send
 Query {"query": "RAISE WARNING"}
 ----
 
-until err_field_typs=S
+until
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"raised a test warning"}]}
+CommandComplete {"tag":"RAISE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "RAISE NOTICE CODE '01234' DETAIL 'details here' HINT 'hints here'"}
+----
+
+until err_field_typs=CMSDH
+CommandComplete
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01234"},{"typ":"M","value":"raised a test notice"},{"typ":"D","value":"details here"},{"typ":"H","value":"hints here"}]}
 CommandComplete {"tag":"RAISE"}
 ReadyForQuery {"status":"I"}
