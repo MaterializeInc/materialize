@@ -295,22 +295,28 @@ where
                     dest_frontier.extend(dest_ts);
                 }
                 Err(ReclockError::BeyondUpper(_)) => {}
-                Err(err @ ReclockError::NotBeyondSince(_) | err @ ReclockError::Uninitialized) => {
-                    return Err(err)
-                }
+                Err(err @ ReclockError::Uninitialized) => return Err(err),
             }
         }
 
         Ok(dest_frontier)
     }
 
+    /// Reclocks an `IntoTime` frontier into a `FromTime` frontier.
+    ///
+    /// The conversion has the property that all messages that would be
+    /// reclocked to times beyond the provided `IntoTime` frontier will be
+    /// beyond the returned `FromTime` frontier. This can be used to compute a
+    /// safe starting point to resume producing an `IntoTime` collection at a
+    /// particular frontier.
+    ///
     /// Implements the inverse of the `reclock_frontier` operation.
     pub fn source_upper_at_frontier<'a>(
         &self,
         frontier: AntichainRef<'a, IntoTime>,
     ) -> Result<Antichain<FromTime>, ReclockError<AntichainRef<'a, IntoTime>>> {
         let inner = self.inner.borrow();
-        if *frontier == [IntoTime::minimum()] {
+        if PartialOrder::less_equal(&frontier, &inner.since.frontier()) {
             return Ok(Antichain::from_elem(FromTime::minimum()));
         }
         if !PartialOrder::less_than(&frontier, &inner.upper.borrow()) {
@@ -319,9 +325,6 @@ where
             } else {
                 return Err(ReclockError::BeyondUpper(frontier));
             }
-        }
-        if !PartialOrder::less_than(&inner.since.frontier(), &frontier) {
-            return Err(ReclockError::NotBeyondSince(frontier));
         }
         let mut source_upper = MutableAntichain::new();
 
@@ -402,7 +405,6 @@ impl<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> Drop
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReclockError<T> {
     Uninitialized,
-    NotBeyondSince(T),
     BeyondUpper(T),
 }
 
@@ -1412,7 +1414,7 @@ mod tests {
             partitioned_frontier([(0, MzOffset::from(5))])
         );
 
-        // If we compact too far, we get an error. Note we compact
+        // (rewrite comment) If we compact too far, we get an error. Note we compact
         // to the previous UPPER we were checking.
         remap_read_handle
             .downgrade_since(&Antichain::from_elem(2001.into()))
@@ -1421,9 +1423,7 @@ mod tests {
 
         assert_eq!(
             follower.source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow()),
-            Err(ReclockError::NotBeyondSince(
-                Antichain::from_elem(2001.into()).borrow()
-            ))
+            Ok(Antichain::from_elem(Partitioned::minimum()))
         );
     }
 
