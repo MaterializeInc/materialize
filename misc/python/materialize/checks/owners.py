@@ -95,6 +95,12 @@ class Owners(Check):
         return Testdrive(
             dedent(
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEROLE ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATEROLE
+
                 > CREATE ROLE owner_role_01
                 >[version<5900] ALTER ROLE owner_role_01 CREATEDB CREATECLUSTER
                 >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
@@ -110,6 +116,12 @@ class Owners(Check):
                 self._create_objects("owner_role_01", 2)
                 + dedent(
                     """
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEROLE ON SYSTEM TO materialize
+
+                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER ROLE materialize CREATEROLE
+
                     > CREATE ROLE owner_role_02
                     >[version<5900] ALTER ROLE owner_role_02 CREATEDB CREATECLUSTER
                     >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
@@ -119,6 +131,12 @@ class Owners(Check):
                 + self._create_objects("owner_role_02", 4)
                 + dedent(
                     """
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEROLE ON SYSTEM TO materialize
+
+                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER ROLE materialize CREATEROLE
+
                     > CREATE ROLE owner_role_03
                     >[version<5900] ALTER ROLE owner_role_03 CREATEDB CREATECLUSTER
                     >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
