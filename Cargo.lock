@@ -3704,7 +3704,6 @@ dependencies = [
 name = "mz-compute"
 version = "0.0.0"
 dependencies = [
- "ahash",
  "anyhow",
  "async-trait",
  "bytesize",
@@ -5261,6 +5260,7 @@ dependencies = [
 name = "mz-timely-util"
 version = "0.0.0"
 dependencies = [
+ "ahash",
  "differential-dataflow",
  "futures-util",
  "mz-ore",

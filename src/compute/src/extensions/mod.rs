@@ -12,5 +12,4 @@
 //! Operator extensions to Timely and Differential
 
 pub(crate) mod arrange;
-pub(crate) mod collection;
 pub(crate) mod reduce;
