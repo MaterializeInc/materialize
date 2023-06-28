@@ -632,7 +632,7 @@ impl PersistClient {
             )
         });
         let heartbeat_ts = (self.cfg.now)();
-        let (shard_upper, _, maintenance) = machine
+        let (shard_upper, maintenance) = machine
             .register_writer(
                 &writer_id,
                 &diagnostics.handle_purpose,
