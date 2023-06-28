@@ -82,8 +82,10 @@
 // https://github.com/rust-lang/rust/issues/87417 pans out.
 #![allow(ungated_async_fn_track_caller)]
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::string::ToString;
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
@@ -310,6 +312,7 @@ impl PersistClient {
         purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        shard_labels: BTreeMap<String, String>,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -323,9 +326,10 @@ impl PersistClient {
                 purpose,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
+                shard_labels.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, purpose, key_schema, val_schema)
+            self.open_leased_reader(shard_id, purpose, key_schema, val_schema, shard_labels)
                 .await?,
         ))
     }
@@ -345,6 +349,7 @@ impl PersistClient {
         purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        shard_labels: BTreeMap<String, String>,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -365,6 +370,7 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            shard_labels,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -411,6 +417,7 @@ impl PersistClient {
         shard_id: ShardId,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        shard_labels: BTreeMap<String, String>,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -424,7 +431,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
         );
-        let shard_metrics = self.metrics.shards.shard(&shard_id);
+        let shard_metrics = self.metrics.shards.shard(&shard_id, shard_labels);
 
         // This call ensures that the types match what was used when creating
         // the shard or puts in place the types that we expect for future
@@ -499,6 +506,7 @@ impl PersistClient {
         shard_id: ShardId,
         reader_id: CriticalReaderId,
         purpose: &str,
+        shard_labels: BTreeMap<String, String>,
     ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -520,6 +528,7 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            shard_labels,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -554,6 +563,7 @@ impl PersistClient {
         purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        shard_labels: BTreeMap<String, String>,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -574,6 +584,7 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            shard_labels,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -679,6 +690,18 @@ impl PersistClient {
     pub fn metrics(&self) -> &Arc<Metrics> {
         &self.metrics
     }
+}
+
+// WIP: This is the one spot where GlobalId (even in String form) leaks into mz_persist_client
+// We could put it in another lib, but it's not obvious to me where else it should go
+pub fn default_shard_label_keys() -> Vec<String> {
+    vec!["global_id".to_string()]
+}
+
+pub fn default_shard_labels(global_id: String) -> BTreeMap<String, String> {
+    let mut x = BTreeMap::new();
+    x.insert("global_id".to_string(), global_id);
+    x
 }
 
 #[cfg(test)]

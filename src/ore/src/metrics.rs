@@ -87,7 +87,31 @@ macro_rules! metric {
         // Set buckets if passed
         $(mk_opts.buckets = Some($bk_name);)*
         mk_opts
-    }}
+    }};
+    (
+        name: $name:expr,
+        help: $help:expr,
+        var_labels: $var_labels:expr,
+        $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
+        $(, buckets: $bk_name:expr)?
+        $(,)?
+    ) => {{
+        let const_labels = (&[
+            $($(
+                ($cl_key.to_string(), $cl_value.to_string()),
+            )*)?
+        ]).into_iter().cloned().collect();
+        #[allow(unused_mut)]
+        let mut mk_opts = $crate::metrics::MakeCollectorOpts {
+            opts: $crate::metrics::PrometheusOpts::new($name, $help)
+                .const_labels(const_labels)
+                .variable_labels($var_labels),
+            buckets: None,
+        };
+        // Set buckets if passed
+        $(mk_opts.buckets = Some($bk_name);)*
+        mk_opts
+    }};
 }
 
 /// Options for MakeCollector. This struct should be instantiated using the metric macro.

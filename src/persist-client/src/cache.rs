@@ -71,11 +71,16 @@ impl Drop for RttLatencyTask {
 
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
-    pub fn new<F>(cfg: PersistConfig, registry: &MetricsRegistry, pubsub: F) -> Self
+    pub fn new<F>(
+        cfg: PersistConfig,
+        registry: &MetricsRegistry,
+        pubsub: F,
+        shard_labels: Vec<String>,
+    ) -> Self
     where
         F: FnOnce(&PersistConfig, Arc<Metrics>) -> PubSubClientConnection,
     {
-        let metrics = Arc::new(Metrics::new(&cfg, registry));
+        let metrics = Arc::new(Metrics::new(&cfg, registry, shard_labels));
         let pubsub_client = pubsub(&cfg, Arc::clone(&metrics));
 
         let state_cache = Arc::new(StateCache::new(
@@ -108,6 +113,7 @@ impl PersistClientCache {
             PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
             |_, _| PubSubClientConnection::noop(),
+            vec![],
         )
     }
 
@@ -400,6 +406,7 @@ impl StateCache {
     pub(crate) async fn get<K, V, T, D, F, InitFn>(
         &self,
         shard_id: ShardId,
+        shard_metrics: Arc<ShardMetrics>,
         mut init_fn: InitFn,
     ) -> Result<Arc<LockingTypedState<K, V, T, D>>, Box<CodecMismatch>>
     where
@@ -440,6 +447,7 @@ impl StateCache {
                                 shard_id,
                                 init_res?,
                                 Arc::clone(&self.metrics),
+                                Arc::clone(&shard_metrics),
                                 Arc::clone(&self.cfg),
                                 Arc::clone(&self.pubsub_sender).subscribe(&shard_id),
                             ));
@@ -538,7 +546,7 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     notifier: StateWatchNotifier,
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
-    shard_metrics: Arc<ShardMetrics>,
+    pub(crate) shard_metrics: Arc<ShardMetrics>,
     _subscription_token: Arc<ShardSubscriptionToken>,
 }
 
@@ -566,6 +574,7 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         shard_id: ShardId,
         initial_state: TypedState<K, V, T, D>,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
         cfg: Arc<PersistConfig>,
         subscription_token: Arc<ShardSubscriptionToken>,
     ) -> Self {
@@ -573,8 +582,8 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
             shard_id,
             notifier: StateWatchNotifier::new(Arc::clone(&metrics)),
             state: RwLock::new(initial_state),
-            cfg: Arc::clone(&cfg),
-            shard_metrics: metrics.shards.shard(&shard_id),
+            cfg,
+            shard_metrics,
             metrics,
             _subscription_token: subscription_token,
         }

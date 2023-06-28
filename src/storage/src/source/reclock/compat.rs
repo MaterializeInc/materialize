@@ -93,6 +93,7 @@ where
                     remap_shard,
                     PersistClient::CONTROLLER_CRITICAL_SINCE,
                     &format!("reclock {}", id),
+                    mz_persist_client::default_shard_labels(id.to_string()),
                 )
                 .await
                 .expect("invalid persist usage");
@@ -105,6 +106,7 @@ where
                 &format!("reclock {}", id),
                 Arc::new(remap_relation_desc),
                 Arc::new(UnitSchema),
+                mz_persist_client::default_shard_labels(id.to_string()),
             )
             .await
             .context("error opening persist shard")?;

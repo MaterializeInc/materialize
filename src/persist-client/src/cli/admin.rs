@@ -10,6 +10,7 @@
 //! CLI introspection tools for persist
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -164,7 +165,7 @@ pub async fn force_compaction(
     blob_uri: &str,
     commit: bool,
 ) -> Result<(), anyhow::Error> {
-    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
+    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry, vec![]));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
 
@@ -439,6 +440,7 @@ async fn make_machine(
         state_versions,
         Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
         Arc::new(NoopPubSubSender),
+        BTreeMap::new(),
     )
     .await?;
 
@@ -453,7 +455,7 @@ async fn force_gc(
     blob_uri: &str,
     commit: bool,
 ) -> anyhow::Result<Box<dyn Any>> {
-    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
+    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry, vec![]));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
     let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;

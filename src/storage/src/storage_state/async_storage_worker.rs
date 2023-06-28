@@ -109,6 +109,8 @@ where
             "reclock",
             Arc::new(ingestion_description.desc.connection.timestamp_desc()),
             Arc::new(UnitSchema),
+            // WIP: what's the GlobalId here?
+            BTreeMap::new(),
         )
         .await
         .expect("shard unavailable");

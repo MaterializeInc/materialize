@@ -42,7 +42,7 @@ use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::stats::PartStats;
-use crate::{PersistLocation, ShardId};
+use crate::{default_shard_labels, PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -271,9 +271,10 @@ where
             let read = client
                 .open_leased_reader::<K, V, G::Timestamp, D>(
                     shard_id,
-                    &format!("shard_source({})", name_owned),
+                    &format!("shard_source({})", name_owned.clone()),
                     key_schema,
                     val_schema,
+                    default_shard_labels(name_owned.clone()),
                 )
                 .await
                 .expect("could not open persist shard");
@@ -622,6 +623,7 @@ where
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
 
+    let name_owned = name.to_string();
     let shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
             let client = clients
@@ -629,7 +631,12 @@ where
                 .await
                 .expect("location should be valid");
             client
-                .create_batch_fetcher::<K, V, T, D>(shard_id, key_schema, val_schema)
+                .create_batch_fetcher::<K, V, T, D>(
+                    shard_id,
+                    key_schema,
+                    val_schema,
+                    default_shard_labels(name_owned),
+                )
                 .await
         };
 

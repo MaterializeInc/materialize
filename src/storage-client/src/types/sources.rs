@@ -204,6 +204,7 @@ impl<T: Timestamp + Lattice + Codec64> CreateResumptionFrontierCalc<T>
                     &format!("resumption data {}", id),
                     Arc::new(relation_desc.clone()),
                     Arc::new(UnitSchema),
+                    mz_persist_client::default_shard_labels(id.to_string()),
                 )
                 .await
                 .unwrap();

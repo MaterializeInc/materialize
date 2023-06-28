@@ -77,6 +77,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::sink;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -391,6 +392,7 @@ impl SinkHandle {
                     &format!("sink::since {}", sink_id),
                     Arc::new(from_relation_desc),
                     Arc::new(UnitSchema),
+                    mz_persist_client::default_shard_labels(sink_id.to_string()),
                 )
                 .await
                 .expect("opening reader for shard");

@@ -9,6 +9,7 @@
 
 //! Implementation of persist command application.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
@@ -93,10 +94,11 @@ where
         state_versions: Arc<StateVersions>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
+        shard_labels: BTreeMap<String, String>,
     ) -> Result<Self, Box<CodecMismatch>> {
-        let shard_metrics = metrics.shards.shard(&shard_id);
+        let shard_metrics = metrics.shards.shard(&shard_id, shard_labels);
         let state = shared_states
-            .get::<K, V, T, D, _, _>(shard_id, || {
+            .get::<K, V, T, D, _, _>(shard_id, Arc::clone(&shard_metrics), || {
                 metrics.cmds.init_state.run_cmd(&shard_metrics, || {
                     state_versions.maybe_init_shard(&shard_metrics)
                 })

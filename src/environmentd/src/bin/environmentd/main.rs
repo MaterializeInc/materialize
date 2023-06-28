@@ -781,13 +781,18 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let persist_clients = {
         // PersistClientCache may spawn tasks, so run within a tokio runtime context
         let _tokio_guard = runtime.enter();
-        PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
-            let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
-                persist_pubsub_client.sender,
-                metrics,
-            ));
-            PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
-        })
+        PersistClientCache::new(
+            persist_config,
+            &metrics_registry,
+            |_, metrics| {
+                let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                    persist_pubsub_client.sender,
+                    metrics,
+                ));
+                PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+            },
+            mz_persist_client::default_shard_label_keys(),
+        )
     };
 
     let persist_clients = Arc::new(persist_clients);

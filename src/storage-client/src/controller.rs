@@ -1438,6 +1438,7 @@ where
 
                 let (write, since_handle) = this
                     .open_data_handles(
+                        &id,
                         format!("controller data {}", id).as_str(),
                         metadata.data_shard,
                         description.since.as_ref(),
@@ -1990,6 +1991,7 @@ where
                 &format!("snapshot {}", id),
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
+                mz_persist_client::default_shard_labels(id.to_string()),
             )
             .await
             .expect("invalid persist usage");
@@ -2616,6 +2618,7 @@ where
     /// current epoch.
     async fn open_data_handles(
         &self,
+        id: &GlobalId,
         purpose: &str,
         shard: ShardId,
         since: Option<&Antichain<T>>,
@@ -2631,6 +2634,7 @@ where
                 purpose,
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
+                mz_persist_client::default_shard_labels(id.to_string()),
             )
             .await
             .expect("invalid persist usage");
@@ -2640,7 +2644,12 @@ where
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, purpose)
+                .open_critical_since(
+                    shard,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    purpose,
+                    mz_persist_client::default_shard_labels(id.to_string()),
+                )
                 .await
                 .expect("invalid persist usage");
 
@@ -3008,6 +3017,7 @@ where
             // already updated all the persistent state (in stash).
             let (write, since_handle) = self
                 .open_data_handles(
+                    &id,
                     format!("controller data for {id}").as_str(),
                     data_shard,
                     collection_desc.since.as_ref(),
@@ -3060,6 +3070,7 @@ where
                         "finalizing shards",
                         Arc::new(RelationDesc::empty()),
                         Arc::new(UnitSchema),
+                        BTreeMap::new(),
                     )
                     .await
                     .expect("invalid persist usage");
@@ -3073,6 +3084,7 @@ where
                             "finalizing shards",
                             Arc::new(RelationDesc::empty()),
                             Arc::new(UnitSchema),
+                            BTreeMap::new(),
                         )
                         .await
                         .expect("invalid persist usage");

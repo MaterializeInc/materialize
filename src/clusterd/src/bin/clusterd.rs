@@ -288,6 +288,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             };
             GrpcPubSubClient::connect(cfg, metrics)
         },
+        mz_persist_client::default_shard_label_keys(),
     ));
 
     // Start storage server.

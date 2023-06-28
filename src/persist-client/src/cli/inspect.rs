@@ -369,7 +369,7 @@ pub async fn blob_batch_part(
     limit: usize,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new(), vec![]));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
     let key = PartialBatchKey(partial_key).complete(&shard_id);
@@ -424,7 +424,7 @@ struct BlobCounts {
 /// Fetches the blob count for given path
 pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new(), vec![]));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
     let mut blob_counts = BTreeMap::new();
@@ -454,7 +454,7 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
 /// Rummages through S3 to find the latest rollup for each shard, then calculates summary stats.
 pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new(), vec![]));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
     // Collect the latest rollup for every shard with the given blob_uri
@@ -601,7 +601,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     };
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics_registry = MetricsRegistry::new();
-    let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
+    let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry, vec![]));
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
@@ -648,7 +648,7 @@ impl StateArgs {
 
     async fn open(&self) -> Result<StateVersions, anyhow::Error> {
         let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new(), vec![]));
         let consensus =
             make_consensus(&cfg, &self.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
         let blob = make_blob(&cfg, &self.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;

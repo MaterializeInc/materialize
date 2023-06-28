@@ -9,6 +9,7 @@
 
 //! Implementation of the persist state machine.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::ops::ControlFlow::{self, Continue};
@@ -81,6 +82,7 @@ where
         state_versions: Arc<StateVersions>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
+        shard_labels: BTreeMap<String, String>,
     ) -> Result<Self, Box<CodecMismatch>> {
         let applier = Applier::new(
             cfg,
@@ -89,6 +91,7 @@ where
             state_versions,
             shared_states,
             pubsub_sender,
+            shard_labels,
         )
         .await?;
         Ok(Machine { applier })

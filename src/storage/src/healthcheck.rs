@@ -44,6 +44,7 @@ pub async fn write_to_persist(
             &format!("healthcheck::write_to_persist {}", collection_id),
             Arc::new(relation_desc.clone()),
             Arc::new(UnitSchema),
+            mz_persist_client::default_shard_labels(collection_id.to_string()),
         )
         .await
         .expect(
