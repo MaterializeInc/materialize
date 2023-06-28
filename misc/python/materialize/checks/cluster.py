@@ -34,7 +34,7 @@ class CreateCluster(Check):
 
                 $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 ALTER ROLE materialize CREATECLUSTER
-                
+
                 > CREATE CLUSTER create_cluster2 REPLICAS (replica1 (SIZE '2-2'));
                 """,
             ]
