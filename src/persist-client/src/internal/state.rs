@@ -486,8 +486,7 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<(Upper<T>, WriterState<T>)>, (Upper<T>, WriterState<T>)>
-    {
+    ) -> ControlFlow<NoOpStateTransition<Upper<T>>, Upper<T>> {
         let upper = Upper(self.trace.upper().clone());
         let writer_state = WriterState {
             debug: HandleDebugState {
@@ -506,12 +505,12 @@ where
         // served. Optimize this by no-op-ing writer registration so that we can
         // settle the shard into a final unchanging tombstone state.
         if self.is_tombstone() {
-            return Break(NoOpStateTransition((upper, writer_state)));
+            return Break(NoOpStateTransition(upper));
         }
 
         // TODO: Handle if the reader or writer already exists.
-        self.writers.insert(writer_id.clone(), writer_state.clone());
-        Continue((Upper(self.trace.upper().clone()), writer_state))
+        self.writers.insert(writer_id.clone(), writer_state);
+        Continue(Upper(self.trace.upper().clone()))
     }
 
     pub fn compare_and_append(
