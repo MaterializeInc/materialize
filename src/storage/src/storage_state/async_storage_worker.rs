@@ -29,7 +29,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
-    SourceTimestamp, TestScriptSourceConnection, SourceEnvelope,
+    SourceEnvelope, SourceTimestamp, TestScriptSourceConnection,
 };
 use timely::order::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -85,7 +85,10 @@ where
     // We can only resume with certain envelope types otherwise we must re-ingest everything.
     // TODO(petrosagg): move this reasoning to the controller
     let envelope = &ingestion_description.desc.envelope;
-    if !matches!(envelope, SourceEnvelope::None(_) | SourceEnvelope::Upsert(_)) {
+    if !matches!(
+        envelope,
+        SourceEnvelope::None(_) | SourceEnvelope::Upsert(_)
+    ) {
         let mut source_resume_uppers = BTreeMap::new();
         for (id, upper) in resume_uppers {
             if upper.is_empty() {
@@ -102,24 +105,10 @@ where
         .await
         .expect("location unavailable");
 
-    let read_handle = persist_client
-        .open_leased_reader::<SourceData, (), IntoTime, Diff>(
-            metadata.remap_shard.clone().unwrap(),
-            "reclock",
-            Arc::new(ingestion_description.desc.connection.timestamp_desc()),
-            Arc::new(UnitSchema),
-        )
-        .await
-        .expect("shard unavailable");
-
     // We must load enough data in the timestamper to reclock all the requested frontiers
-    let mut subscription = read_handle
-        .subscribe(as_of.clone())
-        .await
-        .expect("always valid to read at since");
-
     let mut remap_updates = vec![];
     let mut remap_upper = as_of.clone();
+    let mut subscription = None;
     for upper in resume_uppers.values() {
         // TODO(petrosagg): this feels icky, we shouldn't have exceptions in frontier reasoning
         // unless there is a good explanation as to why it is the case. It seems to me that this is
@@ -131,6 +120,27 @@ where
         }
 
         while PartialOrder::less_than(&remap_upper, upper) {
+            let subscription = match subscription.as_mut() {
+                Some(subscription) => subscription,
+                None => {
+                    let read_handle = persist_client
+                        .open_leased_reader::<SourceData, (), IntoTime, Diff>(
+                            metadata.remap_shard.clone().unwrap(),
+                            "reclock",
+                            Arc::new(ingestion_description.desc.connection.timestamp_desc()),
+                            Arc::new(UnitSchema),
+                        )
+                        .await
+                        .expect("shard unavailable");
+
+                    let sub = read_handle
+                        .subscribe(as_of.clone())
+                        .await
+                        .expect("always valid to read at since");
+
+                    subscription.insert(sub)
+                }
+            };
             for event in subscription.fetch_next().await {
                 match event {
                     ListenEvent::Updates(updates) => {
