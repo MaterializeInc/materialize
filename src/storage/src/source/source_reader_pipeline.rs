@@ -81,7 +81,7 @@ use tracing::{info, trace, warn};
 
 use crate::healthcheck::write_to_persist;
 use crate::internal_control::InternalStorageCommand;
-use crate::render::sources::{OutputIndex, WorkerId};
+use crate::render::sources::OutputIndex;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -179,7 +179,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Option<Rc<dyn Any>>,
 )
 where
@@ -266,7 +266,7 @@ fn source_render_operator<G, C>(
         Diff,
     >,
     Stream<G, Infallible>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Rc<dyn Any>,
 )
 where
@@ -344,14 +344,10 @@ where
         }
     });
 
-    let health = health
-        .concat(&derived_health)
-        .map(move |(output_index, status)| (worker_id, output_index, status));
-
     (
         data.as_collection(),
         progress.unwrap_or(derived_progress),
-        health,
+        health.concat(&derived_health),
         token,
     )
 }
@@ -401,7 +397,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     storage_state: &crate::storage_state::StorageState,
     resume_upper: Antichain<mz_repr::Timestamp>,
     primary_source_id: GlobalId,
-    health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    health_stream: &Stream<G, (OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
 ) -> Rc<dyn Any> {
     // Derived config options
@@ -410,6 +406,9 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     let now = storage_state.now.clone();
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
+
+    // Inject the originating worker id to each item before exchanging to the chosen worker
+    let health_stream = health_stream.map(move |status| (healthcheck_worker_id, status));
 
     // We'll route all the work to a single arbitrary worker;
     // there's not much to do, and we need a global view.
@@ -493,7 +492,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         let mut outputs_seen = BTreeSet::new();
         while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                for (worker_id, output_index, health_event) in rows.drain(..) {
+                for (worker_id, (output_index, health_event)) in rows.drain(..) {
                     let HealthState {
                         source_id,
                         healths,
