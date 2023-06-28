@@ -13,6 +13,9 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_rbac_checks = true;
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_cardinality_estimates = true;
+
 $ set-regex match="cluster1|default|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
 
 > SHOW ALL
