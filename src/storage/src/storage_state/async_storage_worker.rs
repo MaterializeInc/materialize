@@ -228,22 +228,25 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                         // performed by the controller and not here.
                         let mut as_of = Antichain::new();
                         let mut resume_uppers = BTreeMap::new();
+                        let mut seen_remap_shard = None;
 
                         for (id, export) in ingestion_description.source_exports.iter() {
                             // Explicit destructuring to force a compile error when the metadata change
                             let CollectionMetadata {
                                 persist_location,
-                                remap_shard: _,
+                                remap_shard,
                                 data_shard,
                                 // The status shard only contains non-definite status updates
                                 status_shard: _,
                                 relation_desc,
                             } = &export.storage_metadata;
-                            let (write_handle, read_handle) = persist_clients
+                            let client = persist_clients
                                 .open(persist_location.clone())
                                 .await
-                                .expect("error creating persist client")
-                                .open::<SourceData, (), T, Diff>(
+                                .expect("error creating persist client");
+
+                            let write_handle = client
+                                .open_writer::<SourceData, (), T, Diff>(
                                     *data_shard,
                                     &format!("resumption data {}", id),
                                     Arc::new(relation_desc.clone()),
@@ -251,13 +254,48 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 )
                                 .await
                                 .unwrap();
-
-                            for time in read_handle.since().elements() {
-                                as_of.insert(time.clone());
-                            }
                             resume_uppers.insert(*id, write_handle.upper().clone());
-                            read_handle.expire().await;
                             write_handle.expire().await;
+
+                            // TODO(petrosagg): The as_of of the ingestion should normally be based
+                            // on the since frontiers of its outputs. Even though the storage
+                            // controller makes sure to make downgrade decisions in an organized
+                            // and ordered fashion, it then proceeds to persist them in an
+                            // asynchronous and disorganized fashion to persist. The net effect is
+                            // that upon restart, or upon observing the persist state like this
+                            // function, one can see non-sensical results like the since of A be in
+                            // advance of B even when B depends on A! This can happen because the
+                            // downgrade of B gets reordered and lost. Here is our best attempt at
+                            // playing detective of what the controller meant to do by blindly
+                            // assuming that the since of the remap shard is a suitable since
+                            // frontier without consulting the since frontier of the outputs. One
+                            // day we will enforce order to chaos and this comment will be deleted.
+                            if let Some(remap_shard) = remap_shard {
+                                match seen_remap_shard.as_ref() {
+                                    None => {
+                                        let read_handle = client
+                                            .open_leased_reader::<SourceData, (), T, Diff>(
+                                                *data_shard,
+                                                &format!("resumption data {}", id),
+                                                Arc::new(
+                                                    ingestion_description
+                                                        .desc
+                                                        .connection
+                                                        .timestamp_desc(),
+                                                ),
+                                                Arc::new(UnitSchema),
+                                            )
+                                            .await
+                                            .unwrap();
+                                        as_of = read_handle.since().clone();
+                                        seen_remap_shard = Some(remap_shard.clone());
+                                    }
+                                    Some(shard) => assert_eq!(
+                                        shard, remap_shard,
+                                        "ingestion with multiple remap shards"
+                                    ),
+                                }
+                            }
                         }
 
                         /// Convenience function to convert `BTreeMap<GlobalId, Antichain<C>>` to

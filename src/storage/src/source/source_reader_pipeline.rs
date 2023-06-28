@@ -873,7 +873,7 @@ where
         let mut source_metrics = SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
 
         // Compute the overall resume upper to report for the ingestion
-        let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.elements().iter().cloned()));
+        let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
         source_metrics.resume_upper.set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
