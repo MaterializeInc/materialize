@@ -275,7 +275,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     None => {
                                         let read_handle = client
                                             .open_leased_reader::<SourceData, (), T, Diff>(
-                                                *data_shard,
+                                                *remap_shard,
                                                 &format!("resumption data {}", id),
                                                 Arc::new(
                                                     ingestion_description
@@ -288,10 +288,16 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                             .await
                                             .unwrap();
                                         as_of = read_handle.since().clone();
-                                        mz_ore::task::spawn(move || "deferred_expire", async move {
-                                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                                            read_handle.expire().await;
-                                        });
+                                        mz_ore::task::spawn(
+                                            move || "deferred_expire",
+                                            async move {
+                                                tokio::time::sleep(std::time::Duration::from_secs(
+                                                    300,
+                                                ))
+                                                .await;
+                                                read_handle.expire().await;
+                                            },
+                                        );
                                         seen_remap_shard = Some(remap_shard.clone());
                                     }
                                     Some(shard) => assert_eq!(
