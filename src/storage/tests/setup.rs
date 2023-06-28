@@ -270,7 +270,9 @@ where
                 let async_storage_worker = Rc::clone(&worker.storage_state.async_worker);
                 let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
-                let source_resumption_frontier = std::iter::once((
+                let resume_uppers =
+                    BTreeMap::from_iter([(id, Antichain::from_elem(Timestamp::minimum()))]);
+                let source_resume_uppers = BTreeMap::from_iter([(
                     id,
                     match &desc.connection {
                         GenericSourceConnection::Kafka(c) => minimum_frontier(c),
@@ -278,8 +280,7 @@ where
                         GenericSourceConnection::TestScript(c) => minimum_frontier(c),
                         GenericSourceConnection::LoadGenerator(c) => minimum_frontier(c),
                     },
-                ))
-                .collect();
+                )]);
 
                 // NOTE: We only feed internal commands into the worker,
                 // bypassing "external" StorageCommand and the async worker that
@@ -309,7 +310,8 @@ where
                             },
                         // TODO: test resumption as well!
                         as_of: Antichain::from_elem(Timestamp::minimum()),
-                        source_resumption_frontier,
+                        resume_uppers,
+                        source_resume_uppers,
                     },
                 );
             }

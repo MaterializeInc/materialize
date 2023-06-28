@@ -604,12 +604,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
         async_response: AsyncStorageWorkerResponse<mz_repr::Timestamp>,
     ) {
         match async_response {
-            AsyncStorageWorkerResponse::FrontiersUpdated(
+            AsyncStorageWorkerResponse::FrontiersUpdated {
                 id,
                 ingestion_description,
                 as_of,
-                source_resumption_frontier,
-            ) => {
+                resume_uppers,
+                source_resume_uppers,
+            } => {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
                 // assert.
@@ -622,7 +623,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     id,
                     ingestion_description,
                     as_of,
-                    source_resumption_frontier,
+                    resume_uppers,
+                    source_resume_uppers,
                 });
             }
         }
@@ -719,7 +721,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 id: ingestion_id,
                 ingestion_description,
                 as_of,
-                source_resumption_frontier,
+                resume_uppers,
+                source_resume_uppers,
             } => {
                 info!(
                     "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
@@ -778,7 +781,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion_id,
                         ingestion_description,
                         as_of,
-                        source_resumption_frontier,
+                        resume_uppers,
+                        source_resume_uppers,
                     );
                 }
             }

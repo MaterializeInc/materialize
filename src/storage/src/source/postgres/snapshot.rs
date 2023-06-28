@@ -154,7 +154,6 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection};
-use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
@@ -235,8 +234,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let data_cap = data_cap.as_mut().unwrap();
             trace!(
                 %id,
-                "timely-{worker_id} initializing table reader with {} and {} tables to snapshot",
-                config.resume_upper.pretty(),
+                "timely-{worker_id} initializing table reader with {} tables to snapshot",
                 reader_snapshot_table_info.len()
             );
 

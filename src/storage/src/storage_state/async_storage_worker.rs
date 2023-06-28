@@ -62,12 +62,21 @@ pub enum AsyncStorageWorkerCommand<T: Timestamp + Lattice + Codec64> {
 #[derive(Debug)]
 pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
     /// An `IngestionDescription` with recent as-of and resume upper frontiers.
-    FrontiersUpdated(
-        GlobalId,
-        IngestionDescription<CollectionMetadata>,
-        Antichain<T>,
-        BTreeMap<GlobalId, Vec<Row>>,
-    ),
+    FrontiersUpdated {
+        /// ID of the ingestion/source.
+        id: GlobalId,
+        /// The description of the ingestion/source.
+        ingestion_description: IngestionDescription<CollectionMetadata>,
+        /// The frontier beyond which ingested updates should be uncompacted. Inputs to the
+        /// ingestion are guaranteed to be readable at this frontier.
+        as_of: Antichain<T>,
+        /// A frontier in the Materialize time domain with the property that all updates not beyond
+        /// it have already been durably ingested.
+        resume_uppers: BTreeMap<GlobalId, Antichain<T>>,
+        /// A frontier in the source time domain with the property that all updates not beyond it
+        /// have already been durably ingested.
+        source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
+    },
 }
 
 async fn reclock_resume_uppers<C, IntoTime>(
@@ -218,7 +227,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                         // the storage command protocol is updated such that these calculations are
                         // performed by the controller and not here.
                         let mut as_of = Antichain::new();
-                        let mut export_uppers = BTreeMap::new();
+                        let mut resume_uppers = BTreeMap::new();
 
                         for (id, export) in ingestion_description.source_exports.iter() {
                             // Explicit destructuring to force a compile error when the metadata change
@@ -246,7 +255,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             for time in read_handle.since().elements() {
                                 as_of.insert(time.clone());
                             }
-                            export_uppers.insert(*id, write_handle.upper().clone());
+                            resume_uppers.insert(*id, write_handle.upper().clone());
                             read_handle.expire().await;
                             write_handle.expire().await;
                         }
@@ -271,7 +280,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     &persist_clients,
                                     &ingestion_description,
                                     as_of.clone(),
-                                    &export_uppers,
+                                    &resume_uppers,
                                 )
                                 .await;
                                 to_vec_row(uppers)
@@ -281,7 +290,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     &persist_clients,
                                     &ingestion_description,
                                     as_of.clone(),
-                                    &export_uppers,
+                                    &resume_uppers,
                                 )
                                 .await;
                                 to_vec_row(uppers)
@@ -292,7 +301,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                         &persist_clients,
                                         &ingestion_description,
                                         as_of.clone(),
-                                        &export_uppers,
+                                        &resume_uppers,
                                     )
                                     .await;
                                 to_vec_row(uppers)
@@ -303,19 +312,20 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                         &persist_clients,
                                         &ingestion_description,
                                         as_of.clone(),
-                                        &export_uppers,
+                                        &resume_uppers,
                                     )
                                     .await;
                                 to_vec_row(uppers)
                             }
                         };
 
-                        let res = response_tx.send(AsyncStorageWorkerResponse::FrontiersUpdated(
+                        let res = response_tx.send(AsyncStorageWorkerResponse::FrontiersUpdated {
                             id,
                             ingestion_description,
                             as_of,
+                            resume_uppers,
                             source_resume_uppers,
-                        ));
+                        });
 
                         if let Err(_err) = res {
                             // Receiver must have hung up.
