@@ -87,17 +87,11 @@ rust-version = "1.68.2"
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved
 incremental = false
 
-[profile.dev.package]
+[profile.dev.build-override]
 # Compile the backtrace crate and its dependencies with all optimizations, even
 # in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
 # optimizations enabled, symbolizing a backtrace takes less than 1s.
-addr2line = { opt-level = 3 }
-adler = { opt-level = 3 }
-backtrace = { opt-level = 3 }
-gimli = { opt-level = 3 }
-miniz_oxide = { opt-level = 3 }
-object = { opt-level = 3 }
-rustc-demangle = { opt-level = 3 }
+opt-level = 3
 
 [profile.release]
 # Emit full debug info, allowing us to easily analyze core dumps from
