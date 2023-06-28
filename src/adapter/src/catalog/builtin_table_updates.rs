@@ -1199,7 +1199,7 @@ impl CatalogState {
                     let MemoryLimit(ByteSize(memory_bytes)) =
                         (*memory_limit).unwrap_or(MemoryLimit::MAX);
                     let DiskLimit(ByteSize(disk_bytes)) =
-                        (*disk_limit).unwrap_or(DiskLimit::ONE_GIB);
+                        (*disk_limit).unwrap_or(DiskLimit::ARBITRARY);
                     let row = Row::pack_slice(&[
                         size.as_str().into(),
                         u64::from(*scale).into(),

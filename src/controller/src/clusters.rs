@@ -74,7 +74,7 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
-    /// The CPU limit for each process in the replica.
+    /// The disk limit for each process in the replica.
     pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
     pub scale: u16,

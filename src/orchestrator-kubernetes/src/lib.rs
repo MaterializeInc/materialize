@@ -719,14 +719,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
             (true, Some(ephemeral_volume_storage_class)) => {
                 volume_mounts.push(VolumeMount {
-                    name: "scratch-volume".to_string(),
-                    mount_path: "/scratch-directory".to_string(),
+                    name: "scratch".to_string(),
+                    mount_path: "/scratch".to_string(),
                     ..Default::default()
                 });
-                args.push("--scratch-directory=/scratch-directory".into());
+                args.push("--scratch-directory=/scratch".into());
 
                 Some(vec![Volume {
-                    name: "scratch-volume".to_string(),
+                    name: "scratch".to_string(),
                     ephemeral: Some(EphemeralVolumeSource {
                         volume_claim_template: Some(PersistentVolumeClaimTemplate {
                             spec: PersistentVolumeClaimSpec {
@@ -739,7 +739,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                                         "storage".to_string(),
                                         Quantity(
                                             disk_limit
-                                                .unwrap_or(DiskLimit::ONE_GIB)
+                                                .unwrap_or(DiskLimit::ARBITRARY)
                                                 .0
                                                 .as_u64()
                                                 .to_string(),
@@ -757,7 +757,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }])
             }
             (true, None) => {
-                unreachable!("asserted in the controller")
+                return Err(anyhow!(
+                    "service requested disk but no ephemeral volume storage class was configured"
+                ));
             }
             (false, _) => None,
         };

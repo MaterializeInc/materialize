@@ -688,9 +688,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         OrchestratorKind::Kubernetes => {
             if args.orchestrator_process_scratch_directory.is_some() {
                 bail!(
-                    "Use --orchestrator-kubernetes-ephemeral-volume-class instead of \
-                    --orchesatrator-process-scratch-directory with the \
-                    kubernetes-orchestrator"
+                    "--orchestrator-process-scratch-directory is \
+                      not currently usable with the kubernetes orchestrator"
                 );
             }
 
@@ -733,9 +732,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 .is_some()
             {
                 bail!(
-                    "Use --orchestrator-process-scratch-directory instead of \
-                    --orchesatrator-kubernetes-ephemeral-volume-class with the \
-                    process-orchestrator"
+                    "--orchestrator-kubernetes-ephemeral-volume-class is \
+                      not usable with the process orchestrator"
                 );
             }
             let orchestrator = Arc::new(

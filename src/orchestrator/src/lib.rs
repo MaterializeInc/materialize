@@ -265,9 +265,9 @@ pub struct ServiceConfig<'a> {
     /// The orchestrator backend may or may not actually implement anti-affinity functionality.
     pub anti_affinity: Option<Vec<LabelSelector>>,
 
-    /// Whether the pod should have an ephemeral volume attached.
+    /// Whether scratch disk space should be allocated for the service.
     pub disk: bool,
-    /// The limit used for the optional volume.
+    /// The maximum amount of scratch disk space that the service is allowed to consume.
     pub disk_limit: Option<DiskLimit>,
 }
 
@@ -397,7 +397,7 @@ pub struct DiskLimit(pub ByteSize);
 
 impl DiskLimit {
     pub const MAX: Self = Self(ByteSize(u64::MAX));
-    pub const ONE_GIB: Self = Self(ByteSize::gib(1));
+    pub const ARBITRARY: Self = Self(ByteSize::gib(1));
 }
 
 impl<'de> Deserialize<'de> for DiskLimit {

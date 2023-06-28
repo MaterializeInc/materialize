@@ -580,8 +580,7 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
     value: &false,
-    description: "The default for the `DISK` option in (non-`MANAGED`) \
-        cluster replicas and linked clusters",
+    description: "Whether the disk option for cluster replicas should be enabled by default.",
     internal: true,
 };
 

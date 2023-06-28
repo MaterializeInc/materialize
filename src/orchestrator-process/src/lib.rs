@@ -343,7 +343,6 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             availability_zone: _,
             anti_affinity: _,
             disk,
-            // limit is meaningless for processes, as we just use a local path.
             disk_limit: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
@@ -512,7 +511,8 @@ impl NamespacedProcessOrchestrator {
                     scratch_directory.display()
                 ));
             } else {
-                // Ensured elsewhere
+                // WIP: return an error here?
+                panic!("internal error: service requested disk but no scratch directory was configured");
             }
             scratch_directory
         } else {
