@@ -4,7 +4,7 @@ set -eu -o pipefail
 
 : ${csvs=bi-sf1-composite-merged-fk/graphs/csv/bi/composite-merged-fk}
 
-exec 1>load.sql
+exec 1>copy.sql
 
 printf -- "-- static entitities\n"
 for entity in Organisation Place Tag TagClass	      
