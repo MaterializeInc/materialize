@@ -604,10 +604,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
         async_response: AsyncStorageWorkerResponse<mz_repr::Timestamp>,
     ) {
         match async_response {
-            AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper(
+            AsyncStorageWorkerResponse::FrontiersUpdated(
                 id,
                 ingestion_description,
-                resumption_frontier,
+                as_of,
                 source_resumption_frontier,
             ) => {
                 // NOTE: If we want to share the load of async processing we
@@ -621,7 +621,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 internal_cmd_tx.broadcast(InternalStorageCommand::CreateIngestionDataflow {
                     id,
                     ingestion_description,
-                    resumption_frontier,
+                    as_of,
                     source_resumption_frontier,
                 });
             }
@@ -669,7 +669,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // putting undue pressure on worker 0 we can pick the
                     // designated worker for a source/sink based on `id.hash()`.
                     if self.timely_worker.index() == 0 {
-                        async_worker.calculate_resume_upper(id, ingestion_description);
+                        async_worker.update_frontiers(id, ingestion_description);
                     }
 
                     // Continue with other commands.
@@ -718,20 +718,20 @@ impl<'w, A: Allocate> Worker<'w, A> {
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
                 ingestion_description,
-                resumption_frontier,
+                as_of,
                 source_resumption_frontier,
             } => {
                 info!(
                     "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
-                    resumption_frontier
+                    as_of
                 );
 
                 // An empty resume upper means that we can never write down any
                 // more data for this ingestion. We therefore don't render a
                 // dataflow for it.
-                let is_closed = resumption_frontier.is_empty();
+                let is_closed = as_of.is_empty();
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     // This is a separate line cause rustfmt :(
@@ -777,7 +777,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         &mut self.storage_state,
                         ingestion_id,
                         ingestion_description,
-                        resumption_frontier,
+                        as_of,
                         source_resumption_frontier,
                     );
                 }
@@ -1205,7 +1205,7 @@ impl StorageState {
                     // ingestion in the local storage state. This is something we might have
                     // interest in fixing in the future, e.g. #19907
                     if worker_index == 0 {
-                        async_worker.calculate_resume_upper(id, description);
+                        async_worker.update_frontiers(id, description);
                     }
                 }
             }

@@ -52,7 +52,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::{CollectionMetadata, CreateResumptionFrontierCalc};
+use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
@@ -168,12 +168,15 @@ pub struct SourceCreationParams {
 ///
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
-pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
+///
+/// The `resume_stream` parameter will contain frontier updates whenever times are durably
+/// recorded which allows the ingestion to release upstream resources.
+pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    calc: R,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
@@ -184,7 +187,6 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
-    R: CreateResumptionFrontierCalc<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
     let id = config.id;
@@ -193,8 +195,6 @@ where
         resume_upper = %config.resume_upper.pretty(),
         "timely-{worker_id} building source pipeline",
     );
-    let (resume_stream, resume_token) =
-        super::resumption::resumption_operator(scope, config.clone(), calc);
 
     let reclock_follower = {
         let upper_ts = config.resume_upper.as_option().copied().unwrap();
@@ -240,7 +240,7 @@ where
 
     let streams = reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
-    let token = Rc::new((token, remap_token, resume_token));
+    let token = Rc::new((token, remap_token));
 
     (streams, health, Some(token))
 }

@@ -308,7 +308,7 @@ where
                                 remap_collection_id: GlobalId::User(99),
                             },
                         // TODO: test resumption as well!
-                        resumption_frontier: Antichain::from_elem(Timestamp::minimum()),
+                        as_of: Antichain::from_elem(Timestamp::minimum()),
                         source_resumption_frontier,
                     },
                 );

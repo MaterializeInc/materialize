@@ -74,6 +74,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
+    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
@@ -129,20 +130,16 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         params,
     };
 
-    // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning
-    // a million fields
-    let resumption_calculator = description.clone();
-
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let (streams, mut health, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -153,10 +150,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::Postgres(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -167,10 +164,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::LoadGenerator(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -181,10 +178,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::TestScript(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()

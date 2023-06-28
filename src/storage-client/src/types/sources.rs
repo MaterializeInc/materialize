@@ -13,31 +13,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
-use differential_dataflow::lattice::Lattice;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use mz_persist_types::dyn_struct::{DynStruct, DynStructCfg, ValidityMut, ValidityRef};
 use mz_persist_types::stats::StatsFn;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
-    ColumnType, Datum, DatumDecoderT, DatumEncoderT, Diff, GlobalId, RelationDesc, RelationType,
-    Row, RowDecoder, RowEncoder, ScalarType,
+    ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, RelationDesc, RelationType, Row,
+    RowDecoder, RowEncoder, ScalarType,
 };
 use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 use once_cell::sync::Lazy;
@@ -46,15 +41,11 @@ use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::Antichain;
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 use uuid::Uuid;
 
-use crate::controller::{
-    CollectionMetadata, CreateResumptionFrontierCalc, ResumptionFrontierCalculator, StorageError,
-    UpperState,
-};
+use crate::controller::{CollectionMetadata, StorageError};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
@@ -174,53 +165,6 @@ pub struct SourceExport<S = ()> {
     pub output_index: usize,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
-}
-
-#[async_trait]
-impl<T: Timestamp + Lattice + Codec64> CreateResumptionFrontierCalc<T>
-    for IngestionDescription<CollectionMetadata>
-{
-    async fn create_calc(
-        &self,
-        client_cache: &PersistClientCache,
-    ) -> ResumptionFrontierCalculator<T> {
-        let mut upper_states = BTreeMap::new();
-        for (id, export) in self.source_exports.iter() {
-            // Explicit destructuring to force a compile error when the metadata change
-            let CollectionMetadata {
-                persist_location,
-                remap_shard: _,
-                data_shard,
-                // The status shard only contains non-definite status updates
-                status_shard: _,
-                relation_desc,
-            } = &export.storage_metadata;
-            let handle = client_cache
-                .open(persist_location.clone())
-                .await
-                .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff>(
-                    *data_shard,
-                    &format!("resumption data {}", id),
-                    Arc::new(relation_desc.clone()),
-                    Arc::new(UnitSchema),
-                )
-                .await
-                .unwrap();
-            upper_states.insert(*id, UpperState::new(handle));
-        }
-
-        let initial_frontier = match self.desc.envelope {
-            // We can only resume with the None envelope, which is stateless,
-            // or with the [Debezium] Upsert envelope, which is easy
-            //   (re-ingest the last emitted state)
-            SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) => Antichain::new(),
-            // Otherwise re-ingest everything
-            _ => Antichain::from_elem(T::minimum()),
-        };
-
-        ResumptionFrontierCalculator::new(initial_frontier, upper_states)
-    }
 }
 
 impl<S> Arbitrary for IngestionDescription<S>

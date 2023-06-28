@@ -205,6 +205,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
 use timely::communication::Allocate;
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
@@ -244,12 +245,15 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut tokens = vec![];
 
+            let (feedback_handle, feedback) = into_time_scope.feedback(Default::default());
+
             let (mut outputs, health_stream, token) = crate::render::sources::render_source(
                 into_time_scope,
                 &debug_name,
                 primary_source_id,
                 description.clone(),
                 resume_upper.clone(),
+                &feedback,
                 source_resume_upper,
                 storage_state,
             );
@@ -257,6 +261,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut health_configs = BTreeMap::new();
 
+            let mut upper_streams = vec![];
             for (export_id, export) in description.source_exports {
                 let (ok, err) = outputs
                     .get_mut(export.output_index)
@@ -275,7 +280,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 tracing::info!(
                     "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
                 );
-                let token = crate::render::persist_sink::render(
+                let (upper_stream, token) = crate::render::persist_sink::render(
                     into_time_scope,
                     export_id,
                     export.storage_metadata.clone(),
@@ -284,10 +289,15 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     metrics,
                     export.output_index,
                 );
+                upper_streams.push(upper_stream);
                 tokens.push(token);
 
                 health_configs.insert(export.output_index, (export_id, export.storage_metadata));
             }
+
+            into_time_scope
+                .concatenate(upper_streams)
+                .connect_loop(feedback_handle);
 
             let health_token = crate::source::health_operator(
                 into_time_scope,
