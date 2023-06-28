@@ -65,7 +65,9 @@ use mz_sql::session::vars::{
     ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::TransactionMode;
+use mz_sql_parser::ast::{
+    CreateSourceConnection, PgConfigOptionName, TransactionMode, WithOptionValue,
+};
 use mz_sql_parser::ast::{
     CreateSourceSubsource, DeferredItemName, ReferencedSubsources, Statement,
 };
@@ -3660,24 +3662,75 @@ impl Coordinator {
                     _ => return Err(purification_err()),
                 };
 
+                let mut dropped_references = BTreeSet::new();
+
                 // Fixup referenced_subsources. We panic rather than return
                 // errors here because `retain` is an infallible operation and
                 // actually erroring here is both incredibly unlikely and
                 // recoverable (users can stop trying to drop subsources if it
                 // panics).
-                referenced_subsources.retain(|CreateSourceSubsource { subsource, .. }| {
-                    match subsource
-                        .as_ref()
-                        .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
-                    {
-                        DeferredItemName::Named(name) => match name {
-                            // Retain all sources which we still have a dependency on.
-                            ResolvedItemName::Item { id, .. } => depends_on.contains(id),
+                referenced_subsources.retain(
+                    |CreateSourceSubsource {
+                         subsource,
+                         reference,
+                     }| {
+                        match subsource
+                            .as_ref()
+                            .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
+                        {
+                            DeferredItemName::Named(name) => match name {
+                                // Retain all sources which we still have a dependency on.
+                                ResolvedItemName::Item { id, .. } => {
+                                    let contains = depends_on.contains(id);
+                                    if !contains {
+                                        dropped_references.insert(reference.clone());
+                                    }
+                                    contains
+                                }
+                                _ => unreachable!("{}", purification_err()),
+                            },
                             _ => unreachable!("{}", purification_err()),
-                        },
-                        _ => unreachable!("{}", purification_err()),
+                        }
+                    },
+                );
+
+                // Remove dropped references from text columns.
+                match &mut create_source_stmt.connection {
+                    CreateSourceConnection::Postgres { options, .. } => {
+                        if let Some(text_cols) = options
+                            .iter_mut()
+                            .find(|option| option.name == PgConfigOptionName::TextColumns)
+                        {
+                            match &mut text_cols.value {
+                                Some(WithOptionValue::Sequence(names)) => {
+                                    names.retain(|name| match name {
+                                        WithOptionValue::UnresolvedItemName(
+                                            column_qualified_reference,
+                                        ) => {
+                                            mz_ore::soft_assert!(
+                                                column_qualified_reference.0.len() == 4
+                                            );
+                                            if column_qualified_reference.0.len() == 4 {
+                                                let mut table = column_qualified_reference.clone();
+                                                table.0.truncate(3);
+                                                !dropped_references.contains(&table)
+                                            } else {
+                                                tracing::warn!(
+                                                    "PgConfigOptionName::TextColumns had unexpected value {:?}; should have 4 components",
+                                                    column_qualified_reference
+                                                );
+                                                true
+                                            }
+                                        }
+                                        _ => true,
+                                    })
+                                }
+                                _ => {}
+                            }
+                        }
                     }
-                });
+                    _ => {}
+                }
 
                 // Open a new catalog, which we will use to re-plan our
                 // statement with the desired subsources.
