@@ -7,20 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 import random
-import sys
 import time
-from time import sleep
-from typing import Generator, List
 
-from materialize.checks.actions import Action
 from materialize.checks.all_checks import *  # noqa: F401 F403
-from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
-from materialize.checks.scenarios import Scenario
 from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Clusterd,
@@ -30,8 +21,6 @@ from materialize.mzcompose.services import (
     SchemaRegistry,
     Zookeeper,
 )
-from materialize.util import MzVersion
-from materialize.version_list import VersionsFromGit
 
 SERVICES = [
     Postgres(),

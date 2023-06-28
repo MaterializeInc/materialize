@@ -11,25 +11,24 @@ import json
 import random
 import time
 from enum import Enum
-from typing import List
+from typing import Any, List, Optional
 
 import pg8000
-from confluent_kafka import Producer
-from confluent_kafka.admin import AdminClient, NewTopic
-from confluent_kafka.schema_registry import Schema, SchemaRegistryClient
-from confluent_kafka.schema_registry.avro import AvroSerializer
-from confluent_kafka.serialization import (
+from confluent_kafka import Producer  # type: ignore
+from confluent_kafka.admin import AdminClient, NewTopic  # type: ignore
+from confluent_kafka.schema_registry import Schema, SchemaRegistryClient  # type: ignore
+from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
+from confluent_kafka.serialization import (  # type: ignore
     MessageField,
     SerializationContext,
-    StringSerializer,
 )
 
 
-def idfn(d, ctx):
+def idfn(d: str, ctx: Any) -> str:
     return d
 
 
-def delivery_report(err, msg):
+def delivery_report(err: str, msg: Any) -> None:
     assert err is None, f"Delivery failed for User record {msg.key()}: {err}"
     # print('User record {} successfully produced to {} [{}] at offset {}'.format(
     #    msg.key(), msg.topic(), msg.partition(), msg.offset()))
@@ -42,11 +41,11 @@ class Operation(Enum):
 
 
 class Row:
-    key: List[str]
-    value: List[str]
+    key: Any
+    value: Any
     operation: Operation
 
-    def __init__(self, key: List[str], operation: Operation, value: List[str] = None):
+    def __init__(self, key: Any, operation: Operation, value: Optional[Any] = None):
         self.key = key
         self.value = value
         self.operation = operation
@@ -79,12 +78,12 @@ class Transaction:
 
 
 class Executor:
-    def run(self, transactions: List[Transaction]):
+    def run(self, transactions: List[Transaction]) -> None:
         raise NotImplementedError
 
 
 class PrintExecutor(Executor):
-    def run(self, transactions: List[Transaction]):
+    def run(self, transactions: List[Transaction]) -> None:
         for transaction in transactions:
             print("Transaction:")
             print("  ", transaction.row_lists)
@@ -152,7 +151,7 @@ class KafkaExecutor(Executor):
             )
         conn.autocommit = False
 
-    def run(self, transactions: List[Transaction]):
+    def run(self, transactions: List[Transaction]) -> None:
         for transaction in transactions:
             for row_list in transaction.row_lists:
                 for row in row_list.rows:
@@ -202,7 +201,7 @@ class PgExecutor(Executor):
                 f"CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1))"
             )
 
-    def run(self, transactions: List[Transaction]):
+    def run(self, transactions: List[Transaction]) -> None:
         for transaction in transactions:
             with self.conn.cursor() as cur:
                 for row_list in transaction.row_lists:
@@ -257,7 +256,7 @@ class PgCdcExecutor(Executor):
             )
         conn.autocommit = False
 
-    def run(self, transactions: List[Transaction]):
+    def run(self, transactions: List[Transaction]) -> None:
         for transaction in transactions:
             with self.conn.cursor() as cur:
                 for row_list in transaction.row_lists:
@@ -424,7 +423,7 @@ class Workload:
 
 
 class SingleSensorUpdating(Workload):
-    def __init__(self):
+    def __init__(self) -> None:
         self.cycle: List[Definition] = [
             Upsert(
                 keyspace=Keyspace.SINGLE_VALUE,
@@ -435,7 +434,7 @@ class SingleSensorUpdating(Workload):
 
 
 class DeleteDataAtEndOfDay(Workload):
-    def __init__(self):
+    def __init__(self) -> None:
         self.cycle: List[Definition] = [
             Insert(
                 count=Records.MANY,
@@ -446,15 +445,15 @@ class DeleteDataAtEndOfDay(Workload):
 
 
 class ProgressivelyEnrichRecords(Workload):
-    def __init__(self):
+    def __init__(self) -> None:
         self.cycle: List[Definition] = [
             # TODO
         ]
 
 
 def execute_workload(
-    executor_classes, workload: Workload, conn: pg8000.Connection, num: int
-):
+    executor_classes: Any, workload: Workload, conn: pg8000.Connection, num: int
+) -> None:
     transactions = workload.generate()
     print(transactions)
 
@@ -488,7 +487,7 @@ def execute_workload(
             raise ValueError(f"Unexpected result {actual_result} != {expected_result}")
 
 
-def main():
+def main() -> None:
     conn = pg8000.connect(host="materialized", port=6875, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
