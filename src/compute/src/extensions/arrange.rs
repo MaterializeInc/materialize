@@ -204,6 +204,11 @@ where
     let mut trace = arranged.trace.clone();
     let operator = trace.operator().global_id;
 
+    // We don't want to block compaction.
+    let empty = Antichain::new();
+    trace.set_logical_compaction(empty.borrow());
+    trace.set_physical_compaction(empty.borrow());
+
     let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
 
     let stream = arranged
@@ -217,12 +222,6 @@ where
                     data.swap(&mut buffer);
                     output.session(&time).give_container(&mut buffer);
                 }
-
-                // We don't want to block compaction.
-                let mut upper = Antichain::new();
-                trace.read_upper(&mut upper);
-                trace.set_logical_compaction(upper.borrow());
-                trace.set_physical_compaction(upper.borrow());
 
                 let (size, capacity, allocations) = logic(&trace);
 
