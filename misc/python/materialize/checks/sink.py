@@ -111,6 +111,7 @@ class SinkUpsert(Check):
                 GRANT SELECT ON sink_source_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
+                GRANT ALL PRIVILEGES ON SYSTEM TO materialize
 
                 > SELECT * FROM sink_source_view;
                 I2 B 1000
