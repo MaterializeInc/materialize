@@ -84,16 +84,19 @@ contains:permission denied for SCHEMA "materialize.public"
 $ postgres-execute connection=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO materialize;
 
-! CREATE SINK s1 IN CLUSTER default FROM t
+$ postgres-execute connection=mz_system
+CREATE CLUSTER sink_cluster REPLICAS (r1 (SIZE '1'));
+
+! CREATE SINK s1 IN CLUSTER sink_cluster FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 contains:permission denied for CLUSTER "default"
 
 $ postgres-execute connection=mz_system
-GRANT CREATE ON CLUSTER default TO materialize;
+GRANT CREATE ON CLUSTER sink_cluster TO materialize;
 
-> CREATE SINK s1 IN CLUSTER default FROM t
+> CREATE SINK s1 IN CLUSTER sink_cluster FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -102,10 +105,12 @@ $ postgres-execute connection=mz_system
 REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM materialize;
 REVOKE SELECT ON TABLE t FROM materialize;
 REVOKE CREATECLUSTER ON SYSTEM FROM materialize;
+REVOKE CREATE ON CLUSTER sink_cluster FROM materialize;
 DROP SINK s;
 DROP SINK s1;
 DROP TABLE t;
 DROP CONNECTION csr_conn;
 DROP CONNECTION kafka_conn;
+DROP CLUSTER sink_cluster;
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ALTER SYSTEM SET enable_ld_rbac_checks TO false;
