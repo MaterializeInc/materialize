@@ -91,7 +91,7 @@ CREATE CLUSTER sink_cluster REPLICAS (r1 (SIZE '1'));
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:permission denied for CLUSTER "default"
+contains:permission denied for CLUSTER "sink_cluster"
 
 $ postgres-execute connection=mz_system
 GRANT CREATE ON CLUSTER sink_cluster TO materialize;
