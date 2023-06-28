@@ -213,10 +213,6 @@ compare-and-append input=b_inf writer_id=w11111111-1111-1111-1111-111111111111
 ----
 error: Upper(Antichain { elements: [] })
 
-heartbeat-writer writer_id=w11111111-1111-1111-1111-111111111111
-----
-v23 ok
-
 expire-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
 v23 ok
@@ -232,10 +228,6 @@ v23 []
 compare-and-append input=b_inf writer_id=w44444444-4444-4444-4444-444444444444
 ----
 error: Upper(Antichain { elements: [] })
-
-heartbeat-writer writer_id=w44444444-4444-4444-4444-444444444444
-----
-v23 ok
 
 expire-writer writer_id=w44444444-4444-4444-4444-444444444444
 ----

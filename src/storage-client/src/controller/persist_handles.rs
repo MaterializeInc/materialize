@@ -249,18 +249,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
             let mut write_handles =
                 BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
 
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             let mut shutdown = false;
             while !shutdown {
                 tokio::select! {
-                    _ = interval.tick() => {
-                        let futs = FuturesUnordered::new();
-                        for (_id, write) in write_handles.iter_mut() {
-                            futs.push(write.maybe_heartbeat_writer());
-                        }
-                        use futures::StreamExt;
-                        futs.collect::<Vec<_>>().await;
-                    },
                     cmd = rx.recv() => {
                         if let Some(cmd) = cmd {
                             // Peel off all available commands.

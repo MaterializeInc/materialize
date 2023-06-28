@@ -933,8 +933,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoCriticalReaderState> for CriticalRead
 impl<T: Timestamp + Codec64> RustType<ProtoWriterState> for WriterState<T> {
     fn into_proto(&self) -> ProtoWriterState {
         ProtoWriterState {
-            last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
-            lease_duration_ms: self.lease_duration_ms.into_proto(),
+            version: self.version.to_string(),
             most_recent_write_token: self.most_recent_write_token.into_proto(),
             most_recent_write_upper: Some(self.most_recent_write_upper.into_proto()),
             debug: Some(self.debug.into_proto()),
@@ -942,6 +941,12 @@ impl<T: Timestamp + Codec64> RustType<ProtoWriterState> for WriterState<T> {
     }
 
     fn from_proto(proto: ProtoWriterState) -> Result<Self, TryFromProtoError> {
+        let version = if proto.version.is_empty() {
+            Version::new(0, 0, 0)
+        } else {
+            Version::parse(&proto.version)
+                .map_err(|e| TryFromProtoError::InvalidSemverVersion(e.to_string()))?
+        };
         // MIGRATION: We didn't originally have most_recent_write_token and
         // most_recent_write_upper. Pick values that aren't going to
         // accidentally match ones in incoming writes and confuse things. We
@@ -960,8 +965,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoWriterState> for WriterState<T> {
         // need to fill in a default.
         let debug = proto.debug.unwrap_or_default().into_rust()?;
         Ok(WriterState {
-            last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
-            lease_duration_ms: proto.lease_duration_ms.into_rust()?,
+            version,
             most_recent_write_token,
             most_recent_write_upper,
             debug,
@@ -1329,8 +1333,7 @@ mod tests {
     #[mz_ore::test]
     fn writer_state_migration_most_recent_write() {
         let proto = ProtoWriterState {
-            last_heartbeat_timestamp_ms: 1,
-            lease_duration_ms: 2,
+            version: DUMMY_BUILD_INFO.semver_version().to_string(),
             // Old ProtoWriterState had no most_recent_write_token or
             // most_recent_write_upper.
             most_recent_write_token: "".into(),
@@ -1341,8 +1344,7 @@ mod tests {
             }),
         };
         let expected = WriterState {
-            last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
-            lease_duration_ms: proto.lease_duration_ms,
+            version: DUMMY_BUILD_INFO.semver_version(),
             most_recent_write_token: IdempotencyToken::SENTINEL,
             most_recent_write_upper: Antichain::from_elem(0),
             debug: HandleDebugState {

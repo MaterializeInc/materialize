@@ -203,19 +203,11 @@ where
         &mut self,
         writer_id: &WriterId,
         purpose: &str,
-        lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, shard_upper, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
-                state.register_writer(
-                    &cfg.hostname,
-                    writer_id,
-                    purpose,
-                    lease_duration,
-                    heartbeat_timestamp_ms,
-                )
+                state.register_writer(&cfg.hostname, writer_id, purpose, cfg.build_version.clone())
             })
             .await;
         (shard_upper, maintenance)
@@ -595,20 +587,6 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn heartbeat_writer(
-        &mut self,
-        writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, existed, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, _, state| {
-                state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
-            })
-            .await;
-        (seqno, existed, maintenance)
-    }
-
     pub async fn expire_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
@@ -918,51 +896,6 @@ where
                     warn!(
                         "reader ({}) of shard ({}) heartbeat call took {}s",
                         reader_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
-    }
-
-    pub async fn start_writer_heartbeat_task(
-        self,
-        writer_id: WriterId,
-        gc: GarbageCollector<K, V, T, D>,
-    ) -> JoinHandle<()> {
-        let mut machine = self;
-        spawn(|| "persist::heartbeat_write", async move {
-            let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
-
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) went {}s between heartbeats",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, maintenance) = machine
-                    .heartbeat_writer(&writer_id, (machine.applier.cfg.now)())
-                    .await;
-                maintenance.start_performing(&machine, &gc);
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) heartbeat call took {}s",
-                        writer_id,
                         machine.shard_id(),
                         elapsed_since_heartbeat.as_secs_f64(),
                     );
@@ -1723,12 +1656,7 @@ pub mod datadriven {
         let writer_id = args.expect("writer_id");
         let (upper, maintenance) = datadriven
             .machine
-            .register_writer(
-                &writer_id,
-                "tests",
-                datadriven.client.cfg.writer_lease_duration,
-                (datadriven.client.cfg.now)(),
-            )
+            .register_writer(&writer_id, "tests")
             .await;
         datadriven.routine.push(maintenance);
         Ok(format!(
@@ -1746,18 +1674,6 @@ pub mod datadriven {
         let _ = datadriven
             .machine
             .heartbeat_leased_reader(&reader_id, (datadriven.client.cfg.now)())
-            .await;
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
-    }
-
-    pub async fn heartbeat_writer(
-        datadriven: &mut MachineState,
-        args: DirectiveArgs<'_>,
-    ) -> Result<String, anyhow::Error> {
-        let writer_id = args.expect("writer_id");
-        let _ = datadriven
-            .machine
-            .heartbeat_writer(&writer_id, (datadriven.client.cfg.now)())
             .await;
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }

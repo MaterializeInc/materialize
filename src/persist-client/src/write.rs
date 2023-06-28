@@ -12,7 +12,6 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -153,6 +152,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    // NB: this is not async at the moment, but it was in the past, and we'd like to reserve the
+    // right to make it async again in the future.
+    #[allow(clippy::unused_async)]
     pub(crate) async fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
@@ -169,17 +171,17 @@ where
         WriteHandle {
             cfg,
             metrics,
-            machine: machine.clone(),
-            gc: gc.clone(),
+            machine,
+            gc,
             compact,
             blob,
             cpu_heavy_runtime,
-            writer_id: writer_id.clone(),
+            writer_id,
             schemas,
             upper,
             last_heartbeat,
             explicitly_expired: false,
-            heartbeat_task: Some(machine.start_writer_heartbeat_task(writer_id, gc).await),
+            heartbeat_task: None,
         }
     }
 
@@ -364,12 +366,6 @@ where
                     return Ok(Ok(()));
                 }
                 Err(mismatch) => {
-                    // it's possible a client using `append_batch` continually fails if
-                    // it's racing with another writer. that's perfectly fine, but we should
-                    // be sure to heartbeat our writer explicitly if it's not getting a
-                    // chance to renew its lease through `[Self::compare_and_append]`
-                    self.maybe_heartbeat_writer().await;
-
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&mismatch.current, &lower) {
                         self.upper = mismatch.current.clone();
@@ -589,14 +585,7 @@ where
             let ((k, v), t, d) = update.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
             match builder.add(k, v, t, d).await {
-                Ok(Added::Record) => (),
-                // We need to maintain this writer's lease in case the batch is taking an
-                // exceptionally long time to write, so that our staged blobs don't get GC'd
-                // while we're still processing the batch.
-                //
-                // Here, we check if we need to heartbeat the writer each time we completed
-                // and began uploading a batch part.
-                Ok(Added::RecordAndParts) => self.maybe_heartbeat_writer().await,
+                Ok(Added::Record | Added::RecordAndParts) => (),
                 Err(invalid_usage) => return Err(invalid_usage),
             }
         }
@@ -604,52 +593,10 @@ where
         builder.finish(upper.clone()).await
     }
 
-    /// Heartbeats the writer lease if necessary.
-    ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this on some interval that is
-    /// "frequent" compared to PersistConfig::writer_lease_duration
-    pub async fn maybe_heartbeat_writer(&mut self) {
-        let min_elapsed = self.cfg.writer_lease_duration / 4;
-        let heartbeat_ts = (self.cfg.now)();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.applier.cfg.writer_lease_duration {
-                warn!(
-                    "writer ({}) of shard ({}) went {}s between heartbeats",
-                    self.writer_id,
-                    self.machine.shard_id(),
-                    elapsed_since_last_heartbeat.as_secs_f64()
-                );
-            }
-
-            let (_, existed, maintenance) = self
-                .machine
-                .heartbeat_writer(&self.writer_id, heartbeat_ts)
-                .await;
-            if !existed && !self.machine.applier.is_tombstone() {
-                // It's probably surprising to the caller that the shard
-                // becoming a tombstone expired this writer. Possibly the right
-                // thing to do here is pass up a bool to the caller indicating
-                // whether the WriterId it's trying to heartbeat has been
-                // expired, but that happening on a tombstone vs not is very
-                // different. As a medium-term compromise, pretend we did the
-                // heartbeat here.
-                panic!(
-                    "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    self.writer_id
-                )
-            }
-            self.last_heartbeat = heartbeat_ts;
-            maintenance.start_performing(&self.machine, &self.gc);
-        }
-    }
-
     /// Politely expires this writer, releasing its lease.
     ///
     /// There is a best-effort impl in Drop to expire a writer that wasn't
-    /// explictly expired with this method. When possible, explicit expiry is
+    /// explicitly expired with this method. When possible, explicit expiry is
     /// still preferred because the Drop one is best effort and is dependant on
     /// a tokio [Handle] being available in the TLC at the time of drop (which
     /// is a bit subtle). Also, explicit expiry allows for control over when it

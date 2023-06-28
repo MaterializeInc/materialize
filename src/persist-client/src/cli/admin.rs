@@ -183,12 +183,7 @@ pub async fn force_compaction(
     // We don't bother expiring this writer in various error codepaths, instead
     // letting it time out. /shrug
     let _ = machine
-        .register_writer(
-            &writer_id,
-            "persistcli admin force-compaction",
-            cfg.writer_lease_duration,
-            (cfg.now)(),
-        )
+        .register_writer(&writer_id, "persistcli admin force-compaction")
         .await;
 
     let mut attempt = 0;

@@ -223,9 +223,6 @@ mod tests {
                             "heartbeat-leased-reader" => {
                                 machine_dd::heartbeat_leased_reader(&mut state, args).await
                             }
-                            "heartbeat-writer" => {
-                                machine_dd::heartbeat_writer(&mut state, args).await
-                            }
                             "listen-through" => machine_dd::listen_through(&mut state, args).await,
                             "perform-maintenance" => {
                                 machine_dd::perform_maintenance(&mut state, args).await

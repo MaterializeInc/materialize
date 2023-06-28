@@ -66,11 +66,11 @@ message ProtoCriticalReaderState {
 }
 
 message ProtoWriterState {
-    uint64 last_heartbeat_timestamp_ms = 1;
-    uint64 lease_duration_ms = 2;
+    string version = 6;
     string most_recent_write_token = 3;
     ProtoU64Antichain most_recent_write_upper = 4;
     ProtoHandleDebugState debug = 5;
+    reserved 1, 2;
 }
 
 message ProtoHandleDebugState {

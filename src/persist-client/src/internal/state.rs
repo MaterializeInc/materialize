@@ -130,11 +130,10 @@ pub struct CriticalReaderState<T> {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct WriterState<T> {
-    /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
-    pub last_heartbeat_timestamp_ms: u64,
-    /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
-    /// after which this writer may be expired
-    pub lease_duration_ms: u64,
+    /// The writer's version. Since write handles never survive a process restart,
+    /// this should not change.
+    /// TODO: do we really need to track this per writer?
+    pub version: Version,
     /// The idempotency token of the most recent successful compare_and_append
     /// by this writer.
     pub most_recent_write_token: IdempotencyToken,
@@ -484,18 +483,15 @@ where
         hostname: &str,
         writer_id: &WriterId,
         purpose: &str,
-        lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
+        version: Version,
     ) -> ControlFlow<NoOpStateTransition<Upper<T>>, Upper<T>> {
         let upper = Upper(self.trace.upper().clone());
         let writer_state = WriterState {
+            version,
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
                 purpose: purpose.to_owned(),
             },
-            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
-            lease_duration_ms: u64::try_from(lease_duration.as_millis())
-                .expect("lease duration as millis must fit within u64"),
             most_recent_write_token: IdempotencyToken::SENTINEL,
             most_recent_write_upper: Antichain::from_elem(T::minimum()),
         };
@@ -517,7 +513,7 @@ where
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
+        _heartbeat_timestamp_ms: u64,
         idempotency_token: &IdempotencyToken,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
@@ -604,12 +600,6 @@ where
             batch.desc.upper()
         );
         writer_state.most_recent_write_upper = batch.desc.upper().clone();
-
-        // Also use this as an opportunity to heartbeat the writer
-        writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
-            heartbeat_timestamp_ms,
-            writer_state.last_heartbeat_timestamp_ms,
-        );
 
         Continue(merge_reqs)
     }
@@ -821,33 +811,6 @@ where
         // commit the state change so that this gets linearized (maybe we're
         // looking at old state).
         Continue(existed)
-    }
-
-    pub fn heartbeat_writer(
-        &mut self,
-        writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        // We expire all writers if the upper and since both advance to the
-        // empty antichain. Gracefully handle this. At the same time,
-        // short-circuit the cmd application so we don't needlessly create new
-        // SeqNos.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(false));
-        }
-
-        match self.writers.get_mut(writer_id) {
-            Some(writer_state) => {
-                writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
-                    heartbeat_timestamp_ms,
-                    writer_state.last_heartbeat_timestamp_ms,
-                );
-                Continue(true)
-            }
-            // No-op, but we still commit the state change so that this gets
-            // linearized (maybe we're looking at old state).
-            None => Continue(false),
-        }
     }
 
     pub fn expire_writer(
@@ -1257,9 +1220,9 @@ where
         });
         // critical_readers don't need forced expiration. (In fact, that's the point!)
         self.collections.writers.retain(|k, v| {
-            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+            let retain = v.version >= self.applier_version;
             if !retain {
-                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                info!("Force expiring stale writer ({k}) of shard ({shard_id})");
                 // We don't track writer expiration metrics yet.
             }
             retain
@@ -1541,25 +1504,21 @@ pub(crate) mod tests {
     pub fn any_writer_state<T: Arbitrary>() -> impl Strategy<Value = WriterState<T>> {
         Strategy::prop_map(
             (
-                any::<u64>(),
-                any::<u64>(),
+                0u64..100,
+                0u64..1000,
+                0u64..100,
                 any::<IdempotencyToken>(),
                 any::<Option<T>>(),
                 any::<HandleDebugState>(),
             ),
-            |(
-                last_heartbeat_timestamp_ms,
-                lease_duration_ms,
-                most_recent_write_token,
-                most_recent_write_upper,
-                debug,
-            )| WriterState {
-                last_heartbeat_timestamp_ms,
-                lease_duration_ms,
-                most_recent_write_token,
-                most_recent_write_upper: most_recent_write_upper
-                    .map_or_else(Antichain::new, Antichain::from_elem),
-                debug,
+            |(major, minor, point, most_recent_write_token, most_recent_write_upper, debug)| {
+                WriterState {
+                    version: Version::new(major, minor, point),
+                    most_recent_write_token,
+                    most_recent_write_upper: most_recent_write_upper
+                        .map_or_else(Antichain::new, Antichain::from_elem),
+                    debug,
+                }
             },
         )
     }
@@ -1798,7 +1757,7 @@ pub(crate) mod tests {
         .collections;
 
         let writer_id = WriterId::new();
-        let _ = state.register_writer("", &writer_id, "", Duration::from_secs(10), 0);
+        let _ = state.register_writer("", &writer_id, "", DUMMY_BUILD_INFO.semver_version());
         let now = SYSTEM_TIME.clone();
 
         // State is initially empty.
@@ -1901,9 +1860,12 @@ pub(crate) mod tests {
         );
 
         let writer_id = WriterId::new();
-        let _ = state
-            .collections
-            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
+        let _ = state.collections.register_writer(
+            "",
+            &writer_id,
+            "",
+            DUMMY_BUILD_INFO.semver_version(),
+        );
 
         // Advance upper to 5.
         assert!(state
@@ -2055,9 +2017,12 @@ pub(crate) mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
 
         let writer_id = WriterId::new();
-        let _ = state
-            .collections
-            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
+        let _ = state.collections.register_writer(
+            "",
+            &writer_id,
+            "",
+            DUMMY_BUILD_INFO.semver_version(),
+        );
         let now = SYSTEM_TIME.clone();
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
@@ -2134,13 +2099,13 @@ pub(crate) mod tests {
 
         assert!(state
             .collections
-            .register_writer("", &writer_id_one, "", Duration::from_secs(10), 0)
+            .register_writer("", &writer_id_one, "", DUMMY_BUILD_INFO.semver_version())
             .is_continue());
 
         let writer_id_two = WriterId::new();
         assert!(state
             .collections
-            .register_writer("", &writer_id_two, "", Duration::from_secs(10), 0)
+            .register_writer("", &writer_id_two, "", DUMMY_BUILD_INFO.semver_version())
             .is_continue());
 
         // Writer is registered and is now eligible to write
@@ -2204,9 +2169,12 @@ pub(crate) mod tests {
 
         // When a writer is present, non-writes don't gc.
         let writer_id = WriterId::new();
-        let _ = state
-            .collections
-            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
+        let _ = state.collections.register_writer(
+            "",
+            &writer_id,
+            "",
+            DUMMY_BUILD_INFO.semver_version(),
+        );
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.
