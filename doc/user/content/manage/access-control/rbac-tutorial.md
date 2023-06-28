@@ -75,20 +75,16 @@ example.
     ```
     Your `id` and `oid` values will look different.
 
-  The `inherit`, `create_role`, `create_db`, and `create_cluster` are the
-  role attributes assigned to a role when it is created. These attributes
-  determine the system-level privileges of a role and do not impact object-level privileges.
+  The `inherit` is the role attribute assigned to a role when it is created.
 
   * `INHERIT` is set to true by default and allows roles to inherit the
-    privileges of roles it is a member of.
+    privileges of roles it is a member of. It is not possible to set this to false.
 
-  * `CREATEROLE` allows the role to create, change, or delete other roles or
-    assign role membership.
+  * `CREATEROLE` is deprecated and will be removed soon. It has no effect.
 
-  * `CREATEDB` allows the role to create new databases.
+  * `CREATEDB` is deprecated and will be removed soon. It has no effect.
 
-  * `CREATECLUSTER` allows the role to create Materialize clusters. This
-    attribute is unique to the Materialize concept of clusters.
+  * `CREATECLUSTER` is deprecated and will be removed soon. It has no effect.
 
 ## Step 3. Create example objects
 
@@ -208,18 +204,24 @@ privileges as needed.
 1. Create a second role your Materialize account:
 
    ```sql
-   CREATE ROLE qa_role WITH CREATEDB;
+   CREATE ROLE qa_role;
+   ```
+
+2. Apply `CREATEDB` privileges to the `qa_role`
+
+   ```sql
+   GRANT CREATEDB ON SYSTEM TO qa_role;
    ```
 
    This role has permission to create a new database in the Materialize account.
 
-2. Create a new `qa_db` database:
+3. Create a new `qa_db` database:
 
    ```sql
    CREATE DATABASE qa_db;
    ```
 
-3. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database:
+4. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database:
 
    ```sql
    GRANT USAGE, CREATE ON DATABASE qa_db TO qa_role;
@@ -259,35 +261,11 @@ permissions as the `qa_role`.
    the next section, you will edit role attributes for these roles and drop
    privileges.
 
-## Step 8. Revoke privileges and alter role attributes
+## Step 8. Revoke privileges
 
-Your `dev_role` and `qa_role` have the same role attributes. You can alter or
-revoke certain attributes and privileges for each role, even if they are
-inherited from another role.
+You can revoke certain privileges for each role, even if they are inherited from another role.
 
-1. Update the `CREATEROLE` attribute for the `dev_role`:
-
-   ```sql
-   ALTER ROLE dev_role WITH CREATEROLE;
-   ```
-
-   The `qa_role` will not have the `CREATEROLE` attribute enabled because attributes are not inherited.
-
-2. Compare the attributes of the `qa_role` and `dev_role`:
-
-   ```sql
-   SELECT * FROM mz_roles;
-   ```
-
-   Your output should contain the role names and the updated attributes:
-
-   ```nofmt
-   id|oid|name|inherit|create_role|create_db|create_cluster
-   u9|22444|qa_role|t|f|f|f
-   u8|20016|dev_role|t|t|f|f
-   ```
-
-3. Let's say you decide `dev_role` no longer needs `CREATE` privileges on the
+1. Let's say you decide `dev_role` no longer needs `CREATE` privileges on the
    `dev_table` object. You can revoke that privilege for the role:
 
    ```sql

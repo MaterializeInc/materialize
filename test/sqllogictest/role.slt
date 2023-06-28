@@ -25,7 +25,7 @@ materialize  true  true  true  true
 
 # Give materialize the CREATEROLE attribute.
 simple conn=mz_system,user=mz_system
-ALTER ROLE materialize CREATEROLE;
+GRANT CREATEROLE ON SYSTEM TO materialize
 ----
 COMPLETE 0
 
@@ -39,10 +39,16 @@ statement error SUPERUSER attribute is not supported, for more information consu
 CREATE ROLE foo SUPERUSER
 
 statement error conflicting or redundant options
-CREATE ROLE foo CREATEROLE CREATEROLE INHERIT
+CREATE ROLE foo INHERIT INHERIT
 
-statement error conflicting or redundant options
-CREATE ROLE foo CREATEROLE NOCREATEROLE CREATEDB
+statement error CREATEDB attribute is not supported
+CREATE ROLE foo CREATEDB
+
+statement error CREATEROLE attribute is not supported
+CREATE ROLE foo CREATEROLE
+
+statement error CREATECLUSTER attribute is not supported
+CREATE ROLE foo CREATECLUSTER
 
 # Create role and verify its existence.
 statement ok
@@ -123,42 +129,32 @@ CREATE ROLE mz_system
 statement error role name "mz_foo" is reserved
 CREATE ROLE mz_foo
 
-# Create role with attributes
+# Create role
 statement ok
-CREATE ROLE foo CREATEROLE CREATEDB NOCREATECLUSTER
+CREATE ROLE foo
 
 query TBBBB
 SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
 ----
-foo true true true false
+foo true false false false
 
 statement error non inherit roles not yet supported
 ALTER ROLE foo NOINHERIT
 
 statement error role name "mz_system" is reserved
-ALTER ROLE mz_system NOCREATEDB
+ALTER ROLE mz_system INHERIT
 
 statement error conflicting or redundant options
-ALTER ROLE foo CREATEROLE NOCREATEROLE
+ALTER ROLE foo INHERIT INHERIT
 
-statement error conflicting or redundant options
-ALTER ROLE foo CREATEDB CREATEDB
+statement error CREATEDB attribute is not supported
+ALTER ROLE foo CREATEDB
 
-statement ok
-ALTER ROLE foo NOCREATEDB
+statement error CREATEROLE attribute is not supported
+ALTER ROLE foo CREATEROLE
 
-query TBBBB
-SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
-----
-foo true true false false
-
-statement ok
+statement error CREATECLUSTER attribute is not supported
 ALTER ROLE foo CREATECLUSTER
-
-query TBBBB
-SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
-----
-foo true true false true
 
 # Prevent creating, dropping, and altering PUBLIC role
 
@@ -169,7 +165,7 @@ statement error role name "public" is reserved
 DROP ROLE PUBLIC
 
 statement error role name "public" is reserved
-ALTER ROLE public CREATEDB
+ALTER ROLE public INHERIT
 
 statement ok
 BEGIN

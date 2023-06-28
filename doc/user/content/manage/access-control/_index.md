@@ -58,7 +58,7 @@ user more elevated privileges in the Materialize administrator console.
 
 ## RBAC structure
 
-RBAC in practice is a group of roles with assigned privileges and attributes.
+RBAC in practice is a group of roles with assigned privileges.
 You can assign specific users to roles or assign privileges to users to inherit
 from other roles.
 
@@ -77,13 +77,10 @@ organization. You can edit these actions when you create the role:
 
 | Name              | Description                                                                 |
 |-------------------|-----------------------------------------------------------------------------|
-| `CREATEDB`        | Can create a database.                                                      |
-| `CREATEROLE`      | Can create, alter, delete roles and can grant and revoke role membership.   |
 | `INHERIT`         | **Read-only.** Can inherit privileges of other roles.                       |
-| `CREATECLUSTER`   | Can create a cluster.                                                       |
-| `NOCREATEDB`      | Denies the role the ability to create databases.                            |
-| `NOCREATEROLE`    | Denies the role the ability to create, alter, delete roles or grant/revoke. |
-| `NOCREATECLUSTER` | Denies the role the ability to create clusters.                             |
+
+PostgreSQL uses role attributes to determine if a role is allowed to execute certain statements. In
+Materialize these have all been replaced by system privileges.
 
 ### Privileges
 
@@ -91,32 +88,37 @@ Privileges are the actions or operations a role is allowed to perform on a
 specific object. After you create a role, you can grant it the following
 object-specific privileges in Materialize:
 
-| Privilege | Description                                                | `psql` |
-| --------- | ---------------------------------------------------------- | ------ |
-| `SELECT`  | Allows selecting rows from an object.                      | `r`    |
-| `INSERT`  | Allows inserting into an object.                           | `a`    |
-| `UPDATE`  | Allows updating an object (requires `SELECT`).             | `w`    |
-| `DELETE`  | Allows deleting from an object (requires `SELECT`).        | `d`    |
-| `CREATE`  | Allows creating a new object within another object.        | `C`    |
-| `USAGE`   | Allows using an object or looking up members of an object. | `U`    |
+| Privilege       | Description                                                                                    | `psql` |
+|-----------------|------------------------------------------------------------------------------------------------|--------|
+| `SELECT`        | Allows selecting rows from an object.                                                          | `r`    |
+| `INSERT`        | Allows inserting into an object.                                                               | `a`    |
+| `UPDATE`        | Allows updating an object (requires `SELECT`).                                                 | `w`    |
+| `DELETE`        | Allows deleting from an object (requires `SELECT`).                                            | `d`    |
+| `CREATE`        | Allows creating a new object within another object.                                            | `C`    |
+| `USAGE`         | Allows using an object or looking up members of an object.                                     | `U`    |
+| `CREATEROLE`    | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. | `R`    |
+| `CREATEDB`      | Allows creating databases.                                                                     | `B`    |
+| `CREATECLUSTER` | Allows creating clusters.                                                                      | `N`    |
+
 
 Note that the system catalog uses the abbreviation of the privilege name.
 
 Objects in Materialize have different levels of privileges available to them.
 Materialize supports the following object type privileges:
 
-| Object Type          | Privileges                             |
-|----------------------|----------------------------------------|
-| `DATABASE`           | `USAGE`, `CREATE`                      |
-| `SCHEMA`             | `USAGE`, `CREATE`                      |
-| `TABLE`              | `INSERT`, `SELECT`, `UPDATE`, `DELETE` |
-| `VIEW`               | `SELECT`                               |
-| `MATERIALIZED  VIEW` | `SELECT`                               |
-| `TYPE`               | `USAGE`                                |
-| `SOURCE`             | `SELECT`                               |
-| `CONNECTION`         | `USAGE`                                |
-| `SECRET`             | `USAGE`                                |
-| `CLUSTER`            | `USAGE`, `CREATE`                      |
+| Object Type          | Privileges                                |
+|----------------------|-------------------------------------------|
+| `SYSTEM`             | `CREATEROLE`, `CREATEDB`, `CREATECLUSTER` |
+| `DATABASE`           | `USAGE`, `CREATE`                         |
+| `SCHEMA`             | `USAGE`, `CREATE`                         |
+| `TABLE`              | `INSERT`, `SELECT`, `UPDATE`, `DELETE`    |
+| `VIEW`               | `SELECT`                                  |
+| `MATERIALIZED  VIEW` | `SELECT`                                  |
+| `TYPE`               | `USAGE`                                   |
+| `SOURCE`             | `SELECT`                                  |
+| `CONNECTION`         | `USAGE`                                   |
+| `SECRET`             | `USAGE`                                   |
+| `CLUSTER`            | `USAGE`, `CREATE`                         |
 
 ### Inheritance
 

@@ -48,6 +48,7 @@ pub enum PlanError {
     NeverSupported {
         feature: String,
         documentation_link: String,
+        details: Option<String>,
     },
     UnknownColumn {
         table: Option<PartialItemName>,
@@ -209,6 +210,7 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
@@ -306,7 +308,7 @@ impl fmt::Display for PlanError {
                 }
                 Ok(())
             }
-            Self::NeverSupported { feature, documentation_link: documentation_path } => {
+            Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
                 write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
                 Ok(())
             }

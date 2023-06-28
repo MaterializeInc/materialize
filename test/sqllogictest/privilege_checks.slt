@@ -218,45 +218,20 @@ CREATE ROLE r1;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
-CREATE ROLE rr CREATEDB;
-----
-db error: ERROR: permission denied for SYSTEM
-
-simple conn=child,user=child
-CREATE ROLE rr CREATEDB;
-----
-db error: ERROR: permission denied for SYSTEM
-
 simple conn=mz_system,user=mz_system
-GRANT CREATEDB ON SYSTEM TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE ROLE rr CREATEDB;
-----
-COMPLETE 0
-
-simple conn=child,user=child
-CREATE ROLE rr1 CREATEDB;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE CREATEROLE, CREATEDB ON SYSTEM FROM joe;
+REVOKE CREATEROLE ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
 # ALTER ROLE
 
 simple conn=joe,user=joe
-ALTER ROLE r NOCREATEDB;
+ALTER ROLE r INHERIT;
 ----
 db error: ERROR: permission denied for SYSTEM
 
 simple conn=child,user=child
-ALTER ROLE r1 NOCREATEDB;
+ALTER ROLE r1 INHERIT;
 ----
 db error: ERROR: permission denied for SYSTEM
 
@@ -266,42 +241,17 @@ GRANT CREATEROLE ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-ALTER ROLE r NOCREATEDB;
+ALTER ROLE r INHERIT;
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-ALTER ROLE r1 NOCREATEDB;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-ALTER ROLE rr CREATECLUSTER;
-----
-db error: ERROR: permission denied for SYSTEM
-
-simple conn=child,user=child
-ALTER ROLE rr1 CREATECLUSTER;
-----
-db error: ERROR: permission denied for SYSTEM
-
-simple conn=mz_system,user=mz_system
-GRANT CREATECLUSTER ON SYSTEM TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-ALTER ROLE rr CREATECLUSTER;
-----
-COMPLETE 0
-
-simple conn=child,user=child
-ALTER ROLE rr1 CREATECLUSTER;
+ALTER ROLE r1 INHERIT;
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATEROLE, CREATECLUSTER ON SYSTEM FROM joe;
+REVOKE CREATEROLE ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -835,12 +785,12 @@ COMPLETE 0
 # DROP ROLE
 
 simple conn=joe,user=joe
-DROP ROLE r, rr;
+DROP ROLE r;
 ----
 db error: ERROR: permission denied for SYSTEM
 
 simple conn=child,user=child
-DROP ROLE r1, rr1;
+DROP ROLE r1;
 ----
 db error: ERROR: permission denied for SYSTEM
 
@@ -850,12 +800,12 @@ GRANT CREATEROLE ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-DROP ROLE r, rr;
+DROP ROLE r;
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-DROP ROLE r1, rr1;
+DROP ROLE r1;
 ----
 COMPLETE 0
 
