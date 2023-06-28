@@ -8334,15 +8334,21 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
-    fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap> {
+    fn get_privileges(&self, id: &SystemObjectId) -> Option<&PrivilegeMap> {
         match id {
-            ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
-            ObjectId::Database(id) => Some(self.get_database(id).privileges()),
-            ObjectId::Schema((database_spec, schema_spec)) => {
+            SystemObjectId::System => Some(&self.state.system_privileges),
+            SystemObjectId::Object(ObjectId::Cluster(id)) => {
+                Some(self.get_cluster(*id).privileges())
+            }
+            SystemObjectId::Object(ObjectId::Database(id)) => {
+                Some(self.get_database(id).privileges())
+            }
+            SystemObjectId::Object(ObjectId::Schema((database_spec, schema_spec))) => {
                 Some(self.get_schema(database_spec, schema_spec).privileges())
             }
-            ObjectId::Item(id) => Some(self.get_item(id).privileges()),
-            ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+            SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
+            SystemObjectId::Object(ObjectId::ClusterReplica(_))
+            | SystemObjectId::Object(ObjectId::Role(_)) => None,
         }
     }
 
@@ -8710,7 +8716,7 @@ mod tests {
     use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
-        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::StatementContext;
     use mz_sql::session::vars::VarInput;
@@ -9833,11 +9839,14 @@ mod tests {
 
         assert_eq!(
             None,
-            catalog.get_privileges(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+            catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
+                ClusterId::User(1),
+                1
+            ))))
         );
         assert_eq!(
             None,
-            catalog.get_privileges(&ObjectId::Role(RoleId::User(1)))
+            catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
         );
     }
 }

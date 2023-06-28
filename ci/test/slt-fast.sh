@@ -134,7 +134,6 @@ tests_without_views=(
     test/sqllogictest/regressions.slt
     test/sqllogictest/returning.slt
     test/sqllogictest/role.slt
-    test/sqllogictest/role_attributes.slt
     test/sqllogictest/role_create.slt
     test/sqllogictest/role_membership.slt
     test/sqllogictest/scalar-func-table-position.slt
@@ -155,7 +154,6 @@ tests_without_views=(
     test/sqllogictest/subscribe_outputs.slt
     test/sqllogictest/subsource.slt
     test/sqllogictest/system-cluster.slt
-    test/sqllogictest/system_privileges.slt
     test/sqllogictest/table_func.slt
     test/sqllogictest/temporal.slt
     test/sqllogictest/timedomain.slt

@@ -286,7 +286,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId>;
 
     /// Returns the [`PrivilegeMap`] of the object.
-    fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap>;
+    fn get_privileges(&self, id: &SystemObjectId) -> Option<&PrivilegeMap>;
 
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
     ///
@@ -502,6 +502,22 @@ impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
             create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
             _private: (),
         }
+    }
+}
+
+impl From<&RoleAttributes> for AclMode {
+    fn from(attributes: &RoleAttributes) -> Self {
+        let mut acl_mode = AclMode::empty();
+        if attributes.create_role {
+            acl_mode |= AclMode::CREATE_ROLE;
+        }
+        if attributes.create_db {
+            acl_mode |= AclMode::CREATE_DB;
+        }
+        if attributes.create_cluster {
+            acl_mode |= AclMode::CREATE_CLUSTER;
+        }
+        acl_mode
     }
 }
 
