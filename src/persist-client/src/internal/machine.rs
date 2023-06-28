@@ -43,7 +43,6 @@ use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HollowBatch, HollowRollup, IdempotencyToken,
     LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections, Upper,
-    WriterState,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -214,9 +213,9 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> (Upper<T>, WriterState<T>, RoutineMaintenance) {
+    ) -> (Upper<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, (shard_upper, writer_state), maintenance) = self
+        let (_seqno, shard_upper, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_writer(
                     &cfg.hostname,
@@ -227,7 +226,7 @@ where
                 )
             })
             .await;
-        (shard_upper, writer_state, maintenance)
+        (shard_upper, maintenance)
     }
 
     pub async fn compare_and_append(
@@ -1742,7 +1741,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let writer_id = args.expect("writer_id");
-        let (upper, _state, maintenance) = datadriven
+        let (upper, maintenance) = datadriven
             .machine
             .register_writer(
                 &writer_id,
