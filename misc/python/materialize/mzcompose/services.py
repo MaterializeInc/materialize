@@ -254,7 +254,7 @@ class Clusterd(Service):
 
         if scratch_directory:
             environment.append(
-                "CLUSTERD_SCRATCH_DIRECTORY=/mzdata/source_data",
+                "CLUSTERD_SCRATCH_DIRECTORY=/scratch",
             )
 
         command = []
