@@ -263,18 +263,18 @@ class CardinalityEstiamtes(FeatureTestScenario):
     @classmethod
     def create_item(cls, ordinal: int) -> str:
         return dedent(
-            f"""
+            """
             SET enable_session_cardinality_estimates = true;
             """
         )
 
     @classmethod
     def drop_item(cls, ordinal: int) -> str:
-        return f""
+        return ""
 
     @classmethod
     def query_item(cls, ordinal: int) -> str:
-        return f""
+        return ""
 
 
 class FormatJson(FeatureTestScenario):
