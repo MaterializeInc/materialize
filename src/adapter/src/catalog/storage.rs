@@ -545,7 +545,13 @@ impl Connection {
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, _): (SystemPrivilegesKey, ())| k.privileges)
+            .map_ok(
+                |(k, v): (SystemPrivilegesKey, SystemPrivilegesValue)| MzAclItem {
+                    grantee: k.grantee,
+                    grantor: k.grantor,
+                    acl_mode: v.acl_mode,
+                },
+            )
             .collect::<Result<_, _>>()?)
     }
 
@@ -911,7 +917,7 @@ pub struct Transaction<'a> {
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
-    system_privileges: TableTransaction<SystemPrivilegesKey, ()>,
+    system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -1663,6 +1669,20 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Set persisted system privilege.
+    pub fn set_system_privilege(
+        &mut self,
+        grantee: RoleId,
+        grantor: RoleId,
+        acl_mode: Option<AclMode>,
+    ) -> Result<(), Error> {
+        self.system_privileges.set(
+            SystemPrivilegesKey { grantee, grantor },
+            acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
+        )?;
+        Ok(())
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {
@@ -2073,7 +2093,13 @@ pub struct DefaultPrivilegesValue {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesKey {
-    privileges: MzAclItem,
+    grantee: RoleId,
+    grantor: RoleId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SystemPrivilegesValue {
+    acl_mode: AclMode,
 }
 
 pub const ALL_COLLECTIONS: &[&str] = &[

@@ -77,8 +77,10 @@ pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
     proto::DefaultPrivilegesKey,
     proto::DefaultPrivilegesValue,
 > = TypedCollection::new("default_privileges");
-pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<proto::SystemPrivilegesKey, ()> =
-    TypedCollection::new("system_privileges");
+pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<
+    proto::SystemPrivilegesKey,
+    proto::SystemPrivilegesValue,
+> = TypedCollection::new("system_privileges");
 // If you add a new collection, then don't forget to write a migration that initializes the
 // collection either with some initial values or as empty. See
 // [`mz_stash::upgrade::v17_to_v18`] as an example.
@@ -601,29 +603,28 @@ pub async fn initialize(
             ],
         )
         .await?;
-    let system_privileges: Vec<_> = vec![proto::SystemPrivilegesKey {
-        privileges: Some(proto::MzAclItem {
+    let system_privileges: Vec<_> = vec![(
+        proto::SystemPrivilegesKey {
             grantee: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+        },
+        proto::SystemPrivilegesValue {
             acl_mode: Some(rbac::all_object_privileges(SystemObjectType::System).into_proto()),
-        }),
-    }]
+        },
+    )]
     .into_iter()
     // Optionally add system privileges for the bootstrap role.
-    .chain(
-        bootstrap_role
-            .as_ref()
-            .map(|(role_id, _)| proto::SystemPrivilegesKey {
-                privileges: Some(proto::MzAclItem {
-                    grantee: Some(role_id.clone()),
-                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                    acl_mode: Some(
-                        rbac::all_object_privileges(SystemObjectType::System).into_proto(),
-                    ),
-                }),
-            }),
-    )
-    .map(|key| (key, ()))
+    .chain(bootstrap_role.as_ref().map(|(role_id, _)| {
+        (
+            proto::SystemPrivilegesKey {
+                grantee: Some(role_id.clone()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            },
+            proto::SystemPrivilegesValue {
+                acl_mode: Some(rbac::all_object_privileges(SystemObjectType::System).into_proto()),
+            },
+        )
+    }))
     .collect();
     SYSTEM_PRIVILEGES_COLLECTION
         .initialize(tx, system_privileges)

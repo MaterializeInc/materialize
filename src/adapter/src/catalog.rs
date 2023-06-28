@@ -6377,10 +6377,15 @@ impl Catalog {
                                 );
                             }
                             update_privilege_fn(&mut state.system_privileges);
-                            if let Some(new_privilege) = state
+                            let new_privilege = state
                                 .system_privileges
-                                .get_acl_item(&privilege.grantee, &privilege.grantor)
-                            {
+                                .get_acl_item(&privilege.grantee, &privilege.grantor);
+                            tx.set_system_privilege(
+                                privilege.grantee,
+                                privilege.grantor,
+                                new_privilege.map(|new_privilege| new_privilege.acl_mode),
+                            )?;
+                            if let Some(new_privilege) = new_privilege {
                                 builtin_table_updates.push(
                                     state.pack_system_privileges_update(new_privilege.clone(), 1),
                                 );
