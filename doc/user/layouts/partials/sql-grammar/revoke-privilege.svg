@@ -36,9 +36,14 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="243" y="141">PRIVILEGES</text>
-   <rect x="397" y="47" width="40" height="32"/>
-   <rect x="395" y="45" width="40" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="405" y="65">ON</text>
+   <rect x="397" y="47" width="40" height="32" rx="10"/>
+   <rect x="395"
+         y="45"
+         width="40"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="405" y="65">ON</text>
    <rect x="65" y="265" width="66" height="32" rx="10"/>
    <rect x="63"
          y="263"
