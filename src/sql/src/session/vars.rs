@@ -929,8 +929,8 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_cardinality_estimates"),
     value: &false,
     description:
-        "Feature flag indicating whether to use cardinality estimates when planning optimizing \
-    queries; does not affect EXPLAIN WITH(cardinality) (Materialize).",
+        "Feature flag indicating whether to use cardinality estimates when optimizing queries; \
+    does not affect EXPLAIN WITH(cardinality) (Materialize).",
     internal: true,
 };
 
@@ -1122,7 +1122,10 @@ feature_flags!(
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
     (enable_managed_clusters, "managed clusters"),
-    (enable_cardinality_estimates, "cardinality estimates in join planning"),
+    (
+        enable_cardinality_estimates,
+        "join planning with cardinality estimates"
+    ),
 );
 
 /// Represents the input to a variable.
@@ -1214,7 +1217,10 @@ impl SessionVars {
             .with_var(&EMIT_TRACE_ID_NOTICE)
             .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&ENABLE_SESSION_RBAC_CHECKS)
-            .with_feature_gated_var(&ENABLE_SESSION_CARDINALITY_ESTIMATES, &ENABLE_CARDINALITY_ESTIMATES)
+            .with_feature_gated_var(
+                &ENABLE_SESSION_CARDINALITY_ESTIMATES,
+                &ENABLE_CARDINALITY_ESTIMATES,
+            )
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
