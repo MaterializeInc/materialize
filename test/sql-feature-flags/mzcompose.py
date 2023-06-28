@@ -251,6 +251,32 @@ class WithMutuallyRecursive(FeatureTestScenario):
         return f"SELECT * FROM wmr_{ordinal:02d}"
 
 
+class CardinalityEstiamtes(FeatureTestScenario):
+    @classmethod
+    def feature_name(cls) -> str:
+        return "enable_cardinality_estimates"
+
+    @classmethod
+    def feature_error(cls) -> str:
+        return "join planning with cardinality estimates is not supported"
+
+    @classmethod
+    def create_item(cls, ordinal: int) -> str:
+        return dedent(
+            f"""
+            SET enable_session_cardinality_estimates = true;
+            """
+        )
+
+    @classmethod
+    def drop_item(cls, ordinal: int) -> str:
+        return f""
+
+    @classmethod
+    def query_item(cls, ordinal: int) -> str:
+        return f""
+
+
 class FormatJson(FeatureTestScenario):
     @classmethod
     def feature_name(cls) -> str:

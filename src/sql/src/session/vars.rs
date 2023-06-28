@@ -925,13 +925,13 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
-pub const ENABLE_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_cardinality_estimates"),
+pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_session_cardinality_estimates"),
     value: &false,
     description:
-        "User facing session boolean flag indicating whether to use cardinality estimates \
-    when planning optimizing queries; does not affect EXPLAIN WITH(cardinality) (Materialize).",
-    internal: false,
+        "Feature flag indicating whether to use cardinality estimates when planning optimizing \
+    queries; does not affect EXPLAIN WITH(cardinality) (Materialize).",
+    internal: true,
 };
 
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
@@ -1122,6 +1122,7 @@ feature_flags!(
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
     (enable_managed_clusters, "managed clusters"),
+    (enable_cardinality_estimates, "cardinality estimates in join planning"),
 );
 
 /// Represents the input to a variable.
@@ -1213,7 +1214,7 @@ impl SessionVars {
             .with_var(&EMIT_TRACE_ID_NOTICE)
             .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&ENABLE_SESSION_RBAC_CHECKS)
-            .with_var(&ENABLE_CARDINALITY_ESTIMATES)
+            .with_feature_gated_var(&ENABLE_SESSION_CARDINALITY_ESTIMATES, &ENABLE_CARDINALITY_ESTIMATES)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1575,8 +1576,8 @@ impl SessionVars {
     }
 
     /// Returns the value of `enable_cardinality_estimates` configuration parameter.
-    pub fn enable_cardinality_estimates(&self) -> bool {
-        *self.expect_value(&ENABLE_CARDINALITY_ESTIMATES)
+    pub fn enable_session_cardinality_estimates(&self) -> bool {
+        *self.expect_value(&ENABLE_SESSION_CARDINALITY_ESTIMATES)
     }
 
     /// Returns the value of `is_superuser` configuration parameter.

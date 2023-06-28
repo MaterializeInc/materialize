@@ -4222,7 +4222,7 @@ impl Coordinator {
         source_ids: &BTreeSet<GlobalId>,
         query_as_of: Antichain<Timestamp>,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
-        if !session.vars().enable_cardinality_estimates() {
+        if !session.vars().enable_session_cardinality_estimates() {
             return Ok(Box::new(EmptyStatisticsOracle));
         }
 
