@@ -35,7 +35,6 @@ use timely::progress::Timestamp;
 use tracing::warn;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::extensions::collection::ConsolidateExt;
 use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
 use crate::render::errors::MaybeValidatingRow;
@@ -719,7 +718,9 @@ where
                 stage = negated_output
                     .negate()
                     .concat(&input)
-                    .mz_consolidate::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
+                    .consolidate_named::<RowKeySpine<_, _, _>>(
+                        "Consolidated MinsMaxesHierarchical",
+                    );
             }
 
             // Discard the hash from the key and return to the format of the input data.
@@ -873,7 +874,7 @@ where
 
                 (key, values)
             })
-            .mz_consolidate_if::<RowKeySpine<_, _, _>>(
+            .consolidate_named_if::<RowKeySpine<_, _, _>>(
                 must_consolidate,
                 "Consolidated ReduceMonotonic input",
             );

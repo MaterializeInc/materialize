@@ -31,7 +31,6 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
 use crate::extensions::arrange::MzArrange;
-use crate::extensions::collection::ConsolidateExt;
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
@@ -91,7 +90,7 @@ where
                             };
                             (group_row, row)
                         })
-                        .mz_consolidate_if::<RowKeySpine<_, _, _>>(
+                        .consolidate_named_if::<RowKeySpine<_, _, _>>(
                             must_consolidate,
                             "Consolidated MonotonicTopK input",
                         );
@@ -301,7 +300,7 @@ where
         (
             oks.negate()
                 .concat(&input)
-                .mz_consolidate::<RowKeySpine<_, _, _>>("Consolidated TopK"),
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated TopK"),
             errs,
         )
     }
@@ -335,7 +334,7 @@ where
                     (group_key, row)
                 }
             })
-            .mz_consolidate_if::<RowKeySpine<_, _, _>>(
+            .consolidate_named_if::<RowKeySpine<_, _, _>>(
                 must_consolidate,
                 "Consolidated MonotonicTop1 input",
             );

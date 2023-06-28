@@ -132,7 +132,6 @@ use timely::PartialOrder;
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::extensions::collection::ConsolidateExt;
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::LogImportFrontiers;
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
@@ -656,7 +655,7 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.mz_consolidate::<RowKeySpine<_, _, _>>("LetRecConsolidation");
+                let mut oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation");
                 if let Some(token) = &self.shutdown_token.get_inner() {
                     oks = oks.with_token(Weak::clone(token));
                 }
