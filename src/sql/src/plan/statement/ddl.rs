@@ -364,8 +364,7 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Size, String),
     (Timeline, String),
-    (TimestampInterval, Interval),
-    (Disk, bool)
+    (TimestampInterval, Interval)
 );
 
 generate_extracted_config!(
