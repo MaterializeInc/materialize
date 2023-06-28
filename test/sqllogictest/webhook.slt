@@ -13,7 +13,7 @@ mode cockroach
 reset-server
 
 # We shouldn't be able to create a webhook source unless the feature is enabled.
-statement error creating a or pushing data to, a webhook source is not supported
+statement error creating or pushing data to webhook sources is not supported
 CREATE SOURCE webhook_bytes FROM WEBHOOK
     BODY FORMAT BYTES
 
@@ -97,31 +97,3 @@ statement ok
 CREATE SOURCE IF NOT EXISTS webhook_text_include_headers FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
-
-#
-# Invalid WEBHOOK syntax
-#
-
-statement error Expected BODY, found EOF
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
-
-statement error Expected FORMAT, found BYTES
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK BODY BYTES
-
-statement error Expected end of statement, found AS
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
-    BODY FORMAT JSON
-    AS other
-
-statement error Expected format specifier, found EOF
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK BODY FORMAT
-
-# Not yet supported, but maybe one day!
-statement error Unsupported BODY FORMAT PROTOBUF, expected JSON, TEXT, or BYTES
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
-    BODY FORMAT PROTOBUF
-
-# Not yet supported, but maybe one day!
-statement error Unsupported BODY FORMAT AVRO, expected JSON, TEXT, or BYTES
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
-    BODY FORMAT AVRO

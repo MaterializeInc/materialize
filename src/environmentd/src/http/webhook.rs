@@ -190,18 +190,18 @@ mod tests {
 
     use super::{pack_row, WebhookError};
 
-    #[test]
+    #[mz_ore::test]
     fn smoke_test_adapter_error_response_status() {
         // Unsupported errors get mapped to a certain response status.
         let resp = WebhookError::from(AdapterError::Unsupported("test")).into_response();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         // All other errors should map to 500.
         let resp = WebhookError::from(AdapterError::Internal("test".to_string())).into_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn smoke_test_storage_error_response_status() {
         // Resource exhausted should get mapped to a specific status code.
         let resp = WebhookError::from(StorageError::ResourceExhausted("test")).into_response();
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_pack_invalid_column_type() {
         let body = Bytes::from(vec![42, 42, 42, 42]);
         let headers: HeaderMap<HeaderValue> = HeaderMap::default();
@@ -250,7 +250,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn proptest_pack_row_never_panics(
             body: Vec<u8>,
             headers in headermap_strat(),
@@ -262,7 +262,7 @@ mod tests {
             let _ = pack_row(body, headers, body_ty, header_ty);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn proptest_pack_row_succeeds_for_bytes(
             body: Vec<u8>,
             headers in headermap_strat(),
@@ -282,7 +282,7 @@ mod tests {
             prop_assert!(pack_row(body, headers, body_ty, header_ty).is_ok());
         }
 
-        #[test]
+        #[mz_ore::test]
         fn proptest_pack_row_succeeds_for_strings(
             body: String,
             headers in headermap_strat(),

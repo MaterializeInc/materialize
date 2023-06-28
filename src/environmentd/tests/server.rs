@@ -1698,20 +1698,21 @@ fn smoketest_webhook_source() {
     }
 
     // Wait for the events to be persisted.
-    let mut attempts = 0;
-    while attempts < 10 {
-        let cnt: i64 = client
-            .query_one("SELECT COUNT(*) FROM webhook_json", &[])
-            .expect("failed to get count")
-            .get(0);
+    mz_ore::retry::Retry::default()
+        .max_tries(10)
+        .retry(|_| {
+            let cnt: i64 = client
+                .query_one("SELECT COUNT(*) FROM webhook_json", &[])
+                .expect("failed to get count")
+                .get(0);
 
-        if cnt != NUM_EVENTS {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            attempts += 1;
-        } else {
-            break;
-        }
-    }
+            if cnt != 100 {
+                Err(anyhow::anyhow!("not all rows present"))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("failed to read events!");
 
     // Read all of our events back.
     let events_roundtrip: Vec<WebhookEvent> = client
@@ -1798,4 +1799,72 @@ fn test_invalid_webhook_body() {
         .send()
         .expect("failed to POST event");
     assert!(resp.status().is_success());
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_duplicate_headers() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let http_client = Client::new();
+
+    // Create a webhook source that includes headers.
+    client
+        .execute(
+            "CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.inner.http_local_addr()
+    );
+
+    // Send a request with duplicate headers.
+    let resp = http_client
+        .post(webhook_url)
+        .body("test")
+        .header("dupe", "first")
+        .header("DUPE", "second")
+        .header("dUpE", "third")
+        .header("dUpE", "final")
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success());
+
+    // Wait for the events to be persisted.
+    mz_ore::retry::Retry::default()
+        .max_tries(10)
+        .retry(|_| {
+            let cnt: i64 = client
+                .query_one("SELECT COUNT(*) FROM webhook_text", &[])
+                .expect("failed to get count")
+                .get(0);
+
+            if cnt == 0 {
+                Err(anyhow::anyhow!("no rows present"))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("failed to read events!");
+
+    // Query for a row where our final header was applied.
+    let body: String = client
+        .query_one(
+            "SELECT body FROM webhook_text WHERE headers -> 'dupe' = 'final'",
+            &[],
+        )
+        .expect("failed to read row")
+        .get("body");
+    assert_eq!(body, "test");
+
+    // Assert only one row was inserted.
+    let cnt: i64 = client
+        .query_one("SELECT COUNT(*) FROM webhook_text", &[])
+        .expect("failed to get count")
+        .get(0);
+    assert_eq!(cnt, 1);
 }

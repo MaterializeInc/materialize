@@ -16,8 +16,14 @@ pub async fn run_append(
     mut cmd: BuiltinCommand,
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let database = cmd.args.string("database")?;
-    let schema = cmd.args.string("schema")?;
+    let database = cmd
+        .args
+        .opt_string("database")
+        .unwrap_or_else(|| "materialize".to_string());
+    let schema = cmd
+        .args
+        .opt_string("schema")
+        .unwrap_or_else(|| "public".to_string());
     let name = cmd.args.string("name")?;
 
     let status_code = cmd.args.opt_parse::<u16>("status")?;

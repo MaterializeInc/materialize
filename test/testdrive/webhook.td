@@ -57,6 +57,35 @@ $ webhook-append database=materialize schema=public name=webhook_json_with_heade
 > SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'test_drive';
 "{\"hello\":\"world\"}"
 
+$ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=
+{
+  "empty": "world"
+}
+
+> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = '';
+"{\"empty\":\"world\"}"
+
+$ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=list
+[1, 2, 3]
+
+> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'list';
+"[1,2,3]"
+
+$ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=list2
+{ "foo": [1, 2, 3] }
+
+> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'list2';
+"{\"foo\":[1,2,3]}"
+
+$ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=string
+"Hellö String"
+
+> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'string';
+"\"Hellö String\""
+
+! SELECT * FROM webhook_json_with_headers;
+contains: binary encoding of map types is not implemented
+
 # An invalid body should return a 400.
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers status=400 content-type=application/json
 invalid-json
@@ -70,15 +99,37 @@ x
 $ webhook-append database=materialize schema=public name=not_a_webhook status=404
 d
 
+> SELECT * FROM webhook_text;
+a
+b
+c
+
+> CREATE SOURCE webhook_bytes FROM WEBHOOK
+  BODY FORMAT BYTES;
+
+> SHOW COLUMNS FROM webhook_bytes;
+name   nullable  type
+---------------------
+body   false     bytea
+
+$ webhook-append database=materialize schema=public name=webhook_bytes
+和製漢語
+
+$ webhook-append database=materialize schema=public name=webhook_bytes
+null
+
+$ webhook-append database=materialize schema=public name=webhook_bytes
+123
+
+> SELECT * FROM webhook_bytes;
+"\\xe5\\x92\\x8c\\xe8\\xa3\\xbd\\xe6\\xbc\\xa2\\xe8\\xaa\\x9e"
+null
+123
+
 # Turn off the feature.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_webhook_sources = false
 
 # Appending should now fail because the feature isn't enabled.
-$ webhook-append database=materialize schema=public name=webhook_text status=403
+$ webhook-append database=materialize schema=public name=webhook_text status=400
 d
-
-> SELECT * FROM webhook_text;
-a
-b
-c

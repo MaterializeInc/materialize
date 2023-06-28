@@ -860,12 +860,12 @@ The test will fail unless the HTTP status code of the response is in the 200 ran
 
 ## Actions on Webhook Sources
 
-#### `$ webhook-append database=... schema=... name=... [status=404] [header_name=header_value, ...]`
+#### `$ webhook-append name=... [database=...] [schema=...] [status=404] [header_name=header_value, ...]`
 
-Issues an HTTP POST request to a webhook source at `<database>.<schema>.<name>`. The body of the
-command is used as the body of the request. You can optionally specify an expected response status
-code, by default we expect a status of 200. Any remaining arguments are appended to the request as
-headers.
+Issues an HTTP POST request to a webhook source at `<database>.<schema>.<name>`, by default
+`database` is `materialize` and `schema` is `public`. The body of the command is used as the body
+of the request. You can optionally specify an expected response status code, by default we expect a
+status of 200. Any remaining arguments are appended to the request as headers.
 
 See `webhook.td` for more examples.
 
