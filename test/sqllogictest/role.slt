@@ -12,16 +12,16 @@ mode cockroach
 reset-server
 
 # Verify initial roles.
-query TTBBBB
-SELECT id, name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 's%'
+query TTB
+SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%'
 ----
-s1 mz_system true true true true
-s2 mz_introspection true false false false
+s1 mz_system true
+s2 mz_introspection true
 
-query TBBBB
-SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 'u%'
+query TB
+SELECT name, inherit FROM mz_roles WHERE id LIKE 'u%'
 ----
-materialize  true  true  true  true
+materialize  true
 
 # Give materialize the CREATEROLE attribute.
 simple conn=mz_system,user=mz_system
@@ -57,13 +57,13 @@ CREATE ROLE rj
 statement error CREATE USER is not supported, for more information consult the documentation at
 CREATE USER fms
 
-query TBBBB
-SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles
+query TB
+SELECT name, inherit FROM mz_roles
 ----
-rj  true  false  false  false
-mz_system  true  true  true  true
-materialize  true  true  true  true
-mz_introspection  true  false  false  false
+rj  true
+mz_system  true
+materialize  true
+mz_introspection  true
 
 # Dropping multiple roles should not have any effect if one of the role names
 # is bad...
@@ -133,10 +133,10 @@ CREATE ROLE mz_foo
 statement ok
 CREATE ROLE foo
 
-query TBBBB
-SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
+query TB
+SELECT name, inherit FROM mz_roles WHERE name = 'foo'
 ----
-foo true false false false
+foo true
 
 statement error non inherit roles not yet supported
 ALTER ROLE foo NOINHERIT

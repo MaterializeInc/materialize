@@ -549,20 +549,16 @@ fn generate_required_privileges(
         },
         Plan::CreateRole(CreateRolePlan {
             name: _,
-            attributes,
+            attributes: _,
         }) => {
-            let mut acl_mode = AclMode::CREATE_ROLE;
-            acl_mode |= attributes.into();
-            vec![(SystemObjectId::System, acl_mode, role_id)]
+            vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)]
         }
         Plan::AlterRole(AlterRolePlan {
             id: _,
             name: _,
-            attributes,
+            attributes: _,
         }) => {
-            let mut acl_mode = AclMode::CREATE_ROLE;
-            acl_mode |= attributes.into();
-            vec![(SystemObjectId::System, acl_mode, role_id)]
+            vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)]
         }
         Plan::CreateClusterReplica(CreateClusterReplicaPlan {
             cluster_id,

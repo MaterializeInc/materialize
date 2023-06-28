@@ -1619,10 +1619,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("inherit", ScalarType::Bool.nullable(false))
-        .with_column("create_role", ScalarType::Bool.nullable(false))
-        .with_column("create_db", ScalarType::Bool.nullable(false))
-        .with_column("create_cluster", ScalarType::Bool.nullable(false)),
+        .with_column("inherit", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -3244,8 +3241,8 @@ AS SELECT
         ELSE NULL::pg_catalog.bool
     END AS rolsuper,
     inherit AS rolinherit,
-    create_role AS rolcreaterole,
-    create_db AS rolcreatedb,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
     -- We determine login status each time a role logs in, so there's no way to accurately depict
     -- this in the catalog. Instead we just hardcode NULL.
     NULL::pg_catalog.bool AS rolcanlogin,

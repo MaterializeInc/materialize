@@ -140,8 +140,8 @@ name                nullable    type
  rolname            false       text
  rolsuper           true        boolean
  rolinherit         false       boolean
- rolcreaterole      false       boolean
- rolcreatedb        false       boolean
+ rolcreaterole      true        boolean
+ rolcreatedb        true        boolean
  rolcanlogin        true        boolean
  rolreplication     false       boolean
  rolbypassrls       false       boolean

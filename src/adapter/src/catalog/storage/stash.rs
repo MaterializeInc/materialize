@@ -136,20 +136,14 @@ pub async fn initialize(
         )
         .await?;
 
-    // If provided, generate a new Id and attributes for the bootstrap role.
+    // If provided, generate a new Id for the bootstrap role.
     //
     // Note: Make sure we do this _after_ initializing the ID_ALLOCATOR_COLLECTION.
     let bootstrap_role = if let Some(role) = &options.bootstrap_role {
         let role_id = RoleId::User(id_allocator.allocate(USER_ROLE_ID_ALLOC_KEY.to_string()));
         let role_val = proto::RoleValue {
             name: role.to_string(),
-            attributes: Some(
-                RoleAttributes::new()
-                    .with_create_db()
-                    .with_create_cluster()
-                    .with_create_role()
-                    .into_proto(),
-            ),
+            attributes: Some(RoleAttributes::new().into_proto()),
             membership: Some(RoleMembership::new().into_proto()),
         };
 

@@ -413,12 +413,6 @@ pub trait CatalogSchema {
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
-    /// Indicates whether the role is allowed to create more roles.
-    pub create_role: bool,
-    /// Indicates whether the role is allowed to create databases.
-    pub create_db: bool,
-    /// Indicates whether the role is allowed to create clusters.
-    pub create_cluster: bool,
     // Force use of constructor.
     _private: (),
 }
@@ -428,56 +422,22 @@ impl RoleAttributes {
     pub fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
-            create_role: false,
-            create_db: false,
-            create_cluster: false,
             _private: (),
         }
-    }
-
-    /// Adds the create role attribute.
-    pub fn with_create_role(mut self) -> RoleAttributes {
-        self.create_role = true;
-        self
-    }
-
-    /// Adds the create db attribute.
-    pub fn with_create_db(mut self) -> RoleAttributes {
-        self.create_db = true;
-        self
-    }
-
-    /// Adds the create cluster attribute.
-    pub fn with_create_cluster(mut self) -> RoleAttributes {
-        self.create_cluster = true;
-        self
     }
 
     /// Adds all attributes.
     pub fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
-        self.create_role = true;
-        self.create_db = true;
-        self.create_cluster = true;
         self
     }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
-    fn from(
-        PlannedRoleAttributes {
-            inherit,
-            create_role,
-            create_db,
-            create_cluster,
-        }: PlannedRoleAttributes,
-    ) -> RoleAttributes {
+    fn from(PlannedRoleAttributes { inherit }: PlannedRoleAttributes) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
-            create_role: create_role.unwrap_or(default_attributes.create_role),
-            create_db: create_db.unwrap_or(default_attributes.create_db),
-            create_cluster: create_cluster.unwrap_or(default_attributes.create_cluster),
             _private: (),
         }
     }
@@ -485,39 +445,12 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
 
 impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
     fn from(
-        (
-            role,
-            PlannedRoleAttributes {
-                inherit,
-                create_role,
-                create_db,
-                create_cluster,
-            },
-        ): (&dyn CatalogRole, PlannedRoleAttributes),
+        (role, PlannedRoleAttributes { inherit }): (&dyn CatalogRole, PlannedRoleAttributes),
     ) -> RoleAttributes {
         RoleAttributes {
             inherit: inherit.unwrap_or_else(|| role.is_inherit()),
-            create_role: create_role.unwrap_or_else(|| role.create_role()),
-            create_db: create_db.unwrap_or_else(|| role.create_db()),
-            create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
             _private: (),
         }
-    }
-}
-
-impl From<&RoleAttributes> for AclMode {
-    fn from(attributes: &RoleAttributes) -> Self {
-        let mut acl_mode = AclMode::empty();
-        if attributes.create_role {
-            acl_mode |= AclMode::CREATE_ROLE;
-        }
-        if attributes.create_db {
-            acl_mode |= AclMode::CREATE_DB;
-        }
-        if attributes.create_cluster {
-            acl_mode |= AclMode::CREATE_CLUSTER;
-        }
-        acl_mode
     }
 }
 
@@ -525,9 +458,6 @@ impl RustType<proto::RoleAttributes> for RoleAttributes {
     fn into_proto(&self) -> proto::RoleAttributes {
         proto::RoleAttributes {
             inherit: self.inherit,
-            create_role: self.create_role,
-            create_db: self.create_db,
-            create_cluster: self.create_cluster,
         }
     }
 
@@ -535,9 +465,6 @@ impl RustType<proto::RoleAttributes> for RoleAttributes {
         let mut attributes = RoleAttributes::new();
 
         attributes.inherit = proto.inherit;
-        attributes.create_cluster = proto.create_cluster;
-        attributes.create_role = proto.create_role;
-        attributes.create_db = proto.create_db;
 
         Ok(attributes)
     }
@@ -553,15 +480,6 @@ pub trait CatalogRole {
 
     /// Indicates whether the role has inheritance of privileges.
     fn is_inherit(&self) -> bool;
-
-    /// Indicates whether the role has the role creation attribute.
-    fn create_role(&self) -> bool;
-
-    /// Indicates whether the role has the database creation attribute.
-    fn create_db(&self) -> bool;
-
-    /// Indicates whether the role has the cluster creation attribute.
-    fn create_cluster(&self) -> bool;
 
     /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
     /// membership.

@@ -1076,23 +1076,17 @@ pub enum RoleAttribute {
     Inherit,
     /// The `NOINHERIT` option.
     NoInherit,
-    /// The `CREATECLUSTER` option.
-    CreateCluster,
-    /// The `NOCREATECLUSTER` option.
-    NoCreateCluster,
-    /// The `CREATEDB` option.
-    CreateDB,
-    /// The `NOCREATEDB` option.
-    NoCreateDB,
-    /// The `CREATEROLE` option.
-    CreateRole,
-    /// The `NOCREATEROLE` option.
-    NoCreateRole,
     // The following are not supported, but included to give helpful error messages.
     Login,
     NoLogin,
     SuperUser,
     NoSuperUser,
+    CreateCluster,
+    NoCreateCluster,
+    CreateDB,
+    NoCreateDB,
+    CreateRole,
+    NoCreateRole,
 }
 
 impl AstDisplay for RoleAttribute {
