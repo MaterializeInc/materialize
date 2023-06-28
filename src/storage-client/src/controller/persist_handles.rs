@@ -128,10 +128,24 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
 
                     futs.push(async move {
                         let epoch = since_handle.opaque().clone();
-                        let result = since_handle
-                            .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
-                            .instrument(span)
-                            .await;
+
+                        let result = if since.is_empty() {
+                            // A shard's since reaching the empty frontier is a prereq for being
+                            // able to finalize a shard, so the final downgrade should never be
+                            // rate-limited.
+                            Some(
+                                since_handle
+                                    .compare_and_downgrade_since(&epoch, (&epoch, &since))
+                                    .instrument(span)
+                                    .await,
+                            )
+                        } else {
+                            since_handle
+                                .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
+                                .instrument(span)
+                                .await
+                        };
+
                         if let Some(Err(other_epoch)) = result {
                             mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
                         }
