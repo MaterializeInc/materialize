@@ -55,19 +55,22 @@ INSERT INTO table_e VALUES (1, 'one');
 ALTER TABLE table_e REPLICA IDENTITY FULL;
 INSERT INTO table_e VALUES (2, 'two');
 
-CREATE TABLE table_f (pk INTEGER PRIMARY KEY, f2 TEXT);
-INSERT INTO table_f VALUES (1, 'one');
+CREATE TYPE an_enum AS ENUM ('var0', 'var1');
+CREATE TABLE table_f (pk INTEGER PRIMARY KEY, f2 an_enum);
+INSERT INTO table_f VALUES (1, 'var0');
 ALTER TABLE table_f REPLICA IDENTITY FULL;
-INSERT INTO table_f VALUES (2, 'two');
+INSERT INTO table_f VALUES (2, 'var1');
 
 CREATE TABLE table_g (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_g VALUES (1, 'one');
 ALTER TABLE table_g REPLICA IDENTITY FULL;
 INSERT INTO table_g VALUES (2, 'two');
 
-
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS (table_f.f2)
+  )
   FOR SCHEMAS (public);
 
 > SHOW SUBSOURCES ON mz_source
@@ -82,7 +85,10 @@ table_g               subsource
 
 # Show all tablestodo this should be splittable
 > SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"postgres\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"postgres\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\", \"postgres\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"postgres\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"postgres\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"postgres\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\""
+"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"postgres\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"postgres\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"postgres\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"postgres\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"postgres\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"postgres\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
+
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"\"postgres\".\"public\".\"table_f\".\"f2\""
 
 #
 # Error checking
@@ -191,6 +197,10 @@ contains:cannot drop source table_e: still depended upon by materialized view mv
 
 # IF NOT EXISTS + CASCADE works
 > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e, table_f CASCADE;
+
+# TEXT COLUMNS removed from table_f
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+""
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
