@@ -288,6 +288,10 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                             .await
                                             .unwrap();
                                         as_of = read_handle.since().clone();
+                                        mz_ore::task::spawn(move || "deferred_expire", async move {
+                                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                                            read_handle.expire().await;
+                                        });
                                         seen_remap_shard = Some(remap_shard.clone());
                                     }
                                     Some(shard) => assert_eq!(
