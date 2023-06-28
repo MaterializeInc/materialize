@@ -164,7 +164,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ? 'c'
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \? integer
+query error operator does not exist: map\[text=>integer\] \? integer
 SELECT '{a=>1, b=>2}'::map[text=>int] ? 1
 
 query T
@@ -182,14 +182,14 @@ SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 
 ----
 true
 
-query error db error: ERROR: operator is not unique: unknown \? unknown
+query error operator is not unique: unknown \? unknown
 SELECT NULL ? 'a'
 
 ## ?&
-query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "a"
+query error invalid input syntax for type array: Array value must start with "\{": "a"
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \?\& integer\[\]
+query error operator does not exist: map\[text=>integer\] \?\& integer\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[1]
 
 query error cannot determine type of empty array
@@ -223,7 +223,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['c', 'b']
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>boolean\] \?\& integer\[\]
+query error operator does not exist: map\[text=>boolean\] \?\& integer\[\]
 SELECT '{1=>t, 2=>f}'::map[text=>bool] ?& ARRAY[1]
 
 query T
@@ -252,10 +252,10 @@ SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text
 false
 
 ## ?|
-query error db error: ERROR: invalid input syntax for type array: Array value must start with "\{": "a"
+query error invalid input syntax for type array: Array value must start with "\{": "a"
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \?\| integer\[\]
+query error operator does not exist: map\[text=>integer\] \?\| integer\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY[1]
 
 query error could not determine polymorphic type because input has type unknown
@@ -286,7 +286,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'd', '1']
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>boolean\] \?\| integer\[\]
+query error operator does not exist: map\[text=>boolean\] \?\| integer\[\]
 SELECT '{1=>t, 2=>f}'::map[text=>bool] ?| ARRAY[1]
 
 query T
@@ -308,13 +308,13 @@ false
 query error invalid input syntax for type map: expected '\{', found c: "c"
 SELECT '{a=>1, b=>2}'::map[text=>int] @> 'c'
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] @> text
+query error operator does not exist: map\[text=>integer\] @> text
 SELECT '{a=>1, b=>2}'::map[text=>int] @> 'a'::text
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] @> integer\[\]
+query error operator does not exist: map\[text=>integer\] @> integer\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] @> ARRAY[1]
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] @> map\[text=>boolean\]
+query error operator does not exist: map\[text=>integer\] @> map\[text=>boolean\]
 SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>t}'::map[text=>bool]
 ----
 false
@@ -339,7 +339,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>map\[text=>bytea\]\] @> map\[text=>text\]
+query error operator does not exist: map\[text=>map\[text=>bytea\]\] @> map\[text=>text\]
 SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>bytea]] @> '{hello=>world}'::map[text=>text]
 ----
 false
@@ -355,7 +355,7 @@ SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]] @> '{hello=>{world
 false
 
 ## <@
-query error db error: ERROR: operator does not exist: map\[text=>integer\] <@ map\[text=>boolean\]
+query error operator does not exist: map\[text=>integer\] <@ map\[text=>boolean\]
 SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>t}'::map[text=>bool]
 ----
 false
@@ -416,7 +416,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] -> 'c'
 ----
 NULL
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \-> integer
+query error operator does not exist: map\[text=>integer\] \-> integer
 SELECT '{a=>1, b=>2}'::map[text=>int] -> 1
 
 query T
@@ -464,7 +464,7 @@ SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>tex
 ----
 nested
 
-query error db error: ERROR: operator is not unique: unknown \-> text
+query error operator is not unique: unknown \-> text
 SELECT NULL -> 'hello'::text
 
 query error could not determine polymorphic type because input has type unknown
