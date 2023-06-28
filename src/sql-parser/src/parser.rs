@@ -2797,7 +2797,7 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[BODY, FORMAT])?;
 
         // Note: we don't use `parse_format()` here because we support fewer formats than other
-        // sources, and the user get's better errors if we reject the formats here.
+        // sources, and the user gets better errors if we reject the formats here.
         let body_format = match self.expect_one_of_keywords(&[JSON, TEXT, BYTES])? {
             JSON => Format::Json,
             TEXT => Format::Text,

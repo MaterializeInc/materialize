@@ -69,7 +69,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
+    CreateWebhookSourcePlan, Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
@@ -1966,6 +1966,8 @@ pub enum DataSourceDesc {
     Introspection(IntrospectionType),
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
+    /// Receives data from HTTP requests.
+    Webhook,
 }
 
 impl DataSourceDesc {
@@ -2075,7 +2077,7 @@ impl Source {
     /// Returns whether this source ingests data from an external source.
     pub fn is_external(&self) -> bool {
         match self.data_source {
-            DataSourceDesc::Ingestion(_) => true,
+            DataSourceDesc::Ingestion(_) | DataSourceDesc::Webhook => true,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => false,
@@ -2089,6 +2091,7 @@ impl Source {
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
+            DataSourceDesc::Webhook => "webhook",
         }
     }
 
@@ -2126,6 +2129,7 @@ impl Source {
                 }
             },
             DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Webhook
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
         }
@@ -2136,6 +2140,7 @@ impl Source {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
             DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Webhook
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
         }
@@ -2157,6 +2162,7 @@ impl Source {
                 // persist shard).
                 std::cmp::max(1, i64::try_from(ingestion.source_exports.len().saturating_sub(1)).expect("fewer than i64::MAX persist shards"))
             }
+            DataSourceDesc::Webhook => 1,
             //  DataSourceDesc::Source represents subsources, which are accounted for in their
             //  primary source's ingestion.
             DataSourceDesc::Source
@@ -2165,6 +2171,12 @@ impl Source {
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress => 0,
         }
+    }
+
+    /// Returns if this source is a webhook source, which indicates `environmentd` is responsible
+    /// for receiving and pushing data to storage.
+    pub fn is_webhook(&self) -> bool {
+        matches!(self.data_source, DataSourceDesc::Webhook)
     }
 }
 
@@ -2339,6 +2351,7 @@ impl CatalogItem {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
                 DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Webhook
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => Ok(None),
             },
@@ -2511,6 +2524,7 @@ impl CatalogItem {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
                 DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Webhook
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => None,
             },
@@ -2668,6 +2682,17 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Table(_))
     }
 
+    /// Reports whether this catalog entry is a source that is used for a webhook.
+    pub fn is_webhook(&self) -> bool {
+        matches!(
+            self.item(),
+            CatalogItem::Source(Source {
+                data_source: DataSourceDesc::Webhook,
+                ..
+            })
+        )
+    }
+
     /// Reports whether this catalog entry is a source. Note that this includes
     /// subsources.
     pub fn is_source(&self) -> bool {
@@ -2697,6 +2722,7 @@ impl CatalogEntry {
                     .chain(std::iter::once(ingestion.remap_collection_id))
                     .collect(),
                 DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Webhook
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => BTreeSet::new(),
             },
@@ -2720,6 +2746,7 @@ impl CatalogEntry {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
+                | DataSourceDesc::Webhook
                 | DataSourceDesc::Source => None,
             },
             CatalogItem::Table(_)
@@ -7344,6 +7371,20 @@ impl Catalog {
                     resolved_ids,
                 })
             }
+            Plan::CreateWebhookSource(CreateWebhookSourcePlan {
+                create_sql,
+                desc,
+                timeline,
+                ..
+            }) => CatalogItem::Source(Source {
+                create_sql,
+                data_source: DataSourceDesc::Webhook,
+                desc,
+                timeline,
+                resolved_ids: ResolvedIds(BTreeSet::new()),
+                custom_logical_compaction_window: None,
+                is_retained_metrics_object: false,
+            }),
             _ => {
                 return Err(Error::new(ErrorKind::Corruption {
                     detail: "catalog entry generated inappropriate plan".to_string(),
