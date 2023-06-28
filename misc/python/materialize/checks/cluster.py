@@ -19,6 +19,10 @@ class CreateCluster(Check):
             Testdrive(dedent(s))
             for s in [
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT ALL PRIVILEGES ON SYSTEM TO materialize
+                """,
+                """
                 > CREATE CLUSTER create_cluster1 REPLICAS (replica1 (SIZE '2-2'));
                 """,
                 """
