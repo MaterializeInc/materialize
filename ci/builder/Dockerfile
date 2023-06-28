@@ -174,7 +174,8 @@ RUN mkdir rust \
     && `: Until https://github.com/est31/cargo-udeps/pull/147 is released in cargo-udeps` \
     && cargo install --root /usr/local --git https://github.com/est31/cargo-udeps --rev=b84d478ef3efd7264dba8c15c31a50c6399dc5bb --locked cargo-udeps --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \
-    && cargo install --root /usr/local --version "=0.3.6" cargo-binutils
+    && cargo install --root /usr/local --version "=0.3.6" cargo-binutils \
+    && cargo install --root /usr/local --version "=0.1.61" cargo-chef
 
 # Link the system mold into the cross-compiling sysroot.
 # TODO(def-) Use mold endings and switch to -fuse-ld=mold when crosstool-ng is updated
