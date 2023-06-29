@@ -731,11 +731,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     as_of
                 );
 
-                // An empty resume upper means that we can never write down any
-                // more data for this ingestion. We therefore don't render a
-                // dataflow for it.
-                let is_closed = as_of.is_empty();
-
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     // This is a separate line cause rustfmt :(
                     let stats =
@@ -760,11 +755,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .source_uppers
                         .entry(id.clone())
                         .or_insert_with(|| {
-                            Rc::new(RefCell::new(if is_closed {
-                                Antichain::new()
-                            } else {
-                                Antichain::from_elem(mz_repr::Timestamp::minimum())
-                            }))
+                            Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())))
                         });
 
                     let mut source_upper = source_upper.borrow_mut();
@@ -774,17 +765,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
-                if !is_closed {
-                    crate::render::build_ingestion_dataflow(
-                        self.timely_worker,
-                        &mut self.storage_state,
-                        ingestion_id,
-                        ingestion_description,
-                        as_of,
-                        resume_uppers,
-                        source_resume_uppers,
-                    );
-                }
+                crate::render::build_ingestion_dataflow(
+                    self.timely_worker,
+                    &mut self.storage_state,
+                    ingestion_id,
+                    ingestion_description,
+                    as_of,
+                    resume_uppers,
+                    source_resume_uppers,
+                );
             }
             InternalStorageCommand::CreateSinkDataflow(sink_id, sink_description) => {
                 info!(

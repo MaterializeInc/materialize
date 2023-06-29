@@ -747,7 +747,7 @@ where
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        loop {
+        while !cap_set.is_empty() {
             // AsyncInputHandle::next is cancel safe
             tokio::select! {
                 _ = ticker.tick() => {
