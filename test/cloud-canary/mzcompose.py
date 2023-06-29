@@ -11,6 +11,7 @@ import argparse
 import os
 import ssl
 import time
+import traceback
 import urllib.parse
 
 import pg8000
@@ -112,7 +113,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable", REGION)
+    for i in range(10):
+        try:
+            c.run("mz", "region", "disable", REGION)
+        except UIError as e:
+            traceback.print_exc()
+            print(str(e))
+            if i == 9:
+                raise
+        else:
+            break
 
 
 def cloud_hostname(c: Composition) -> str:
