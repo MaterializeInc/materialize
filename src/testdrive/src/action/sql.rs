@@ -13,7 +13,7 @@ use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
 use std::time::SystemTime;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -130,7 +130,8 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::DropObjects { .. } => {
             let disk_state = state
                 .with_catalog_copy(|catalog| catalog.state().dump())
-                .await?;
+                .await
+                .map_err(|e| anyhow!("failed to dump on-disk catalog state: {e}"))?;
             if let Some(disk_state) = disk_state {
                 let mem_state = reqwest::get(&format!(
                     "http://{}/api/catalog",

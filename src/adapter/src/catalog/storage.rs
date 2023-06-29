@@ -1906,6 +1906,7 @@ pub struct ClusterReplica {
     pub owner_id: RoleId,
 }
 
+#[derive(Debug)]
 pub struct Item {
     pub id: GlobalId,
     pub name: QualifiedItemName,
