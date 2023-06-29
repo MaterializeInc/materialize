@@ -145,23 +145,28 @@ ALTER SYSTEM SET enable_cardinality_estimates = true
 ----
 COMPLETE 0
 
-statement ok
+simple
 SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE
+----
+COMPLETE 0
 
 statement ok
 INSERT INTO t (x, y) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
 query T multiline
-EXPLAIN WITH(join_impls) SELECT * FROM t as l, t as r WHERE l.x = r.y AND r.x = l.y;
+EXPLAIN WITH(join_impls) SELECT * FROM t as l, t as r WHERE l.x = r.x;
 ----
 Explained Query:
-  Project (#0, #1, #1, #0)
-    Join on=(#0 = #3 AND #1 = #2) type=differential
-      implementation
-        %0:t[#1, #0]KK|4| » %1:t[#0, #1]KK|4|
-      ArrangeBy keys=[[#1, #0]]
-        Get materialize.public.t
-      ArrangeBy keys=[[#0, #1]]
+  Return
+    Project (#0, #1, #0, #3)
+      Join on=(#0 = #2) type=differential
+        implementation
+          %0:l0[#0]KA|4| » %1:l0[#0]KA|4|
+        Get l0
+        Get l0
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
         Get materialize.public.t
 
 Used Indexes:

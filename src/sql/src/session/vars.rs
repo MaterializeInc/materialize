@@ -931,7 +931,7 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     description:
         "Feature flag indicating whether to use cardinality estimates when optimizing queries; \
     does not affect EXPLAIN WITH(cardinality) (Materialize).",
-    internal: true,
+    internal: false,
 };
 
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
