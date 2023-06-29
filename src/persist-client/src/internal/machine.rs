@@ -41,8 +41,9 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HollowBatch, HollowRollup, IdempotencyToken,
-    LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections, Upper,
+    CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
+    IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
+    Upper,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -207,32 +208,11 @@ where
         (state, maintenance)
     }
 
-    pub async fn register_writer(
-        &mut self,
-        writer_id: &WriterId,
-        purpose: &str,
-        lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
-    ) -> (Upper<T>, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, shard_upper, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
-                state.register_writer(
-                    &cfg.hostname,
-                    writer_id,
-                    purpose,
-                    lease_duration,
-                    heartbeat_timestamp_ms,
-                )
-            })
-            .await;
-        (shard_upper, maintenance)
-    }
-
     pub async fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
+        debug_info: &HandleDebugState,
         heartbeat_timestamp_ms: u64,
     ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
         let idempotency_token = IdempotencyToken::new();
@@ -243,6 +223,7 @@ where
                     writer_id,
                     heartbeat_timestamp_ms,
                     &idempotency_token,
+                    debug_info,
                     None,
                 )
                 .await;
@@ -277,12 +258,20 @@ where
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
         idempotency_token: &IdempotencyToken,
+        debug_info: &HandleDebugState,
         // Only exposed for testing. In prod, this always starts as None, but
         // making it a parameter allows us to simulate hitting an indeterminate
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
     ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, (SeqNo, Upper<T>)> {
         let metrics = Arc::clone(&self.applier.metrics);
+        let lease_duration_ms = self
+            .applier
+            .cfg
+            .writer_lease_duration
+            .as_millis()
+            .try_into()
+            .expect("reasonable duration");
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
         // tricky (more discussion of this in #12797):
         //
@@ -379,7 +368,9 @@ where
                         batch,
                         writer_id,
                         heartbeat_timestamp_ms,
+                        lease_duration_ms,
                         idempotency_token,
+                        debug_info,
                     )
                 })
                 .await;
@@ -599,20 +590,6 @@ where
         let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, _, state| {
                 state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
-            })
-            .await;
-        (seqno, existed, maintenance)
-    }
-
-    pub async fn heartbeat_writer(
-        &mut self,
-        writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, existed, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, _, state| {
-                state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
             })
             .await;
         (seqno, existed, maintenance)
@@ -933,57 +910,6 @@ where
                     warn!(
                         "reader ({}) of shard ({}) heartbeat call took {}s",
                         reader_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
-    }
-
-    pub async fn start_writer_heartbeat_task(
-        self,
-        writer_id: WriterId,
-        gc: GarbageCollector<K, V, T, D>,
-    ) -> JoinHandle<()> {
-        let mut machine = self;
-        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
-        let name = format!(
-            "persist::heartbeat_write({},{})",
-            machine.shard_id(),
-            writer_id
-        );
-        isolated_runtime.spawn_named(|| name, async move {
-            let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
-
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) went {}s between heartbeats",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, maintenance) = machine
-                    .heartbeat_writer(&writer_id, (machine.applier.cfg.now)())
-                    .await;
-                maintenance.start_performing(&machine, &gc);
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) heartbeat call took {}s",
-                        writer_id,
                         machine.shard_id(),
                         elapsed_since_heartbeat.as_secs_f64(),
                     );
@@ -1737,28 +1663,6 @@ pub mod datadriven {
         ))
     }
 
-    pub async fn register_writer(
-        datadriven: &mut MachineState,
-        args: DirectiveArgs<'_>,
-    ) -> Result<String, anyhow::Error> {
-        let writer_id = args.expect("writer_id");
-        let (upper, maintenance) = datadriven
-            .machine
-            .register_writer(
-                &writer_id,
-                "tests",
-                datadriven.client.cfg.writer_lease_duration,
-                (datadriven.client.cfg.now)(),
-            )
-            .await;
-        datadriven.routine.push(maintenance);
-        Ok(format!(
-            "{} {:?}\n",
-            datadriven.machine.seqno(),
-            upper.0.elements()
-        ))
-    }
-
     pub async fn heartbeat_leased_reader(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1767,18 +1671,6 @@ pub mod datadriven {
         let _ = datadriven
             .machine
             .heartbeat_leased_reader(&reader_id, (datadriven.client.cfg.now)())
-            .await;
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
-    }
-
-    pub async fn heartbeat_writer(
-        datadriven: &mut MachineState,
-        args: DirectiveArgs<'_>,
-    ) -> Result<String, anyhow::Error> {
-        let writer_id = args.expect("writer_id");
-        let _ = datadriven
-            .machine
-            .heartbeat_writer(&writer_id, (datadriven.client.cfg.now)())
             .await;
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
@@ -1831,7 +1723,14 @@ pub mod datadriven {
         let now = (datadriven.client.cfg.now)();
         let (_, maintenance) = datadriven
             .machine
-            .compare_and_append_idempotent(&batch, &writer_id, now, &token, indeterminate)
+            .compare_and_append_idempotent(
+                &batch,
+                &writer_id,
+                now,
+                &token,
+                &HandleDebugState::default(),
+                indeterminate,
+            )
             .await
             .map_err(|(_seqno, upper)| anyhow!("{:?}", upper))?
             .expect("invalid usage");
@@ -1899,6 +1798,7 @@ pub mod tests {
     use timely::progress::Antichain;
 
     use crate::internal::gc::{GarbageCollector, GcReq};
+    use crate::internal::state::HandleDebugState;
     use crate::tests::new_test_client;
     use crate::ShardId;
 
@@ -1926,6 +1826,7 @@ pub mod tests {
                 .compare_and_append(
                     &batch.into_hollow_batch(),
                     &write.writer_id,
+                    &HandleDebugState::default(),
                     (write.cfg.now)(),
                 )
                 .await

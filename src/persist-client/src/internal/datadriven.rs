@@ -223,9 +223,6 @@ mod tests {
                             "heartbeat-leased-reader" => {
                                 machine_dd::heartbeat_leased_reader(&mut state, args).await
                             }
-                            "heartbeat-writer" => {
-                                machine_dd::heartbeat_writer(&mut state, args).await
-                            }
                             "listen-through" => machine_dd::listen_through(&mut state, args).await,
                             "perform-maintenance" => {
                                 machine_dd::perform_maintenance(&mut state, args).await
@@ -238,9 +235,6 @@ mod tests {
                             }
                             "register-leased-reader" => {
                                 machine_dd::register_leased_reader(&mut state, args).await
-                            }
-                            "register-writer" => {
-                                machine_dd::register_writer(&mut state, args).await
                             }
                             "set-batch-parts-size" => {
                                 machine_dd::set_batch_parts_size(&mut state, args).await
