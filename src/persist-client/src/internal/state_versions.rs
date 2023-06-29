@@ -20,6 +20,7 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashSet;
 use mz_persist::location::{
     Atomicity, Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
@@ -989,6 +990,20 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             assert_eq!(last_incr.desc.upper(), last_full.desc.upper());
             PartialOrder::less_equal(last_full.desc.since(), last_incr.desc.since());
         }
+
+        let inc_parts: HashSet<_> = self
+            .inc_batches
+            .iter()
+            .flat_map(|x| x.parts.iter())
+            .map(|x| x.key.clone())
+            .collect();
+        let full_parts = self
+            .full_batches
+            .iter()
+            .flat_map(|x| x.parts.iter())
+            .map(|x| x.key.clone())
+            .collect();
+        assert_eq!(inc_parts, full_parts);
 
         assert_eq!(self.inc_rollups, self.full_rollups);
     }
