@@ -1561,6 +1561,7 @@ pub mod datadriven {
         let req = GcReq {
             shard_id: datadriven.shard_id,
             new_seqno_since,
+            max_walltime_ms: u64::MAX,
         };
         let (maintenance, stats) =
             GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
@@ -1966,6 +1967,7 @@ pub mod tests {
             let req = GcReq {
                 shard_id: machine.shard_id(),
                 new_seqno_since,
+                max_walltime_ms: u64::MAX,
             };
             GarbageCollector::gc_and_truncate(&mut machine, req).await
         });
@@ -1979,6 +1981,7 @@ pub mod tests {
         let req = GcReq {
             shard_id: read.machine.shard_id(),
             new_seqno_since,
+            max_walltime_ms: u64::MAX,
         };
         let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
     }

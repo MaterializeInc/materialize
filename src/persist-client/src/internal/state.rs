@@ -1206,7 +1206,7 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(&mut self, is_write: bool) -> Option<GcReq> {
+    pub fn maybe_gc(&mut self, is_write: bool, lease_duration: Duration) -> Option<GcReq> {
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -1233,6 +1233,12 @@ where
             Some(GcReq {
                 shard_id: self.shard_id,
                 new_seqno_since,
+                max_walltime_ms: self.walltime_ms.saturating_sub(
+                    lease_duration
+                        .as_millis()
+                        .try_into()
+                        .expect("reasonable number of millis"),
+                ),
             })
         } else {
             None
@@ -2185,6 +2191,8 @@ pub(crate) mod tests {
             .is_continue());
     }
 
+    const LEASE_DURATION: Duration = Duration::from_secs(900);
+
     #[mz_ore::test]
     fn maybe_gc() {
         let mut state = TypedState::<String, String, u64, i64>::new(
@@ -2195,8 +2203,8 @@ pub(crate) mod tests {
         );
 
         // Empty state doesn't need gc, regardless of is_write.
-        assert_eq!(state.maybe_gc(true), None);
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(state.maybe_gc(true, LEASE_DURATION), None);
+        assert_eq!(state.maybe_gc(false, LEASE_DURATION), None);
 
         // Artificially advance the seqno so the seqno_since advances past our
         // internal gc_threshold.
@@ -2208,14 +2216,15 @@ pub(crate) mod tests {
         let _ = state
             .collections
             .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
-        assert_eq!(state.maybe_gc(false), None);
+        assert_eq!(state.maybe_gc(false, LEASE_DURATION), None);
 
         // A write will gc though.
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(true, LEASE_DURATION),
             Some(GcReq {
                 shard_id: state.shard_id,
-                new_seqno_since: SeqNo(100)
+                new_seqno_since: SeqNo(100),
+                max_walltime_ms: u64::MAX,
             })
         );
 
@@ -2227,10 +2236,11 @@ pub(crate) mod tests {
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
         assert_eq!(
-            state.maybe_gc(true),
+            state.maybe_gc(true, LEASE_DURATION),
             Some(GcReq {
                 shard_id: state.shard_id,
-                new_seqno_since: SeqNo(200)
+                new_seqno_since: SeqNo(200),
+                max_walltime_ms: u64::MAX,
             })
         );
     }

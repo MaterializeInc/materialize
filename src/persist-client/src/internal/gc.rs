@@ -41,6 +41,9 @@ use crate::ShardId;
 pub struct GcReq {
     pub shard_id: ShardId,
     pub new_seqno_since: SeqNo,
+    /// Do not garbage collect anything written after this time,
+    /// given as a unix timestamp in milliseconds.
+    pub max_walltime_ms: u64,
 }
 
 #[derive(Debug)]
@@ -252,8 +255,8 @@ where
         }
 
         debug!(
-            "Finding all rollups <= ({}). Will truncate: {:?}. Will remove rollups from state: {:?}",
-            req.new_seqno_since,
+            "Finding all rollups <= ({:?}). Will truncate: {:?}. Will remove rollups from state: {:?}",
+            req,
             gc_rollups.truncate_seqnos().collect::<Vec<_>>(),
             rollups_to_remove_from_state,
         );
@@ -287,8 +290,31 @@ where
             machine,
             &mut report_step_timing,
             &mut gc_results,
+            req.max_walltime_ms,
         )
         .await;
+
+        // If we did not actually truncate past a certain point (perhaps to respect
+        // max_walltime_ms) don't remove the rollups either.
+        let rollups_to_remove_from_state = {
+            let trucated_to = gc_results
+                .truncated_consensus_to
+                .last()
+                .copied()
+                .unwrap_or(initial_seqno);
+            if let Some(position) = rollups_to_remove_from_state
+                .iter()
+                .position(|(s, _)| *s < trucated_to)
+            {
+                let (before, after) = rollups_to_remove_from_state.split_at(position);
+                debug!(
+                    "Skipping removal for rollups {after:?}, since they were not deleted from blob."
+                );
+                before
+            } else {
+                rollups_to_remove_from_state
+            }
+        };
 
         // Now that the blobs are deleted / Consensus is truncated, remove
         // the rollups from state. Doing this at the end ensures that our
@@ -392,6 +418,7 @@ where
         machine: &mut Machine<K, V, T, D>,
         timer: &mut F,
         gc_results: &mut GcResults,
+        max_walltime_ms: u64,
     ) where
         F: FnMut(&Counter),
     {
@@ -449,6 +476,12 @@ where
                 gc_rollups,
                 states.state().seqno
             );
+
+            if states.state().walltime_ms >= max_walltime_ms {
+                // We maintain a window of recent diffs in consensus, even if they'd be legal to
+                // clean up from a state-machine perspective, to keep write requests idempotent.
+                return;
+            }
 
             // Extra paranoia: verify that none of the blobs we're about to delete
             // are in our current state (we should only be truncating blobs from

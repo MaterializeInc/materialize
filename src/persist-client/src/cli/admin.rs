@@ -460,6 +460,7 @@ async fn force_gc(
     let gc_req = GcReq {
         shard_id,
         new_seqno_since: machine.applier.seqno_since(),
+        max_walltime_ms: u64::MAX,
     };
     let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
     if !maintenance.is_empty() {

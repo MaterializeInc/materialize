@@ -448,7 +448,7 @@ where
         // run though the loop (i.e. no `if let Some` here). When we
         // lose a CaS race, we might discover that the winner got
         // assigned the gc.
-        let garbage_collection = new_state.maybe_gc(is_write);
+        let garbage_collection = new_state.maybe_gc(is_write, cfg.writer_lease_duration);
 
         // NB: Make sure this is the very last thing before the
         // `try_compare_and_set_current` call. (In particular, it needs
