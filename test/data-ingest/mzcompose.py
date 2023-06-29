@@ -12,7 +12,8 @@ import time
 
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.scenarios import *  # noqa: F401 F403
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
+from materialize.data_ingest import main
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Clusterd,
     Kafka,
@@ -25,11 +26,18 @@ from materialize.mzcompose.services import (
 SERVICES = [
     Postgres(),
     Zookeeper(),
-    Kafka(auto_create_topics=False),
+    Kafka(
+        auto_create_topics=False,
+        port="30123:30123",
+        allow_host_ports=True,
+        environment_extra=[
+            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        ],
+    ),
     SchemaRegistry(),
     Materialized(),
     Clusterd(name="clusterd1", options=["--scratch-directory=/mzdata/source_data"]),
-    Service("data-ingest", {"mzbuild": "data-ingest"}),
 ]
 
 
@@ -43,8 +51,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"--- Random seed is {args.seed}")
     random.seed(args.seed)
 
-    c.up("materialized", "zookeeper", "kafka", "schema-registry", "postgres")
+    services = ("materialized", "zookeeper", "kafka", "schema-registry", "postgres")
+    c.up(*services)
 
-    c.run("data-ingest")
-
-    c.down(destroy_volumes=True)
+    ports = {s: c.default_port(s) for s in services}
+    main(ports)

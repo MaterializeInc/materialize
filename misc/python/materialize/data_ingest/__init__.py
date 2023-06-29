@@ -11,7 +11,7 @@ import json
 import random
 import time
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pg8000
 from confluent_kafka import Producer  # type: ignore
@@ -94,7 +94,7 @@ class KafkaExecutor(Executor):
     topic: str
     table: str
 
-    def __init__(self, num: int, conn: pg8000.Connection):
+    def __init__(self, num: int, conn: pg8000.Connection, ports: Dict[str, int]):
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
 
@@ -116,7 +116,7 @@ class KafkaExecutor(Executor):
             ],
         }
 
-        kafka_conf = {"bootstrap.servers": "kafka:9092"}
+        kafka_conf = {"bootstrap.servers": f"localhost:{ports['kafka']}"}
 
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
@@ -126,7 +126,7 @@ class KafkaExecutor(Executor):
             f.result()
             print(f"Topic {topic} created")
 
-        schema_registry_conf = {"url": "http://schema-registry:8081"}
+        schema_registry_conf = {"url": f"http://localhost:{ports['schema-registry']}"}
         registry = SchemaRegistryClient(schema_registry_conf)
 
         self.avro_serializer = AvroSerializer(registry, json.dumps(schema), idfn)
@@ -147,7 +147,11 @@ class KafkaExecutor(Executor):
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(
-                f"CREATE SOURCE {self.table} FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT"
+                f"""CREATE SOURCE {self.table}
+                    FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
+                    FORMAT AVRO
+                    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                    ENVELOPE UPSERT"""
             )
         conn.autocommit = False
 
@@ -190,15 +194,18 @@ class PgExecutor(Executor):
     conn: pg8000.Connection
     table: str
 
-    def __init__(self, num: int):
+    def __init__(self, num: int, ports: Dict[str, int]):
         self.conn = pg8000.connect(
-            host="postgres", user="postgres", password="postgres"
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=ports["postgres"],
         )
         self.table = f"table{num}"
         with self.conn.cursor() as cur:
-            cur.execute(f"DROP TABLE IF EXISTS {self.table}")
             cur.execute(
-                f"CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1))"
+                f"""DROP TABLE IF EXISTS {self.table};
+                    CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1))"""
             )
 
     def run(self, transactions: List[Transaction]) -> None:
@@ -226,33 +233,41 @@ class PgCdcExecutor(Executor):
     conn: pg8000.Connection
     table: str
 
-    def __init__(self, num: int, conn: pg8000.Connection):
+    def __init__(self, num: int, conn: pg8000.Connection, ports: Dict[str, int]):
         self.conn = pg8000.connect(
-            host="postgres", user="postgres", password="postgres"
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=ports["postgres"],
         )
         self.table = f"cdc{num}"
         self.conn.autocommit = True
         with self.conn.cursor() as cur:
-            cur.execute(f"DROP TABLE IF EXISTS {self.table}")
             cur.execute(
-                f"CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1))"
+                f"""DROP TABLE IF EXISTS {self.table};
+                    CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1));
+                    ALTER TABLE {self.table} REPLICA IDENTITY FULL;
+                    CREATE USER postgres{num} WITH SUPERUSER PASSWORD 'postgres';
+                    ALTER USER postgres{num} WITH replication;
+                    DROP PUBLICATION IF EXISTS postgres_source;
+                    CREATE PUBLICATION postgres_source FOR ALL TABLES;"""
             )
-            cur.execute(f"ALTER TABLE {self.table} REPLICA IDENTITY FULL")
-            cur.execute(f"CREATE USER postgres{num} WITH SUPERUSER PASSWORD 'postgres'")
-            cur.execute(f"ALTER USER postgres{num} WITH replication")
-
-            cur.execute("DROP PUBLICATION IF EXISTS postgres_source")
-            cur.execute("CREATE PUBLICATION postgres_source FOR ALL TABLES")
         self.conn.autocommit = False
 
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(f"CREATE SECRET pgpass{num} AS 'postgres'")
             cur.execute(
-                f"CREATE CONNECTION pg{num} FOR POSTGRES HOST 'postgres', DATABASE postgres, USER postgres{num}, PASSWORD SECRET pgpass{num}"
+                f"""CREATE CONNECTION pg{num} FOR POSTGRES
+                    HOST 'postgres',
+                    DATABASE postgres,
+                    USER postgres{num},
+                    PASSWORD SECRET pgpass{num}"""
             )
             cur.execute(
-                f"CREATE SOURCE postgres_source{num} FROM POSTGRES CONNECTION pg{num} (PUBLICATION 'postgres_source') FOR TABLES ({self.table} AS {self.table});"
+                f"""CREATE SOURCE postgres_source{num}
+                    FROM POSTGRES CONNECTION pg{num} (PUBLICATION 'postgres_source')
+                    FOR TABLES ({self.table} AS {self.table})"""
             )
         conn.autocommit = False
 
@@ -266,7 +281,10 @@ class PgCdcExecutor(Executor):
                             or row.operation == Operation.UPSERT
                         ):
                             cur.execute(
-                                f"INSERT INTO {self.table} VALUES ({row.key}, {row.value}) ON CONFLICT (col1) DO UPDATE SET col2 = EXCLUDED.col2"
+                                f"""INSERT INTO {self.table}
+                                    VALUES ({row.key}, {row.value})
+                                    ON CONFLICT (col1) DO
+                                        UPDATE SET col2 = EXCLUDED.col2"""
                             )
                         elif row.operation == Operation.DELETE:
                             cur.execute(
@@ -452,14 +470,20 @@ class ProgressivelyEnrichRecords(Workload):
 
 
 def execute_workload(
-    executor_classes: Any, workload: Workload, conn: pg8000.Connection, num: int
+    executor_classes: Any,
+    workload: Workload,
+    conn: pg8000.Connection,
+    num: int,
+    ports: Dict[str, int],
 ) -> None:
     transactions = workload.generate()
     print(transactions)
 
-    pg_executor = PgExecutor(num)
+    pg_executor = PgExecutor(num, ports)
     print_executor = PrintExecutor()
-    executors = [executor_class(num, conn) for executor_class in executor_classes]
+    executors = [
+        executor_class(num, conn, ports) for executor_class in executor_classes
+    ]
 
     for executor in [print_executor, pg_executor] + executors:
         executor.run(transactions)
@@ -487,22 +511,24 @@ def execute_workload(
             raise ValueError(f"Unexpected result {actual_result} != {expected_result}")
 
 
-def main() -> None:
-    conn = pg8000.connect(host="materialized", port=6875, user="materialize")
+def main(ports: Dict[str, int]) -> None:
+    conn = pg8000.connect(
+        host="localhost", user="materialize", port=ports["materialized"]
+    )
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
-            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092'"
+            """CREATE CONNECTION IF NOT EXISTS kafka_conn
+               FOR KAFKA BROKER 'kafka:9092'"""
         )
         cur.execute(
-            "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+            """CREATE CONNECTION IF NOT EXISTS csr_conn
+               FOR CONFLUENT SCHEMA REGISTRY
+               URL 'http://schema-registry:8081'"""
         )
     conn.autocommit = False
 
     executor_classes = [KafkaExecutor, PgCdcExecutor]
 
     for i, workload in enumerate([SingleSensorUpdating(), DeleteDataAtEndOfDay()]):
-        execute_workload(executor_classes, workload, conn, i)
-
-
-main()
+        execute_workload(executor_classes, workload, conn, i, ports)
