@@ -405,6 +405,10 @@ DROP CLUSTER foo CASCADE
 statement error db error: ERROR: unknown cluster replica size invalid_size
 CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
 
+# Test for #20195 . Without the fix, this query will hang indefinitely
+statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
+CREATE CLUSTER foo SIZE '1', replication factor 9999999;
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_managed_clusters = false;
 ----
