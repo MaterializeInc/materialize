@@ -397,7 +397,7 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    resume_upper: Antichain<mz_repr::Timestamp>,
+    as_of: Antichain<mz_repr::Timestamp>,
     primary_source_id: GlobalId,
     health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
@@ -469,7 +469,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
             .collect();
 
         // Write the initial starting state to the status shard for all managed sources
-        if is_active_worker && !resume_upper.is_empty() {
+        if is_active_worker && !as_of.is_empty() {
             for state in health_states.values() {
                 if let Some((status_shard, persist_client)) = state.persist_details {
                     let status = HealthStatus::Starting;

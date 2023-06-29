@@ -15,7 +15,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -43,19 +42,15 @@ use crate::source::types::SourceRender;
 /// normally run async code, such as the timely main loop.
 #[derive(Debug)]
 pub struct AsyncStorageWorker<T: Timestamp + Lattice + Codec64> {
-    tx: mpsc::UnboundedSender<AsyncStorageWorkerCommand<T>>,
+    tx: mpsc::UnboundedSender<AsyncStorageWorkerCommand>,
     rx: crossbeam_channel::Receiver<AsyncStorageWorkerResponse<T>>,
 }
 
 /// Commands for [AsyncStorageWorker].
 #[derive(Debug)]
-pub enum AsyncStorageWorkerCommand<T: Timestamp + Lattice + Codec64> {
+pub enum AsyncStorageWorkerCommand {
     /// Calculate a recent resumption frontier for the ingestion.
-    UpdateFrontiers(
-        GlobalId,
-        IngestionDescription<CollectionMetadata>,
-        PhantomData<T>,
-    ),
+    UpdateFrontiers(GlobalId, IngestionDescription<CollectionMetadata>),
 }
 
 /// Responses from [AsyncStorageWorker].
@@ -203,11 +198,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
         mz_ore::task::spawn(|| "AsyncStorageWorker", async move {
             while let Some(command) = command_rx.recv().await {
                 match command {
-                    AsyncStorageWorkerCommand::UpdateFrontiers(
-                        id,
-                        ingestion_description,
-                        _phantom_data,
-                    ) => {
+                    AsyncStorageWorkerCommand::UpdateFrontiers(id, ingestion_description) => {
                         // Here we update the as-of and upper(i.e resumption) frontiers of the
                         // ingestion.
                         //
@@ -399,14 +390,10 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
         id: GlobalId,
         ingestion: IngestionDescription<CollectionMetadata>,
     ) {
-        self.send(AsyncStorageWorkerCommand::UpdateFrontiers(
-            id,
-            ingestion,
-            PhantomData,
-        ))
+        self.send(AsyncStorageWorkerCommand::UpdateFrontiers(id, ingestion))
     }
 
-    fn send(&self, cmd: AsyncStorageWorkerCommand<T>) {
+    fn send(&self, cmd: AsyncStorageWorkerCommand) {
         self.tx
             .send(cmd)
             .expect("persist worker exited while its handle was alive")

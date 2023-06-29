@@ -231,7 +231,7 @@ fn render_source_stream<G>(
     id: GlobalId,
     ok_source: SourceType<G>,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<G::Timestamp>,
+    as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
@@ -329,8 +329,6 @@ where
                                 .expect("dependent source missing from ingestion description")
                                 .clone();
                             let persist_clients = Arc::clone(&storage_state.persist_clients);
-                            let upper_ts = resume_upper.as_option().copied().unwrap();
-                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
@@ -361,6 +359,8 @@ where
                     let upsert_input = upsert_commands(results, upsert_envelope.clone());
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
+                    // TODO: Get this to work with the as_of.
+                    let resume_upper = base_source_config.resume_uppers[&id].clone();
 
                     let upper_ts = resume_upper
                         .as_option()
