@@ -1,0 +1,4 @@
+pg8000
+semver
+sqlparse
+kubernetes
