@@ -4813,6 +4813,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "static_assertions",
  "thiserror",
  "tokio",
  "tokio-postgres",

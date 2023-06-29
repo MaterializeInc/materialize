@@ -2636,7 +2636,18 @@ impl CatalogEntry {
     pub fn connection(&self) -> Result<&Connection, SqlCatalogError> {
         match self.item() {
             CatalogItem::Connection(connection) => Ok(connection),
-            _ => Err(SqlCatalogError::UnknownConnection(self.name().to_string())),
+            _ => {
+                let db_name = match self.name().qualifiers.database_spec {
+                    ResolvedDatabaseSpecifier::Ambient => "".to_string(),
+                    ResolvedDatabaseSpecifier::Id(id) => format!("{id}."),
+                };
+                Err(SqlCatalogError::UnknownConnection(format!(
+                    "{}{}.{}",
+                    db_name,
+                    self.name().qualifiers.schema_spec,
+                    self.name().item
+                )))
+            }
         }
     }
 
@@ -4411,12 +4422,10 @@ impl Catalog {
                     continue;
                 }
                 Err(e) => {
+                    let name = c.resolve_full_name(&item.name, None);
                     return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!(
-                            "failed to deserialize item {} ({}): {}",
-                            item.id, item.name, e
-                        ),
-                    }))
+                        detail: format!("failed to deserialize item {} ({}): {}", item.id, name, e),
+                    }));
                 }
             };
             let oid = c.allocate_oid()?;
@@ -4450,6 +4459,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -4468,6 +4478,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",

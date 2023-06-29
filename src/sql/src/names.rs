@@ -86,14 +86,9 @@ pub struct QualifiedItemName {
     pub item: String,
 }
 
-impl fmt::Display for QualifiedItemName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let ResolvedDatabaseSpecifier::Id(id) = &self.qualifiers.database_spec {
-            write!(f, "{}.", id)?;
-        }
-        write!(f, "{}.{}", self.qualifiers.schema_spec, self.item)
-    }
-}
+// Do not implement [`Display`] for [`QualifiedItemName`]. [`FullItemName`] should always be
+// displayed instead.
+static_assertions::assert_not_impl_any!(QualifiedItemName: fmt::Display);
 
 /// An optionally-qualified human-readable name of an item in the catalog.
 ///

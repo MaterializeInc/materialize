@@ -203,7 +203,10 @@ pub async fn purify_create_source(
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
-                    _ => sql_bail!("{} is not a kafka connection", item.name()),
+                    _ => sql_bail!(
+                        "{} is not a kafka connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
                 }
             };
 
@@ -273,7 +276,10 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
-                    _ => sql_bail!("{} is not a postgres connection", item.name()),
+                    _ => sql_bail!(
+                        "{} is not a postgres connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
                 }
             };
             let crate::plan::statement::PgConfigOptionExtracted {
