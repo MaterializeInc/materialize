@@ -417,14 +417,14 @@ where
                     }
                     return Ok(Ok((seqno, writer_maintenance)));
                 }
-                Err(CompareAndAppendBreak::AlreadyCommitted) => {
-                    // A previous iteration through this loop got an
-                    // Indeterminate error but was successful. Sanity check this
-                    // and pass along the good news.
-                    assert!(indeterminate.is_some());
-                    self.applier.metrics.cmds.compare_and_append_noop.inc();
-                    return Ok(Ok((seqno, WriterMaintenance::default())));
-                }
+                // Err(CompareAndAppendBreak::AlreadyCommitted) => {
+                //     // A previous iteration through this loop got an
+                //     // Indeterminate error but was successful. Sanity check this
+                //     // and pass along the good news.
+                //     assert!(indeterminate.is_some());
+                //     self.applier.metrics.cmds.compare_and_append_noop.inc();
+                //     return Ok(Ok((seqno, WriterMaintenance::default())));
+                // }
                 Err(CompareAndAppendBreak::InvalidUsage(err)) => {
                     // InvalidUsage is (or should be) a deterministic function
                     // of the inputs and independent of anything in persist
@@ -437,17 +437,13 @@ where
                     shard_upper,
                     writer_upper,
                 }) => {
-                    // NB the below intentionally compares to writer_upper
-                    // (because it gives a tighter bound on the bad case), but
-                    // returns shard_upper (what the persist caller cares
-                    // about).
                     assert!(
                         PartialOrder::less_equal(&writer_upper, &shard_upper),
                         "{:?} vs {:?}",
                         &writer_upper,
                         &shard_upper
                     );
-                    if PartialOrder::less_than(&writer_upper, batch.desc.upper()) {
+                    if PartialOrder::less_than(&shard_upper, batch.desc.upper()) {
                         // No way this could have committed in some previous
                         // attempt of this loop: the upper of the writer is
                         // strictly less than the proposed new upper.

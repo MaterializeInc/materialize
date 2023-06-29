@@ -340,7 +340,7 @@ pub struct StateCollections<T> {
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub enum CompareAndAppendBreak<T> {
-    AlreadyCommitted,
+    // AlreadyCommitted,
     Upper {
         shard_upper: Antichain<T>,
         writer_upper: Antichain<T>,
@@ -567,20 +567,20 @@ where
             ));
         }
 
-        if idempotency_token == &writer_state.most_recent_write_token {
-            // If the last write had the same idempotency_token, then this must
-            // have already committed. Sanity check that the most recent write
-            // upper matches and that the shard upper is at least the write
-            // upper, if it's not something very suspect is going on.
-            assert_eq!(batch.desc.upper(), &writer_state.most_recent_write_upper);
-            assert!(
-                PartialOrder::less_equal(batch.desc.upper(), self.trace.upper()),
-                "{:?} vs {:?}",
-                batch.desc.upper(),
-                self.trace.upper()
-            );
-            return Break(CompareAndAppendBreak::AlreadyCommitted);
-        }
+        // if idempotency_token == &writer_state.most_recent_write_token {
+        //     // If the last write had the same idempotency_token, then this must
+        //     // have already committed. Sanity check that the most recent write
+        //     // upper matches and that the shard upper is at least the write
+        //     // upper, if it's not something very suspect is going on.
+        //     assert_eq!(batch.desc.upper(), &writer_state.most_recent_write_upper);
+        //     assert!(
+        //         PartialOrder::less_equal(batch.desc.upper(), self.trace.upper()),
+        //         "{:?} vs {:?}",
+        //         batch.desc.upper(),
+        //         self.trace.upper()
+        //     );
+        //     return Break(CompareAndAppendBreak::AlreadyCommitted);
+        // }
 
         let shard_upper = self.trace.upper();
         if shard_upper != batch.desc.lower() {
