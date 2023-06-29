@@ -443,7 +443,10 @@ pub fn plan_create_source(
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
             let mut kafka_connection = match connection_item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
+                _ => sql_bail!(
+                    "{} is not a kafka connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
             };
 
             // Starting offsets are allowed out with feature flags mode, as they are a simple,
@@ -575,7 +578,10 @@ pub fn plan_create_source(
             let connection_item = scx.get_item_by_resolved_name(connection)?;
             let connection = match connection_item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a postgres connection", connection_item.name()),
+                _ => sql_bail!(
+                    "{} is not a postgres connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
             };
             let PgConfigOptionExtracted {
                 details,
@@ -1086,7 +1092,9 @@ pub fn plan_create_source(
     // timeline for the source.
     let timeline = match timeline {
         None => match envelope {
-            SourceEnvelope::CdcV2 => Timeline::External(name.to_string()),
+            SourceEnvelope::CdcV2 => {
+                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
+            }
             _ => Timeline::EpochMilliseconds,
         },
         // TODO(benesch): if we stabilize this, can we find a better name than
@@ -1761,7 +1769,11 @@ pub fn plan_view(
         scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
-    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, columns)?;
+    plan_utils::maybe_rename_columns(
+        format!("view {}", scx.catalog.resolve_full_name(&name)),
+        &mut desc,
+        columns,
+    )?;
     let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
@@ -1892,7 +1904,7 @@ pub fn plan_create_materialized_view(
     let expr = expr.optimize_and_lower(&scx.into())?;
 
     plan_utils::maybe_rename_columns(
-        format!("materialized view {}", name),
+        format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
         &stmt.columns,
     )?;
@@ -2204,7 +2216,10 @@ fn kafka_sink_builder(
     // Get Kafka connection
     let mut connection = match item.connection()? {
         Connection::Kafka(connection) => connection.clone(),
-        _ => sql_bail!("{} is not a kafka connection", item.name()),
+        _ => sql_bail!(
+            "{} is not a kafka connection",
+            scx.catalog.resolve_full_name(item.name())
+        ),
     };
 
     // Starting offsets are allowed with feature flags mode, as they are a simple,
@@ -3119,7 +3134,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                                     sql_bail!("AWS PrivateLink availability zone {} does not match any of the \
                                       availability zones on the AWS PrivateLink connection {}",
                                       az.quoted(),
-                                      entry.name().to_string().quoted())
+                                        scx.catalog.resolve_full_name(entry.name()).to_string().quoted())
                                 }
                             }
                             Tunnel::AwsPrivatelink(AwsPrivatelink {
@@ -4890,7 +4905,10 @@ fn ensure_cluster_is_not_linked(
     let cluster = scx.catalog.get_cluster(cluster_id);
     if let Some(linked_id) = cluster.linked_object_id() {
         let cluster_name = scx.catalog.get_cluster(cluster_id).name().to_string();
-        let linked_object_name = scx.catalog.get_item(&linked_id).name().to_string();
+        let linked_object_name = scx
+            .catalog
+            .resolve_full_name(scx.catalog.get_item(&linked_id).name())
+            .to_string();
         Err(PlanError::ModifyLinkedCluster {
             cluster_name,
             linked_object_name,

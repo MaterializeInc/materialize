@@ -419,7 +419,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             .expect("can only create indexes on items with a valid description")
             .typ()
             .clone();
-        let name = index_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(index_entry.name(), index_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
@@ -495,7 +498,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             ),
         };
 
-        let name = mview_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(mview_entry.name(), mview_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
 
         self.import_view_into_dataflow(&internal_view_id, &mview.optimized_expr, &mut dataflow)?;
