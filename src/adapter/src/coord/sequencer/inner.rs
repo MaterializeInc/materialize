@@ -3694,6 +3694,8 @@ impl Coordinator {
                     },
                 );
 
+                referenced_subsources.sort();
+
                 // Remove dropped references from text columns.
                 match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres { options, .. } => {
@@ -3723,7 +3725,9 @@ impl Coordinator {
                                             }
                                         }
                                         _ => true,
-                                    })
+                                    });
+
+                                    names.sort();
                                 }
                                 _ => {}
                             }

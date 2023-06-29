@@ -165,7 +165,7 @@ impl_display!(UnresolvedDatabaseName);
 
 // The name of an item not yet created during name resolution, which should be
 // resolveable as an item name later.
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
 pub enum DeferredItemName<T: AstInfo> {
     Named(T::ItemName),
     Deferred(UnresolvedItemName),

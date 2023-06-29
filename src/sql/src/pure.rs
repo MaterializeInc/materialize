@@ -616,6 +616,8 @@ pub async fn purify_create_source(
                 });
             }
 
+            targeted_subsources.sort();
+
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
 
             // Remove any old detail references
