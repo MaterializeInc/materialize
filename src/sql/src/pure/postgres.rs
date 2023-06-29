@@ -24,7 +24,7 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 
 use crate::catalog::ErsatzCatalog;
-use crate::names::Aug;
+use crate::names::{Aug, PartialItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -176,8 +176,9 @@ pub(crate) fn generate_targeted_subsources<F>(
         UnresolvedItemName,
         &PostgresTableDesc,
     )>,
-    text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
+    mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
     mut get_transient_subsource_id: F,
+    publication_tables: &[PostgresTableDesc],
 ) -> Result<
     (
         Vec<CreateSourceSubsource<Aug>>,
@@ -198,9 +199,10 @@ where
     for (upstream_name, subsource_name, table) in validated_requested_subsources.into_iter() {
         // Figure out the schema of the subsource
         let mut columns = vec![];
+        let text_cols_dict = text_cols_dict.remove(&table.oid);
         for c in table.columns.iter() {
             let name = Ident::new(c.name.clone());
-            let ty = match text_cols_dict.get(&table.oid) {
+            let ty = match &text_cols_dict {
                 Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
                 _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
                     Ok(t) => t,
@@ -300,6 +302,29 @@ where
     if !unsupported_cols.is_empty() {
         return Err(PlanError::UnrecognizedTypeInPostgresSource {
             cols: unsupported_cols,
+        });
+    }
+
+    // If any any item was not removed from the text_cols dict, it wasn't being
+    // added.
+    let mut dangling_text_column_refs = vec![];
+
+    for id in text_cols_dict.keys() {
+        let desc = publication_tables
+            .iter()
+            .find(|t| t.oid == *id)
+            .expect("validated when generating text columns");
+
+        dangling_text_column_refs.push(PartialItemName {
+            database: None,
+            schema: Some(desc.namespace.clone()),
+            item: desc.name.clone(),
+        });
+    }
+
+    if !dangling_text_column_refs.is_empty() {
+        return Err(PlanError::DanglingTextColumns {
+            items: dangling_text_column_refs,
         });
     }
 
