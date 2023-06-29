@@ -34,6 +34,16 @@ def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
 
 
 @pytest.fixture(scope="session")
+def log_filter(pytestconfig: pytest.Config) -> Any:
+    return pytestconfig.getoption("log_filter")
+
+
+@pytest.fixture(scope="session")
+def dev(pytestconfig: pytest.Config) -> Any:
+    return pytestconfig.getoption("dev")
+
+
+@pytest.fixture(scope="session")
 def aws_region(pytestconfig: pytest.Config) -> Any:
     return pytestconfig.getoption("aws_region")
 
