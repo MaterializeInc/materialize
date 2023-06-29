@@ -73,54 +73,14 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::env;
+//! An async wrapper around RocksDB, that does IO on a separate thread.
+//!
+//! This crate offers a limited API to communicate with RocksDB, to get
+//! the best performance possible (most importantly, by batching operations).
+//! Currently this API is only `upsert`, which replaces (or deletes) values for
+//! a set of keys, and returns the previous values.
 
-fn main() {
-    env::set_var("PROTOC", protobuf_src::protoc());
+#![warn(missing_docs)]
 
-    let mut config = prost_build::Config::new();
-    config.btree_map(["."]);
-
-    tonic_build::configure()
-        // Enabling `emit_rerun_if_changed` will rerun the build script when
-        // anything in the include directory (..) changes. This causes quite a
-        // bit of spurious recompilation, so we disable it. The default behavior
-        // is to re-run if any file in the crate changes; that's still a bit too
-        // broad, but it's better.
-        .emit_rerun_if_changed(false)
-        .extern_path(".mz_ccsr.config", "::mz_ccsr")
-        .extern_path(".mz_expr.id", "::mz_expr")
-        .extern_path(".mz_expr.linear", "::mz_expr")
-        .extern_path(".mz_expr.relation", "::mz_expr")
-        .extern_path(".mz_expr.scalar", "::mz_expr")
-        .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
-        .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
-        .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
-        .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
-        .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
-        .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
-        .extern_path(".mz_orchestrator", "::mz_orchestrator")
-        .extern_path(".mz_persist_client", "::mz_persist_client")
-        .extern_path(".mz_proto", "::mz_proto")
-        .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
-        .extern_path(".mz_repr.row", "::mz_repr")
-        .extern_path(".mz_repr.url", "::mz_repr::url")
-        .extern_path(".mz_rocksdb_types", "::mz_rocksdb_types")
-        .extern_path(".mz_cluster_client", "::mz_cluster_client")
-        .compile_with_config(
-            config,
-            &[
-                "storage-client/src/controller.proto",
-                "storage-client/src/client.proto",
-                "storage-client/src/types/errors.proto",
-                "storage-client/src/types/connections/aws.proto",
-                "storage-client/src/types/instances.proto",
-                "storage-client/src/types/parameters.proto",
-                "storage-client/src/types/sinks.proto",
-                "storage-client/src/types/sources.proto",
-                "storage-client/src/types/sources/encoding.proto",
-            ],
-            &[".."],
-        )
-        .unwrap_or_else(|e| panic!("{e}"))
-}
+pub mod config;
+pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};

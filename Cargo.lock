@@ -3418,7 +3418,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
- "mz-rocksdb",
+ "mz-rocksdb-types",
  "mz-secrets",
  "mz-segment",
  "mz-sql",
@@ -4670,6 +4670,7 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-proto",
+ "mz-rocksdb-types",
  "num_cpus",
  "once_cell",
  "prometheus",
@@ -4686,6 +4687,25 @@ dependencies = [
  "tokio",
  "tonic-build",
  "tracing",
+ "uncased",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-rocksdb-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-proto",
+ "num_cpus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tonic-build",
  "uncased",
  "workspace-hack",
 ]
@@ -4797,7 +4817,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
- "mz-rocksdb",
+ "mz-rocksdb-types",
  "mz-secrets",
  "mz-sql-parser",
  "mz-stash",
@@ -5080,7 +5100,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
- "mz-rocksdb",
+ "mz-rocksdb-types",
  "mz-secrets",
  "mz-service",
  "mz-ssh-util",
