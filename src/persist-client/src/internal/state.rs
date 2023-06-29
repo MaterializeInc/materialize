@@ -146,7 +146,7 @@ pub struct WriterState<T> {
 }
 
 /// Debugging info for a reader or writer.
-#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
+#[derive(Arbitrary, Clone, Debug, Default, PartialEq, Serialize)]
 pub struct HandleDebugState {
     /// Hostname of the persist user that registered this writer or reader. For
     /// critical readers, this is the _most recent_ registration.
@@ -504,46 +504,14 @@ where
         Continue(state)
     }
 
-    pub fn register_writer(
-        &mut self,
-        hostname: &str,
-        writer_id: &WriterId,
-        purpose: &str,
-        lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<Upper<T>>, Upper<T>> {
-        let upper = Upper(self.trace.upper().clone());
-        let writer_state = WriterState {
-            debug: HandleDebugState {
-                hostname: hostname.to_owned(),
-                purpose: purpose.to_owned(),
-            },
-            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
-            lease_duration_ms: u64::try_from(lease_duration.as_millis())
-                .expect("lease duration as millis must fit within u64"),
-            most_recent_write_token: IdempotencyToken::SENTINEL,
-            most_recent_write_upper: Antichain::from_elem(T::minimum()),
-        };
-
-        // If the shard-global upper and since are both the empty antichain,
-        // then no further writes can ever commit and no further reads can be
-        // served. Optimize this by no-op-ing writer registration so that we can
-        // settle the shard into a final unchanging tombstone state.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(upper));
-        }
-
-        // TODO: Handle if the reader or writer already exists.
-        self.writers.insert(writer_id.clone(), writer_state);
-        Continue(Upper(self.trace.upper().clone()))
-    }
-
     pub fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
+        lease_duration_ms: u64,
         idempotency_token: &IdempotencyToken,
+        debug_info: &HandleDebugState,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -561,14 +529,16 @@ where
             });
         }
 
-        let writer_state = match self.writers.get_mut(writer_id) {
-            Some(x) => x,
-            None => {
-                return Break(CompareAndAppendBreak::InvalidUsage(
-                    InvalidUsage::UnknownWriter(writer_id.clone()),
-                ))
-            }
-        };
+        let writer_state = self
+            .writers
+            .entry(writer_id.clone())
+            .or_insert_with(|| WriterState {
+                last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+                lease_duration_ms,
+                most_recent_write_token: IdempotencyToken::SENTINEL,
+                most_recent_write_upper: Antichain::from_elem(T::minimum()),
+                debug: debug_info.clone(),
+            });
 
         if PartialOrder::less_than(batch.desc.upper(), batch.desc.lower()) {
             return Break(CompareAndAppendBreak::InvalidUsage(
@@ -630,7 +600,7 @@ where
         );
         writer_state.most_recent_write_upper = batch.desc.upper().clone();
 
-        // Also use this as an opportunity to heartbeat the writer
+        // Heartbeat the writer state to keep our idempotency token alive.
         writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
             heartbeat_timestamp_ms,
             writer_state.last_heartbeat_timestamp_ms,
@@ -846,33 +816,6 @@ where
         // commit the state change so that this gets linearized (maybe we're
         // looking at old state).
         Continue(existed)
-    }
-
-    pub fn heartbeat_writer(
-        &mut self,
-        writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        // We expire all writers if the upper and since both advance to the
-        // empty antichain. Gracefully handle this. At the same time,
-        // short-circuit the cmd application so we don't needlessly create new
-        // SeqNos.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(false));
-        }
-
-        match self.writers.get_mut(writer_id) {
-            Some(writer_state) => {
-                writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
-                    heartbeat_timestamp_ms,
-                    writer_state.last_heartbeat_timestamp_ms,
-                );
-                Continue(true)
-            }
-            // No-op, but we still commit the state change so that this gets
-            // linearized (maybe we're looking at old state).
-            None => Continue(false),
-        }
     }
 
     pub fn expire_writer(
@@ -1490,6 +1433,14 @@ pub(crate) mod tests {
 
     use super::*;
 
+    const LEASE_DURATION_MS: u64 = 900 * 1000;
+    fn debug_state() -> HandleDebugState {
+        HandleDebugState {
+            hostname: "debug".to_owned(),
+            purpose: "finding the bugs".to_owned(),
+        }
+    }
+
     pub fn any_hollow_batch<T: Arbitrary + Timestamp>() -> impl Strategy<Value = HollowBatch<T>> {
         Strategy::prop_map(
             (
@@ -1823,7 +1774,6 @@ pub(crate) mod tests {
         .collections;
 
         let writer_id = WriterId::new();
-        let _ = state.register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         let now = SYSTEM_TIME.clone();
 
         // State is initially empty.
@@ -1837,7 +1787,9 @@ pub(crate) mod tests {
                 &hollow(1, 2, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -1851,7 +1803,9 @@ pub(crate) mod tests {
                 &hollow(0, 5, &[], 0),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
 
@@ -1861,7 +1815,9 @@ pub(crate) mod tests {
                 &hollow(5, 4, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -1875,7 +1831,9 @@ pub(crate) mod tests {
                 &hollow(5, 5, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -1892,7 +1850,9 @@ pub(crate) mod tests {
                 &hollow(5, 5, &[], 0),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
     }
@@ -1926,9 +1886,6 @@ pub(crate) mod tests {
         );
 
         let writer_id = WriterId::new();
-        let _ = state
-            .collections
-            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
 
         // Advance upper to 5.
         assert!(state
@@ -1937,7 +1894,9 @@ pub(crate) mod tests {
                 &hollow(0, 5, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
 
@@ -2005,7 +1964,9 @@ pub(crate) mod tests {
                 &hollow(5, 10, &[], 0),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
 
@@ -2031,7 +1992,9 @@ pub(crate) mod tests {
                 &hollow(10, 15, &["key2"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
 
@@ -2080,9 +2043,6 @@ pub(crate) mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
 
         let writer_id = WriterId::new();
-        let _ = state
-            .collections
-            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
         let now = SYSTEM_TIME.clone();
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
@@ -2092,7 +2052,9 @@ pub(crate) mod tests {
                 &hollow(0, 5, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
         assert!(state
@@ -2101,7 +2063,9 @@ pub(crate) mod tests {
                 &hollow(5, 10, &["key2"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
 
@@ -2144,38 +2108,18 @@ pub(crate) mod tests {
 
         let writer_id_one = WriterId::new();
 
-        // Writer has not been registered and should be unable to write
-        assert_eq!(
-            state.collections.compare_and_append(
-                &hollow(0, 2, &["key1"], 1),
-                &writer_id_one,
-                now(),
-                &IdempotencyToken::new()
-            ),
-            Break(CompareAndAppendBreak::InvalidUsage(
-                InvalidUsage::UnknownWriter(writer_id_one.clone())
-            ))
-        );
-
-        assert!(state
-            .collections
-            .register_writer("", &writer_id_one, "", Duration::from_secs(10), 0)
-            .is_continue());
-
         let writer_id_two = WriterId::new();
-        assert!(state
-            .collections
-            .register_writer("", &writer_id_two, "", Duration::from_secs(10), 0)
-            .is_continue());
 
-        // Writer is registered and is now eligible to write
+        // Writer is eligible to write
         assert!(state
             .collections
             .compare_and_append(
                 &hollow(0, 2, &["key1"], 1),
                 &writer_id_one,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
 
@@ -2184,27 +2128,16 @@ pub(crate) mod tests {
             .expire_writer(&writer_id_one)
             .is_continue());
 
-        // Writer has been expired and should be fenced off from further writes
-        assert_eq!(
-            state.collections.compare_and_append(
-                &hollow(2, 5, &["key2"], 1),
-                &writer_id_one,
-                now(),
-                &IdempotencyToken::new()
-            ),
-            Break(CompareAndAppendBreak::InvalidUsage(
-                InvalidUsage::UnknownWriter(writer_id_one.clone())
-            ))
-        );
-
-        // But other writers should still be able to write
+        // Other writers should still be able to write
         assert!(state
             .collections
             .compare_and_append(
                 &hollow(2, 5, &["key2"], 1),
                 &writer_id_two,
                 now(),
-                &IdempotencyToken::new()
+                LEASE_DURATION_MS,
+                &IdempotencyToken::new(),
+                &debug_state(),
             )
             .is_continue());
     }
@@ -2229,9 +2162,15 @@ pub(crate) mod tests {
 
         // When a writer is present, non-writes don't gc.
         let writer_id = WriterId::new();
-        let _ = state
-            .collections
-            .register_writer("", &writer_id, "", Duration::from_secs(10), 0);
+        let now = SYSTEM_TIME.clone();
+        state.collections.compare_and_append(
+            &hollow(1, 2, &["key1"], 1),
+            &writer_id,
+            now(),
+            LEASE_DURATION_MS,
+            &IdempotencyToken::new(),
+            &debug_state(),
+        );
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.
