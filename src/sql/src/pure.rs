@@ -415,6 +415,7 @@ pub async fn purify_create_source(
                 validated_requested_subsources,
                 text_cols_dict,
                 get_transient_subsource_id,
+                &publication_tables,
             )?;
 
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
@@ -743,6 +744,7 @@ pub async fn purify_alter_source(
         validated_requested_subsources,
         BTreeMap::new(),
         get_transient_subsource_id,
+        &publication_tables,
     )?;
 
     *targeted_subsources = named_subsources;

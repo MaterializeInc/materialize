@@ -131,6 +131,9 @@ pub enum PlanError {
     UnrecognizedTypeInPostgresSource {
         cols: Vec<(String, Oid)>,
     },
+    DanglingTextColumns {
+        items: Vec<PartialItemName>,
+    },
     FetchingCsrSchemaFailed {
         schema_lookup: String,
         cause: Arc<dyn Error + Send + Sync>,
@@ -250,6 +253,15 @@ impl PlanError {
                 ))
             }
             Self::VarError(e) => e.detail(),
+            Self::DanglingTextColumns { items } => {
+                let mut items = items.to_owned();
+                items.sort();
+
+                Some(format!(
+                    "the following tables were referenced but not added: {}",
+                    itertools::join(items, ", ")
+                ))
+            }
             _ => None,
         }
     }
@@ -453,6 +465,12 @@ impl fmt::Display for PlanError {
                         cols.into_iter().map(|(col, Oid(oid))| format!("{} (OID {})", col, oid)),
                         "\n"
                     )
+                )
+            },
+            Self::DanglingTextColumns { .. } => {
+                write!(
+                    f,
+                    "TEXT COLUMNS can only refer to tables being added to source",
                 )
             },
             Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
