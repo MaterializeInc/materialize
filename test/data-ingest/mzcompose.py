@@ -12,7 +12,8 @@ import time
 
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.scenarios import *  # noqa: F401 F403
-from materialize.data_ingest import main
+from materialize.data_ingest.executor import KafkaExecutor, PgCdcExecutor
+from materialize.data_ingest.workload import Workload, execute_workload
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Clusterd,
@@ -42,17 +43,46 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--upsert", action="store_true", help="Run upserts")
-
     parser.add_argument("--seed", metavar="SEED", type=str, default=str(time.time()))
+    parser.add_argument(
+        "--workload",
+        metavar="WORKLOAD",
+        type=str,
+        action="append",
+        help="Workload(s) to run.",
+    )
 
     args = parser.parse_args()
 
+    workloads = (
+        [globals()[workload] for workload in args.workload]
+        if args.workload
+        else Workload.__subclasses__()
+    )
+
     print(f"--- Random seed is {args.seed}")
-    random.seed(args.seed)
 
     services = ("materialized", "zookeeper", "kafka", "schema-registry", "postgres")
     c.up(*services)
 
+    conn = c.sql_connection()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            """CREATE CONNECTION IF NOT EXISTS kafka_conn
+               FOR KAFKA BROKER 'kafka:9092'"""
+        )
+        cur.execute(
+            """CREATE CONNECTION IF NOT EXISTS csr_conn
+               FOR CONFLUENT SCHEMA REGISTRY
+               URL 'http://schema-registry:8081'"""
+        )
+    conn.autocommit = False
+
+    executor_classes = [KafkaExecutor, PgCdcExecutor]
     ports = {s: c.default_port(s) for s in services}
-    main(ports)
+
+    for i, workload_class in enumerate(workloads):
+        random.seed(args.seed)
+        print(f"--- Testing workload {workload_class.__name__}")
+        execute_workload(executor_classes, workload_class(), conn, i, ports)
