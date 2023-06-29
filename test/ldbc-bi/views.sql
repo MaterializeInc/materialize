@@ -41,25 +41,34 @@ CREATE OR REPLACE MATERIALIZED VIEW Person_likes_Message AS
   (SELECT creationDate, PersonId, PostId as MessageId FROM Person_likes_Post);
 
 -- A recursive materialized view containing the root Post of each Message (for Posts, themselves, for Comments, traversing up the Message thread to the root Post of the tree)
-CREATE OR REPLACE MATERIALIZED VIEW AllMessages AS
+CREATE OR REPLACE MATERIALIZED VIEW Message AS
 WITH MUTUALLY RECURSIVE
   -- compute the transitive closure (with root information) using minimnal info
-  roots (MessageId bigint, RootId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
-    (      SELECT id AS MessageId, id AS RootId, language AS RootPostLanguage, ContainerForumId, NULL::bigint AS ParentMessageId FROM Post
+  roots (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT id AS MessageId, id AS RootPostId, language AS RootPostLanguage, ContainerForumId, NULL::bigint AS ParentMessageId FROM Post
      UNION SELECT
-     	     id AS MessageId,
-	     ParentPostId AS RootId,
+     	     Comment.id AS MessageId,
+	     ParentPostId AS RootPostId,
 	     language AS RootPostLanguage,
-	     ContainerForumId,
-	     ParentPostId as ParentMessageId,
+	     Post.ContainerForumId AS ContainerForumId,
+	     ParentPostId AS ParentMessageId
            FROM Comment
 	   JOIN Post
-	   ON Comment.ParentPostId = Post.id)
-  ms (MessageId bigint, RootId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
-    (      SELECT * from roots
-     UNION SELECT id AS MessageId, ms.RootId, ms.RootPostLanguage, ms.ContainerForumId, ParentCommentId as ParentMessageId FROM Comment JOIN ms ON ParentCommentId = ms.MessageId)
+	   ON Comment.ParentPostId = Post.id),
+  ms (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT *
+           FROM roots
+     UNION SELECT
+     	     Comment.id AS MessageId,
+	     ms.RootPostId AS RootPostId,
+	     ms.RootPostLanguage AS RootPostLanguage,
+	     ms.ContainerForumId AS ContainerForumId,
+	     ParentCommentId AS ParentMessageId
+           FROM Comment
+	   JOIN ms
+	   ON ParentCommentId = ms.MessageId)
   -- now do the late materialization
-        SELECT
+  (     SELECT
           creationDate,
           id AS MessageId,
           id AS RootPostId,
@@ -74,7 +83,7 @@ WITH MUTUALLY RECURSIVE
           LocationCountryId,
           NULL::bigint AS ParentMessageId
         FROM Post
-  UNION SELECT
+  UNION (SELECT
           Comment.creationDate AS creationDate,
           Comment.id AS MessageId,
           ms.RootPostId AS RootPostId,
@@ -90,7 +99,24 @@ WITH MUTUALLY RECURSIVE
           ms.ParentMessageId AS ParentMessageId
 	FROM Comment
 	JOIN ms
-	ON Comment.id = ms.MessageId;
+	ON Comment.id = ms.MessageId));
+
+-- every message accounts for exactly one post or comment:
+--
+-- materialize=> select count(*) from Message;
+--   count  
+-- ---------
+--  2860664
+-- (1 row)
+-- 
+-- Time: 1005301.819 ms (16:45.302)
+-- materialize=> select (select count(*) as num_posts from Post) + (select count(*) as num_comments from Comment);
+--  ?column? 
+-- ----------
+--   2860664
+-- (1 row)
+-- 
+-- Time: 18313.558 ms (00:18.314)
 
 
 CREATE INDEX Message_MessageId ON Message (MessageId);

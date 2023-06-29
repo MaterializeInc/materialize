@@ -16,7 +16,7 @@ do
 done
 
 printf -- "\n-- dynamic entitites\n"
-for entity in Comment Forum Forum_hasMember_Person Forum_hasTag_Tag Person Person_hasInterest_Tag Person_knows_Person Person_studyAt_University Person_workAt_Company Post
+for entity in Comment Comment_hasTag_Tag Forum Forum_hasMember_Person Forum_hasTag_Tag Person Person_hasInterest_Tag Person_knows_Person Person_studyAt_University Person_workAt_Company Person_likes_Comment Person_likes_Post Post Post_hasTag_Tag
 do
     for csv in "$csvs"/initial_snapshot/dynamic/$entity/part-*.csv
     do
