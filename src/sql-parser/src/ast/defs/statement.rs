@@ -635,7 +635,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 impl_display_t!(CreateSourceStatement);
 
 /// A selected subsource in a FOR TABLES (..) statement
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CreateSourceSubsource<T: AstInfo> {
     pub reference: UnresolvedItemName,
     pub subsource: Option<DeferredItemName<T>>,
