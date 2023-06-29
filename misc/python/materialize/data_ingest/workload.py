@@ -21,7 +21,7 @@ from materialize.data_ingest.definition import (
     RecordSize,
     Upsert,
 )
-from materialize.data_ingest.executor import PgExecutor, PrintExecutor
+from materialize.data_ingest.executor import Field, PgExecutor, PrintExecutor, Type
 from materialize.data_ingest.transaction import Transaction
 
 
@@ -71,17 +71,25 @@ def execute_workload(
     conn: pg8000.Connection,
     num: int,
     ports: Dict[str, int],
+    verbose: bool,
 ) -> None:
     transactions = workload.generate()
     print(transactions)
-
-    pg_executor = PgExecutor(num, ports)
-    print_executor = PrintExecutor()
-    executors = [
-        executor_class(num, conn, ports) for executor_class in executor_classes
+    fields = [
+        Field("key1", Type.STRING, True),
+        Field("value1", Type.INT, False),
+        Field("value2", Type.FLOAT, False),
     ]
 
-    for executor in [print_executor, pg_executor] + executors:
+    pg_executor = PgExecutor(num, ports, fields)
+    executors = [
+        executor_class(num, conn, ports, fields) for executor_class in executor_classes
+    ]
+    run_executors = [pg_executor] + executors
+    if verbose:
+        run_executors = [PrintExecutor()] + executors
+
+    for executor in run_executors:
         executor.run(transactions)
 
     with pg_executor.conn.cursor() as cur:

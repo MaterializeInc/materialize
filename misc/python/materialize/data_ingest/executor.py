@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+from enum import Enum
 from typing import Any, Dict, List
 
 import pg8000
@@ -46,30 +47,67 @@ def delivery_report(err: str, msg: Any) -> None:
     #    msg.key(), msg.topic(), msg.partition(), msg.offset()))
 
 
+class Type(Enum):
+    """As supported by Avro: https://avro.apache.org/docs/1.11.1/specification/_print/"""
+
+    NULL = 1
+    BOOLEAN = 2
+    INT = 3
+    FLOAT = 4
+    BYTES = 5
+    STRING = 6
+    RECORD = 7
+    ENUM = 8
+    ARRAY = 9
+    MAP = 10
+    FIXED = 11
+
+
+class Field:
+    name: str
+    typ: Type
+    is_key: bool
+
+    def __init__(self, name: str, typ: Type, is_key: bool):
+        self.name = name
+        self.typ = typ
+        self.is_key = is_key
+
+
 class KafkaExecutor(Executor):
     producer: Producer
+    avro_serializer: AvroSerializer
+    key_avro_serializer: AvroSerializer
     topic: str
     table: str
 
-    def __init__(self, num: int, conn: pg8000.Connection, ports: Dict[str, int]):
+    def __init__(
+        self,
+        num: int,
+        conn: pg8000.Connection,
+        ports: Dict[str, int],
+        fields: List[Field],
+    ):
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
 
         schema = {
             "type": "record",
-            "name": "test",
+            "name": "value",
             "fields": [
-                # {"name":"f1", "type": "string"}
-                {"name": "f1", "type": "int"}
+                {"name": field.name, "type": str(field.typ).lower()}
+                for field in fields
+                if not field.is_key
             ],
         }
 
         key_schema = {
             "type": "record",
-            "name": "Key",
+            "name": "key",
             "fields": [
-                # {"name": "key1", "type": "string"}
-                {"name": "key1", "type": "int"}
+                {"name": field.name, "type": str(field.typ).lower()}
+                for field in fields
+                if field.is_key
             ],
         }
 
@@ -151,7 +189,7 @@ class PgExecutor(Executor):
     conn: pg8000.Connection
     table: str
 
-    def __init__(self, num: int, ports: Dict[str, int]):
+    def __init__(self, num: int, ports: Dict[str, int], fields: List[Field]):
         self.conn = pg8000.connect(
             host="localhost",
             user="postgres",
@@ -190,7 +228,13 @@ class PgCdcExecutor(Executor):
     conn: pg8000.Connection
     table: str
 
-    def __init__(self, num: int, conn: pg8000.Connection, ports: Dict[str, int]):
+    def __init__(
+        self,
+        num: int,
+        conn: pg8000.Connection,
+        ports: Dict[str, int],
+        fields: List[Field],
+    ):
         self.conn = pg8000.connect(
             host="localhost",
             user="postgres",
