@@ -155,12 +155,24 @@ nodes:
   - role: worker
     labels:
       materialize.cloud/disk: false
+      materialize.cloud/availability-zone: "1"
   - role: worker
     labels:
       materialize.cloud/disk: false
+      materialize.cloud/availability-zone: "2"
   - role: worker
     labels:
       materialize.cloud/disk: false
+      materialize.cloud/availability-zone: "3"
   - role: worker
     labels:
       materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "1"
+  - role: worker
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "2"
+  - role: worker
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "3"

@@ -25,7 +25,7 @@ def test_disk_source(mz: MaterializeApplication) -> None:
 
             > CREATE CLUSTER disk_cluster1
                 REPLICAS (r1 (
-                    SIZE '1', DISK = true, AVAILABILITY ZONE 'cloudtest-worker4'
+                    SIZE '1', DISK = true
                 ))
 
             > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
