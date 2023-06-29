@@ -256,14 +256,10 @@ impl StateVersions {
             },
         )
         .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
-        .await
-        .map_err(|err| {
-            debug!("apply_unbatched_cmd {} errored: {}", cmd_name, err);
-            err
-        })?;
+        .await;
 
         match cas_res {
-            CaSResult::Committed => {
+            Ok(CaSResult::Committed) => {
                 trace!(
                     "apply_unbatched_cmd {} succeeded {}\n  new_state={:?}",
                     cmd_name,
@@ -312,7 +308,7 @@ impl StateVersions {
                     .inc_by(u64::cast_from(payload_len));
                 Ok((CaSResult::Committed, new))
             }
-            CaSResult::ExpectationMismatch => {
+            Ok(CaSResult::ExpectationMismatch) => {
                 debug!(
                     "apply_unbatched_cmd {} {} lost the CaS race, retrying: {:?}",
                     new_state.shard_id(),
@@ -320,6 +316,31 @@ impl StateVersions {
                     expected,
                 );
                 Ok((CaSResult::ExpectationMismatch, new))
+            }
+            Err(err) => {
+                debug!("apply_unbatched_cmd {} errored: {}", cmd_name, err);
+                // If we're not sure if our write committed or not, try and infer it from the
+                // contents of the consensus store.
+                let cas_res: Vec<VersionedData> =
+                    retry_external(&self.metrics.retries.external.fetch_state_scan, || {
+                        self.consensus.scan(&path, new.seqno, 1)
+                    })
+                    .await;
+                match cas_res.into_iter().next() {
+                    Some(version) => {
+                        let actual_result = if version == new {
+                            // The store contains the data we tried to write; definite success!
+                            CaSResult::Committed
+                        } else {
+                            // It does not: another writer was able to write first, definite failure.
+                            CaSResult::ExpectationMismatch
+                        };
+                        Ok((actual_result, version))
+                    }
+                    // If there's nothing there, the append in that position has already been GCd,
+                    // and the result will remain a mystery. Percolate the error up.
+                    None => Err(err),
+                }
             }
         }
     }
