@@ -22,7 +22,8 @@ RUN apt-get update \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && mkdir /mzdata \
     && mkdir /cockroach-data \
-    && chown materialize /mzdata /cockroach-data
+    && mkdir /scratch \
+    && chown materialize /mzdata /cockroach-data /scratch
 
 COPY --from=crdb /cockroach/cockroach /usr/local/bin/cockroach
 

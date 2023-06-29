@@ -84,7 +84,7 @@ class Materialized(Service):
             # are enabled for testing purposes only
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
-            "MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/mzdata/source_data",
+            "MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/scratch",
             "MZ_BOOTSTRAP_ROLE=materialize",
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             # Please think twice before forwarding additional environment

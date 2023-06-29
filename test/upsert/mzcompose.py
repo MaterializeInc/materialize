@@ -31,7 +31,7 @@ SERVICES = [
     SchemaRegistry(),
     Materialized(
         options=[
-            "--orchestrator-process-scratch-directory=/mzdata/source_data",
+            "--orchestrator-process-scratch-directory=/scratch",
         ],
         additional_system_parameter_defaults={
             "disk_cluster_replicas_default": "true",
@@ -104,7 +104,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     materialized = Materialized(
         default_size=args.default_size,
         options=[
-            "--orchestrator-process-scratch-directory=/mzdata/source_data",
+            "--orchestrator-process-scratch-directory=/scratch",
         ],
         additional_system_parameter_defaults={"disk_cluster_replicas_default": "true", "enable_managed_clusters": "true"},
         environment_extra=materialized_environment_extra,
@@ -320,7 +320,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             on s.cluster_id = c.cluster_id
             where s.name ='{source_name}'"""
         )[0]
-        prefix = "/mzdata/source_data"
+        prefix = "/scratch"
         cluster_prefix = f"{cluster_id}-replica-{replica_id[1:]}"
         return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
 
