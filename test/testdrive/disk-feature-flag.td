@@ -13,6 +13,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_create_source_denylist_with_options = false
 ALTER SYSTEM SET enable_disk_cluster_replicas = true
 ALTER SYSTEM SET enable_managed_clusters = true
+ALTER SYSTEM SET disk_cluster_replicas_default = false
 
 > DROP CLUSTER IF EXISTS c;
 
@@ -23,9 +24,9 @@ ALTER SYSTEM SET enable_managed_clusters = true
 r1 1 true
 r2 1 false
 
-# Can set on managed clusters
 > DROP CLUSTER c;
 
+# Can set on managed clusters
 > CREATE CLUSTER c SIZE '1', REPLICATION FACTOR = 2, DISK;
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
@@ -43,6 +44,8 @@ ALTER SYSTEM SET disk_cluster_replicas_default = true
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
 r1 1 true
 r2 1 true
+
+> DROP CLUSTER c;
 
 # Can disable whether disk-backed replicas are allowed
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
