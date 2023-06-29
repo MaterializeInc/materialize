@@ -69,8 +69,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     dataflow_debug_name: &String,
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<mz_repr::Timestamp>,
-    source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
+    source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
+    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     Vec<(
@@ -110,8 +112,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         now: storage_state.now.clone(),
         // TODO(guswynn): avoid extra clones here
         base_metrics: storage_state.source_metrics.clone(),
-        resume_upper: resume_upper.clone(),
-        source_resume_upper,
+        as_of: as_of.clone(),
+        resume_uppers,
+        source_resume_uppers,
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
         source_statistics: storage_state
@@ -125,20 +128,16 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         params,
     };
 
-    // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning
-    // a million fields
-    let resumption_calculator = description.clone();
-
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let (streams, mut health, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -149,10 +148,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::Postgres(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -163,10 +162,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::LoadGenerator(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -177,10 +176,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::TestScript(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -207,7 +206,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             id,
             ok_source,
             description.clone(),
-            resume_upper.clone(),
+            as_of.clone(),
             error_collections,
             storage_state,
             base_source_config.clone(),
@@ -228,7 +227,7 @@ fn render_source_stream<G>(
     id: GlobalId,
     ok_source: SourceType<G>,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<G::Timestamp>,
+    as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
@@ -327,8 +326,6 @@ where
                                 .expect("dependent source missing from ingestion description")
                                 .clone();
                             let persist_clients = Arc::clone(&storage_state.persist_clients);
-                            let upper_ts = resume_upper.as_option().copied().unwrap();
-                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
@@ -359,6 +356,8 @@ where
                     let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
+                    // TODO: Get this to work with the as_of.
+                    let resume_upper = base_source_config.resume_uppers[&id].clone();
 
                     let upper_ts = resume_upper
                         .as_option()

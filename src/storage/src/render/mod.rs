@@ -205,6 +205,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
 use timely::communication::Allocate;
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
@@ -227,8 +228,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     storage_state: &mut StorageState,
     primary_source_id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<mz_repr::Timestamp>,
-    source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
+    source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
 ) {
     let worker_id = timely_worker.index();
     let worker_logging = timely_worker.log_register().get("timely");
@@ -244,19 +246,24 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut tokens = vec![];
 
+            let (feedback_handle, feedback) = into_time_scope.feedback(Default::default());
+
             let (mut outputs, health_stream, token) = crate::render::sources::render_source(
                 into_time_scope,
                 &debug_name,
                 primary_source_id,
                 description.clone(),
-                resume_upper.clone(),
-                source_resume_upper,
+                as_of.clone(),
+                resume_uppers.clone(),
+                source_resume_uppers,
+                &feedback,
                 storage_state,
             );
             tokens.push(token);
 
             let mut health_configs = BTreeMap::new();
 
+            let mut upper_streams = vec![];
             for (export_id, export) in description.source_exports {
                 let (ok, err) = outputs
                     .get_mut(export.output_index)
@@ -275,7 +282,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 tracing::info!(
                     "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
                 );
-                let token = crate::render::persist_sink::render(
+                let (upper_stream, token) = crate::render::persist_sink::render(
                     into_time_scope,
                     export_id,
                     export.storage_metadata.clone(),
@@ -284,15 +291,20 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     metrics,
                     export.output_index,
                 );
+                upper_streams.push(upper_stream);
                 tokens.push(token);
 
                 health_configs.insert(export.output_index, (export_id, export.storage_metadata));
             }
 
+            into_time_scope
+                .concatenate(upper_streams)
+                .connect_loop(feedback_handle);
+
             let health_token = crate::source::health_operator(
                 into_time_scope,
                 storage_state,
-                resume_upper,
+                resume_uppers,
                 primary_source_id,
                 &health_stream,
                 health_configs,

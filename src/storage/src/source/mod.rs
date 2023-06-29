@@ -32,7 +32,6 @@ mod kafka;
 pub mod metrics;
 mod postgres;
 pub(crate) mod reclock;
-mod resumption;
 mod source_reader_pipeline;
 // Public for integration testing.
 #[doc(hidden)]
