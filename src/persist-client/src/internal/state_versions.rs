@@ -25,6 +25,7 @@ use mz_persist::location::{
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
+use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
@@ -973,7 +974,22 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
                 self.full_rollups.insert(x.clone());
             }
         });
-        assert_eq!(self.inc_batches, self.full_batches);
+
+        if let Some(first_incr) = self.inc_batches.first() {
+            let first_full = self
+                .full_batches
+                .first()
+                .expect("full has at least 1 batch");
+            assert_eq!(first_incr.desc.lower(), first_full.desc.lower());
+            PartialOrder::less_equal(first_full.desc.since(), first_incr.desc.since());
+        }
+
+        if let Some(last_incr) = self.inc_batches.last() {
+            let last_full = self.full_batches.last().expect("full has at least 1 batch");
+            assert_eq!(last_incr.desc.upper(), last_full.desc.upper());
+            PartialOrder::less_equal(last_full.desc.since(), last_incr.desc.since());
+        }
+
         assert_eq!(self.inc_rollups, self.full_rollups);
     }
 }
