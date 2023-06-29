@@ -10,6 +10,7 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
+import "proto/src/proto.proto";
 
 package mz_rocksdb.config;
 
@@ -39,4 +40,5 @@ message ProtoRocksDbTuningParameters {
     ProtoCompressionType compression_type = 6;
     ProtoCompressionType bottommost_compression_type = 7;
     uint64 batch_size = 8;
+    mz_proto.ProtoDuration retry_max_duration = 9;
 }

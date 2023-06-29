@@ -40,9 +40,10 @@
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use mz_ore::cast::CastFrom;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use rocksdb::{DBCompactionStyle, DBCompressionType};
 use serde::{Deserialize, Serialize};
@@ -124,6 +125,9 @@ pub struct RocksDBTuningParameters {
 
     /// The size of the `multi_get` and `multi_put` batches sent to RocksDB. The default is 1024.
     pub batch_size: usize,
+
+    /// The maximum duration for the retries when performing rocksdb actions in case of retry-able errors.
+    pub retry_max_duration: Duration,
 }
 
 impl Default for RocksDBTuningParameters {
@@ -139,6 +143,7 @@ impl Default for RocksDBTuningParameters {
             compression_type: defaults::DEFAULT_COMPRESSION_TYPE,
             bottommost_compression_type: defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
             batch_size: defaults::DEFAULT_BATCH_SIZE,
+            retry_max_duration: defaults::DEFAULT_RETRY_DURATION,
         }
     }
 }
@@ -154,6 +159,7 @@ impl RocksDBTuningParameters {
         compression_type: CompressionType,
         bottommost_compression_type: CompressionType,
         batch_size: usize,
+        retry_max_duration: Duration,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             compaction_style,
@@ -182,6 +188,7 @@ impl RocksDBTuningParameters {
             compression_type,
             bottommost_compression_type,
             batch_size,
+            retry_max_duration,
         })
     }
 }
@@ -315,6 +322,7 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
                 &self.bottommost_compression_type,
             )),
             batch_size: u64::cast_from(self.batch_size),
+            retry_max_duration: Some(self.retry_max_duration.into_proto()),
         }
     }
 
@@ -376,6 +384,9 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             compression_type: compression_from_proto(proto.compression_type)?,
             bottommost_compression_type: compression_from_proto(proto.bottommost_compression_type)?,
             batch_size: usize::cast_from(proto.batch_size),
+            retry_max_duration: proto
+                .retry_max_duration
+                .into_rust_if_some("ProtoRocksDbTuningParameters::retry_max_duration")?,
         })
     }
 }
@@ -403,6 +414,7 @@ pub struct RocksDBConfig {
     parallelism: Option<i32>,
     compression_type: CompressionType,
     bottommost_compression_type: CompressionType,
+    pub(crate) retry_max_duration: Duration,
     pub(crate) dynamic: RocksDBDynamicConfig,
 }
 
@@ -423,6 +435,7 @@ impl RocksDBConfig {
             compression_type,
             bottommost_compression_type,
             batch_size,
+            retry_max_duration,
         } = params;
 
         Self {
@@ -433,6 +446,7 @@ impl RocksDBConfig {
             parallelism,
             compression_type,
             bottommost_compression_type,
+            retry_max_duration,
             dynamic: RocksDBDynamicConfig {
                 batch_size: Arc::new(AtomicUsize::new(batch_size)),
             },
@@ -451,6 +465,7 @@ impl RocksDBConfig {
             compression_type,
             bottommost_compression_type,
             batch_size,
+            retry_max_duration,
         } = params;
 
         self.compaction_style = compaction_style;
@@ -460,6 +475,7 @@ impl RocksDBConfig {
         self.parallelism = parallelism;
         self.compression_type = compression_type;
         self.bottommost_compression_type = bottommost_compression_type;
+        self.retry_max_duration = retry_max_duration;
 
         // SeqCst is probably not required here, but its the easiest to reason about
         self.dynamic.batch_size.store(batch_size, Ordering::SeqCst);
@@ -476,6 +492,7 @@ impl RocksDBConfig {
             parallelism,
             compression_type,
             bottommost_compression_type,
+            retry_max_duration: _,
             dynamic: _,
         } = self;
 
@@ -523,6 +540,8 @@ impl RocksDBConfig {
 /// The following are defaults (and default strings for LD parameters)
 /// for `RocksDBTuningParameters`.
 pub mod defaults {
+    use std::time::Duration;
+
     use super::*;
 
     pub const DEFAULT_COMPACTION_STYLE: CompactionStyle = CompactionStyle::Level;
@@ -544,6 +563,9 @@ pub mod defaults {
     /// A reasonable default batch size for gets and puts in RocksDB. Based
     /// on advice here: <https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ>.
     pub const DEFAULT_BATCH_SIZE: usize = 1024;
+
+    /// The default max duration for retrying the retry-able errors in rocksdb.
+    pub const DEFAULT_RETRY_DURATION: Duration = Duration::from_secs(1);
 }
 
 #[cfg(test)]
@@ -564,6 +586,7 @@ mod tests {
             defaults::DEFAULT_COMPRESSION_TYPE,
             defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
             defaults::DEFAULT_BATCH_SIZE,
+            defaults::DEFAULT_RETRY_DURATION,
         )
         .unwrap();
 

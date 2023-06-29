@@ -7527,6 +7527,7 @@ impl Catalog {
                     self.system_config()
                         .upsert_rocksdb_bottommost_compression_type(),
                     self.system_config().upsert_rocksdb_batch_size(),
+                    self.system_config().upsert_rocksdb_retry_duration(),
                 ) {
                     Ok(u) => u,
                     Err(e) => {
