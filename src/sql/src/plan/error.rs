@@ -196,6 +196,7 @@ pub enum PlanError {
     FromValueRequiresParen,
     VarError(VarError),
     UnsolvablePolymorphicFunctionInput,
+    ShowCommandInView,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -490,6 +491,7 @@ impl fmt::Display for PlanError {
             Self::UnsolvablePolymorphicFunctionInput => f.write_str(
                 "could not determine polymorphic type because input has type unknown"
             ),
+            Self::ShowCommandInView => f.write_str("SHOW commands are not allowed in views"),
         }
     }
 }
