@@ -352,6 +352,19 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         fs::create_dir_all(&run_dir)
             .await
             .context("creating run directory")?;
+        let scratch_dir = if disk {
+            let scratch_dir = self
+                .scratch_directory
+                .as_ref()
+                .expect("scratch directory must be specified when using disk")
+                .join(&full_id);
+            fs::create_dir_all(&scratch_dir)
+                .await
+                .context("creating scratch directory")?;
+            Some(fs::canonicalize(&scratch_dir).await?)
+        } else {
+            None
+        };
 
         {
             let mut services = self.services.lock().expect("lock poisoned");
@@ -391,6 +404,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     self.supervise_service_process(ServiceProcessConfig {
                         id: id.to_string(),
                         run_dir: run_dir.clone(),
+                        scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
                         args,
@@ -466,6 +480,7 @@ impl NamespacedProcessOrchestrator {
         ServiceProcessConfig {
             id,
             run_dir,
+            scratch_dir,
             i,
             image,
             args,
@@ -504,17 +519,12 @@ impl NamespacedProcessOrchestrator {
         ));
 
         let scratch_directory = if disk {
-            let scratch_directory = self.scratch_directory.as_ref().map(|dir| dir.join(id));
-            if let Some(scratch_directory) = &scratch_directory {
-                args.push(format!(
-                    "--scratch-directory={}",
-                    scratch_directory.display()
-                ));
+            if let Some(scratch) = &scratch_dir {
+                args.push(format!("--scratch-directory={}", scratch.display()));
             } else {
-                // WIP: return an error here?
                 panic!("internal error: service requested disk but no scratch directory was configured");
             }
-            scratch_directory
+            scratch_dir
         } else {
             None
         };
@@ -655,6 +665,7 @@ impl NamespacedProcessOrchestrator {
 struct ServiceProcessConfig<'a> {
     id: String,
     run_dir: PathBuf,
+    scratch_dir: Option<PathBuf>,
     i: usize,
     image: String,
     args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
