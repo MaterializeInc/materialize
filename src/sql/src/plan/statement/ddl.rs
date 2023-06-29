@@ -2655,40 +2655,40 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
     for option in options {
         match option {
             RoleAttribute::Login | RoleAttribute::NoLogin => {
-                bail_never_supported!("LOGIN attribute", "sql/create-role/#details")
+                bail_never_supported!("LOGIN attribute", "sql/create-role/#details");
             }
             RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
-                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details")
+                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details");
             }
             RoleAttribute::Inherit | RoleAttribute::NoInherit
                 if planned_attributes.inherit.is_some() =>
             {
                 sql_bail!("conflicting or redundant options");
             }
-            RoleAttribute::CreateCluster | RoleAttribute::NoCreateCluster
-                if planned_attributes.create_cluster.is_some() =>
-            {
-                sql_bail!("conflicting or redundant options");
+            RoleAttribute::CreateCluster | RoleAttribute::NoCreateCluster => {
+                bail_never_supported!(
+                    "CREATECLUSTER attribute",
+                    "sql/create-role/#details",
+                    "Use system privileges instead."
+                );
             }
-            RoleAttribute::CreateDB | RoleAttribute::NoCreateDB
-                if planned_attributes.create_db.is_some() =>
-            {
-                sql_bail!("conflicting or redundant options");
+            RoleAttribute::CreateDB | RoleAttribute::NoCreateDB => {
+                bail_never_supported!(
+                    "CREATEDB attribute",
+                    "sql/create-role/#details",
+                    "Use system privileges instead."
+                );
             }
-            RoleAttribute::CreateRole | RoleAttribute::NoCreateRole
-                if planned_attributes.create_role.is_some() =>
-            {
-                sql_bail!("conflicting or redundant options");
+            RoleAttribute::CreateRole | RoleAttribute::NoCreateRole => {
+                bail_never_supported!(
+                    "CREATEROLE attribute",
+                    "sql/create-role/#details",
+                    "Use system privileges instead."
+                );
             }
 
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
-            RoleAttribute::CreateCluster => planned_attributes.create_cluster = Some(true),
-            RoleAttribute::NoCreateCluster => planned_attributes.create_cluster = Some(false),
-            RoleAttribute::CreateDB => planned_attributes.create_db = Some(true),
-            RoleAttribute::NoCreateDB => planned_attributes.create_db = Some(false),
-            RoleAttribute::CreateRole => planned_attributes.create_role = Some(true),
-            RoleAttribute::NoCreateRole => planned_attributes.create_role = Some(false),
         }
     }
     if planned_attributes.inherit == Some(false) {

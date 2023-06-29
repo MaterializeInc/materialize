@@ -14,7 +14,7 @@ alter_rename ::=
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_role ::=
-    'ALTER' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
+    'ALTER' 'ROLE' role_name 'WITH'? 'INHERIT'
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 alter_sink ::=
@@ -86,7 +86,7 @@ create_materialized_view ::=
     ('IN CLUSTER' cluster_name)?
     'AS' select_stmt
 create_role ::=
-    'CREATE' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
+    'CREATE' 'ROLE' role_name 'WITH'? 'INHERIT'
 create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=

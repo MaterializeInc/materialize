@@ -9,7 +9,7 @@
 
 # Loosely based on https://github.com/postgres/postgres/blob/master/src/test/regress/expected/create_role.out
 # We have replaced role attributes with system privileges so we had to make a lot of changes to
-# this test to reflect that.
+# this test file to reflect that.
 
 mode cockroach
 
@@ -26,7 +26,7 @@ ALTER SYSTEM SET enable_rbac_checks TO true;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE ROLE regress_role_admin CREATEDB CREATECLUSTER CREATEROLE;
+CREATE ROLE regress_role_admin;
 ----
 COMPLETE 0
 
@@ -51,7 +51,7 @@ GRANT CREATE ON DATABASE regression TO regress_role_admin WITH GRANT OPTION;
 db error: ERROR: Expected end of statement, found WITH
 
 simple conn=mz_system,user=mz_system
-CREATE ROLE regress_role_limited_admin CREATEROLE;
+CREATE ROLE regress_role_limited_admin;
 ----
 COMPLETE 0
 
@@ -73,12 +73,14 @@ db error: ERROR: SUPERUSER attribute is not supported, for more information cons
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createdb CREATEDB;
 ----
-db error: ERROR: permission denied for SYSTEM
+db error: ERROR: CREATEDB attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createcluster CREATECLUSTER;
 ----
-db error: ERROR: permission denied for SYSTEM
+db error: ERROR: CREATECLUSTER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_role_limited;
@@ -88,42 +90,58 @@ COMPLETE 0
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 ALTER ROLE regress_role_limited CREATEDB;
 ----
-db error: ERROR: permission denied for SYSTEM
+db error: ERROR: CREATEDB attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 ALTER ROLE regress_role_limited CREATECLUSTER;
 ----
-db error: ERROR: permission denied for SYSTEM
+db error: ERROR: CREATECLUSTER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_admin,user=regress_role_admin
-CREATE ROLE regress_createdb CREATEDB;
+CREATE ROLE regress_createdb;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO regress_createdb;
 ----
 COMPLETE 0
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb NOCREATEDB;
 ----
-COMPLETE 0
+db error: ERROR: CREATEDB attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb CREATEDB;
 ----
-COMPLETE 0
+db error: ERROR: CREATEDB attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_admin,user=regress_role_admin
-CREATE ROLE regress_createcluster CREATECLUSTER;
+CREATE ROLE regress_createcluster;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO regress_createcluster;
 ----
 COMPLETE 0
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createcluster NOCREATECLUSTER;
 ----
-COMPLETE 0
+db error: ERROR: CREATECLUSTER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createcluster CREATECLUSTER;
 ----
-COMPLETE 0
+db error: ERROR: CREATECLUSTER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+DETAIL: Use system privileges instead.
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb SUPERUSER;
@@ -136,7 +154,12 @@ ALTER ROLE regress_createdb NOSUPERUSER;
 db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=regress_role_admin,user=regress_role_admin
-CREATE ROLE regress_createrole CREATEROLE;
+CREATE ROLE regress_createrole;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO regress_createrole;
 ----
 COMPLETE 0
 
