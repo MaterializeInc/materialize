@@ -91,11 +91,11 @@ class ConfigureMz(MzcomposeAction):
 
         # Since we already test with RBAC enabled, we have to give materialize
         # user the relevant attributes so the existing tests keep working.
-        if MzVersion(0, 45, 0) <= e.current_mz_version < MzVersion(0, 59, 0):
+        if MzVersion(0, 45, 0) <= e.current_mz_version < MzVersion.parse("0.59.0-dev"):
             system_settings.add(
                 "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
             )
-        elif e.current_mz_version >= MzVersion(0, 59, 0):
+        elif e.current_mz_version >= MzVersion.parse("0.59.0-dev"):
             system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
         if e.current_mz_version >= MzVersion(0, 47, 0):
