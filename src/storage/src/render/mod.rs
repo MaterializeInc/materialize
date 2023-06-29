@@ -254,7 +254,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 primary_source_id,
                 description.clone(),
                 as_of.clone(),
-                resume_uppers,
+                resume_uppers.clone(),
                 source_resume_uppers,
                 &feedback,
                 storage_state,
@@ -304,7 +304,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let health_token = crate::source::health_operator(
                 into_time_scope,
                 storage_state,
-                as_of,
+                resume_uppers,
                 primary_source_id,
                 &health_stream,
                 health_configs,
