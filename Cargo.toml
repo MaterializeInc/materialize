@@ -50,6 +50,7 @@ members = [
     "src/repr",
     "src/repr-test-util",
     "src/rocksdb",
+    "src/rocksdb-types",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",

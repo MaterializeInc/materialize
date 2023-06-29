@@ -31,7 +31,7 @@ pub struct StorageParameters {
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
-    pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBTuningParameters,
+    pub upsert_rocksdb_tuning_config: mz_rocksdb_types::RocksDBTuningParameters,
     /// Whether or not to allow shard finalization to occur. Note that this will
     /// only disable the actual finalization of shards, not registering them for
     /// finalization.

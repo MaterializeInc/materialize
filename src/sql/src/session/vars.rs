@@ -588,7 +588,7 @@ const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
 mod upsert_rocksdb {
     use std::str::FromStr;
 
-    use mz_rocksdb::config::{CompactionStyle, CompressionType};
+    use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 
     use super::*;
 
@@ -630,75 +630,75 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_COMPACTION_STYLE: ServerVar<CompactionStyle> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compaction_style"),
-        value: &mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_COMPACTION_STYLE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
-        value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        value: &mz_rocksdb_types::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
-        value: &mz_rocksdb::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        value: &mz_rocksdb_types::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
-        value: &mz_rocksdb::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+        value: &mz_rocksdb_types::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_parallelism"),
-        value: &mz_rocksdb::defaults::DEFAULT_PARALLELISM,
+        value: &mz_rocksdb_types::defaults::DEFAULT_PARALLELISM,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
-        value: &mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
-        value: &mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
 
     pub static UPSERT_ROCKSDB_BATCH_SIZE: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_batch_size"),
-        value: &mz_rocksdb::defaults::DEFAULT_BATCH_SIZE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_BATCH_SIZE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Can be changed dynamically (Materialize).",
         internal: true,
     };
 
     pub static UPSERT_ROCKSDB_RETRY_DURATION: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_retry_duration"),
-        value: &mz_rocksdb::defaults::DEFAULT_RETRY_DURATION,
+        value: &mz_rocksdb_types::defaults::DEFAULT_RETRY_DURATION,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
@@ -2053,7 +2053,7 @@ impl SystemVars {
         *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
     }
 
-    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::config::CompactionStyle {
+    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb_types::config::CompactionStyle {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
     }
 
@@ -2073,13 +2073,13 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
     }
 
-    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb::config::CompressionType {
+    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb_types::config::CompressionType {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
     }
 
     pub fn upsert_rocksdb_bottommost_compression_type(
         &self,
-    ) -> mz_rocksdb::config::CompressionType {
+    ) -> mz_rocksdb_types::config::CompressionType {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
     }
 

@@ -12,7 +12,7 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 import "proto/src/proto.proto";
 
-package mz_rocksdb.config;
+package mz_rocksdb_types.config;
 
 // The lowercase `b` is because prost lowercases it anyways
 // if its capitalized :(

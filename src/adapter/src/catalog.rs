@@ -7514,7 +7514,7 @@ impl Catalog {
                 .system_config()
                 .keep_n_source_status_history_entries(),
             upsert_rocksdb_tuning_config: {
-                match mz_rocksdb::RocksDBTuningParameters::from_parameters(
+                match mz_rocksdb_types::RocksDBTuningParameters::from_parameters(
                     self.system_config().upsert_rocksdb_compaction_style(),
                     self.system_config()
                         .upsert_rocksdb_optimize_compaction_memtable_budget(),
@@ -7537,7 +7537,7 @@ impl Catalog {
                             failing back to reasonable defaults: {}",
                             e.display_with_causes()
                         );
-                        mz_rocksdb::RocksDBTuningParameters::default()
+                        mz_rocksdb_types::RocksDBTuningParameters::default()
                     }
                 }
             },

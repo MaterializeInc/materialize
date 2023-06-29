@@ -155,7 +155,7 @@ impl InstanceOptions {
         // Set the env first so tuning applies to the shared `Env`.
         options.set_env(&self.env);
 
-        tuning_config.apply_to_options(&mut options);
+        config::apply_to_options(tuning_config, &mut options);
 
         options
     }
