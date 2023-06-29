@@ -95,7 +95,7 @@ class ConfigureMz(MzcomposeAction):
             system_settings.add(
                 "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
             )
-        elif e.current_mz_version >= MzVersion.parse("0.59.0-dev"):
+        elif e.current_mz_version >= MzVersion.parse("0.59.0"):
             system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
         if e.current_mz_version >= MzVersion(0, 47, 0):

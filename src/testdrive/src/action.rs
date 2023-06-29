@@ -339,7 +339,7 @@ impl State {
             }
         }
 
-        // Alter materialize user with all attributes.
+        // Alter materialize user with all system privileges.
         inner_client
             .batch_execute(&format!(
                 "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
