@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TEST `EXPLAIN WITH(cardinality)`
+# (we test the stats themselves in the second half of this file)
+
 statement ok
 CREATE TABLE t (x INTEGER NOT NULL, y INTEGER NOT NULL);
 
@@ -134,5 +137,56 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.cities_name
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cardinality_estimates = true
+----
+COMPLETE 0
+
+statement ok
+SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE
+
+statement ok
+INSERT INTO t (x, y) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t as l, t as r WHERE l.x = r.y AND r.x = l.y;
+----
+Explained Query:
+  Project (#0, #1, #1, #0)
+    Join on=(#0 = #3 AND #1 = #2) type=differential
+      implementation
+        %0:t[#1, #0]KK|4| » %1:t[#0, #1]KK|4|
+      ArrangeBy keys=[[#1, #0]]
+        Get materialize.public.t
+      ArrangeBy keys=[[#0, #1]]
+        Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_x
+
+EOF
+
+statement ok
+INSERT INTO t2 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 200)) AS l, (SELECT generate_series(1, 50)) AS r
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t, t2 WHERE t.x = t2.x;
+----
+Explained Query:
+  Project (#0, #1, #0, #3)
+    Join on=(#0 = #2) type=differential
+      implementation
+        %0:t[#0]KA|4| » %1:t2[#0]KA|10000|
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t2
+
+Used Indexes:
+  - materialize.public.t_x
+  - materialize.public.tt_x
 
 EOF
