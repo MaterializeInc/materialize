@@ -37,6 +37,7 @@ DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
+    "scratch:/scratch",
 ]
 
 # TODO(benesch): change to `docker-mzcompose` once v0.39 ships.

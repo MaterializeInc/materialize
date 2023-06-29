@@ -24,6 +24,8 @@ WORKDIR /workdir
 
 RUN mkdir -p /share/tmp && chmod 777 /share/tmp
 RUN mkdir -p /mzdata && chmod 777 /mzdata
+RUN mkdir -p /scratch && chmod 777 /scratch
 
 VOLUME /share/tmp
 VOLUME /mzdata
+VOLUME /scratch
