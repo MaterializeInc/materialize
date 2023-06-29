@@ -14,10 +14,6 @@
 
 # Initialize a writer, a leased reader, a critical reader, some data, and an
 # initial since downgrade.
-register-writer writer_id=w11111111-1111-1111-1111-111111111111
-----
-v2 [0]
-
 write-batch output=b0 lower=0 upper=1
 k1 0 1
 ----
@@ -30,27 +26,27 @@ parts=1 len=1
 
 compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v3 [1]
+v2 [1]
 
 compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v4 [2]
+v3 [2]
 
 register-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v5 [0]
+v4 [0]
 
 register-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v6 [0]
+v5 [0]
 
 downgrade-since since=1 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v7 [1]
+v6 [1]
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=1 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v8 0 [1]
+v7 0 [1]
 
 # Now advance the upper to the empty antichain, closing this shard to writes.
 #
@@ -62,7 +58,7 @@ parts=1 len=1
 
 compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v9 []
+v8 []
 
 ####### UPPER IS EMPTY BUT SINCE IS NOT
 
@@ -77,29 +73,25 @@ parts=1 len=2
 
 apply-merge-res input=b0_1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v10 true
+v9 true
 
 # We can still downgrade since on both reader types.
 downgrade-since since=2 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v11 [2]
+v10 [2]
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=2 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v12 0 [2]
+v11 0 [2]
 
 # We can still register a new writer and do all the normal things with it.
-register-writer writer_id=w33333333-3333-3333-3333-333333333333
-----
-v13 []
-
 compare-and-append input=b2 writer_id=w33333333-3333-3333-3333-333333333333
 ----
 error: Upper(Antichain { elements: [] })
 
 expire-writer writer_id=w33333333-3333-3333-3333-333333333333
 ----
-v14 ok
+v12 ok
 
 # We can still read data
 snapshot as_of=2
@@ -110,19 +102,17 @@ k2 2 1
 # maintenance it needs.
 perform-maintenance
 ----
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
-v14 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
 
 # Now downgrade_since to empty antichain, closing the shard to reads as well.
 # Everything still works (for idempotence), but this replaces the shard with a
@@ -131,11 +121,11 @@ v14 ok
 # keep the last few atm), and stores no batch data in blob.
 downgrade-since since=() reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v15 []
+v13 []
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=() reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v17 0 []
+v15 0 []
 
 shard-desc
 ----
@@ -145,8 +135,8 @@ since=[] upper=[]
 # like GC can result in followup maintenance)
 perform-maintenance
 ----
-v17 ok
-v18 ok
+v15 ok
+v16 ok
 
 perform-maintenance
 ----
@@ -158,8 +148,8 @@ perform-maintenance
 
 consensus-scan from_seqno=v0
 ----
-seqno=v17 batches= rollups=v1
-seqno=v18 batches= rollups=v1,v17
+seqno=v15 batches= rollups=v1
+seqno=v16 batches= rollups=v1,v15
 
 blob-scan-batches
 ----
@@ -182,33 +172,21 @@ compare-and-append input=b_inf writer_id=w11111111-1111-1111-1111-111111111111
 ----
 error: Upper(Antichain { elements: [] })
 
-heartbeat-writer writer_id=w11111111-1111-1111-1111-111111111111
-----
-v18 ok
-
 expire-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v18 ok
+v16 ok
 
 # Perhaps counter-intuitively, we can "register" a new writer. This doesn't
 # actually register and produce a new SeqNo, but there's (intentionally) no
 # place to return an error to the persist user. Instead, we make sure we can
 # do all the above things the same with this writer.
-register-writer writer_id=w44444444-4444-4444-4444-444444444444
-----
-v18 []
-
 compare-and-append input=b_inf writer_id=w44444444-4444-4444-4444-444444444444
 ----
 error: Upper(Antichain { elements: [] })
 
-heartbeat-writer writer_id=w44444444-4444-4444-4444-444444444444
-----
-v18 ok
-
 expire-writer writer_id=w44444444-4444-4444-4444-444444444444
 ----
-v18 ok
+v16 ok
 
 # Similarly, downgrade_since, as well as all the other reader operations, works
 # for an existing reader. As an odd side effect, CaDS works even when the token
@@ -217,45 +195,45 @@ v18 ok
 # NB: Critically, none of these create a new seqno.
 downgrade-since since=4 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v18 []
+v16 []
 
 expire-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v18 ok
+v16 ok
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v18 0 []
+v16 0 []
 
 compare-and-downgrade-since expect_opaque=1 opaque=1 since=5 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v18 1 []
+v16 1 []
 
 expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v18 ok
+v16 ok
 
 # And ditto we can "register" both reader types and do the same ops.
 register-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v18 []
+v16 []
 
 downgrade-since since=4 reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v18 []
+v16 []
 
 expire-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v18 ok
+v16 ok
 
 register-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v18 []
+v16 []
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v18 0 []
+v16 0 []
 
 expire-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v18 ok
+v16 ok
