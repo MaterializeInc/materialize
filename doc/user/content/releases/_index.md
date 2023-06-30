@@ -31,6 +31,11 @@ Region        | Upgrade window
 aws/eu-west-1 | 2100-2300 [Europe/Dublin]
 aws/us-east-1 | 0500-0700 [America/New_York]
 
+{{< note >}}
+Upgrade windows follow any daylight saving time or summer time rules
+for their indicated time zone.
+{{< /note >}}
+
 Upgrade windows were chosen to be outside of business hours in the most
 representative time zone for the region.
 
