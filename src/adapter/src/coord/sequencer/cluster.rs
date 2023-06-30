@@ -17,6 +17,7 @@ use mz_controller::clusters::{
     ClusterId, CreateReplicaConfig, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
     DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
+use mz_ore::cast::CastFrom;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
 use mz_sql::names::ObjectId;
 use mz_sql::plan::{
@@ -24,6 +25,7 @@ use mz_sql::plan::{
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
 };
+use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 use rand::seq::SliceRandom;
 
 use crate::catalog::{
@@ -181,6 +183,18 @@ impl Coordinator {
         self.catalog
             .ensure_valid_replica_size(allowed_replica_sizes, &size)?;
 
+        // Eagerly validate the `max_replicas_per_cluster` limit.
+        // `catalog_transact` will do this validation too, but allocating
+        // replica IDs is expensive enough that we need to do this validation
+        // before allocating replica IDs. See #20195.
+        self.validate_resource_limit(
+            0,
+            i64::from(replication_factor),
+            SystemVars::max_replicas_per_cluster,
+            "cluster replica",
+            MAX_REPLICAS_PER_CLUSTER.name(),
+        )?;
+
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             let id = self.catalog_mut().allocate_replica_id().await?;
             self.create_managed_cluster_replica_op(
@@ -281,6 +295,18 @@ impl Coordinator {
                 })?;
             }
         }
+
+        // Eagerly validate the `max_replicas_per_cluster` limit.
+        // `catalog_transact` will do this validation too, but allocating
+        // replica IDs is expensive enough that we need to do this validation
+        // before allocating replica IDs. See #20195.
+        self.validate_resource_limit(
+            0,
+            i64::try_from(replicas.len()).unwrap_or(i64::MAX),
+            SystemVars::max_replicas_per_cluster,
+            "cluster replica",
+            MAX_REPLICAS_PER_CLUSTER.name(),
+        )?;
 
         for (replica_name, replica_config) in replicas {
             // If the AZ was not specified, choose one, round-robin, from the ones with
@@ -729,6 +755,20 @@ impl Coordinator {
                     interval,
                 }),
         };
+
+        // Eagerly validate the `max_replicas_per_cluster` limit.
+        // `catalog_transact` will do this validation too, but allocating
+        // replica IDs is expensive enough that we need to do this validation
+        // before allocating replica IDs. See #20195.
+        if new_replication_factor > replication_factor {
+            self.validate_resource_limit(
+                usize::cast_from(*replication_factor),
+                i64::from(*new_replication_factor) - i64::from(*replication_factor),
+                SystemVars::max_replicas_per_cluster,
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
+            )?;
+        }
 
         if new_size != size
             || new_availability_zones != availability_zones
