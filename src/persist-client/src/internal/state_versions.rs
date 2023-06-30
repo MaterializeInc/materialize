@@ -9,6 +9,7 @@
 
 //! A durable, truncatable log of versions of [State].
 
+use std::borrow::Borrow;
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -995,13 +996,13 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| x.key.clone())
+            .map(|x| x.key.borrow())
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| x.key.clone())
+            .map(|x| x.key.borrow())
             .collect();
         assert_eq!(inc_parts, full_parts);
 
