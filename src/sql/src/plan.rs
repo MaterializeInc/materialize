@@ -82,10 +82,14 @@ pub(crate) mod with_options;
 use crate::plan::with_options::OptionalInterval;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use expr::{
+    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
+    WindowExprType,
+};
 pub use notice::PlanNotice;
 pub use optimize::OptimizerConfig;
-pub use query::{QueryContext, QueryLifetime};
+pub use query::{ExprContext, QueryContext, QueryLifetime};
+pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::PlannedRoleAttributes;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};

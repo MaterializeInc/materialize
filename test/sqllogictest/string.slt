@@ -388,17 +388,17 @@ su
 
 # testing large numbers
 query T
-SELECT substr('abcdef', 2, 2147483648);
+SELECT substr('abcdef', 2, 2147483647);
 ----
 bcdef
 
 query T
-SELECT substr('abcdef', 2147483648, 2);
+SELECT substr('abcdef', 2147483647, 2);
 ----
 (empty)
 
 query T
-SELECT substr('abcdef', 2147483648, 2147483648);
+SELECT substr('abcdef', 2147483647, 2147483647);
 ----
 (empty)
 
@@ -450,22 +450,22 @@ SELECT substring('abcdef' from -1);
 abcdef
 
 query T
-SELECT substring('abcdef' from 2 for 2147483648);
+SELECT substring('abcdef' from 2 for 2147483647);
 ----
 bcdef
 
 query T
-SELECT substring('abcdef' from 2147483648 for 2);
+SELECT substring('abcdef' from 2147483647 for 2);
 ----
 (empty)
 
 query T
-SELECT substring('abcdef' from 2147483648 for 2147483648);
+SELECT substring('abcdef' from 2147483647 for 2147483647);
 ----
 (empty)
 
 query T
-SELECT substring('abcdef' for 2147483648);
+SELECT substring('abcdef' for 2147483647);
 ----
 abcdef
 
@@ -903,6 +903,9 @@ query T
 SELECT lpad('str', 5, 'đẹp')
 ----
 đẹstr
+
+query error db error: ERROR: requested length too large
+SELECT lpad('', 2147483647)
 
 
 ### ilike ###
@@ -1356,6 +1359,9 @@ query T
 SELECT repeat('a', -1)
 ----
 (empty)
+
+query error db error: ERROR: requested length too large
+SELECT repeat('a', 2147483647)
 
 # Check for char cmp validity, which ignores white space
 # ...at datum level

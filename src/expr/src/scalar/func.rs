@@ -70,6 +70,11 @@ pub(crate) mod impls;
 
 pub use impls::*;
 
+/// The maximum size of a newly allocated string. Chosen to be the smallest number to keep our tests
+/// passing without changing. 100MiB is probably higher than what we want, but it's better than no
+/// limit.
+const MAX_STRING_BYTES: usize = 1024 * 1024 * 100;
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
@@ -1914,9 +1919,15 @@ fn timezone_interval_timestamp(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'stat
 fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
     let interval = a.unwrap_interval();
     if interval.months != 0 {
-        Err(EvalError::InvalidTimezoneInterval)
-    } else {
-        Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).try_into()?)
+        return Err(EvalError::InvalidTimezoneInterval);
+    }
+    match b
+        .unwrap_timestamptz()
+        .naive_utc()
+        .checked_add_signed(interval.duration_as_chrono())
+    {
+        Some(dt) => Ok(dt.try_into()?),
+        None => Err(EvalError::TimestampOutOfRange),
     }
 }
 
@@ -5846,7 +5857,7 @@ fn pad_leading<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let string = datums[0].unwrap_str();
 
-    let len = match usize::try_from(datums[1].unwrap_int64()) {
+    let len = match usize::try_from(datums[1].unwrap_int32()) {
         Ok(len) => len,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
@@ -5854,6 +5865,9 @@ fn pad_leading<'a>(
             ))
         }
     };
+    if len > MAX_STRING_BYTES {
+        return Err(EvalError::LengthTooLarge);
+    }
 
     let pad_string = if datums.len() == 3 {
         datums[2].unwrap_str()
@@ -5880,7 +5894,7 @@ fn pad_leading<'a>(
 fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let s: &'a str = datums[0].unwrap_str();
 
-    let raw_start_idx = datums[1].unwrap_int64() - 1;
+    let raw_start_idx = i64::from(datums[1].unwrap_int32()) - 1;
     let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
         Ok(i) => i,
         Err(_) => {
@@ -5898,7 +5912,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let start_char_idx = char_indices.nth(start_idx).map_or(str_len, get_str_index);
 
     if datums.len() == 3 {
-        let end_idx = match datums[2].unwrap_int64() {
+        let end_idx = match i64::from(datums[2].unwrap_int32()) {
             e if e < 0 => {
                 return Err(EvalError::InvalidParameterValue(
                     "negative substring length not allowed".to_owned(),
@@ -5932,7 +5946,7 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let delimiter = datums[1].unwrap_str();
 
     // Provided index value begins at 1, not 0.
-    let index = match usize::try_from(datums[2].unwrap_int64() - 1) {
+    let index = match usize::try_from(i64::from(datums[2].unwrap_int32()) - 1) {
         Ok(index) => index,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
@@ -6130,13 +6144,12 @@ fn repeat_string<'a>(
     count: Datum<'a>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    Ok(Datum::String(
-        temp_storage.push_string(
-            string
-                .unwrap_str()
-                .repeat(usize::try_from(count.unwrap_int32()).unwrap_or(0)),
-        ),
-    ))
+    let len = usize::try_from(count.unwrap_int32()).unwrap_or(0);
+    let string = string.unwrap_str();
+    if (len * string.len()) > MAX_STRING_BYTES {
+        return Err(EvalError::LengthTooLarge);
+    }
+    Ok(Datum::String(temp_storage.push_string(string.repeat(len))))
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
