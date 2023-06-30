@@ -489,6 +489,16 @@ impl Coordinator {
                 let result = self.sequence_reassign_owned(ctx.session_mut(), plan).await;
                 ctx.retire(result);
             }
+            Plan::ValidateConnection(plan) => {
+                let connection_context = self.connection_context.clone();
+                mz_ore::task::spawn(|| "coord::validate_connection", async move {
+                    let res = match plan.connection.validate(&connection_context).await {
+                        Ok(()) => Ok(ExecuteResponse::ValidatedConnection),
+                        Err(err) => Err(err.into()),
+                    };
+                    ctx.retire(res);
+                });
+            }
         }
     }
 

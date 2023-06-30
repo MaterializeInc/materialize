@@ -22,6 +22,11 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
 # Test mz_aclitem type and functions
 
 statement ok
@@ -318,7 +323,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'se'
 se  materialize=U/materialize
 
 statement ok
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'conn'
@@ -3143,22 +3148,22 @@ CREATE SECRET d2.s2.se4 AS decode('c2VjcmV0Cg==', 'base64');
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d1.s1.conn1 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.conn1 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d1.s1.conn2 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.conn2 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d2.s2.conn3 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.conn3 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d2.s2.conn4 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.conn4 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 

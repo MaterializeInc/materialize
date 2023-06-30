@@ -130,24 +130,11 @@ a
 
 # Ensure that connectors do not require the certificate authority
 
-> CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
+# This ensures that the error is not that the CA was required, but simply that
+# not providing it prohibits connecting.
+! CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
     BROKER 'kafka:9092',
     SSL KEY = SECRET ssl_key_kafka,
     SSL CERTIFICATE = '${arg.materialized-kafka-crt}'
   );
-
-> CREATE CONNECTION csr_ssl_no_ca TO CONFLUENT SCHEMA REGISTRY (
-    URL '${testdrive.schema-registry-url}',
-    SSL KEY = SECRET ssl_key_csr,
-    SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
-    USERNAME = 'materialize',
-    PASSWORD = SECRET password_csr
-  );
-
-# This ensures that the error is not that the CA was required, but simply that
-# not providing it prohibits connecting.
-! CREATE SOURCE kafka_ssl_no_ca
-  FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
-    FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl_no_ca
 contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)

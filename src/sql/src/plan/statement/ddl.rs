@@ -32,10 +32,10 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
     AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
+    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -3458,6 +3458,8 @@ impl TryFrom<AwsPrivatelinkConnectionOptionExtracted> for AwsPrivatelinkConnecti
     }
 }
 
+generate_extracted_config!(CreateConnectionOption, (Validate, bool));
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -3467,27 +3469,28 @@ pub fn plan_create_connection(
         name,
         connection,
         if_not_exists,
+        with_options,
     } = stmt;
     let connection = match connection {
-        CreateConnection::Kafka { with_options } => {
-            let c = KafkaConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Kafka { options } => {
+            let c = KafkaConnectionOptionExtracted::try_from(options)?;
             Connection::Kafka(c.to_connection(scx)?)
         }
-        CreateConnection::Csr { with_options } => {
-            let c = CsrConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Csr { options } => {
+            let c = CsrConnectionOptionExtracted::try_from(options)?;
             Connection::Csr(c.to_connection(scx)?)
         }
-        CreateConnection::Postgres { with_options } => {
-            let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Postgres { options } => {
+            let c = PostgresConnectionOptionExtracted::try_from(options)?;
             Connection::Postgres(c.to_connection(scx)?)
         }
-        CreateConnection::Aws { with_options } => {
-            let c = AwsConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Aws { options } => {
+            let c = AwsConnectionOptionExtracted::try_from(options)?;
             let connection = AwsConfig::try_from(c)?;
             Connection::Aws(connection)
         }
-        CreateConnection::AwsPrivatelink { with_options } => {
-            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::AwsPrivatelink { options } => {
+            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(options)?;
             let connection = AwsPrivatelinkConnection::try_from(c)?;
             if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
                 for connection_az in &connection.availability_zones {
@@ -3501,13 +3504,27 @@ pub fn plan_create_connection(
             }
             Connection::AwsPrivatelink(connection)
         }
-        CreateConnection::Ssh { with_options } => {
-            let c = SshConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Ssh { options } => {
+            let c = SshConnectionOptionExtracted::try_from(options)?;
             let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+
+    let options = CreateConnectionOptionExtracted::try_from(with_options)?;
+    if options.validate.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
+    }
+    let validate = match options.validate {
+        Some(val) => val,
+        None => {
+            scx.catalog
+                .system_vars()
+                .enable_default_connection_validation()
+                && connection.validate_by_default()
+        }
+    };
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -3526,6 +3543,7 @@ pub fn plan_create_connection(
             create_sql,
             connection,
         },
+        validate,
     };
     Ok(Plan::CreateConnection(plan))
 }

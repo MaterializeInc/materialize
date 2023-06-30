@@ -945,6 +945,14 @@ const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_default_connection_validation"),
+    value: &true,
+    description:
+        "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
+    internal: true,
+};
+
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -1122,6 +1130,10 @@ feature_flags!(
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
     (enable_managed_clusters, "managed clusters"),
+    (
+        enable_connection_validation_syntax,
+        "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax"
+    )
 );
 
 /// Represents the input to a variable.
@@ -1748,7 +1760,8 @@ impl SystemVars {
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
-            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION);
+            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
+            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION);
         vars.refresh_internal_state();
         vars
     }
@@ -2242,6 +2255,11 @@ impl SystemVars {
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
+    }
+
+    /// Returns the `enable_default_connection_validation` configuration parameter.
+    pub fn enable_default_connection_validation(&self) -> bool {
+        *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
     }
 }
 

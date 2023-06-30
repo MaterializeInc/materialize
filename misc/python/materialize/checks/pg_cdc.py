@@ -32,14 +32,6 @@ class PgCdcBase:
         return Testdrive(
             dedent(
                 f"""
-                > CREATE SECRET pgpass1 AS 'postgres';
-
-                > CREATE CONNECTION pg1 FOR POSTGRES
-                  HOST 'postgres',
-                  DATABASE postgres,
-                  USER postgres1,
-                  PASSWORD SECRET pgpass1
-
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres1 WITH replication;
@@ -53,6 +45,14 @@ class PgCdcBase:
                 INSERT INTO postgres_source_table SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM generate_series(1,100) AS i;
 
                 CREATE PUBLICATION postgres_source FOR ALL TABLES;
+
+                > CREATE SECRET pgpass1 AS 'postgres';
+
+                > CREATE CONNECTION pg1 FOR POSTGRES
+                  HOST 'postgres',
+                  DATABASE postgres,
+                  USER postgres1,
+                  PASSWORD SECRET pgpass1
                 """
             )
         )
@@ -229,14 +229,6 @@ class PgCdcMzNow(Check):
         return Testdrive(
             dedent(
                 """
-                > CREATE SECRET postgres_mz_now_pass AS 'postgres';
-
-                > CREATE CONNECTION postgres_mz_now_conn FOR POSTGRES
-                  HOST 'postgres',
-                  DATABASE postgres,
-                  USER postgres2,
-                  PASSWORD SECRET postgres_mz_now_pass
-
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres2 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres2 WITH replication;
@@ -254,6 +246,14 @@ class PgCdcMzNow(Check):
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E1');
 
                 CREATE PUBLICATION postgres_mz_now_publication FOR ALL TABLES;
+
+                > CREATE SECRET postgres_mz_now_pass AS 'postgres';
+
+                > CREATE CONNECTION postgres_mz_now_conn FOR POSTGRES
+                  HOST 'postgres',
+                  DATABASE postgres,
+                  USER postgres2,
+                  PASSWORD SECRET postgres_mz_now_pass
 
                 > CREATE SOURCE postgres_mz_now_source
                   FROM POSTGRES CONNECTION postgres_mz_now_conn

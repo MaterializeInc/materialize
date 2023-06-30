@@ -106,6 +106,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
         | Plan::ReassignOwned(_)
+        | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
 
@@ -251,7 +252,8 @@ pub fn user_privilege_hack(
         | Plan::Prepare(_)
         | Plan::Execute(_)
         | Plan::Deallocate(_)
-        | Plan::SideEffectingFunc(_) => {}
+        | Plan::SideEffectingFunc(_)
+        | Plan::ValidateConnection(_) => {}
 
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)

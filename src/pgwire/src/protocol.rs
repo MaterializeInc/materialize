@@ -1470,7 +1470,8 @@ where
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
-            | ExecuteResponse::Updated(..) => {
+            | ExecuteResponse::Updated(..)
+            | ExecuteResponse::ValidatedConnection => {
                 command_complete!()
             }
         };

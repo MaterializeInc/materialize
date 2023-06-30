@@ -160,6 +160,7 @@ pub enum Plan {
     AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
     SideEffectingFunc(SideEffectingFunc),
+    ValidateConnection(ValidateConnectionPlan),
 }
 
 impl Plan {
@@ -248,6 +249,7 @@ impl Plan {
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
             StatementKind::Update => vec![PlanKind::ReadThenWrite],
+            StatementKind::ValidateConnection => vec![PlanKind::ValidateConnection],
         }
     }
 
@@ -373,6 +375,7 @@ impl Plan {
             Plan::AlterDefaultPrivileges(_) => "alter default privileges",
             Plan::ReassignOwned(_) => "reassign owned",
             Plan::SideEffectingFunc(_) => "side effecting func",
+            Plan::ValidateConnection(_) => "validate connection",
         }
     }
 }
@@ -560,6 +563,14 @@ pub struct CreateConnectionPlan {
     pub name: QualifiedItemName,
     pub if_not_exists: bool,
     pub connection: Connection,
+    pub validate: bool,
+}
+
+#[derive(Debug)]
+pub struct ValidateConnectionPlan {
+    pub id: GlobalId,
+    /// The connection to validate.
+    pub connection: mz_storage_client::types::connections::Connection,
 }
 
 #[derive(Debug)]

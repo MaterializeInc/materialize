@@ -30,8 +30,8 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PeekStage, PeekStageFinish, PeekValidity,
-    PendingReadTxn, RealTimeRecencyContext, SinkConnectionReady,
+    Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message, PeekStage,
+    PeekStageFinish, PeekValidity, PendingReadTxn, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
@@ -52,6 +52,9 @@ impl Coordinator {
             }
             Message::CreateSourceStatementReady(ready) => {
                 self.message_create_source_statement_ready(ready).await
+            }
+            Message::CreateConnectionValidationReady(ready) => {
+                self.message_create_connection_validation_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
             Message::Execute {
@@ -437,6 +440,45 @@ impl Coordinator {
 
         // Finally, sequence all plans in one go
         self.sequence_plan(ctx, Plan::CreateSources(plans), Vec::new())
+            .await;
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_create_connection_validation_ready(
+        &mut self,
+        CreateConnectionValidationReady {
+            ctx,
+            result,
+            params,
+            original_stmt,
+            depends_on,
+            otel_ctx,
+        }: CreateConnectionValidationReady,
+    ) {
+        otel_ctx.attach_as_parent();
+
+        // Ensure that all dependencies still exist after validation, as a
+        // `DROP SECRET` may have sneaked in. If any have gone missing, we
+        // revalidate the original statement. This will either produce a nice
+        // "unknown secret" error, or pick up a new connector that has
+        // replaced the dropped connector.
+        //
+        // WARNING: If we support `ALTER SECRET`, we'll need to also check
+        // for connectors that were altered while we were purifying.
+        if !depends_on
+            .iter()
+            .all(|id| self.catalog().try_get_entry(id).is_some())
+        {
+            self.handle_execute_inner(original_stmt, params, ctx).await;
+            return;
+        }
+
+        let plan = match result {
+            Ok(ok) => ok,
+            Err(e) => return ctx.retire(Err(e)),
+        };
+
+        self.sequence_plan(ctx, Plan::CreateConnection(plan), depends_on)
             .await;
     }
 

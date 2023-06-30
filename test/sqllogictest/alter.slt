@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
 query error system schema 'mz_catalog' cannot be modified
 ALTER TABLE mz_tables RENAME TO foo;
 
@@ -19,7 +24,7 @@ query error cannot ALTER this type of source
 ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
 
 statement ok
-CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SHOW CONNECTIONS

@@ -396,6 +396,8 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+    /// A connection was validated.
+    ValidatedConnection,
 }
 
 impl ExecuteResponse {
@@ -461,6 +463,7 @@ impl ExecuteResponse {
             TransactionCommitted { .. } => Some("COMMIT".into()),
             TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
+            ValidatedConnection => Some("VALIDATE CONNECTION".into()),
         }
     }
 
@@ -536,6 +539,7 @@ impl ExecuteResponse {
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
             SideEffectingFunc => vec![SendingRows],
+            ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }
 }

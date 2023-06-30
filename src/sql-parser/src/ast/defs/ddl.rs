@@ -841,62 +841,94 @@ impl_display_t!(SshConnectionOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
     Aws {
-        with_options: Vec<AwsConnectionOption<T>>,
+        options: Vec<AwsConnectionOption<T>>,
     },
     AwsPrivatelink {
-        with_options: Vec<AwsPrivatelinkConnectionOption<T>>,
+        options: Vec<AwsPrivatelinkConnectionOption<T>>,
     },
     Kafka {
-        with_options: Vec<KafkaConnectionOption<T>>,
+        options: Vec<KafkaConnectionOption<T>>,
     },
     Csr {
-        with_options: Vec<CsrConnectionOption<T>>,
+        options: Vec<CsrConnectionOption<T>>,
     },
     Postgres {
-        with_options: Vec<PostgresConnectionOption<T>>,
+        options: Vec<PostgresConnectionOption<T>>,
     },
     Ssh {
-        with_options: Vec<SshConnectionOption<T>>,
+        options: Vec<SshConnectionOption<T>>,
     },
 }
 
 impl<T: AstInfo> AstDisplay for CreateConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Kafka { with_options } => {
+            Self::Kafka { options } => {
                 f.write_str("KAFKA (");
-                f.write_node(&display::comma_separated(with_options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            Self::Csr { with_options } => {
+            Self::Csr { options } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY (");
-                f.write_node(&display::comma_separated(with_options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            Self::Postgres { with_options } => {
+            Self::Postgres { options } => {
                 f.write_str("POSTGRES (");
-                f.write_node(&display::comma_separated(with_options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            Self::Aws { with_options } => {
+            Self::Aws { options } => {
                 f.write_str("AWS (");
-                f.write_node(&display::comma_separated(with_options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            Self::AwsPrivatelink { with_options } => {
+            Self::AwsPrivatelink { options } => {
                 f.write_str("AWS PRIVATELINK (");
-                f.write_node(&display::comma_separated(with_options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            Self::Ssh { with_options } => {
+            Self::Ssh { options } => {
                 f.write_str("SSH TUNNEL (");
-                f.write_node(&display::comma_separated(with_options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
         }
     }
 }
 impl_display_t!(CreateConnection);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CreateConnectionOptionName {
+    Validate,
+}
+
+impl AstDisplay for CreateConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CreateConnectionOptionName::Validate => "VALIDATE",
+        })
+    }
+}
+impl_display!(CreateConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `CREATE CONNECTION...` statement.
+pub struct CreateConnectionOption<T: AstInfo> {
+    pub name: CreateConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(CreateConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KafkaConfigOptionName {

@@ -24,6 +24,11 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 CREATE ROLE joe;
 ----
 COMPLETE 0
@@ -66,12 +71,12 @@ COMPLETE 0
 # CREATE CONNECTION
 
 simple conn=joe,user=joe
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
@@ -81,12 +86,12 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE CONNECTION conn1 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
