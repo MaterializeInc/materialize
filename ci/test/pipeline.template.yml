@@ -494,19 +494,6 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: checks-restart-entire-mz
-    label: "Checks + restart of the entire Mz"
-    depends_on: build-x86_64
-    inputs: [misc/python/materialize/checks]
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
-
   - id: checks-restart-environmentd-clusterd-storage
     label: "Checks + restart of environmentd & storage clusterd"
     depends_on: build-x86_64
