@@ -32,6 +32,7 @@ use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceT
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 use mz_timely_util::order::Partitioned;
+use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -76,7 +77,7 @@ pub struct KafkaSourceReader {
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// The last partition we received
-    partition_info: Arc<Mutex<Option<Vec<PartitionId>>>>,
+    partition_info: Arc<Mutex<Option<BTreeMap<PartitionId, i64>>>>,
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
@@ -290,11 +291,7 @@ impl SourceRender for KafkaSourceConnection {
                             "kafka metadata thread: starting..."
                         );
                         while let Some(partition_info) = partition_info.upgrade() {
-                            let result = get_partitions(
-                                consumer.client(),
-                                &topic,
-                                DEFAULT_FETCH_METADATA_TIMEOUT,
-                            );
+                            let result = fetch_partition_info(consumer.client(), &topic);
                             trace!(
                                 source_id = config.id.to_string(),
                                 worker_id = config.worker_id,
@@ -312,7 +309,6 @@ impl SourceRender for KafkaSourceConnection {
                                         "kafka metadata thread: updated partition metadata info",
                                     );
                                     *status_report.lock().unwrap() = Some(HealthStatus::Running);
-                                    thread::park_timeout(metadata_refresh_frequency);
                                 }
                                 Err(e) => {
                                     *status_report.lock().unwrap() =
@@ -320,9 +316,9 @@ impl SourceRender for KafkaSourceConnection {
                                             error: format!("{}", e.display_with_causes()),
                                             hint: None,
                                         });
-                                    thread::park_timeout(metadata_refresh_frequency);
                                 }
                             }
+                            thread::park_timeout(metadata_refresh_frequency);
                         }
                         info!(
                             source_id = config.id.to_string(),
@@ -395,15 +391,29 @@ impl SourceRender for KafkaSourceConnection {
                 let partition_info = reader.partition_info.lock().unwrap().take();
                 if let Some(partitions) = partition_info {
                     let mut max_pid = None;
-                    for pid in partitions {
+                    for (pid, upper) in partitions {
                         max_pid = std::cmp::max(max_pid, Some(pid));
                         if config.responsible_for(pid) {
                             reader.ensure_partition(pid);
                             let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
-                            reader
+                            let part_cap = reader
                                 .partition_capabilities
                                 .entry(pid)
                                 .or_insert_with(|| data_cap.delayed(&part_min_ts));
+
+                            let prev_upper = part_cap.time().timestamp().offset;
+                            let upper = u64::try_from(upper).unwrap();
+
+                            // If the previously observed upper is not beyond the currently
+                            // observed upper then the topic was recreated.
+                            if !(prev_upper <= upper) {
+                                let err = SourceReaderError::other_definite(anyhow!(
+                                    "topic was recreated"
+                                ));
+                                let time = part_cap.time().clone();
+                                data_output.give(part_cap, ((0, Err(err)), time, 1)).await;
+                                return;
+                            }
                         }
                     }
                     // Topics are identified by name but it's possible that a user recreates a
@@ -1013,4 +1023,20 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// Fetches the list of partitions and their corresponding high watermark
+fn fetch_partition_info<C: ClientContext>(
+    client: &Client<C>,
+    topic: &str,
+) -> Result<BTreeMap<PartitionId, i64>, anyhow::Error> {
+    let pids = get_partitions(client, topic, DEFAULT_FETCH_METADATA_TIMEOUT)?;
+
+    let mut result = BTreeMap::new();
+
+    for pid in pids {
+        let (_low, high) = client.fetch_watermarks(topic, pid, DEFAULT_FETCH_METADATA_TIMEOUT)?;
+        result.insert(pid, high);
+    }
+    Ok(result)
 }

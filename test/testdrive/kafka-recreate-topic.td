@@ -49,3 +49,38 @@ $ kafka-create-topic topic=topic0 partitions=2
 
 ! SELECT * FROM source0
 contains:topic was recreated
+
+# We can also detect that a topic got recreated by observing the high watermark regressing
+
+$ kafka-create-topic topic=topic1 partitions=4
+
+$ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
+{"f2": 1}
+
+> CREATE SOURCE source1
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
+> SELECT * FROM source1
+f2
+---
+1
+
+# Now recreate the topic with the same number of partitions and observe the error
+
+$ kafka-delete-topic-flaky topic=topic1
+
+# Even though `kafka-delete-topic` ensures that the topic no longer exists in
+# the broker metadata there is still work to be done asychnronously before it's
+# truly gone that must complete before we attempt to recreate it. There is no
+# way to observe this work completing so the only option left is sleeping for a
+# while. This is the sad state of Kafka. If this test ever becomes flaky let's
+# just delete it.
+# See: https://github.com/confluentinc/confluent-kafka-python/issues/541
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
+
+$ kafka-create-topic topic=topic1 partitions=4
+
+! SELECT * FROM source1
+contains:topic was recreated
