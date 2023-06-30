@@ -493,7 +493,7 @@ impl NamespacedProcessOrchestrator {
 
         let state_updater = ProcessStateUpdater {
             namespace: self.namespace.clone(),
-            id: id.clone(),
+            id,
             i,
             services: Arc::clone(&self.services),
             service_event_tx: self.service_event_tx.clone(),

@@ -44,20 +44,6 @@ DEFAULT_MZ_VOLUMES = [
 DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
 
 
-def try_extract_release_version(image: Optional[str]) -> Optional[MzVersion]:
-    """Returns the MzVersion of the image, if the image was an official release."""
-
-    if (
-        image
-        and "latest" not in image
-        and "devel" not in image
-        and "unstable" not in image
-    ):
-        return MzVersion.parse_mz(image.split(":")[1])
-    else:
-        return None
-
-
 class Materialized(Service):
     class Size:
         DEFAULT_SIZE = 4
@@ -85,7 +71,6 @@ class Materialized(Service):
         additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
         soft_assertions: bool = True,
     ) -> None:
-        release_version: Optional[MzVersion] = try_extract_release_version(image)
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
@@ -110,16 +95,8 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
+            *environment_extra,
         ]
-
-        if release_version and release_version < MzVersion.parse("0.59.0"):
-            # releases before 0.59.0 disabled the scratch directory
-            # by default and will panic if it is passed in.
-            pass
-        else:
-            environment += ["MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/scratch"]
-
-        environment += environment_extra
 
         if system_parameter_defaults is None:
             system_parameter_defaults = {
@@ -174,7 +151,11 @@ class Materialized(Service):
 
         self.default_storage_size = (
             default_size
-            if release_version and release_version < MzVersion.parse("0.41.0")
+            if image
+            and "latest" not in image
+            and "devel" not in image
+            and "unstable" not in image
+            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
             else "1"
             if default_size == 1
             else f"{default_size}-1"
@@ -263,18 +244,12 @@ class Clusterd(Service):
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
         options: List[str] = [],
-        scratch_directory: bool = True,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
             *environment_extra,
         ]
-
-        if scratch_directory:
-            environment.append(
-                "CLUSTERD_SCRATCH_DIRECTORY=/scratch",
-            )
 
         command = []
 

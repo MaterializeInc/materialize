@@ -325,7 +325,7 @@ pub struct StorageInstanceContext {
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
+    pub fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
         Ok(Self {
             scratch_directory,
             rocksdb_env: rocksdb::Env::new()?,
