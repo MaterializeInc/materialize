@@ -7,7 +7,7 @@ menu:
 ---
 
 `REVOKE` revokes membership of one role from another role. Roles can be members
-of other roles, as well as inherit all the attributes and privileges of those
+of other roles, as well as inherit all the privileges of those
 roles. This membership can also be revoked.
 
 {{< alpha />}}
