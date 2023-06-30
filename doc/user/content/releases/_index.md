@@ -23,10 +23,16 @@ and [documentation](https://materialize.com/docs/lts/).
 
 ## Schedule
 
-Each week, Materialize upgrades all accounts to the latest version.
+Each week, Materialize upgrades all regions to the latest version according to
+the following schedule:
 
-- Accounts in the eu-west-1 region are upgraded between 4-6 pm ET on Wednesdays.
-- Accounts in the us-east-1 region are upgraded between 5-7am ET on Thursdays.
+Region        | Upgrade window
+--------------|------------------------------
+aws/eu-west-1 | 2100-2300 [Europe/Dublin]
+aws/us-east-1 | 0500-0700 [America/New_York]
+
+Upgrade windows were chosen to be outside of business hours in the most
+representative time zone for the region.
 
 Materialize may occasionally deploy unscheduled releases to fix urgent bugs as well.
 
@@ -73,3 +79,6 @@ These unstable interfaces are not subject to the backwards-compatibility policy.
 If you choose to use these unstable interfaces, you should be aware of the risk
 of backwards-incompatible changes. Backwards-incompatible changes may be made to
 these unstable interfaces at any time and without mention in the release notes.
+
+[America/New_York]: https://time.is/New_York
+[Europe/Dublin]: https://time.is/Dublin
