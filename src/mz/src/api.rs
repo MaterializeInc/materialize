@@ -11,6 +11,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context, Result};
+use mz_ore::retry::Retry;
 use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -151,13 +152,18 @@ pub async fn disable_region_environment(
     cloud_provider: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<(), reqwest::Error> {
-    client
-        .delete(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())
-        .authenticate(&valid_profile.frontegg_auth)
-        .send()
-        .await?
-        .error_for_status()?;
-    Ok(())
+    Retry::default()
+        .max_tries(10)
+        .retry_async(|_| async {
+            client
+                .delete(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())
+                .authenticate(&valid_profile.frontegg_auth)
+                .send()
+                .await?
+                .error_for_status()?;
+            Ok(())
+        })
+        .await
 }
 
 //// Get a cloud provider's regions
