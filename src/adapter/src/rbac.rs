@@ -403,6 +403,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::DropOwned(_)
         | Plan::ReassignOwned(_)
         | Plan::AlterDefaultPrivileges(_)
+        | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
@@ -424,7 +425,6 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterSource(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterItemRename(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
-        Plan::ValidateConnection(plan) => vec![ObjectId::Item(plan.id)],
         Plan::RotateKeys(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterOwner(plan) => vec![plan.id.clone()],
         Plan::GrantPrivileges(plan) => plan
@@ -539,8 +539,8 @@ fn generate_required_privileges(
         Plan::ValidateConnection(ValidateConnectionPlan { id, connection: _ }) => {
             let schema_id: ObjectId = catalog.get_item(id).name().qualifiers.clone().into();
             vec![
-                (schema_id, AclMode::USAGE, role_id),
-                (id.into(), AclMode::USAGE, role_id),
+                (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),
+                (SystemObjectId::Object(id.into()), AclMode::USAGE, role_id),
             ]
         }
         Plan::CreateSchema(CreateSchemaPlan {
