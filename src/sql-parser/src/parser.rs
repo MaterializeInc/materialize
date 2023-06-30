@@ -29,6 +29,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 use IsLateral::*;
 use IsOptional::*;
@@ -55,6 +56,33 @@ macro_rules! parser_err {
     };
 }
 
+trait ParserStatementErrorMapper<T> {
+    /// Wrap a `ParserError` within a `ParserStatementError` alongside the provided `StatementKind`
+    fn map_parser_err(self, statement_kind: StatementKind) -> Result<T, ParserStatementError>;
+
+    /// Wrap a `ParserError` within a `ParserStatementError` without an accompanying
+    /// `StatementKind`.
+    ///
+    /// This should be used when we do not know what specific statement is being parsed.
+    fn map_no_statement_parser_err(self) -> Result<T, ParserStatementError>;
+}
+
+impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
+    fn map_parser_err(self, statement: StatementKind) -> Result<T, ParserStatementError> {
+        self.map_err(|error| ParserStatementError {
+            error,
+            statement: Some(statement),
+        })
+    }
+
+    fn map_no_statement_parser_err(self) -> Result<T, ParserStatementError> {
+        self.map_err(|error| ParserStatementError {
+            error,
+            statement: None,
+        })
+    }
+}
+
 /// Parses a SQL string containing zero or more SQL statements.
 /// Statements larger than [`MAX_STATEMENT_BATCH_SIZE`] are rejected.
 ///
@@ -63,7 +91,7 @@ macro_rules! parser_err {
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements_with_limit(
     sql: &str,
-) -> Result<Result<Vec<Statement<Raw>>, ParserError>, String> {
+) -> Result<Result<Vec<Statement<Raw>>, ParserStatementError>, String> {
     if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
@@ -75,8 +103,8 @@ pub fn parse_statements_with_limit(
 
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
-pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
-    let tokens = lexer::lex(sql)?;
+pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserStatementError> {
+    let tokens = lexer::lex(sql).map_no_statement_parser_err()?;
     Parser::new(sql, tokens).parse_statements()
 }
 
@@ -151,7 +179,7 @@ enum IsLateral {
     NotLateral,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParserError {
     /// The error message.
     pub message: String,
@@ -189,6 +217,22 @@ impl ParserError {
             pos,
             message: message.into(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParserStatementError {
+    /// The underlying error
+    pub error: ParserError,
+    /// The kind of statement erroring
+    pub statement: Option<StatementKind>,
+}
+
+impl Error for ParserStatementError {}
+
+impl fmt::Display for ParserStatementError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.error.to_string())
     }
 }
 
@@ -243,7 +287,7 @@ impl<'a> Parser<'a> {
         ParserError { pos, message }
     }
 
-    fn parse_statements(&mut self) -> Result<Vec<Statement<Raw>>, ParserError> {
+    fn parse_statements(&mut self) -> Result<Vec<Statement<Raw>>, ParserStatementError> {
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
         loop {
@@ -255,7 +299,9 @@ impl<'a> Parser<'a> {
             if self.peek_token().is_none() {
                 break;
             } else if expecting_statement_delimiter {
-                return self.expected(self.peek_pos(), "end of statement", self.peek_token());
+                return self
+                    .expected(self.peek_pos(), "end of statement", self.peek_token())
+                    .map_no_statement_parser_err();
             }
 
             let statement = self.parse_statement()?;
@@ -267,68 +313,117 @@ impl<'a> Parser<'a> {
 
     /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
     /// stopping before the statement separator, if any.
-    fn parse_statement(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_statement(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.next_token() {
             Some(t) => match t {
                 Token::Keyword(SELECT) | Token::Keyword(WITH) | Token::Keyword(VALUES) => {
                     self.prev_token();
                     Ok(Statement::Select(SelectStatement {
-                        query: self.parse_query()?,
-                        as_of: self.parse_optional_as_of()?,
+                        query: self.parse_query().map_parser_err(StatementKind::Select)?,
+                        as_of: self
+                            .parse_optional_as_of()
+                            .map_parser_err(StatementKind::Select)?,
                     }))
                 }
                 Token::Keyword(CREATE) => Ok(self.parse_create()?),
-                Token::Keyword(DISCARD) => Ok(self.parse_discard()?),
+                Token::Keyword(DISCARD) => Ok(self
+                    .parse_discard()
+                    .map_parser_err(StatementKind::Discard)?),
                 Token::Keyword(DROP) => Ok(self.parse_drop()?),
-                Token::Keyword(DELETE) => Ok(self.parse_delete()?),
-                Token::Keyword(INSERT) => Ok(self.parse_insert()?),
-                Token::Keyword(UPDATE) => Ok(self.parse_update()?),
+                Token::Keyword(DELETE) => {
+                    Ok(self.parse_delete().map_parser_err(StatementKind::Delete)?)
+                }
+                Token::Keyword(INSERT) => {
+                    Ok(self.parse_insert().map_parser_err(StatementKind::Insert)?)
+                }
+                Token::Keyword(UPDATE) => {
+                    Ok(self.parse_update().map_parser_err(StatementKind::Update)?)
+                }
                 Token::Keyword(ALTER) => Ok(self.parse_alter()?),
                 Token::Keyword(COPY) => Ok(self.parse_copy()?),
                 Token::Keyword(SET) => Ok(self.parse_set()?),
-                Token::Keyword(RESET) => Ok(self.parse_reset()?),
-                Token::Keyword(SHOW) => Ok(Statement::Show(self.parse_show()?)),
-                Token::Keyword(START) => Ok(self.parse_start_transaction()?),
+                Token::Keyword(RESET) => Ok(self
+                    .parse_reset()
+                    .map_parser_err(StatementKind::ResetVariable)?),
+                Token::Keyword(SHOW) => Ok(Statement::Show(
+                    self.parse_show().map_parser_err(StatementKind::Show)?,
+                )),
+                Token::Keyword(START) => Ok(self
+                    .parse_start_transaction()
+                    .map_parser_err(StatementKind::StartTransaction)?),
                 // `BEGIN` is a nonstandard but common alias for the
                 // standard `START TRANSACTION` statement. It is supported
                 // by at least PostgreSQL and MySQL.
-                Token::Keyword(BEGIN) => Ok(self.parse_begin()?),
-                Token::Keyword(COMMIT) => Ok(self.parse_commit()?),
-                Token::Keyword(ROLLBACK) => Ok(self.parse_rollback()?),
-                Token::Keyword(TAIL) => Ok(self.parse_tail()?),
-                Token::Keyword(SUBSCRIBE) => Ok(self.parse_subscribe()?),
-                Token::Keyword(EXPLAIN) => Ok(self.parse_explain()?),
+                Token::Keyword(BEGIN) => Ok(self
+                    .parse_begin()
+                    .map_parser_err(StatementKind::StartTransaction)?),
+                Token::Keyword(COMMIT) => {
+                    Ok(self.parse_commit().map_parser_err(StatementKind::Commit)?)
+                }
+                Token::Keyword(ROLLBACK) => Ok(self
+                    .parse_rollback()
+                    .map_parser_err(StatementKind::Rollback)?),
+                Token::Keyword(TAIL) => {
+                    Ok(self.parse_tail().map_parser_err(StatementKind::Subscribe)?)
+                }
+                Token::Keyword(SUBSCRIBE) => Ok(self
+                    .parse_subscribe()
+                    .map_parser_err(StatementKind::Subscribe)?),
+                Token::Keyword(EXPLAIN) => Ok(self
+                    .parse_explain()
+                    .map_parser_err(StatementKind::Explain)?),
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
-                Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
-                Token::Keyword(CLOSE) => Ok(self.parse_close()?),
+                Token::Keyword(FETCH) => {
+                    Ok(self.parse_fetch().map_parser_err(StatementKind::Fetch)?)
+                }
+                Token::Keyword(CLOSE) => {
+                    Ok(self.parse_close().map_parser_err(StatementKind::Close)?)
+                }
                 Token::Keyword(PREPARE) => Ok(self.parse_prepare()?),
-                Token::Keyword(EXECUTE) => Ok(self.parse_execute()?),
-                Token::Keyword(DEALLOCATE) => Ok(self.parse_deallocate()?),
-                Token::Keyword(RAISE) => Ok(self.parse_raise()?),
+                Token::Keyword(EXECUTE) => Ok(self
+                    .parse_execute()
+                    .map_parser_err(StatementKind::Execute)?),
+                Token::Keyword(DEALLOCATE) => Ok(self
+                    .parse_deallocate()
+                    .map_parser_err(StatementKind::Deallocate)?),
+                Token::Keyword(RAISE) => {
+                    Ok(self.parse_raise().map_parser_err(StatementKind::Raise)?)
+                }
                 Token::Keyword(GRANT) => Ok(self.parse_grant()?),
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
-                Token::Keyword(REASSIGN) => Ok(self.parse_reassign_owned()?),
-                Token::Keyword(INSPECT) => Ok(Statement::Show(self.parse_inspect()?)),
-                Token::Keyword(VALIDATE) => Ok(self.parse_validate()?),
+                Token::Keyword(REASSIGN) => Ok(self
+                    .parse_reassign_owned()
+                    .map_parser_err(StatementKind::ReassignOwned)?),
+                Token::Keyword(INSPECT) => Ok(Statement::Show(
+                    self.parse_inspect().map_no_statement_parser_err()?,
+                )),
+                Token::Keyword(VALIDATE) => Ok(self
+                    .parse_validate()
+                    .map_parser_err(StatementKind::ValidateConnection)?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
                     format!("Unexpected keyword {} at the beginning of a statement", kw)
-                ),
+                )
+                .map_no_statement_parser_err(),
                 Token::LParen => {
                     self.prev_token();
                     Ok(Statement::Select(SelectStatement {
-                        query: self.parse_query()?,
+                        query: self.parse_query().map_parser_err(StatementKind::Select)?,
                         as_of: None, // Only the outermost SELECT may have an AS OF clause.
                     }))
                 }
-                unexpected => self.expected(
-                    self.peek_prev_pos(),
-                    "a keyword at the beginning of a statement",
-                    Some(unexpected),
-                ),
+                unexpected => self
+                    .expected(
+                        self.peek_prev_pos(),
+                        "a keyword at the beginning of a statement",
+                        Some(unexpected),
+                    )
+                    .map_no_statement_parser_err(),
             },
-            None => self.expected(self.peek_prev_pos(), "SQL statement", None),
+            None => self
+                .expected(self.peek_prev_pos(), "SQL statement", None)
+                .map_no_statement_parser_err(),
         }
     }
 
@@ -1654,49 +1749,63 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL CREATE statement
-    fn parse_create(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_create(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         if self.peek_keyword(DATABASE) {
             self.parse_create_database()
+                .map_parser_err(StatementKind::CreateDatabase)
         } else if self.peek_keyword(SCHEMA) {
             self.parse_create_schema()
+                .map_parser_err(StatementKind::CreateSchema)
         } else if self.peek_keyword(SINK) {
             self.parse_create_sink()
+                .map_parser_err(StatementKind::CreateSink)
         } else if self.peek_keyword(TYPE) {
             self.parse_create_type()
+                .map_parser_err(StatementKind::CreateType)
         } else if self.peek_keyword(ROLE) {
             self.parse_create_role()
+                .map_parser_err(StatementKind::CreateRole)
         } else if self.peek_keyword(CLUSTER) {
             self.next_token();
             if self.peek_keyword(REPLICA) {
                 self.parse_create_cluster_replica()
+                    .map_parser_err(StatementKind::CreateClusterReplica)
             } else {
                 self.parse_create_cluster()
+                    .map_parser_err(StatementKind::CreateCluster)
             }
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
+                .map_parser_err(StatementKind::CreateIndex)
         } else if self.peek_keyword(SOURCE) {
             self.parse_create_source()
+                .map_parser_err(StatementKind::CreateSource)
         } else if self.peek_keyword(SUBSOURCE) {
             self.parse_create_subsource()
+                .map_parser_err(StatementKind::CreateSubsource)
         } else if self.peek_keyword(TABLE)
             || self.peek_keywords(&[TEMP, TABLE])
             || self.peek_keywords(&[TEMPORARY, TABLE])
         {
             self.parse_create_table()
+                .map_parser_err(StatementKind::CreateTable)
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
+                .map_parser_err(StatementKind::CreateSecret)
         } else if self.peek_keyword(CONNECTION) {
             self.parse_create_connection()
+                .map_parser_err(StatementKind::CreateConnection)
         } else if self.peek_keywords(&[MATERIALIZED, VIEW])
             || self.peek_keywords(&[OR, REPLACE, MATERIALIZED, VIEW])
         {
             self.parse_create_materialized_view()
+                .map_parser_err(StatementKind::CreateMaterializedView)
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
                 self.peek_pos(),
                 "CREATE USER is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details"
-            )
+            ).map_parser_err(StatementKind::CreateRole)
         } else {
             let index = self.index;
 
@@ -1707,12 +1816,13 @@ impl<'a> Parser<'a> {
             if self.parse_keyword(VIEW) {
                 self.index = index;
                 self.parse_create_view()
+                    .map_parser_err(StatementKind::CreateView)
             } else {
                 self.expected(
                     self.peek_pos(),
                     "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
                     self.peek_token(),
-                )
+                ).map_no_statement_parser_err()
             }
         }
     }
@@ -3348,11 +3458,17 @@ impl<'a> Parser<'a> {
         Ok(Statement::Discard(DiscardStatement { target }))
     }
 
-    fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         if self.parse_keyword(OWNED) {
-            return self.parse_drop_owned();
+            self.parse_drop_owned()
+                .map_parser_err(StatementKind::DropOwned)
+        } else {
+            self.parse_drop_objects()
+                .map_parser_err(StatementKind::DropObjects)
         }
+    }
 
+    fn parse_drop_objects(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = self.expect_object_type()?;
         let if_exists = self.parse_if_exists()?;
         match object_type {
@@ -3746,34 +3862,43 @@ impl<'a> Parser<'a> {
         Ok(WithOptionValue::DataType(self.parse_data_type()?))
     }
 
-    fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         if self.parse_keyword(SYSTEM) {
             self.parse_alter_system()
         } else if self.parse_keywords(&[DEFAULT, PRIVILEGES]) {
             self.parse_alter_default_privileges()
+                .map_parser_err(StatementKind::AlterDefaultPrivileges)
         } else {
             self.parse_alter_object()
         }
     }
 
-    fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = self.expect_object_type()?;
+    fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let object_type = self.expect_object_type().map_no_statement_parser_err()?;
 
         match object_type {
-            ObjectType::Role => self.parse_alter_role(),
+            ObjectType::Role => self
+                .parse_alter_role()
+                .map_parser_err(StatementKind::AlterRole),
             ObjectType::Sink => self.parse_alter_sink(),
             ObjectType::Source => self.parse_alter_source(),
             ObjectType::Index => self.parse_alter_index(),
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
-                let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedObjectName::Item(self.parse_item_name()?);
-                let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
-                self.expect_keyword(TO)?;
+                let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+                let name = UnresolvedObjectName::Item(
+                    self.parse_item_name().map_no_statement_parser_err()?,
+                );
+                let action = self
+                    .expect_one_of_keywords(&[RENAME, OWNER])
+                    .map_no_statement_parser_err()?;
+                self.expect_keyword(TO).map_no_statement_parser_err()?;
                 match action {
                     RENAME => {
-                        let to_item_name = self.parse_identifier()?;
+                        let to_item_name = self
+                            .parse_identifier()
+                            .map_parser_err(StatementKind::AlterObjectRename)?;
                         Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
                             object_type,
                             if_exists,
@@ -3782,7 +3907,9 @@ impl<'a> Parser<'a> {
                         }))
                     }
                     OWNER => {
-                        let new_owner = self.parse_identifier()?;
+                        let new_owner = self
+                            .parse_identifier()
+                            .map_parser_err(StatementKind::AlterOwner)?;
                         Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
@@ -3794,10 +3921,18 @@ impl<'a> Parser<'a> {
                 }
             }
             ObjectType::Type => {
-                let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedObjectName::Item(self.parse_item_name()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
+                let if_exists = self
+                    .parse_if_exists()
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let name = UnresolvedObjectName::Item(
+                    self.parse_item_name()
+                        .map_parser_err(StatementKind::AlterOwner)?,
+                );
+                self.expect_keywords(&[OWNER, TO])
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let new_owner = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterOwner)?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
                     object_type,
                     if_exists,
@@ -3807,13 +3942,20 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Cluster => self.parse_alter_cluster(object_type),
             ObjectType::ClusterReplica => {
-                let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
-                let action = self.expect_one_of_keywords(&[OWNER, RENAME])?;
-                self.expect_keyword(TO)?;
+                let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+                let name = UnresolvedObjectName::ClusterReplica(
+                    self.parse_cluster_replica_name()
+                        .map_no_statement_parser_err()?,
+                );
+                let action = self
+                    .expect_one_of_keywords(&[OWNER, RENAME])
+                    .map_no_statement_parser_err()?;
+                self.expect_keyword(TO).map_no_statement_parser_err()?;
                 match action {
                     OWNER => {
-                        let new_owner = self.parse_identifier()?;
+                        let new_owner = self
+                            .parse_identifier()
+                            .map_parser_err(StatementKind::AlterOwner)?;
                         Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
@@ -3822,7 +3964,9 @@ impl<'a> Parser<'a> {
                         }))
                     }
                     RENAME => {
-                        let to_item_name = self.parse_identifier()?;
+                        let to_item_name = self
+                            .parse_identifier()
+                            .map_parser_err(StatementKind::AlterObjectRename)?;
                         Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
                             object_type,
                             if_exists,
@@ -3834,10 +3978,18 @@ impl<'a> Parser<'a> {
                 }
             }
             ObjectType::Database => {
-                let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedObjectName::Database(self.parse_database_name()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
+                let if_exists = self
+                    .parse_if_exists()
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let name = UnresolvedObjectName::Database(
+                    self.parse_database_name()
+                        .map_parser_err(StatementKind::AlterOwner)?,
+                );
+                self.expect_keywords(&[OWNER, TO])
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let new_owner = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterOwner)?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
                     object_type,
                     if_exists,
@@ -3846,10 +3998,18 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Schema => {
-                let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedObjectName::Schema(self.parse_schema_name()?);
-                self.expect_keywords(&[OWNER, TO])?;
-                let new_owner = self.parse_identifier()?;
+                let if_exists = self
+                    .parse_if_exists()
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let name = UnresolvedObjectName::Schema(
+                    self.parse_schema_name()
+                        .map_parser_err(StatementKind::AlterOwner)?,
+                );
+                self.expect_keywords(&[OWNER, TO])
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let new_owner = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterOwner)?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
                     object_type,
                     if_exists,
@@ -3861,21 +4021,27 @@ impl<'a> Parser<'a> {
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
-            ),
+            )
+            .map_no_statement_parser_err(),
         }
     }
 
     fn parse_alter_cluster(
         &mut self,
         object_type: ObjectType,
-    ) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_identifier()?;
-        let action = self.expect_one_of_keywords(&[OWNER, RENAME, RESET, SET])?;
+    ) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name = self.parse_identifier().map_no_statement_parser_err()?;
+        let action = self
+            .expect_one_of_keywords(&[OWNER, RENAME, RESET, SET])
+            .map_no_statement_parser_err()?;
         match action {
             OWNER => {
-                self.expect_keyword(TO)?;
-                let new_owner = self.parse_identifier()?;
+                self.expect_keyword(TO)
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let new_owner = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterOwner)?;
                 let name = UnresolvedObjectName::Cluster(name);
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
                     object_type,
@@ -3885,8 +4051,11 @@ impl<'a> Parser<'a> {
                 }))
             }
             RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+                self.expect_keyword(TO)
+                    .map_parser_err(StatementKind::AlterObjectRename)?;
+                let to_item_name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterObjectRename)?;
                 let name = UnresolvedObjectName::Cluster(name);
                 Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type,
@@ -3896,9 +4065,13 @@ impl<'a> Parser<'a> {
                 }))
             }
             RESET => {
-                self.expect_token(&Token::LParen)?;
-                let names = self.parse_comma_separated(Parser::parse_cluster_option_name)?;
-                self.expect_token(&Token::RParen)?;
+                self.expect_token(&Token::LParen)
+                    .map_parser_err(StatementKind::AlterCluster)?;
+                let names = self
+                    .parse_comma_separated(Parser::parse_cluster_option_name)
+                    .map_parser_err(StatementKind::AlterCluster)?;
+                self.expect_token(&Token::RParen)
+                    .map_parser_err(StatementKind::AlterCluster)?;
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
@@ -3906,9 +4079,13 @@ impl<'a> Parser<'a> {
                 }))
             }
             SET => {
-                self.expect_token(&Token::LParen)?;
-                let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
-                self.expect_token(&Token::RParen)?;
+                self.expect_token(&Token::LParen)
+                    .map_parser_err(StatementKind::AlterCluster)?;
+                let options = self
+                    .parse_comma_separated(Parser::parse_cluster_option)
+                    .map_parser_err(StatementKind::AlterCluster)?;
+                self.expect_token(&Token::RParen)
+                    .map_parser_err(StatementKind::AlterCluster)?;
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
@@ -3919,18 +4096,26 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let source_name = self.parse_item_name()?;
+    fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let source_name = self.parse_item_name().map_no_statement_parser_err()?;
 
         Ok(
-            match self.expect_one_of_keywords(&[DROP, RESET, SET, RENAME, OWNER])? {
+            match self
+                .expect_one_of_keywords(&[DROP, RESET, SET, RENAME, OWNER])
+                .map_no_statement_parser_err()?
+            {
                 DROP => {
-                    self.expect_one_of_keywords(&[SUBSOURCE, TABLE])?;
+                    self.expect_one_of_keywords(&[SUBSOURCE, TABLE])
+                        .map_parser_err(StatementKind::AlterSource)?;
 
-                    let if_exists_inner = self.parse_if_exists()?;
+                    let if_exists_inner = self
+                        .parse_if_exists()
+                        .map_parser_err(StatementKind::AlterSource)?;
 
-                    let names = self.parse_comma_separated(Parser::parse_item_name)?;
+                    let names = self
+                        .parse_comma_separated(Parser::parse_item_name)
+                        .map_parser_err(StatementKind::AlterSource)?;
 
                     let cascade = self.parse_keyword(CASCADE);
 
@@ -3945,10 +4130,13 @@ impl<'a> Parser<'a> {
                     })
                 }
                 RESET => {
-                    self.expect_token(&Token::LParen)?;
-                    let reset_options =
-                        self.parse_comma_separated(Parser::parse_source_option_name)?;
-                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterSource)?;
+                    let reset_options = self
+                        .parse_comma_separated(Parser::parse_source_option_name)
+                        .map_parser_err(StatementKind::AlterSource)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterSource)?;
 
                     Statement::AlterSource(AlterSourceStatement {
                         source_name,
@@ -3957,9 +4145,13 @@ impl<'a> Parser<'a> {
                     })
                 }
                 SET => {
-                    self.expect_token(&Token::LParen)?;
-                    let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
-                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterSource)?;
+                    let set_options = self
+                        .parse_comma_separated(Parser::parse_source_option)
+                        .map_parser_err(StatementKind::AlterSource)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterSource)?;
                     Statement::AlterSource(AlterSourceStatement {
                         source_name,
                         if_exists,
@@ -3967,8 +4159,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 RENAME => {
-                    self.expect_keyword(TO)?;
-                    let to_item_name = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
+                    let to_item_name = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Source,
@@ -3978,8 +4173,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 OWNER => {
-                    self.expect_keyword(TO)?;
-                    let new_owner = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterOwner)?;
+                    let new_owner = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterOwner)?;
 
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Source,
@@ -3993,17 +4191,23 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_item_name()?;
+    fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name = self.parse_item_name().map_no_statement_parser_err()?;
 
         Ok(
-            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+            match self
+                .expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])
+                .map_no_statement_parser_err()?
+            {
                 RESET => {
-                    self.expect_token(&Token::LParen)?;
-                    let reset_options =
-                        self.parse_comma_separated(Parser::parse_index_option_name)?;
-                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterIndex)?;
+                    let reset_options = self
+                        .parse_comma_separated(Parser::parse_index_option_name)
+                        .map_parser_err(StatementKind::AlterIndex)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterIndex)?;
 
                     Statement::AlterIndex(AlterIndexStatement {
                         index_name: name,
@@ -4012,9 +4216,13 @@ impl<'a> Parser<'a> {
                     })
                 }
                 SET => {
-                    self.expect_token(&Token::LParen)?;
-                    let set_options = self.parse_comma_separated(Parser::parse_index_option)?;
-                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterIndex)?;
+                    let set_options = self
+                        .parse_comma_separated(Parser::parse_index_option)
+                        .map_parser_err(StatementKind::AlterIndex)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterIndex)?;
                     Statement::AlterIndex(AlterIndexStatement {
                         index_name: name,
                         if_exists,
@@ -4022,8 +4230,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 RENAME => {
-                    self.expect_keyword(TO)?;
-                    let to_item_name = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
+                    let to_item_name = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Index,
@@ -4033,8 +4244,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 OWNER => {
-                    self.expect_keyword(TO)?;
-                    let new_owner = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterOwner)?;
+                    let new_owner = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterOwner)?;
 
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Index,
@@ -4048,57 +4262,76 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_item_name()?;
+    fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name = self.parse_item_name().map_no_statement_parser_err()?;
 
-        Ok(match self.expect_one_of_keywords(&[AS, RENAME, OWNER])? {
-            AS => {
-                let value = self.parse_expr()?;
-                Statement::AlterSecret(AlterSecretStatement {
-                    name,
-                    if_exists,
-                    value,
-                })
-            }
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+        Ok(
+            match self
+                .expect_one_of_keywords(&[AS, RENAME, OWNER])
+                .map_no_statement_parser_err()?
+            {
+                AS => {
+                    let value = self
+                        .parse_expr()
+                        .map_parser_err(StatementKind::AlterSecret)?;
+                    Statement::AlterSecret(AlterSecretStatement {
+                        name,
+                        if_exists,
+                        value,
+                    })
+                }
+                RENAME => {
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
+                    let to_item_name = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Secret,
-                    if_exists,
-                    name: UnresolvedObjectName::Item(name),
-                    to_item_name,
-                })
-            }
-            OWNER => {
-                self.expect_keyword(TO)?;
-                let new_owner = self.parse_identifier()?;
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Secret,
+                        if_exists,
+                        name: UnresolvedObjectName::Item(name),
+                        to_item_name,
+                    })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterOwner)?;
+                    let new_owner = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterOwner)?;
 
-                Statement::AlterOwner(AlterOwnerStatement {
-                    object_type: ObjectType::Secret,
-                    if_exists,
-                    name: UnresolvedObjectName::Item(name),
-                    new_owner,
-                })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Secret,
+                        if_exists,
+                        name: UnresolvedObjectName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     /// Parse an ALTER SINK statement.
-    fn parse_alter_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_item_name()?;
+    fn parse_alter_sink(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name = self.parse_item_name().map_no_statement_parser_err()?;
 
         Ok(
-            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+            match self
+                .expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])
+                .map_no_statement_parser_err()?
+            {
                 RESET => {
-                    self.expect_token(&Token::LParen)?;
-                    let reset_options =
-                        self.parse_comma_separated(Parser::parse_create_sink_option_name)?;
-                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterSink)?;
+                    let reset_options = self
+                        .parse_comma_separated(Parser::parse_create_sink_option_name)
+                        .map_parser_err(StatementKind::AlterSink)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterSink)?;
 
                     Statement::AlterSink(AlterSinkStatement {
                         sink_name: name,
@@ -4107,10 +4340,13 @@ impl<'a> Parser<'a> {
                     })
                 }
                 SET => {
-                    self.expect_token(&Token::LParen)?;
-                    let set_options =
-                        self.parse_comma_separated(Parser::parse_create_sink_option)?;
-                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterSink)?;
+                    let set_options = self
+                        .parse_comma_separated(Parser::parse_create_sink_option)
+                        .map_parser_err(StatementKind::AlterSink)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterSink)?;
                     Statement::AlterSink(AlterSinkStatement {
                         sink_name: name,
                         if_exists,
@@ -4118,8 +4354,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 RENAME => {
-                    self.expect_keyword(TO)?;
-                    let to_item_name = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
+                    let to_item_name = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Sink,
@@ -4129,8 +4368,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 OWNER => {
-                    self.expect_keyword(TO)?;
-                    let new_owner = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterOwner)?;
+                    let new_owner = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterOwner)?;
 
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Sink,
@@ -4145,12 +4387,20 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse an ALTER SYSTEM statement.
-    fn parse_alter_system(&mut self) -> Result<Statement<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[SET, RESET])? {
+    fn parse_alter_system(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        match self
+            .expect_one_of_keywords(&[SET, RESET])
+            .map_no_statement_parser_err()?
+        {
             SET => {
-                let name = self.parse_identifier()?;
-                self.expect_keyword_or_token(TO, &Token::Eq)?;
-                let to = self.parse_set_variable_to()?;
+                let name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterSystemSet)?;
+                self.expect_keyword_or_token(TO, &Token::Eq)
+                    .map_parser_err(StatementKind::AlterSystemSet)?;
+                let to = self
+                    .parse_set_variable_to()
+                    .map_parser_err(StatementKind::AlterSystemSet)?;
                 Ok(Statement::AlterSystemSet(AlterSystemSetStatement {
                     name,
                     to,
@@ -4162,7 +4412,9 @@ impl<'a> Parser<'a> {
                         AlterSystemResetAllStatement {},
                     ))
                 } else {
-                    let name = self.parse_identifier()?;
+                    let name = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterSystemReset)?;
                     Ok(Statement::AlterSystemReset(AlterSystemResetStatement {
                         name,
                     }))
@@ -4172,15 +4424,21 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_alter_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_item_name()?;
+    fn parse_alter_connection(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name = self.parse_item_name().map_no_statement_parser_err()?;
 
         Ok(
-            match self.expect_one_of_keywords(&[RENAME, ROTATE, OWNER])? {
+            match self
+                .expect_one_of_keywords(&[RENAME, ROTATE, OWNER])
+                .map_no_statement_parser_err()?
+            {
                 RENAME => {
-                    self.expect_keyword(TO)?;
-                    let to_item_name = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
+                    let to_item_name = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterObjectRename)?;
 
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Connection,
@@ -4190,12 +4448,16 @@ impl<'a> Parser<'a> {
                     })
                 }
                 ROTATE => {
-                    self.expect_keyword(KEYS)?;
+                    self.expect_keyword(KEYS)
+                        .map_parser_err(StatementKind::AlterConnection)?;
                     Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
                 }
                 OWNER => {
-                    self.expect_keyword(TO)?;
-                    let new_owner = self.parse_identifier()?;
+                    self.expect_keyword(TO)
+                        .map_parser_err(StatementKind::AlterOwner)?;
+                    let new_owner = self
+                        .parse_identifier()
+                        .map_parser_err(StatementKind::AlterOwner)?;
 
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Connection,
@@ -4287,21 +4549,30 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a copy statement
-    fn parse_copy(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_copy(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         let relation = if self.consume_token(&Token::LParen) {
             let query = self.parse_statement()?;
-            self.expect_token(&Token::RParen)?;
+            self.expect_token(&Token::RParen)
+                .map_parser_err(StatementKind::Copy)?;
             match query {
                 Statement::Select(stmt) => CopyRelation::Select(stmt),
                 Statement::Subscribe(stmt) => CopyRelation::Subscribe(stmt),
-                _ => return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY"),
+                _ => {
+                    return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY")
+                        .map_parser_err(StatementKind::Copy)
+                }
             }
         } else {
-            let name = self.parse_raw_name()?;
-            let columns = self.parse_parenthesized_column_list(Optional)?;
+            let name = self.parse_raw_name().map_parser_err(StatementKind::Copy)?;
+            let columns = self
+                .parse_parenthesized_column_list(Optional)
+                .map_parser_err(StatementKind::Copy)?;
             CopyRelation::Table { name, columns }
         };
-        let (direction, target) = match self.expect_one_of_keywords(&[FROM, TO])? {
+        let (direction, target) = match self
+            .expect_one_of_keywords(&[FROM, TO])
+            .map_parser_err(StatementKind::Copy)?
+        {
             FROM => {
                 if let CopyRelation::Table { .. } = relation {
                     // Ok.
@@ -4310,13 +4581,16 @@ impl<'a> Parser<'a> {
                         self,
                         self.peek_prev_pos(),
                         "queries not allowed in COPY FROM"
-                    );
+                    )
+                    .map_no_statement_parser_err();
                 }
-                self.expect_keyword(STDIN)?;
+                self.expect_keyword(STDIN)
+                    .map_parser_err(StatementKind::Copy)?;
                 (CopyDirection::From, CopyTarget::Stdin)
             }
             TO => {
-                self.expect_keyword(STDOUT)?;
+                self.expect_keyword(STDOUT)
+                    .map_parser_err(StatementKind::Copy)?;
                 (CopyDirection::To, CopyTarget::Stdout)
             }
             _ => unreachable!(),
@@ -4325,14 +4599,18 @@ impl<'a> Parser<'a> {
         // compat with Postgres but is required elsewhere, which is why we don't use
         // parse_with_options here.
         let has_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
+            self.expect_token(&Token::LParen)
+                .map_parser_err(StatementKind::Copy)?;
             true
         } else {
             self.consume_token(&Token::LParen)
         };
         let options = if has_options {
-            let o = self.parse_comma_separated(Parser::parse_copy_option)?;
-            self.expect_token(&Token::RParen)?;
+            let o = self
+                .parse_comma_separated(Parser::parse_copy_option)
+                .map_parser_err(StatementKind::Copy)?;
+            self.expect_token(&Token::RParen)
+                .map_parser_err(StatementKind::Copy)?;
             o
         } else {
             vec![]
@@ -5286,14 +5564,14 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_set(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_set(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         let modifier = self.parse_one_of_keywords(&[SESSION, LOCAL]);
-        let mut variable = self.parse_identifier()?;
+        let mut variable = self.parse_identifier().map_no_statement_parser_err()?;
         let mut normal = self.consume_token(&Token::Eq) || self.parse_keyword(TO);
         if !normal {
             match variable.as_str().parse() {
                 Ok(TIME) => {
-                    self.expect_keyword(ZONE)?;
+                    self.expect_keyword(ZONE).map_no_statement_parser_err()?;
                     variable = Ident::new("timezone");
                     normal = true;
                 }
@@ -5306,14 +5584,18 @@ impl<'a> Parser<'a> {
         }
         if variable.as_str().parse() == Ok(SCHEMA) {
             variable = Ident::new("search_path");
-            let to = self.parse_set_schema_to()?;
+            let to = self
+                .parse_set_schema_to()
+                .map_parser_err(StatementKind::SetVariable)?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
                 to,
             }))
         } else if normal {
-            let to = self.parse_set_variable_to()?;
+            let to = self
+                .parse_set_variable_to()
+                .map_parser_err(StatementKind::SetVariable)?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
@@ -5323,7 +5605,9 @@ impl<'a> Parser<'a> {
             // SET TRANSACTION transaction_mode
             Ok(Statement::SetTransaction(SetTransactionStatement {
                 local: true,
-                modes: self.parse_transaction_modes(true)?,
+                modes: self
+                    .parse_transaction_modes(true)
+                    .map_parser_err(StatementKind::SetTransaction)?,
             }))
         } else if modifier == Some(SESSION)
             && variable.as_str().parse() == Ok(CHARACTERISTICS)
@@ -5332,10 +5616,13 @@ impl<'a> Parser<'a> {
             // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
             Ok(Statement::SetTransaction(SetTransactionStatement {
                 local: false,
-                modes: self.parse_transaction_modes(true)?,
+                modes: self
+                    .parse_transaction_modes(true)
+                    .map_parser_err(StatementKind::SetTransaction)?,
             }))
         } else {
             self.expected(self.peek_pos(), "equals sign or TO", self.peek_token())
+                .map_no_statement_parser_err()
         }
     }
 
@@ -6185,12 +6472,16 @@ impl<'a> Parser<'a> {
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token
     /// has already been consumed.
-    fn parse_declare(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let name = self.parse_identifier()?;
-        self.expect_keyword(CURSOR)?;
+    fn parse_declare(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let name = self
+            .parse_identifier()
+            .map_parser_err(StatementKind::Declare)?;
+        self.expect_keyword(CURSOR)
+            .map_parser_err(StatementKind::Declare)?;
         // WITHOUT HOLD is optional and the default behavior so we can ignore it.
         let _ = self.parse_keywords(&[WITHOUT, HOLD]);
-        self.expect_keyword(FOR)?;
+        self.expect_keyword(FOR)
+            .map_parser_err(StatementKind::Declare)?;
         let stmt = self.parse_statement()?;
         Ok(Statement::Declare(DeclareStatement {
             name,
@@ -6207,9 +6498,12 @@ impl<'a> Parser<'a> {
 
     /// Parse a `PREPARE` statement, assuming that the `PREPARE` token
     /// has already been consumed.
-    fn parse_prepare(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let name = self.parse_identifier()?;
-        self.expect_keyword(AS)?;
+    fn parse_prepare(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        let name = self
+            .parse_identifier()
+            .map_parser_err(StatementKind::Prepare)?;
+        self.expect_keyword(AS)
+            .map_parser_err(StatementKind::Prepare)?;
         let pos = self.peek_pos();
         //
         let stmt = match self.parse_statement()? {
@@ -6217,7 +6511,10 @@ impl<'a> Parser<'a> {
             | stmt @ Statement::Insert(_)
             | stmt @ Statement::Delete(_)
             | stmt @ Statement::Update(_) => stmt,
-            _ => return parser_err!(self, pos, "unpreparable statement"),
+            _ => {
+                return parser_err!(self, pos, "unpreparable statement")
+                    .map_no_statement_parser_err()
+            }
         };
         Ok(Statement::Prepare(PrepareStatement {
             name,
@@ -6305,10 +6602,14 @@ impl<'a> Parser<'a> {
 
     /// Parse a `GRANT` statement, assuming that the `GRANT` token
     /// has already been consumed.
-    fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.parse_privilege_specification() {
-            Some(privileges) => self.parse_grant_privilege(privileges),
-            None => self.parse_grant_role(),
+            Some(privileges) => self
+                .parse_grant_privilege(privileges)
+                .map_parser_err(StatementKind::GrantPrivileges),
+            None => self
+                .parse_grant_role()
+                .map_parser_err(StatementKind::GrantRole),
         }
     }
 
@@ -6343,10 +6644,14 @@ impl<'a> Parser<'a> {
 
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
-    fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.parse_privilege_specification() {
-            Some(privileges) => self.parse_revoke_privilege(privileges),
-            None => self.parse_revoke_role(),
+            Some(privileges) => self
+                .parse_revoke_privilege(privileges)
+                .map_parser_err(StatementKind::RevokePrivileges),
+            None => self
+                .parse_revoke_role()
+                .map_parser_err(StatementKind::RevokeRole),
         }
     }
 

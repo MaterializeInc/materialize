@@ -651,12 +651,24 @@ where
         assert!(res.is_ok());
     }
 
+    fn parse_sql(&self, sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
+        match self.adapter_client.parse(sql) {
+            Ok(result) => result.map_err(|e| {
+                // Convert our 0-based byte position to pgwire's 1-based character
+                // position.
+                let pos = sql[..e.error.pos].chars().count() + 1;
+                ErrorResponse::error(SqlState::SYNTAX_ERROR, e.error.message).with_position(pos)
+            }),
+            Err(msg) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, msg)),
+        }
+    }
+
     // See "Multiple Statements in a Simple Query" which documents how implicit
     // transactions are handled.
     // From https://www.postgresql.org/docs/current/protocol-flow.html
     async fn query(&mut self, sql: String) -> Result<State, io::Error> {
         // Parse first before doing any transaction checking.
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 self.error(err).await?;
@@ -739,7 +751,7 @@ where
             }
         }
 
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 return self.error(err).await;
@@ -1947,18 +1959,6 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[mz_pgrepr::Format]) -> Ba
             BackendMessage::RowDescription(message::encode_row_description(desc, formats))
         }
         _ => BackendMessage::NoData,
-    }
-}
-
-fn parse_sql(sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
-    match mz_sql::parse::parse_with_limit(sql) {
-        Ok(result) => result.map_err(|e| {
-            // Convert our 0-based byte position to pgwire's 1-based character
-            // position.
-            let pos = sql[..e.pos].chars().count() + 1;
-            ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
-        }),
-        Err(e) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, e)),
     }
 }
 

@@ -111,7 +111,7 @@ pub enum AdapterError {
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// Wrapper around parsing error
-    ParseError(mz_sql_parser::parser::ParserError),
+    ParseError(mz_sql_parser::parser::ParserStatementError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The transaction in in read-only mode and a read already occurred.
@@ -645,8 +645,8 @@ impl From<TimestampError> for AdapterError {
     }
 }
 
-impl From<mz_sql_parser::parser::ParserError> for AdapterError {
-    fn from(e: mz_sql_parser::parser::ParserError) -> Self {
+impl From<mz_sql_parser::parser::ParserStatementError> for AdapterError {
+    fn from(e: mz_sql_parser::parser::ParserStatementError) -> Self {
         AdapterError::ParseError(e)
     }
 }

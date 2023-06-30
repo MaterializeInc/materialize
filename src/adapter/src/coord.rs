@@ -1638,7 +1638,7 @@ pub async fn serve(
             unsafe_mode,
             all_features,
             build_info,
-            environment_id,
+            environment_id: environment_id.clone(),
             now: now.clone(),
             skip_migrations: false,
             metrics_registry: &metrics_registry,
@@ -1668,6 +1668,7 @@ pub async fn serve(
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
     let metrics = Metrics::register_into(&metrics_registry);
     let metrics_clone = metrics.clone();
+    let segment_client_clone = segment_client.clone();
     let span = tracing::Span::current();
     let coord_now = now.clone();
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
@@ -1752,7 +1753,14 @@ pub async fn serve(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone, now);
+            let client = Client::new(
+                build_info,
+                cmd_tx.clone(),
+                metrics_clone,
+                now,
+                environment_id,
+                segment_client_clone,
+            );
             Ok((handle, client))
         }
         Err(e) => Err(e),
