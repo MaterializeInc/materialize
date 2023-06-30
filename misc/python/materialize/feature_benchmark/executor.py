@@ -34,6 +34,9 @@ class Executor:
         self._known_fragments.add(fragment)
         return result
 
+    def DockerMem(self) -> int:
+        raise NotImplementedError
+
 
 class Docker(Executor):
     def __init__(
@@ -66,6 +69,9 @@ class Docker(Executor):
         return self._composition.run(
             "kgen", f"--topic=testdrive-{topic}-{self._seed}", *args
         )
+
+    def DockerMem(self) -> int:
+        return self._composition.mem("materialized")
 
 
 class MzCloud(Executor):

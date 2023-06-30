@@ -8,12 +8,13 @@
 # by the Apache License, Version 2.0.
 
 import sys
-from typing import List, Optional, Tuple, Type
+from typing import Iterable, List, Optional, Type
 
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.filter import Filter
+from materialize.feature_benchmark.measurement import Measurement, MeasurementType
 from materialize.feature_benchmark.scenario import Scenario
 from materialize.feature_benchmark.termination import TerminationCondition
 
@@ -26,8 +27,9 @@ class Benchmark:
         executor: Executor,
         filter: Filter,
         termination_conditions: List[TerminationCondition],
-        aggregation: Aggregation,
+        aggregation_class: Type[Aggregation],
         scale: Optional[str] = None,
+        measure_memory: bool = True,
     ) -> None:
         self._scale = scale
         self._mz_id = mz_id
@@ -35,9 +37,12 @@ class Benchmark:
         self._executor = executor
         self._filter = filter
         self._termination_conditions = termination_conditions
-        self._aggregation = aggregation
+        self._performance_aggregation = aggregation_class()
 
-    def run(self) -> Tuple[float, int]:
+        if measure_memory:
+            self._memory_aggregation = aggregation_class()
+
+    def run(self) -> List[Aggregation]:
         scale = self._scenario.SCALE
 
         if self._scale and not self._scenario.FIXED_SCALE:
@@ -103,17 +108,29 @@ class Benchmark:
                 timestamps[1] >= timestamps[0]
             ), f"Second timestamp reported not greater than first: scenario: {scenario}, timestamps: {timestamps}"
 
-            measurement = timestamps[1] - timestamps[0]
-            if self._filter and self._filter.filter(measurement):
-                continue
+            performance_measurement = Measurement(
+                type=MeasurementType.WALLCLOCK,
+                value=timestamps[1] - timestamps[0],
+            )
 
-            print(f"Measurement {i}: {measurement}")
+            if not self._filter or not self._filter.filter(performance_measurement):
+                print(f"{i} {performance_measurement}")
+                self._performance_aggregation.append(performance_measurement)
 
-            self._aggregation.append(measurement)
+            if self._memory_aggregation:
+                memory_measurement = Measurement(
+                    type=MeasurementType.MEMORY,
+                    value=self._executor.DockerMem() / 2**20,  # Convert to Mb
+                )
+
+                if memory_measurement.value > 0:
+                    if not self._filter or not self._filter.filter(memory_measurement):
+                        print(f"{i} {memory_measurement}")
+                        self._memory_aggregation.append(memory_measurement)
 
             for termination_condition in self._termination_conditions:
-                if termination_condition.terminate(measurement):
-                    return self._aggregation.aggregate(), i + 1
+                if termination_condition.terminate(performance_measurement):
+                    return [self._performance_aggregation, self._memory_aggregation]
 
         assert False, "unreachable"
 
@@ -125,16 +142,19 @@ class Report:
     def append(self, comparison: Comparator) -> None:
         self._comparisons.append(comparison)
 
+    def extend(self, comparisons: Iterable[Comparator]) -> None:
+        self._comparisons.extend(comparisons)
+
     def dump(self) -> None:
         print(
-            f"{'NAME':<35} | {'THIS':^11} | {'OTHER':^11} | {'Regression?':^13} | 'THIS' is:"
+            f"{'NAME':<35} | {'TYPE':<10} | {'THIS':^11} | {'OTHER':^11} | {'Regression?':^13} | 'THIS' is:"
         )
         print("-" * 100)
 
         for comparison in self._comparisons:
             regression = "!!YES!!" if comparison.is_regression() else "no"
             print(
-                f"{comparison.name():<35} | {comparison.this():>11.3f} | {comparison.other():>11.3f} | {regression:^13} | {comparison.human_readable()}"
+                f"{comparison.name:<35} | {comparison.type:<10} | {comparison.this():>11.3f} | {comparison.other():>11.3f} | {regression:^13} | {comparison.human_readable()}"
             )
 
 
@@ -144,4 +164,4 @@ class SingleReport(Report):
         print("-" * 50)
 
         for comparison in self._comparisons:
-            print(f"{comparison.name():<25} | {comparison.this():>11.3f}")
+            print(f"{comparison.name:<25} | {comparison.this():>11.3f}")
