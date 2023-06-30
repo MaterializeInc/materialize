@@ -1187,18 +1187,27 @@ async fn handle_message<K, V, T, D>(
     T: SourceTimestamp,
     D: Semigroup,
 {
-    let (partition, offset) = time
-        .try_into_compat_ts()
-        .expect("data at invalid timestamp");
-
     let output = match message {
         Ok(message) => {
+            let (partition, offset) = time
+                .try_into_compat_ts()
+                .expect("data at invalid timestamp");
+
             // Note: empty and null payload/keys are currently treated as the same thing.
             if let Some(len) = message.key.len() {
                 *bytes_read += len;
             }
             if let Some(len) = message.value.len() {
                 *bytes_read += len;
+            }
+
+            match metric_updates.entry(partition) {
+                Entry::Occupied(mut entry) => {
+                    entry.insert((offset, ts, entry.get().2 + 1));
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert((offset, ts, 1));
+                }
             }
 
             (
@@ -1224,12 +1233,4 @@ async fn handle_message<K, V, T, D>(
 
     let ts_cap = cap_set.delayed(&ts);
     output_handle.give(&ts_cap, (output, ts, diff)).await;
-    match metric_updates.entry(partition) {
-        Entry::Occupied(mut entry) => {
-            entry.insert((offset, ts, entry.get().2 + 1));
-        }
-        Entry::Vacant(entry) => {
-            entry.insert((offset, ts, 1));
-        }
-    }
 }

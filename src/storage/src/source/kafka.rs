@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
@@ -405,8 +406,21 @@ impl SourceRender for KafkaSourceConnection {
                                 .or_insert_with(|| data_cap.delayed(&part_min_ts));
                         }
                     }
+                    // Topics are identified by name but it's possible that a user recreates a
+                    // topic with the same name but different configuration. Ideally we'd want to
+                    // catch all of these cases and immediately error out the source, since the
+                    // data is effectively gone. Unfortunately this is not possible without
+                    // something like KIP-516 so we're left with heuristics.
+                    //
+                    // Here is one such heuristic that checks if the reported number of partitions
+                    // went down. If this happens we know that the topic got swapped out.
                     let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
-                    data_cap.downgrade(&future_ts);
+                    if let Err(_) = data_cap.try_downgrade(&future_ts) {
+                        let err = SourceReaderError::other_definite(anyhow!("topic was recreated"));
+                        let time = data_cap.time().clone();
+                        data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
+                        return;
+                    }
                 }
 
                 // Poll the consumer once. We split the consumer's partitions out into separate
