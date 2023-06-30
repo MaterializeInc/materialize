@@ -689,6 +689,19 @@ Add partitions to an existing topic
 
 Create a Kafka topic
 
+#### `$ kafka-delete-topic-flaky`
+
+Delete a Kafka topic
+
+Even though `kafka-delete-topic-flaky` ensures that the topic no longer exists
+in the broker metadata there is still work to be done asychnronously before
+it's truly gone that must complete before we attempt to recreate it. There is
+no way to observe this work completing so the only option left is sleeping for
+a while after executing this command. 
+
+For this reason this command must be used with great care or not at all,
+otherwise there is a risk of introducing flakiness in CI.
+
 #### `$ kafka-ingest topic=... schema=... ...`
 
 Sends the data provided to a kafka topic. This action has many arguments:
