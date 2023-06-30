@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -836,10 +837,30 @@ class DependencySet:
         """
         deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
         self._prepare_batch(deps_to_build)
+
+        images_to_push = []
         for dep in deps_to_build:
             dep.build()
             if dep.publish:
-                spawn.runv(["docker", "push", dep.spec()])
+                images_to_push.append(dep.spec())
+
+        # Push all Docker images in parallel to minimize build time.
+        pushes: list[subprocess.Popen] = []
+        for image in images_to_push:
+            # Piping through `cat` disables terminal control codes, and so the
+            # interleaved progress output from multiple pushes is less hectic.
+            # We don't use `docker push --quiet`, as that disables progress
+            # output entirely.
+            push = subprocess.Popen(
+                f"docker push {shlex.quote(image)} | cat",
+                shell=True,
+            )
+            pushes.append(push)
+
+        for push in pushes:
+            returncode = push.wait()
+            if returncode:
+                raise subprocess.CalledProcessError(returncode, push.args)
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self._dependencies.values())
