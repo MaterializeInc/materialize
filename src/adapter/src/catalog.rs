@@ -8530,18 +8530,6 @@ impl mz_sql::catalog::CatalogRole for Role {
         self.attributes.inherit
     }
 
-    fn create_role(&self) -> bool {
-        self.attributes.create_role
-    }
-
-    fn create_db(&self) -> bool {
-        self.attributes.create_db
-    }
-
-    fn create_cluster(&self) -> bool {
-        self.attributes.create_cluster
-    }
-
     fn membership(&self) -> &BTreeMap<RoleId, RoleId> {
         &self.membership.map
     }

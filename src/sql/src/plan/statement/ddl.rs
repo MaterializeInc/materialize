@@ -24,7 +24,7 @@ use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
@@ -2654,18 +2654,10 @@ generate_extracted_config!(
 #[derive(Debug)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
-    pub create_role: Option<bool>,
-    pub create_db: Option<bool>,
-    pub create_cluster: Option<bool>,
 }
 
 fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
-    let mut planned_attributes = PlannedRoleAttributes {
-        inherit: None,
-        create_role: None,
-        create_db: None,
-        create_cluster: None,
-    };
+    let mut planned_attributes = PlannedRoleAttributes { inherit: None };
 
     for option in options {
         match option {
@@ -2711,22 +2703,6 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
     }
 
     Ok(planned_attributes)
-}
-
-impl From<&PlannedRoleAttributes> for AclMode {
-    fn from(attributes: &PlannedRoleAttributes) -> Self {
-        let mut acl_mode = AclMode::empty();
-        if let Some(true) = attributes.create_role {
-            acl_mode |= AclMode::CREATE_ROLE;
-        }
-        if let Some(true) = attributes.create_db {
-            acl_mode |= AclMode::CREATE_DB;
-        }
-        if let Some(true) = attributes.create_cluster {
-            acl_mode |= AclMode::CREATE_CLUSTER;
-        }
-        acl_mode
-    }
 }
 
 pub fn describe_create_role(
