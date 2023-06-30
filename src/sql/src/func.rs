@@ -30,6 +30,7 @@ use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
     ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc, ValueWindowFunc, VariadicFunc,
 };
+
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
