@@ -102,7 +102,7 @@ pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 /// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
 /// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
 /// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 25;
+pub const STASH_VERSION: u64 = 26;
 
 /// The minimum [`Stash`] version number that we support migrating from.
 ///
