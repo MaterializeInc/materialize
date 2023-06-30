@@ -44,6 +44,20 @@ DEFAULT_MZ_VOLUMES = [
 DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
 
 
+def try_extract_release_version(image: Optional[str]) -> Optional[MzVersion]:
+    """Returns the MzVersion of the image, if the image was an official release."""
+
+    if (
+        image
+        and "latest" not in image
+        and "devel" not in image
+        and "unstable" not in image
+    ):
+        return MzVersion.parse_mz(image.split(":")[1])
+    else:
+        return None
+
+
 class Materialized(Service):
     class Size:
         DEFAULT_SIZE = 4
@@ -71,6 +85,7 @@ class Materialized(Service):
         additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
         soft_assertions: bool = True,
     ) -> None:
+        release_version: Optional[MzVersion] = try_extract_release_version(image)
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
@@ -85,7 +100,6 @@ class Materialized(Service):
             # are enabled for testing purposes only
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
-            "MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/scratch",
             "MZ_BOOTSTRAP_ROLE=materialize",
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             # Please think twice before forwarding additional environment
@@ -96,8 +110,16 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
-            *environment_extra,
         ]
+
+        if release_version and release_version < MzVersion.parse("0.59.0"):
+            # releases before 0.59.0 disabled the scratch directory
+            # by default and will panic if it is passed in.
+            pass
+        else:
+            environment += ["MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/scratch"]
+
+        environment += environment_extra
 
         if system_parameter_defaults is None:
             system_parameter_defaults = {
@@ -152,11 +174,7 @@ class Materialized(Service):
 
         self.default_storage_size = (
             default_size
-            if image
-            and "latest" not in image
-            and "devel" not in image
-            and "unstable" not in image
-            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
+            if release_version and release_version < MzVersion.parse("0.41.0")
             else "1"
             if default_size == 1
             else f"{default_size}-1"
