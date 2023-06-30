@@ -2755,6 +2755,13 @@ pub fn plan_create_cluster(
 
         let replication_factor = replication_factor.unwrap_or(1);
         let availability_zones = availability_zones.unwrap_or_default();
+
+        let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
+        let disk = disk.unwrap_or(disk_default);
+        if disk {
+            scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
+        }
+
         Ok(Plan::CreateCluster(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
@@ -2762,8 +2769,7 @@ pub fn plan_create_cluster(
                 size,
                 availability_zones,
                 compute,
-                // Managed clusters do not use `disk_cluster_replicas_default`.
-                disk: disk.unwrap_or_default(),
+                disk,
             }),
         }))
     } else {
