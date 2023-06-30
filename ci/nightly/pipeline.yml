@@ -39,6 +39,7 @@ steps:
           - { value: zippy-crdb-latest }
           - { value: secrets }
           - { value: checks-restart-cockroach }
+          - { value: checks-restart-entire-mz }
           - { value: checks-parallel-drop-create-default-replica }
           - { value: checks-parallel-restart-clusterd-compute }
           - { value: checks-parallel-restart-entire-mz }
@@ -353,6 +354,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
+
+  - id: checks-restart-entire-mz
+    label: "Checks + restart of the entire Mz"
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
