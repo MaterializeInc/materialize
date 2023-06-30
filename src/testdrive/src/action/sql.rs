@@ -127,6 +127,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::CreateSource { .. }
         | Statement::CreateTable { .. }
         | Statement::CreateView { .. }
+        | Statement::CreateMaterializedView { .. }
         | Statement::DropObjects { .. } => {
             let disk_state = state
                 .with_catalog_copy(|catalog| catalog.state().dump())

@@ -1469,9 +1469,27 @@ fn plan_set_expr(
             Ok((expr, scope))
         }
         SetExpr::Show(stmt) => {
+            // The create SQL definition of involving this query, will have the explicit `SHOW`
+            // command in it. Many `SHOW` commands will expand into a sub-query that involves the
+            // current schema of the executing user. When Materialize restarts and tries to re-plan
+            // these queries, it will only have access to the raw `SHOW` command and have no idea
+            // what schema to use. As a result Materialize will fail to boot.
+            //
+            // Some `SHOW` commands are ok, like `SHOW CLUSTERS`, and there are probably other ways
+            // around this issue. Such as expanding the `SHOW` command in the SQL definition. For
+            // now we just disallow any `SHOW` commands in views.
+            //
+            // Ideally, the `SHOW` commands that use the current schema would expand to use the
+            // `current_schema()` function, instead of hard-coding the current schema id, so that
+            // planning can correctly identify that they are unmaterializable. However, that's a
+            // little tricky because `current_schema()` returns a schema name not id, which is what
+            // we need.
+            if qcx.lifetime == QueryLifetime::Static {
+                return Err(PlanError::ShowCommandInView);
+            }
+
             // Some SHOW statements are a SELECT query. Others produces Rows
             // directly. Convert both of these to the needed Hir and Scope.
-
             fn to_hirscope(
                 plan: ShowCreatePlan,
                 desc: StatementDesc,
