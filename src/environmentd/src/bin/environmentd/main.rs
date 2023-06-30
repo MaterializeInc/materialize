@@ -761,7 +761,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                     .orchestrator_process_prometheus_service_discovery_directory,
                             },
                         ),
-                        scratch_directory: args.orchestrator_process_scratch_directory.clone(),
+                        scratch_directory: args
+                            .orchestrator_process_scratch_directory
+                            .expect("process orchestrator requires scratch directory"),
                     }))
                     .context("creating process orchestrator")?,
             );

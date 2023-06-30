@@ -148,7 +148,7 @@ pub struct ProcessOrchestratorConfig {
     /// browsers).
     pub tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     /// A scratch directory that orchestrated processes can use for ephemeral storage.
-    pub scratch_directory: Option<PathBuf>,
+    pub scratch_directory: PathBuf,
 }
 
 /// Configures the TCP proxy for a [`ProcessOrchestrator`].
@@ -189,7 +189,7 @@ pub struct ProcessOrchestrator {
     command_wrapper: Vec<String>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
-    scratch_directory: Option<PathBuf>,
+    scratch_directory: PathBuf,
 }
 
 impl ProcessOrchestrator {
@@ -275,7 +275,7 @@ struct NamespacedProcessOrchestrator {
     system: Mutex<System>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
-    scratch_directory: Option<PathBuf>,
+    scratch_directory: PathBuf,
 }
 
 #[async_trait]
@@ -353,11 +353,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             .await
             .context("creating run directory")?;
         let scratch_dir = if disk {
-            let scratch_dir = self
-                .scratch_directory
-                .as_ref()
-                .expect("scratch directory must be specified when using disk")
-                .join(&full_id);
+            let scratch_dir = self.scratch_directory.join(&full_id);
             fs::create_dir_all(&scratch_dir)
                 .await
                 .context("creating scratch directory")?;
