@@ -114,6 +114,7 @@ uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
+zstd-sys = { version = "2.0.8", features = ["std"] }
 
 [build-dependencies]
 ahash = { version = "0.8.0" }
@@ -218,6 +219,7 @@ uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
+zstd-sys = { version = "2.0.8", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }

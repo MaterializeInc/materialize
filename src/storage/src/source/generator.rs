@@ -31,12 +31,14 @@ use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 mod auction;
 mod counter;
 mod datums;
+mod ldbc;
 mod marketing;
 mod tpch;
 
 pub use auction::Auction;
 pub use counter::Counter;
 pub use datums::Datums;
+pub use ldbc::Ldbc;
 pub use tpch::Tpch;
 
 use self::marketing::Marketing;
@@ -65,6 +67,7 @@ pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Gene
             // completely.
             tick: Duration::from_micros(tick_micros.unwrap_or(0)),
         }),
+        LoadGenerator::Ldbc { urls } => Box::new(Ldbc { urls: urls.clone() }),
     }
 }
 

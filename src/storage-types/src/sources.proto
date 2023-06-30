@@ -208,6 +208,7 @@ message ProtoLoadGeneratorSourceConnection {
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
         google.protobuf.Empty marketing = 7;
+        ProtoLdbcLoadGenerator ldbc = 8;
     }
     optional uint64 tick_micros = 2;
 }
@@ -226,6 +227,10 @@ message ProtoTpchLoadGenerator {
     int64 count_customer = 3;
     int64 count_orders = 4;
     int64 count_clerk = 5;
+}
+
+message ProtoLdbcLoadGenerator {
+    repeated string urls = 1;
 }
 
 message ProtoCompression {

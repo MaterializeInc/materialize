@@ -1514,6 +1514,24 @@ pub(crate) fn load_generator_ast_to_generator(
                 count_clerk,
             }
         }
+        mz_sql_parser::ast::LoadGenerator::Ldbc => {
+            let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
+            let sf: i64 = match scale_factor {
+                None => 1,
+                Some(sf) => match i64::try_cast_from(sf) {
+                    Some(i) => i,
+                    None => sql_bail!("unsupported scale factor: {sf}"),
+                },
+            };
+            // See https://github.com/ldbc/ldbc_snb_bi/blob/main/snb-bi-pre-generated-data-sets.md
+            // for valid scale factors and URLs.
+            match sf {
+                1 | 3 | 10 | 30 | 100 | 300 => {}
+                _ => sql_bail!("unsupported scale factor: {sf}"),
+            }
+            let urls = vec![format!("https://pub-383410a98aef4cb686f0c7601eddd25f.r2.dev/bi-pre-audit/bi-sf{}-composite-merged-fk.tar.zst", sf)];
+            LoadGenerator::Ldbc { urls }
+        }
     };
 
     let mut available_subsources = BTreeMap::new();
@@ -1526,6 +1544,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
+                LoadGenerator::Ldbc { .. } => "ldbc".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
