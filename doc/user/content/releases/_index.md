@@ -23,13 +23,13 @@ and [documentation](https://materialize.com/docs/lts/).
 
 ## Schedule
 
-Each week, Materialize upgrades all regions to the latest version according to
+Materialize upgrades all regions to the latest release each week according to
 the following schedule:
 
-Region        | Upgrade window
---------------|------------------------------
-aws/eu-west-1 | 2100-2300 [Europe/Dublin]
-aws/us-east-1 | 0500-0700 [America/New_York]
+Region        | Day of week | Time
+--------------|-------------|-----------------------------
+aws/eu-west-1 | Wednesday   | 2100-2300 [Europe/Dublin]
+aws/us-east-1 | Thursday    | 0500-0700 [America/New_York]
 
 {{< note >}}
 Upgrade windows follow any daylight saving time or summer time rules
