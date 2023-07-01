@@ -17,10 +17,12 @@ documentation][user-docs].
 
 import argparse
 import base64
+import collections
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -29,11 +31,23 @@ from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import IO, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set
+from typing import (
+    IO,
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    cast,
+)
 
 import boto3
 import yaml
 from botocore.exceptions import NoCredentialsError
+from typing_extensions import Self
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.elf import get_build_id
@@ -151,6 +165,15 @@ class PreImage:
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
+
+    @classmethod
+    def prepare_batch(cls, instances: list[Self]) -> None:
+        """Prepare a batch of actions.
+
+        This is useful for `PreImage` actions that are more efficient when
+        their actions are applied to several images in bulk.
+        """
+        pass
 
     def run(self) -> None:
         """Perform the action."""
@@ -303,7 +326,7 @@ class CargoPreImage(PreImage):
 
 
 class CargoBuild(CargoPreImage):
-    """A pre-image action that builds a single binary with Cargo."""
+    """A pre-image action that builds individual binaries with Cargo."""
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
         super().__init__(rd, path)
@@ -314,26 +337,55 @@ class CargoBuild(CargoPreImage):
         self.strip = config.pop("strip", True)
         self.split_debuginfo = config.pop("split_debuginfo", False)
         self.extract = config.pop("extract", {})
-        self.rustflags = config.pop("rustflags", [])
-        self.channel = None
-        if rd.coverage:
-            self.rustflags += rustc_flags.coverage
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
 
-    def build(self) -> None:
-        cargo_build = [
-            *self.rd.cargo("build", channel=self.channel, rustflags=self.rustflags)
-        ]
+    @staticmethod
+    def generate_cargo_build_command(
+        rd: RepositoryDetails,
+        bins: List[str],
+        examples: List[str],
+    ) -> List[str]:
+        rustflags = rustc_flags.coverage if rd.coverage else []
 
-        for bin in self.bins:
+        cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
+
+        for bin in bins:
             cargo_build.extend(["--bin", bin])
-        for example in self.examples:
+        for example in examples:
             cargo_build.extend(["--example", example])
 
-        if self.rd.release_mode:
+        if rd.release_mode:
             cargo_build.append("--release")
-        spawn.runv(cargo_build, cwd=self.rd.root)
+
+        return cargo_build
+
+    @classmethod
+    def prepare_batch(cls, cargo_builds: list[Self]) -> None:
+        super().prepare_batch(cargo_builds)
+
+        if not cargo_builds:
+            return
+
+        # Building all binaries and exmaples in the same `cargo build` command
+        # allows Cargo to link in parallel with other work, which can
+        # meaningfully speed up builds.
+
+        rd: Optional[RepositoryDetails] = None
+        bins = set()
+        examples = set()
+        for build in cargo_builds:
+            if not rd:
+                rd = build.rd
+            bins.update(build.bins)
+            examples.update(build.examples)
+        assert rd
+
+        ui.say(f"Common cargo build for: {', '.join(bins | examples)}")
+        cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
+        spawn.runv(cargo_build, cwd=rd.root)
+
+    def build(self) -> None:
         cargo_profile = "release" if self.rd.release_mode else "debug"
 
         def copy(exe: Path) -> None:
@@ -392,6 +444,10 @@ class CargoBuild(CargoPreImage):
             copy(Path("examples") / example)
 
         if self.extract:
+            cargo_build = self.generate_cargo_build_command(
+                self.rd, self.bins, self.examples
+            )
+
             output = spawn.capture(
                 cargo_build + ["--message-format=json"],
                 cwd=self.rd.root,
@@ -413,6 +469,8 @@ class CargoBuild(CargoPreImage):
                 package = message["package_id"].split()[0]
                 for src, dst in self.extract.get(package, {}).items():
                     spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
+
+        self.acquired = True
 
     def run(self) -> None:
         super().run()
@@ -580,10 +638,13 @@ class ResolvedImage:
         return f
 
     def build(self) -> None:
-        """Build the image from source."""
-        for dep in self.dependencies.values():
-            dep.acquire()
+        """Build the image from source.
+
+        Requires that the caller has already acquired all dependencies and
+        prepared all `PreImage` actions via `PreImage.prepare_batch`.
+        """
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
+
         for pre_image in self.image.pre_images:
             pre_image.run()
         build_args = {
@@ -605,31 +666,26 @@ class ResolvedImage:
         ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
-    def acquire(self) -> None:
-        """Download or build the image if it does not exist locally."""
-        if self.acquired:
-            return
-
+    def try_pull(self) -> bool:
+        """Download the image if it does not exist locally. Returns whether it was found."""
         ui.header(f"Acquiring {self.spec()}")
-        try:
-            spawn.runv(
-                ["docker", "pull", self.spec()],
-                stdout=sys.stderr.buffer,
-            )
-        except subprocess.CalledProcessError:
-            self.build()
-        self.acquired = True
+        if not self.acquired:
+            try:
+                spawn.runv(
+                    ["docker", "pull", self.spec()],
+                    stdout=sys.stderr.buffer,
+                )
+                self.acquired = True
+            except subprocess.CalledProcessError:
+                pass
+        return self.acquired
 
-    def ensure(self) -> None:
-        """Ensure the image exists on Docker Hub if it is publishable.
-
-        The image is pushed using its spec as its tag.
-        """
+    def is_published_if_necessary(self) -> bool:
+        """Report whether the image exists on Docker Hub if it is publishable."""
         if self.publish and is_docker_image_pushed(self.spec()):
             ui.say(f"{self.spec()} already exists")
-            return
-        self.build()
-        spawn.runv(["docker", "push", self.spec()])
+            return True
+        return False
 
     def run(self, args: List[str] = [], docker_args: List[str] = []) -> None:
         """Run a command in the image.
@@ -756,12 +812,22 @@ class DependencySet:
             image.acquired = image.spec() in known_images
             self._dependencies[d.name] = image
 
+    def _prepare_batch(self, images: List[ResolvedImage]) -> None:
+        pre_images = collections.defaultdict(list)
+        for image in images:
+            for pre_image in image.image.pre_images:
+                pre_images[type(pre_image)].append(pre_image)
+        for cls, instances in pre_images.items():
+            cast(PreImage, cls).prepare_batch(instances)
+
     def acquire(self) -> None:
         """Download or build all of the images in the dependency set that do not
         already exist locally.
         """
-        for dep in self:
-            dep.acquire()
+        deps_to_build = [dep for dep in self if not dep.try_pull()]
+        self._prepare_batch(deps_to_build)
+        for dep in deps_to_build:
+            dep.build()
 
     def ensure(self) -> None:
         """Ensure all publishable images in this dependency set exist on Docker
@@ -769,8 +835,32 @@ class DependencySet:
 
         Images are pushed using their spec as their tag.
         """
-        for dep in self:
-            dep.ensure()
+        deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
+        self._prepare_batch(deps_to_build)
+
+        images_to_push = []
+        for dep in deps_to_build:
+            dep.build()
+            if dep.publish:
+                images_to_push.append(dep.spec())
+
+        # Push all Docker images in parallel to minimize build time.
+        pushes: list[subprocess.Popen] = []
+        for image in images_to_push:
+            # Piping through `cat` disables terminal control codes, and so the
+            # interleaved progress output from multiple pushes is less hectic.
+            # We don't use `docker push --quiet`, as that disables progress
+            # output entirely.
+            push = subprocess.Popen(
+                f"docker push {shlex.quote(image)} | cat",
+                shell=True,
+            )
+            pushes.append(push)
+
+        for push in pushes:
+            returncode = push.wait()
+            if returncode:
+                raise subprocess.CalledProcessError(returncode, push.args)
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self._dependencies.values())
