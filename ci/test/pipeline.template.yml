@@ -33,8 +33,9 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
     inputs:
       - "*"
-    timeout_in_minutes: 60
     priority: 1
+    timeout_in_minutes: 60
+    branches: main
     agents:
       queue: builder-linux-aarch64
     coverage: skip
