@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.66"
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 mz-proto = { path = "../proto" }
-num_cpus = "1.14.0"
+num_cpus = "1.16.0"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
