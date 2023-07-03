@@ -468,20 +468,14 @@ pub struct AutoSpillBackend {
     backend_type: BackendType,
     rockdsdb_params: RocksDBParams,
     auto_spill_threshold_bytes: usize,
-    worker_id: usize,
 }
 
 impl AutoSpillBackend {
-    pub(crate) fn new(
-        rockdsdb_params: RocksDBParams,
-        auto_spill_threshold_bytes: usize,
-        worker_id: usize,
-    ) -> Self {
+    pub(crate) fn new(rockdsdb_params: RocksDBParams, auto_spill_threshold_bytes: usize) -> Self {
         Self {
             backend_type: BackendType::InMemory(InMemoryHashMap::default()),
             rockdsdb_params,
             auto_spill_threshold_bytes,
-            worker_id,
         }
     }
 
