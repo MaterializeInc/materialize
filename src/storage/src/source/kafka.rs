@@ -43,6 +43,7 @@ use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
@@ -76,7 +77,7 @@ pub struct KafkaSourceReader {
     start_offsets: BTreeMap<PartitionId, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
-    /// The last partition we received
+    /// The last partition info we received. For each partition we also fetch the high watermark.
     partition_info: Arc<Mutex<Option<BTreeMap<PartitionId, i64>>>>,
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
@@ -387,50 +388,58 @@ impl SourceRender for KafkaSourceConnection {
             };
             tokio::pin!(offset_commit_loop);
 
+            let mut prev_pid_info: Option<BTreeMap<PartitionId, i64>> = None;
             loop {
                 let partition_info = reader.partition_info.lock().unwrap().take();
                 if let Some(partitions) = partition_info {
-                    let mut max_pid = None;
-                    for (pid, upper) in partitions {
-                        max_pid = std::cmp::max(max_pid, Some(pid));
-                        if config.responsible_for(pid) {
-                            reader.ensure_partition(pid);
-                            let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
-                            let part_cap = reader
-                                .partition_capabilities
-                                .entry(pid)
-                                .or_insert_with(|| data_cap.delayed(&part_min_ts));
+                    let max_pid = partitions.keys().last().cloned();
+                    let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
 
-                            let prev_upper = part_cap.time().timestamp().offset;
-                            let upper = u64::try_from(upper).unwrap();
-
-                            // If the previously observed upper is not beyond the currently
-                            // observed upper then the topic was recreated.
-                            if !(prev_upper <= upper) {
-                                let err = SourceReaderError::other_definite(anyhow!(
-                                    "topic was recreated"
-                                ));
-                                let time = part_cap.time().clone();
-                                data_output.give(part_cap, ((0, Err(err)), time, 1)).await;
-                                return;
-                            }
-                        }
-                    }
                     // Topics are identified by name but it's possible that a user recreates a
                     // topic with the same name but different configuration. Ideally we'd want to
                     // catch all of these cases and immediately error out the source, since the
                     // data is effectively gone. Unfortunately this is not possible without
                     // something like KIP-516 so we're left with heuristics.
                     //
-                    // Here is one such heuristic that checks if the reported number of partitions
-                    // went down. If this happens we know that the topic got swapped out.
-                    let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
-                    if let Err(_) = data_cap.try_downgrade(&future_ts) {
-                        let err = SourceReaderError::other_definite(anyhow!("topic was recreated"));
+                    // The first heuristic is whether the reported number of partitions went down
+                    if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
+                        let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
+                        let pid_count = partitions.len();
+                        let err = SourceReaderError::other_definite(
+                            anyhow!( "topic was recreated: partition count regressed from {prev_pid_count} to {pid_count}")
+                        );
                         let time = data_cap.time().clone();
                         data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
                         return;
                     }
+
+                    // The second heuristic is whether the high watermark regressed
+                    if let Some(prev_pid_info) = prev_pid_info {
+                        for (pid, prev_upper) in prev_pid_info {
+                            let upper = partitions[&pid];
+                            if !(prev_upper <= upper) {
+                                let err = SourceReaderError::other_definite(
+                                    anyhow!("topic was recreated: high watermark of partition {pid} regressed from {prev_upper} to {upper}")
+                                );
+                                let time = data_cap.time().clone();
+                                data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
+                                return;
+                            }
+                        }
+                    }
+
+                    for &pid in partitions.keys() {
+                        if config.responsible_for(pid) {
+                            reader.ensure_partition(pid);
+                            let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
+                            reader
+                                .partition_capabilities
+                                .entry(pid)
+                                .or_insert_with(|| data_cap.delayed(&part_min_ts));
+                        }
+                    }
+                    data_cap.downgrade(&future_ts);
+                    prev_pid_info = Some(partitions);
                 }
 
                 // Poll the consumer once. We split the consumer's partitions out into separate

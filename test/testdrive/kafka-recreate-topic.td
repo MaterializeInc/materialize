@@ -48,11 +48,11 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 $ kafka-create-topic topic=topic0 partitions=2
 
 ! SELECT * FROM source0
-contains:topic was recreated
+contains:topic was recreated: partition count regressed from 4 to 2
 
 # We can also detect that a topic got recreated by observing the high watermark regressing
 
-$ kafka-create-topic topic=topic1 partitions=4
+$ kafka-create-topic topic=topic1 partitions=1
 
 $ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
 {"f2": 1}
@@ -80,7 +80,7 @@ $ kafka-delete-topic-flaky topic=topic1
 # See: https://github.com/confluentinc/confluent-kafka-python/issues/541
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
-$ kafka-create-topic topic=topic1 partitions=4
+$ kafka-create-topic topic=topic1 partitions=1
 
 ! SELECT * FROM source1
-contains:topic was recreated
+contains:topic was recreated: high watermark of partition 0 regressed from 1 to 0
