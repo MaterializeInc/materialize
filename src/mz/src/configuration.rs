@@ -27,7 +27,7 @@ use crate::vault::Token;
 pub const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
 
 pub static DEFAULT_ENDPOINT: Lazy<Endpoint> =
-    Lazy::new(|| "https://cloud.materialize.com".parse().unwrap());
+    Lazy::new(|| "https://console.materialize.com".parse().unwrap());
 
 /// A Materialize Cloud API endpoint.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
