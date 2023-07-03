@@ -217,6 +217,14 @@ class PreExecutionInconsistencyIgnoreFilter:
 
 class PostExecutionInconsistencyIgnoreFilter:
     def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
+        if error.query_execution.query_template.contains_aggregations:
+            return self.shall_ignore_error_involving_aggregation(error)
+
+        return NoIgnore()
+
+    def shall_ignore_error_involving_aggregation(
+        self, error: ValidationError
+    ) -> IgnoreVerdict:
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
             outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
@@ -227,11 +235,7 @@ class PostExecutionInconsistencyIgnoreFilter:
                 EvaluationStrategyKey.CONSTANT_FOLDING
             ].successful
 
-            if (
-                error.query_execution.query_template.contains_aggregations
-                and not dfr_successful
-                and ctf_successful
-            ):
+            if not dfr_successful and ctf_successful:
                 # see https://github.com/MaterializeInc/materialize/issues/19662
                 return YesIgnore("#19662")
 
