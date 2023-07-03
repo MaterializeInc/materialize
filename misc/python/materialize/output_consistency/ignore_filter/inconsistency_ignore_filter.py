@@ -166,7 +166,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         all_involved_characteristics: Set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Note that function names are always provided in lower case.
-        if db_function.function_name in {
+        if db_function.function_name_in_lower_case in {
             "sum",
             "avg",
             "stddev_samp",
@@ -185,7 +185,7 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return YesIgnore("#19511")
 
-        if db_function.function_name in {"regexp_match"}:
+        if db_function.function_name_in_lower_case in {"regexp_match"}:
             if len(expression.args) == 3 and isinstance(
                 expression.args[2], EnumConstant
             ):
@@ -193,9 +193,10 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # https://github.com/MaterializeInc/materialize/issues/18494
                 return YesIgnore("#18494")
 
-        if db_function.function_name in {"array_agg", "string_agg"} and not isinstance(
-            db_function, DbFunctionWithCustomPattern
-        ):
+        if db_function.function_name_in_lower_case in {
+            "array_agg",
+            "string_agg",
+        } and not isinstance(db_function, DbFunctionWithCustomPattern):
             # The unordered variants are to be ignored.
             # https://github.com/MaterializeInc/materialize/issues/19832
             return YesIgnore("#19832")
@@ -249,7 +250,8 @@ class PostExecutionInconsistencyIgnoreFilter:
                     operation = expression.operation
                     return (
                         isinstance(operation, DbFunction)
-                        and operation.function_name in FUNCTIONS_TAKING_SHORTCUTS
+                        and operation.function_name_in_lower_case
+                        in FUNCTIONS_TAKING_SHORTCUTS
                     )
                 return False
 
