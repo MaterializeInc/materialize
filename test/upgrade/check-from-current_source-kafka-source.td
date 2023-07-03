@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ skip-if
-SELECT mz_version_num() >= 6000;
-
 $ set schema={
     "type": "record",
     "name": "cpx",
@@ -42,11 +39,12 @@ a b
 $ set-from-sql var=expected-user
 SELECT user FROM linked_cluster_audit_event_user ORDER BY priority DESC LIMIT 1
 
-# Test that the migrations backfilled a linked cluster for the source && that the migration backfilled "disk" to false.
+# Test that the migrations backfilled a linked cluster for the source && that the
+# backfilled "disk" defaults to true (matching the test setup defaults)
 > SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_kafka_source'
 materialize_public_kafka_source  linked
 > SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id', user
   FROM mz_audit_events
   WHERE details->>'name' = 'materialize_public_kafka_source' OR details->>'cluster_name' = 'materialize_public_kafka_source'
 create  cluster          "{\"name\":\"materialize_public_kafka_source\"}"  ${expected-user}
-create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"  ${expected-user}
+create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"  ${expected-user}
