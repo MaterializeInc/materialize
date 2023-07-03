@@ -290,8 +290,8 @@ fn test_local() {
 
     let output = output_to_string(binding);
 
-    println!("{:?}", output.clone());
-    println!("{:?}", expected_command_output.clone());
+    println!("{:?}", output);
+    println!("{:?}", expected_command_output);
     assert!(output.trim() == expected_command_output.trim());
 }
 
@@ -422,7 +422,7 @@ fn test_e2e() {
         .success();
     let output = output_to_string(binding);
 
-    assert!(output.contains(&email.to_string()));
+    assert!(output.contains(&email));
 
     // Assert `mz user remove` + `mz user list`
     cmd()
@@ -441,7 +441,7 @@ fn test_e2e() {
 
     let output = output_to_string(binding);
 
-    assert!(!output.contains(&email.to_string()));
+    assert!(!output.contains(&email));
 
     // Test - `mz region`
     //
@@ -506,7 +506,7 @@ fn test_e2e() {
         .success();
     let output = output_to_string(binding);
 
-    assert!(output.trim().starts_with(&format!("Healthy: \tyes")));
+    assert!(output.trim().starts_with("Healthy: \tyes"));
 
     // Test - `mz sql`
     //
