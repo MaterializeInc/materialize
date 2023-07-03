@@ -28,7 +28,7 @@ import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
-from inspect import getmembers, isfunction
+from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
@@ -720,6 +720,7 @@ class Composition:
         service: str = "testdrive",
         persistent: bool = True,
         args: List[str] = [],
+        caller: Optional[Traceback] = None,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -730,10 +731,14 @@ class Composition:
             persistent: Whether a persistent testdrive container will be used.
         """
 
+        caller = caller or getframeinfo(stack()[1][0])
+
+        args_with_source = args + [f"--source={caller.filename}:{caller.lineno}"]
+
         if persistent:
-            self.exec(service, *args, stdin=input)
+            self.exec(service, *args_with_source, stdin=input)
         else:
-            self.run(service, *args, stdin=input)
+            self.run(service, *args_with_source, stdin=input)
 
 
 class ServiceHealthcheck(TypedDict, total=False):
