@@ -427,8 +427,8 @@ impl UpsertStateBackend for InMemoryHashMap {
                     self.state.remove(&key);
                 }
             }
-            self.total_size += stats.size_diff;
         }
+        self.total_size += stats.size_diff;
         Ok(stats)
     }
 
@@ -468,14 +468,20 @@ pub struct AutoSpillBackend {
     backend_type: BackendType,
     rockdsdb_params: RocksDBParams,
     auto_spill_threshold_bytes: usize,
+    worker_id: usize,
 }
 
 impl AutoSpillBackend {
-    pub(crate) fn new(rockdsdb_params: RocksDBParams, auto_spill_threshold_bytes: usize) -> Self {
+    pub(crate) fn new(
+        rockdsdb_params: RocksDBParams,
+        auto_spill_threshold_bytes: usize,
+        worker_id: usize,
+    ) -> Self {
         Self {
             backend_type: BackendType::InMemory(InMemoryHashMap::default()),
             rockdsdb_params,
             auto_spill_threshold_bytes,
+            worker_id,
         }
     }
 
@@ -516,8 +522,10 @@ impl UpsertStateBackend for AutoSpillBackend {
                         .total_size
                         .try_into()
                         .expect("unexpected error while casting");
-                    // TODO (mouli): Configure the size
                     if in_memory_size > self.auto_spill_threshold_bytes {
+                        let mut rocksdb_backend =
+                            AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
+
                         let new_puts = map.state.iter().map(|(k, v)| {
                             (
                                 k.clone(),
@@ -528,17 +536,13 @@ impl UpsertStateBackend for AutoSpillBackend {
                             )
                         });
 
-                        let mut rocksdb_backend =
-                            AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
-
                         match rocksdb_backend.multi_put(new_puts).await {
                             Ok(puts_stats) => {
-                                // clearing the in memory map after successfully writing to rocksdb
-                                map.clear();
                                 // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
                                 result_status.size_diff += puts_stats.size_diff;
                                 result_status.size_diff -= map.total_size;
-
+                                // clearing the in memory map after successfully writing to rocksdb
+                                map.clear();
                                 self.backend_type = BackendType::RocksDb(rocksdb_backend);
                             }
                             Err(e) => {

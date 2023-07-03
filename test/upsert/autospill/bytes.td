@@ -31,6 +31,9 @@ animal:whale
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
 fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
 
+> SELECT count(*) from autospill;
+3
+
 > SELECT
     SUM(u.envelope_state_bytes) > 0,
     SUM(u.envelope_state_count)
@@ -46,6 +49,9 @@ $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
 fish:
 bird:
 animal:
+
+> SELECT count(*) from autospill;
+0
 
 # Both envelope_state_bytes and envelope_state_count should be zero
 > SELECT

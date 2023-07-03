@@ -167,6 +167,8 @@ where
             .auto_spill_config
             .spill_to_disk_threshold_bytes;
 
+        let worker_id = source_config.worker_id;
+
         tracing::info!(
             ?tuning,
             ?dataflow_paramters.auto_spill_config,
@@ -199,6 +201,7 @@ where
                             metrics: rocksdb_metrics,
                         },
                         spill_threshold,
+                        worker_id,
                     )
                 },
             )
