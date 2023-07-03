@@ -46,6 +46,9 @@ def test_upgrade(
     aws_region: Optional[str], log_filter: Optional[str], dev: bool
 ) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
+    print(
+        f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"
+    )
 
     mz = MaterializeApplication(
         tag=str(LAST_RELEASED_VERSION),
