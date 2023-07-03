@@ -76,10 +76,10 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
 
 
 class CloudtestExecutor(Executor):
-    def __init__(self, application: MaterializeApplication) -> None:
+    def __init__(self, application: MaterializeApplication, version: MzVersion) -> None:
         self.application = application
         self.seed = random.getrandbits(32)
-        self.current_mz_version = MzVersion.parse_cargo()
+        self.current_mz_version = version
 
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application

@@ -55,6 +55,6 @@ def test_upgrade(
     )
     wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
-    executor = CloudtestExecutor(application=mz)
+    executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
     scenario.run()
