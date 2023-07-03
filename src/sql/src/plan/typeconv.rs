@@ -287,9 +287,9 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
-        (Oid, RegClass) => Assignment: CastOidToRegClass(func::CastOidToRegClass),
-        (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
-        (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
+        (Oid, RegClass) => Implicit: CastOidToRegClass(func::CastOidToRegClass),
+        (Oid, RegProc) => Implicit: CastOidToRegProc(func::CastOidToRegProc),
+        (Oid, RegType) => Implicit: CastOidToRegType(func::CastOidToRegType),
 
         // REGCLASS
         (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),

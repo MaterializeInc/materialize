@@ -825,6 +825,18 @@
   - signature: 'pg_postmaster_start_time() -> timestamptz'
     description: Returns the time when the server started.
     unmaterializable: true
+  - signature: 'pg_relation_size(relation: regclass[, fork: text]) -> bigint'
+    description: >-
+      Disk space used by the specified fork ('main', 'fsm', 'vm', or 'init')
+      of the specified table or index. If no fork is specified, it defaults
+      to 'main'. This function always returns -1 because Materialize does
+      not store tables and indexes on local disk.
+  - signature: 'pg_stat_get_numscans(oid: oid) -> bigint'
+    description: >-
+       Number of sequential scans done when argument is a table,
+       or number of index scans done when argument is an index.
+       This function always returns -1 because Materialize does
+       not collect statistics.
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
     unmaterializable: true
