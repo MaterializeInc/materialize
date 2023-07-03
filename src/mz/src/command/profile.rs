@@ -59,7 +59,9 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
         &format!("/access/cli?redirectUri=http://localhost:{port}"),
     );
 
-    let open_url = query_pairs.finish().as_str();
+    // The replace is a little hack to avoid asking an additional parameter
+    // for a custom login.
+    let open_url = &query_pairs.finish().as_str().replace("cloud", "console");
 
     // Open the browser to login user.
     if let Err(_err) = open::that(open_url) {

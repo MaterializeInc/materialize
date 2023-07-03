@@ -8801,7 +8801,6 @@ dependencies = [
  "rand",
  "rdkafka-sys",
  "regex",
- "regex-automata",
  "regex-syntax",
  "reqwest",
  "ring",
