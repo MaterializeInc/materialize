@@ -576,11 +576,11 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// The default for the `DISK` option in `UPSERT` sources.
+/// The default for the `DISK` option when creating managed clusters and cluster replicas.
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
     value: &false,
-    description: "Whether the disk option for cluster replicas should be enabled by default.",
+    description: "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
     internal: true,
 };
 
