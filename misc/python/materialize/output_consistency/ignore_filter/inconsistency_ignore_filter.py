@@ -239,4 +239,23 @@ class PostExecutionInconsistencyIgnoreFilter:
                 # see https://github.com/MaterializeInc/materialize/issues/19662
                 return YesIgnore("#19662")
 
+        if error.error_type == ValidationErrorType.ERROR_MISMATCH:
+            query_template = error.query_execution.query_template
+
+            FUNCTIONS_TAKING_SHORTCUTS = {"count"}
+
+            def is_function_taking_shortcut(expression: Expression) -> bool:
+                if isinstance(expression, ExpressionWithArgs):
+                    operation = expression.operation
+                    return (
+                        isinstance(operation, DbFunction)
+                        and operation.function_name in FUNCTIONS_TAKING_SHORTCUTS
+                    )
+                return False
+
+            for expression in query_template.select_expressions:
+                if expression.contains(is_function_taking_shortcut):
+                    # see https://github.com/MaterializeInc/materialize/issues/17189
+                    return YesIgnore("#17189")
+
         return NoIgnore()
