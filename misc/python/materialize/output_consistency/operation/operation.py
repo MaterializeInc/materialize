@@ -168,7 +168,7 @@ class DbFunction(DbOperationOrFunction):
             relevance=relevance,
             is_enabled=is_enabled,
         )
-        self.function_name = function_name.lower()
+        self.function_name_in_lower_case = function_name.lower()
 
     def validate_params(self, params: List[OperationParam]) -> None:
         optional_param_seen = False
@@ -190,10 +190,10 @@ class DbFunction(DbOperationOrFunction):
     def to_pattern(self, args_count: int) -> str:
         self.validate_args_count_in_range(args_count)
         args_pattern = ", ".join(["$"] * args_count)
-        return f"{self.function_name}({args_pattern})"
+        return f"{self.function_name_in_lower_case}({args_pattern})"
 
     def __str__(self) -> str:
-        return f"DbFunction: {self.function_name}"
+        return f"DbFunction: {self.function_name_in_lower_case}"
 
 
 class DbFunctionWithCustomPattern(DbFunction):
@@ -224,7 +224,7 @@ class DbFunctionWithCustomPattern(DbFunction):
 
         if args_count not in self.pattern_per_param_count:
             raise RuntimeError(
-                f"No pattern specified for {self.function_name} with {args_count} params"
+                f"No pattern specified for {self.function_name_in_lower_case} with {args_count} params"
             )
 
         return self.pattern_per_param_count[args_count]
