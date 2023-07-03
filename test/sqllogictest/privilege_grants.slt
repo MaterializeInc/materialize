@@ -1875,8 +1875,10 @@ SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREA
 ----
 false
 
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT CREATEDB ON SYSTEM TO joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1895,8 +1897,10 @@ SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREA
 true
 
 ### Duplicate grants have no effect
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT CREATEDB ON SYSTEM TO joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1904,8 +1908,10 @@ SELECT privileges::text FROM mz_system_privileges
 joe=B/mz_system
 mz_system=RBN/mz_system
 
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT CREATEROLE, CREATECLUSTER ON SYSTEM TO PUBLIC
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1917,8 +1923,10 @@ mz_system=RBN/mz_system
 statement error role "joe" cannot be dropped because some objects depend on it
 DROP ROLE joe
 
-statement ok
+simple conn=mz_system,user=mz_system
 REVOKE CREATEDB ON SYSTEM FROM joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1937,8 +1945,10 @@ SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREA
 false
 
 ### Duplicate revokes have no effect
-statement ok
+simple conn=mz_system,user=mz_system
 REVOKE CREATEDB ON SYSTEM FROM joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1952,8 +1962,10 @@ DROP ROLE joe
 statement ok
 CREATE ROLE joe
 
-statement ok
+simple conn=mz_system,user=mz_system
 REVOKE CREATEROLE, CREATECLUSTER ON SYSTEM FROM PUBLIC
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
