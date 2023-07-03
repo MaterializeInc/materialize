@@ -2007,6 +2007,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "get_byte" => Scalar {
             params!(Bytes, Int32) => BinaryFunc::GetByte => Int32, 721;
         },
+        "pg_get_ruledef" => Scalar {
+            params!(Oid) => sql_impl_func("NULL::pg_catalog.text") => String, 1573;
+            params!(Oid, Bool) => sql_impl_func("NULL::pg_catalog.text") => String, 2504;
+        },
         "has_schema_privilege" => Scalar {
             params!(String, String, String) => sql_impl_func("has_schema_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_schema_oid($2), $3)") => Bool, 2268;
             params!(String, Oid, String) => sql_impl_func("has_schema_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2269;

@@ -1582,3 +1582,8 @@ query B
 SELECT pg_tablespace_location(0) IS NULL
 ----
 true
+
+query B
+SELECT pg_get_ruledef(0) IS NULL
+----
+true
