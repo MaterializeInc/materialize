@@ -322,7 +322,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             where s.name ='{source_name}'"""
         )[0]
         prefix = "/scratch"
-        cluster_prefix = f"{cluster_id}-replica-{replica_id[1:]}"
+        cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id[1:]}"
         return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
 
     # Returns the number of files recursive in a given directory
