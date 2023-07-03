@@ -258,3 +258,14 @@ name                nullable    type
  extversion         false       text
  extconfig          false       oid[]
  extcondition       false       text[]
+
+> SHOW COLUMNS FROM pg_event_trigger
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ evtname            false       text
+ evtevent           false       text
+ evtowner           false       oid
+ evtfoid            false       oid
+ evtenabled         false       char
+ evttags            false       text[]

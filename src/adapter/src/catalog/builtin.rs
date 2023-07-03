@@ -2653,6 +2653,20 @@ JOIN mz_roles member ON membership.member = member.id
 JOIN mz_roles grantor ON membership.grantor = grantor.id",
 };
 
+pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
+    name: "pg_event_trigger",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_event_trigger AS SELECT
+        NULL::pg_catalog.oid AS oid,
+        NULL::pg_catalog.text AS evtname,
+        NULL::pg_catalog.text AS evtevent,
+        NULL::pg_catalog.oid AS evtowner,
+        NULL::pg_catalog.oid AS evtfoid,
+        NULL::pg_catalog.char AS evtenabled,
+        NULL::pg_catalog.text[] AS evttags
+    WHERE false",
+};
+
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_peek_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3996,6 +4010,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TRIGGER),
         Builtin::View(&PG_REWRITE),
         Builtin::View(&PG_EXTENSION),
+        Builtin::View(&PG_EVENT_TRIGGER),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),

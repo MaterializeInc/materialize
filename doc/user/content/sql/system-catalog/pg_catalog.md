@@ -20,6 +20,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_database`](https://www.postgresql.org/docs/current/catalog-pg-database.html)
   * [`pg_description`](https://www.postgresql.org/docs/current/catalog-pg-description.html)
   * [`pg_enum`](https://www.postgresql.org/docs/current/catalog-pg-enum.html)
+  * [`pg_event_trigger`](https://www.postgresql.org/docs/current/catalog-pg-event-trigger.html)
   * [`pg_extension`](https://www.postgresql.org/docs/current/catalog-pg-extension.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
   * [`pg_inherits`](https://www.postgresql.org/docs/current/catalog-pg-inherits.html)

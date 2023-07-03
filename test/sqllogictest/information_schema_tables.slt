@@ -577,6 +577,10 @@ pg_enum
 VIEW
 materialize
 pg_catalog
+pg_event_trigger
+VIEW
+materialize
+pg_catalog
 pg_extension
 VIEW
 materialize
