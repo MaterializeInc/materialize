@@ -150,7 +150,9 @@ mod tests {
         );
 
         let config_file_path = ConfigFile::default_path().unwrap();
-        let config_dir = config_file_path.parent().expect("Failed to get parent directory");
+        let config_dir = config_file_path
+            .parent()
+            .expect("Failed to get parent directory");
 
         if !config_dir.exists() {
             fs::create_dir_all(config_dir).expect("Failed to create directory");
