@@ -26,7 +26,8 @@ attributes for a role during authentication, every time that role tries
 to connect to Materialize. Therefore, you cannot specify either
 attribute when altering an existing role.
 
-Unlike PostgreSQL, materialize does not currently support `NOINHERIT`.
+Unlike PostgreSQL, materialize does not currently support the `NOINHERIT` attribute and the `SET
+ROLE` command.
 
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `ALTER ROLE ... INHERIT INHERIT`.
