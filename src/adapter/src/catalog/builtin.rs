@@ -2373,6 +2373,58 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
+pub const PG_DEPEND: BuiltinView = BuiltinView {
+    name: "pg_depend",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_depend AS
+WITH class_objects AS (
+    SELECT
+        CASE
+            WHEN type = 'table' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'source' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'view' THEN 'pg_views'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'materialized-view' THEN 'pg_matviews'::pg_catalog.regclass::pg_catalog.oid
+        END classid,
+        id,
+        oid,
+        schema_id
+    FROM mz_catalog.mz_relations
+    UNION ALL
+    SELECT
+        'pg_index'::pg_catalog.regclass::pg_catalog.oid AS classid,
+        i.id,
+        i.oid,
+        r.schema_id
+    FROM mz_catalog.mz_indexes i
+    JOIN mz_catalog.mz_relations r ON i.on_id = r.id
+),
+
+current_objects AS (
+    SELECT class_objects.*
+    FROM class_objects
+    JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
+    LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    -- This filter is tricky, as it filters out not just objects outside the
+    -- database, but *dependencies* on objects outside this database. It's not
+    -- clear that this is the right choice, but because PostgreSQL doesn't
+    -- support cross-database references, it's not clear that the other choice
+    -- is better.
+    WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
+)
+
+SELECT
+    objects.classid::pg_catalog.oid,
+    objects.oid::pg_catalog.oid AS objid,
+    0::pg_catalog.int4 AS objsubid,
+    dependents.classid::pg_catalog.oid AS refclassid,
+    dependents.oid::pg_catalog.oid AS refobjid,
+    0::pg_catalog.int4 AS refobjsubid,
+    'n'::pg_catalog.char AS deptype
+FROM mz_internal.mz_object_dependencies
+JOIN current_objects objects ON object_id = objects.id
+JOIN current_objects dependents ON referenced_object_id = dependents.id",
+};
+
 pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
@@ -4008,6 +4060,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
+        Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
         Builtin::View(&PG_DESCRIPTION),

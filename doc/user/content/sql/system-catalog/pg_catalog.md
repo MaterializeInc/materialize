@@ -17,6 +17,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
   * [`pg_collation`](https://www.postgresql.org/docs/current/catalog-pg-collation.html)
   * [`pg_constraint`](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
+  * [`pg_depend`](https://www.postgresql.org/docs/current/catalog-pg-depend.html)
   * [`pg_database`](https://www.postgresql.org/docs/current/catalog-pg-database.html)
   * [`pg_description`](https://www.postgresql.org/docs/current/catalog-pg-description.html)
   * [`pg_enum`](https://www.postgresql.org/docs/current/catalog-pg-enum.html)

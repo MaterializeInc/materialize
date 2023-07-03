@@ -569,6 +569,10 @@ pg_database
 VIEW
 materialize
 pg_catalog
+pg_depend
+VIEW
+materialize
+pg_catalog
 pg_description
 VIEW
 materialize
