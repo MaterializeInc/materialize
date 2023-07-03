@@ -21,7 +21,7 @@ from confluent_kafka.serialization import (  # type: ignore
     SerializationContext,
 )
 
-from materialize.data_ingest.row import Operation
+from materialize.data_ingest.row import Operation, Field, Type
 from materialize.data_ingest.transaction import Transaction
 
 
@@ -47,39 +47,13 @@ def delivery_report(err: str, msg: Any) -> None:
     #    msg.key(), msg.topic(), msg.partition(), msg.offset()))
 
 
-class Type(Enum):
-    """As supported by Avro: https://avro.apache.org/docs/1.11.1/specification/_print/"""
-
-    NULL = 1
-    BOOLEAN = 2
-    INT = 3
-    FLOAT = 4
-    BYTES = 5
-    STRING = 6
-    RECORD = 7
-    ENUM = 8
-    ARRAY = 9
-    MAP = 10
-    FIXED = 11
-
-
-class Field:
-    name: str
-    typ: Type
-    is_key: bool
-
-    def __init__(self, name: str, typ: Type, is_key: bool):
-        self.name = name
-        self.typ = typ
-        self.is_key = is_key
-
-
 class KafkaExecutor(Executor):
     producer: Producer
     avro_serializer: AvroSerializer
     key_avro_serializer: AvroSerializer
     topic: str
     table: str
+    fields: List[Field]
 
     def __init__(
         self,
@@ -90,6 +64,7 @@ class KafkaExecutor(Executor):
     ):
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
+        self.fields = fields
 
         schema = {
             "type": "record",
@@ -188,6 +163,7 @@ class KafkaExecutor(Executor):
 class PgExecutor(Executor):
     conn: pg8000.Connection
     table: str
+    fields: List[Field]
 
     def __init__(self, num: int, ports: Dict[str, int], fields: List[Field]):
         self.conn = pg8000.connect(
@@ -197,10 +173,17 @@ class PgExecutor(Executor):
             port=ports["postgres"],
         )
         self.table = f"table{num}"
+        self.fields = fields
+
+        values = [f"{field.name} {str(field.type).lower()}" for field in fields)]
+        keys = [field.name for field in fields if field.is_key]
+
         with self.conn.cursor() as cur:
             cur.execute(
                 f"""DROP TABLE IF EXISTS {self.table};
-                    CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1))"""
+                    CREATE TABLE {self.table} (
+                        {", ".join(values)},
+                        PRIMARY KEY ({", ".join(keys)}))"""
             )
 
     def run(self, transactions: List[Transaction]) -> None:

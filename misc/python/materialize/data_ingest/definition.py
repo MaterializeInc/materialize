@@ -11,6 +11,7 @@ import random
 from enum import Enum
 from typing import List
 
+from materialize.data_ingest.data_type import RecordSize, DataType
 from materialize.data_ingest.row import Operation, Row
 from materialize.data_ingest.rowlist import RowList
 from materialize.data_ingest.transaction import Transaction
@@ -20,13 +21,6 @@ class Records(Enum):
     ONE = 1
     MANY = 2
     ALL = 3
-
-
-class RecordSize(Enum):
-    TINY = 1
-    SMALL = 2
-    MEDIUM = 3
-    LARGE = 4
 
 
 class Keyspace(Enum):
@@ -52,7 +46,7 @@ class Insert(Definition):
         self.record_size = record_size
         self.current_key = 1
 
-    def generate(self) -> List[Transaction]:
+    def generate(self, fields: List[Field]) -> List[Transaction]:
         key = self.current_key
         self.current_key += 1
 
@@ -74,11 +68,16 @@ class Insert(Definition):
         else:
             raise ValueError(f"Unexpected count {self.count}")
 
+        #fields = [Field("key1", Type.INT, True), Field("value1", Type.STRING, False), Field("value2", Type.FLOAT, False)]
+        fields_with_values = fields.copy()
+
         transactions = []
         for i in range(count):
+            for field in fields_with_values:
+                field.value = field.type
             transactions.append(
                 Transaction(
-                    [RowList([Row(key=key, value=value, operation=Operation.INSERT)])]
+                    [RowList([Row(fields=fields_with_values, operation=Operation.INSERT)])]
                 )
             )
 
@@ -121,7 +120,7 @@ class Upsert(Definition):
         for i in range(count):
             transactions.append(
                 Transaction(
-                    [RowList([Row(key=key, value=value, operation=Operation.UPSERT)])]
+                    [RowList([Row(fields=fields, operation=Operation.UPSERT)])]
                 )
             )
 

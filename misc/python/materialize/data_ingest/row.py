@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Type
 
+from materialize.data_ingest.data_type import DataType
 
 class Operation(Enum):
     INSERT = 1
@@ -17,15 +18,32 @@ class Operation(Enum):
     DELETE = 3
 
 
+class Field:
+    name: str
+    typ: Type[DataType]
+    is_key: bool
+    value: Optional[Any]
+
+    def __init__(self, name: str, typ: Type[DataType], is_key: bool, value: Optional[Any] = None):
+        self.name = name
+        self.typ = typ
+        self.is_key = is_key
+        self.value = value
+
+    def set_random_value(record_size: RecordSize) -> None:
+        self.value = self.typ.random_value(record_size)
+
+    def __repr__(self) -> str:
+        return f"Field({'key' if self.is_key else 'value'}, {self.name}: {self.typ} = {self.value})"
+
+
 class Row:
-    key: Any
-    value: Any
+    fields: List[Field]
     operation: Operation
 
-    def __init__(self, key: Any, operation: Operation, value: Optional[Any] = None):
-        self.key = key
-        self.value = value
+    def __init__(self, fields: List[Field], operation: Operation):
+        self.fields = fields
         self.operation = operation
 
     def __repr__(self) -> str:
-        return f"Row({self.key}, {self.value}, {self.operation})"
+        return f"Row({self.fields}, {self.operation})"
