@@ -77,15 +77,42 @@ use std::{fs, time::Duration};
 
 use assert_cmd::{assert::Assert, Command};
 use mz::{config_file::ConfigFile, ui::OptionalStr};
+use mz_frontegg_auth::AppPassword;
 use serde::{Deserialize, Serialize};
 use tabled::{Style, Table, Tabled};
 
+/// Returns the password to use in the tests.
+/// The password must start with the `mzp_` prefix.
+fn get_password(mock: bool) -> String {
+    // TODO: Remove mock after understanding how to get an CI app-password
+    if mock {
+        return AppPassword {
+            client_id: uuid::Uuid::new_v4(),
+            secret_key: uuid::Uuid::new_v4(),
+        }
+        .to_string();
+    }
+    std::env::var("CI_PASSWORD").unwrap()
+}
+
+/// Returns the admin endpoint for the testing environment.
+fn get_admin_endpoint() -> String {
+    std::env::var("CI_ADMIN_ENDPOINT").unwrap()
+}
+
+/// Returns the cloud endpoint for the testing environment.
+fn get_cloud_endpoint() -> String {
+    std::env::var("CI_CLOUD_ENDPOINT").unwrap()
+}
+
+/// Returns a command to execute mz.
 fn cmd() -> Command {
     let mut cmd = Command::cargo_bin("mz").unwrap();
-    cmd.env_clear().timeout(Duration::from_secs(10));
+    cmd.timeout(Duration::from_secs(10));
     cmd
 }
 
+/// Returns the assert's output as a string.
 fn output_to_string(assert: Assert) -> String {
     let output = assert.get_output();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -107,7 +134,8 @@ fn test_version() {
         .stdout(format!("mz {}\n", expected_version));
 }
 
-fn init_config_file() {
+/// Writes a valid config file at the [ConfigFile] default path.
+fn init_config_file(mock: bool) {
     let main_config_file = format!(
         r#"
             "profile" = "default"
@@ -116,16 +144,16 @@ fn init_config_file() {
             app-password = "{}"
             region = "aws/us-east-1"
         "#,
-        // TODO: Replace with CI PASSWORD
-        std::env!("CI_PASSWORD")
+        get_password(mock)
     );
 
     fs::write(ConfigFile::default_path().unwrap(), main_config_file).unwrap();
 }
 
+/// Tests local commands that do not requires interacting with any API.
 #[test]
-fn test_e2e() {
-    init_config_file();
+fn test_local() {
+    init_config_file(true);
 
     // Test - `mz config`
     //
@@ -211,6 +239,16 @@ fn test_e2e() {
     // Test - `mz profile`
     //
     // Assert `mz profile list`
+    let binding = output_to_string(
+        cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("get")
+            .arg("app-password")
+            .assert()
+            .success(),
+    );
+    let app_password = binding.trim();
 
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct ProfileConfigParam<'a> {
@@ -227,7 +265,7 @@ fn test_e2e() {
         },
         ProfileConfigParam {
             name: "app-password",
-            value: std::env!("CI_PASSWORD"),
+            value: app_password,
         },
         ProfileConfigParam {
             name: "cloud-endpoint",
@@ -252,7 +290,34 @@ fn test_e2e() {
 
     let output = output_to_string(binding);
 
+    println!("{:?}", output.clone());
+    println!("{:?}", expected_command_output.clone());
     assert!(output.trim() == expected_command_output.trim());
+}
+
+/// TODO: Re-enable after understanding how to get an CI app-password, admin endpoint and cloud endpoint.
+#[test]
+#[ignore]
+fn test_e2e() {
+    init_config_file(false);
+    // Set the admin-endpoint and cloud-endpoint
+    cmd()
+        .arg("profile")
+        .arg("config")
+        .arg("set")
+        .arg("admin-endpoint")
+        .arg(get_admin_endpoint())
+        .assert()
+        .success();
+
+    cmd()
+        .arg("profile")
+        .arg("config")
+        .arg("set")
+        .arg("cloud-endpoint")
+        .arg(get_cloud_endpoint())
+        .assert()
+        .success();
 
     // Assert `mz profile config get region`
     let binding = cmd()
@@ -426,17 +491,17 @@ fn test_e2e() {
     // Assert `mz region show`
     // The path does not always contains the pg_isready binary.
     // let binding = cmd().arg("region").arg("show").env("PATH", "/opt/homebrew/bin/").assert().success();
-    cmd()
-        .arg("region")
-        .arg("enable")
-        .env("PATH", "/opt/homebrew/bin/")
-        .assert()
-        .success();
+    // cmd()
+    //     .arg("region")
+    //     .arg("enable")
+    //     // .env("PATH", "/opt/homebrew/bin/")
+    //     .assert()
+    //     .success();
 
     let binding = cmd()
         .arg("region")
         .arg("show")
-        .env("PATH", "/opt/homebrew/bin/")
+        // .env("PATH", "/opt/homebrew/bin/")
         .assert()
         .success();
     let output = output_to_string(binding);
