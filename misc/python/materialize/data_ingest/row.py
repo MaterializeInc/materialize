@@ -8,33 +8,15 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Any, Optional, Type
+from typing import List
 
-from materialize.data_ingest.data_type import DataType
+from materialize.data_ingest.field import Field
+
 
 class Operation(Enum):
     INSERT = 1
     UPSERT = 2
     DELETE = 3
-
-
-class Field:
-    name: str
-    typ: Type[DataType]
-    is_key: bool
-    value: Optional[Any]
-
-    def __init__(self, name: str, typ: Type[DataType], is_key: bool, value: Optional[Any] = None):
-        self.name = name
-        self.typ = typ
-        self.is_key = is_key
-        self.value = value
-
-    def set_random_value(record_size: RecordSize) -> None:
-        self.value = self.typ.random_value(record_size)
-
-    def __repr__(self) -> str:
-        return f"Field({'key' if self.is_key else 'value'}, {self.name}: {self.typ} = {self.value})"
 
 
 class Row:

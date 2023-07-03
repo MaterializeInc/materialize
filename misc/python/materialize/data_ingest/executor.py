@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-from enum import Enum
 from typing import Any, Dict, List
 
 import pg8000
@@ -21,13 +20,21 @@ from confluent_kafka.serialization import (  # type: ignore
     SerializationContext,
 )
 
-from materialize.data_ingest.row import Operation, Field, Type
+from materialize.data_ingest.data_type import Backend
+from materialize.data_ingest.field import Field
+from materialize.data_ingest.row import Operation
 from materialize.data_ingest.transaction import Transaction
 
 
 class Executor:
     def run(self, transactions: List[Transaction]) -> None:
         raise NotImplementedError
+
+    def print_progress(self, cur_transaction: int, num_transactions: int) -> None:
+        if (100 * cur_transaction) % num_transactions == 0:
+            print(
+                f"{type(self).__name__}: {int((100 * cur_transaction) / num_transactions):2d}% ({cur_transaction} / {num_transactions})"
+            )
 
 
 class PrintExecutor(Executor):
@@ -70,7 +77,10 @@ class KafkaExecutor(Executor):
             "type": "record",
             "name": "value",
             "fields": [
-                {"name": field.name, "type": str(field.typ).lower()}
+                {
+                    "name": field.name,
+                    "type": str(field.typ.name(Backend.AVRO)).lower(),
+                }
                 for field in fields
                 if not field.is_key
             ],
@@ -80,7 +90,10 @@ class KafkaExecutor(Executor):
             "type": "record",
             "name": "key",
             "fields": [
-                {"name": field.name, "type": str(field.typ).lower()}
+                {
+                    "name": field.name,
+                    "type": str(field.typ.name(Backend.AVRO)).lower(),
+                }
                 for field in fields
                 if field.is_key
             ],
@@ -126,7 +139,8 @@ class KafkaExecutor(Executor):
         conn.autocommit = False
 
     def run(self, transactions: List[Transaction]) -> None:
-        for transaction in transactions:
+        for i, transaction in enumerate(transactions):
+            self.print_progress(i, len(transactions))
             for row_list in transaction.row_lists:
                 for row in row_list.rows:
                     if (
@@ -136,11 +150,19 @@ class KafkaExecutor(Executor):
                         self.producer.produce(
                             topic=self.topic,
                             key=self.key_avro_serializer(
-                                {"key1": row.key},
+                                {
+                                    field.name: field.value
+                                    for field in row.fields
+                                    if field.is_key
+                                },
                                 SerializationContext(self.topic, MessageField.KEY),
                             ),
                             value=self.avro_serializer(
-                                {"f1": row.value},
+                                {
+                                    field.name: field.value
+                                    for field in row.fields
+                                    if not field.is_key
+                                },
                                 SerializationContext(self.topic, MessageField.VALUE),
                             ),
                             on_delivery=delivery_report,
@@ -149,7 +171,11 @@ class KafkaExecutor(Executor):
                         self.producer.produce(
                             topic=self.topic,
                             key=self.key_avro_serializer(
-                                {"key1": row.key},
+                                {
+                                    field.name: field.value
+                                    for field in row.fields
+                                    if field.is_key
+                                },
                                 SerializationContext(self.topic, MessageField.KEY),
                             ),
                             value=None,
@@ -175,7 +201,10 @@ class PgExecutor(Executor):
         self.table = f"table{num}"
         self.fields = fields
 
-        values = [f"{field.name} {str(field.type).lower()}" for field in fields)]
+        values = [
+            f"{field.name} {str(field.typ.name(Backend.POSTGRES)).lower()}"
+            for field in fields
+        ]
         keys = [field.name for field in fields if field.is_key]
 
         with self.conn.cursor() as cur:
@@ -187,7 +216,8 @@ class PgExecutor(Executor):
             )
 
     def run(self, transactions: List[Transaction]) -> None:
-        for transaction in transactions:
+        for i, transaction in enumerate(transactions):
+            self.print_progress(i, len(transactions))
             with self.conn.cursor() as cur:
                 for row_list in transaction.row_lists:
                     for row in row_list.rows:
@@ -195,12 +225,34 @@ class PgExecutor(Executor):
                             row.operation == Operation.INSERT
                             or row.operation == Operation.UPSERT
                         ):
+                            values_str = ", ".join(
+                                str(field.formatted_value()) for field in row.fields
+                            )
+                            keys_str = ", ".join(
+                                field.name for field in row.fields if field.is_key
+                            )
+                            update_str = ", ".join(
+                                f"{field.name} = EXCLUDED.{field.name}"
+                                for field in row.fields
+                                if not field.is_key
+                            )
                             cur.execute(
-                                f"INSERT INTO {self.table} VALUES ({row.key}, {row.value}) ON CONFLICT (col1) DO UPDATE SET col2 = EXCLUDED.col2"
+                                f"""INSERT INTO {self.table}
+                                    VALUES ({values_str})
+                                    ON CONFLICT ({keys_str})
+                                    DO UPDATE SET {update_str}
+                                """
                             )
                         elif row.operation == Operation.DELETE:
+                            cond_str = " AND ".join(
+                                f"{field.name} = {field.formatted_value()}"
+                                for field in row.fields
+                                if field.is_key
+                            )
                             cur.execute(
-                                f"DELETE FROM {self.table} WHERE col1 = {row.key}"
+                                f"""DELETE FROM {self.table}
+                                    WHERE {cond_str}
+                                """
                             )
                         else:
                             raise ValueError(f"Unexpected operation {row.operation}")
@@ -225,11 +277,20 @@ class PgCdcExecutor(Executor):
             port=ports["postgres"],
         )
         self.table = f"cdc{num}"
+
+        values = [
+            f"{field.name} {str(field.typ.name(Backend.POSTGRES)).lower()}"
+            for field in fields
+        ]
+        keys = [field.name for field in fields if field.is_key]
+
         self.conn.autocommit = True
         with self.conn.cursor() as cur:
             cur.execute(
                 f"""DROP TABLE IF EXISTS {self.table};
-                    CREATE TABLE {self.table} (col1 int, col2 int, PRIMARY KEY (col1));
+                    CREATE TABLE {self.table} (
+                        {", ".join(values)},
+                        PRIMARY KEY ({", ".join(keys)}));
                     ALTER TABLE {self.table} REPLICA IDENTITY FULL;
                     CREATE USER postgres{num} WITH SUPERUSER PASSWORD 'postgres';
                     ALTER USER postgres{num} WITH replication;
@@ -256,7 +317,8 @@ class PgCdcExecutor(Executor):
         conn.autocommit = False
 
     def run(self, transactions: List[Transaction]) -> None:
-        for transaction in transactions:
+        for i, transaction in enumerate(transactions):
+            self.print_progress(i, len(transactions))
             with self.conn.cursor() as cur:
                 for row_list in transaction.row_lists:
                     for row in row_list.rows:
@@ -264,15 +326,33 @@ class PgCdcExecutor(Executor):
                             row.operation == Operation.INSERT
                             or row.operation == Operation.UPSERT
                         ):
+                            values_str = ", ".join(
+                                str(field.formatted_value()) for field in row.fields
+                            )
+                            keys_str = ", ".join(
+                                field.name for field in row.fields if field.is_key
+                            )
+                            update_str = ", ".join(
+                                f"{field.name} = EXCLUDED.{field.name}"
+                                for field in row.fields
+                            )
                             cur.execute(
                                 f"""INSERT INTO {self.table}
-                                    VALUES ({row.key}, {row.value})
-                                    ON CONFLICT (col1) DO
-                                        UPDATE SET col2 = EXCLUDED.col2"""
+                                    VALUES ({values_str})
+                                    ON CONFLICT ({keys_str})
+                                    DO UPDATE SET {update_str}
+                                """
                             )
                         elif row.operation == Operation.DELETE:
+                            cond_str = " AND ".join(
+                                f"{field.name} = {field.formatted_value()}"
+                                for field in row.fields
+                                if field.is_key
+                            )
                             cur.execute(
-                                f"DELETE FROM {self.table} WHERE col1 = {row.key}"
+                                f"""DELETE FROM {self.table}
+                                    WHERE {cond_str}
+                                """
                             )
                         else:
                             raise ValueError(f"Unexpected operation {row.operation}")

@@ -7,11 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import random
+from copy import deepcopy
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
-from materialize.data_ingest.data_type import RecordSize, DataType
+from materialize.data_ingest.data_type import RecordSize
+from materialize.data_ingest.field import Field
 from materialize.data_ingest.row import Operation, Row
 from materialize.data_ingest.rowlist import RowList
 from materialize.data_ingest.transaction import Transaction
@@ -36,7 +37,7 @@ class Target(Enum):
 
 
 class Definition:
-    def generate(self) -> List[Transaction]:
+    def generate(self, fields: List[Field]) -> List[Transaction]:
         raise NotImplementedError
 
 
@@ -44,12 +45,17 @@ class Insert(Definition):
     def __init__(self, count: Records, record_size: RecordSize):
         self.count = count
         self.record_size = record_size
-        self.current_key = 1
+        self.current_key = 0
+
+    def max_key(self) -> int:
+        if self.count == Records.ONE:
+            return 1
+        elif self.count == Records.MANY:
+            return 1000
+        else:
+            raise ValueError(f"Unexpected count {self.count}")
 
     def generate(self, fields: List[Field]) -> List[Transaction]:
-        key = self.current_key
-        self.current_key += 1
-
         if self.count == Records.ONE:
             count = 1
         elif self.count == Records.MANY:
@@ -57,27 +63,28 @@ class Insert(Definition):
         else:
             raise ValueError(f"Unexpected count {self.count}")
 
-        if self.record_size == RecordSize.TINY:
-            value = random.randint(-127, 128)
-        elif self.record_size == RecordSize.SMALL:
-            value = random.randint(-32768, 32767)
-        elif self.record_size == RecordSize.MEDIUM:
-            value = random.randint(-2147483648, 2147483647)
-        elif self.record_size == RecordSize.LARGE:
-            value = random.randint(-9223372036854775808, 9223372036854775807)
-        else:
-            raise ValueError(f"Unexpected count {self.count}")
-
-        #fields = [Field("key1", Type.INT, True), Field("value1", Type.STRING, False), Field("value2", Type.FLOAT, False)]
-        fields_with_values = fields.copy()
+        fields_with_values = deepcopy(fields)
 
         transactions = []
         for i in range(count):
             for field in fields_with_values:
-                field.value = field.type
+                if field.is_key:
+                    field.value = field.typ.num_value(self.current_key)
+                else:
+                    field.value = field.typ.random_value(self.record_size)
+            self.current_key += 1
             transactions.append(
                 Transaction(
-                    [RowList([Row(fields=fields_with_values, operation=Operation.INSERT)])]
+                    [
+                        RowList(
+                            [
+                                Row(
+                                    fields=deepcopy(fields_with_values),
+                                    operation=Operation.INSERT,
+                                )
+                            ]
+                        )
+                    ]
                 )
             )
 
@@ -90,14 +97,7 @@ class Upsert(Definition):
         self.count = count
         self.record_size = record_size
 
-    def generate(self) -> List[Transaction]:
-        if self.keyspace == Keyspace.SINGLE_VALUE:
-            key = 1
-        elif self.keyspace == Keyspace.LARGE:
-            key = random.randint(0, 1_000_000)
-        else:
-            raise ValueError(f"Unexpected keyspace {self.keyspace}")
-
+    def generate(self, fields: List[Field]) -> List[Transaction]:
         if self.count == Records.ONE:
             count = 1
         elif self.count == Records.MANY:
@@ -105,22 +105,31 @@ class Upsert(Definition):
         else:
             raise ValueError(f"Unexpected count {self.count}")
 
-        if self.record_size == RecordSize.TINY:
-            value = random.randint(-127, 128)
-        elif self.record_size == RecordSize.SMALL:
-            value = random.randint(-32768, 32767)
-        elif self.record_size == RecordSize.MEDIUM:
-            value = random.randint(-2147483648, 2147483647)
-        elif self.record_size == RecordSize.LARGE:
-            value = random.randint(-9223372036854775808, 9223372036854775807)
-        else:
-            raise ValueError(f"Unexpected count {self.count}")
+        fields_with_values = deepcopy(fields)
 
         transactions = []
         for i in range(count):
+            for field in fields_with_values:
+                if field.is_key:
+                    if self.keyspace == Keyspace.SINGLE_VALUE:
+                        field.value = field.typ.num_value(0)
+                    else:
+                        raise NotImplementedError
+                else:
+                    field.value = field.typ.random_value(self.record_size)
+
             transactions.append(
                 Transaction(
-                    [RowList([Row(fields=fields, operation=Operation.UPSERT)])]
+                    [
+                        RowList(
+                            [
+                                Row(
+                                    fields=deepcopy(fields_with_values),
+                                    operation=Operation.UPSERT,
+                                )
+                            ]
+                        )
+                    ]
                 )
             )
 
@@ -128,22 +137,49 @@ class Upsert(Definition):
 
 
 class Delete(Definition):
-    def __init__(self, number_of_records: Records):
+    def __init__(
+        self,
+        number_of_records: Records,
+        record_size: RecordSize,
+        num: Optional[int] = None,
+    ):
         self.number_of_records = number_of_records
+        self.record_size = record_size
+        self.num = num
 
-    def generate(self) -> List[Transaction]:
+    def generate(self, fields: List[Field]) -> List[Transaction]:
         transactions = []
 
+        fields_with_values = [field for field in fields if field.is_key]
+
         if self.number_of_records == Records.ONE:
-            raise NotImplementedError
+            for field in fields_with_values:
+                field.value = field.typ.random_value(self.record_size)
+            transactions.append(
+                Transaction([RowList([Row(fields_with_values, Operation.DELETE)])])
+            )
         elif self.number_of_records == Records.MANY:
-            raise NotImplementedError
-        elif self.number_of_records == Records.ALL:
-            for key in range(1000):
+            for i in range(1000):
+                for field in fields_with_values:
+                    field.value = field.typ.random_value(self.record_size)
                 transactions.append(
-                    Transaction([RowList([Row(key=key, operation=Operation.DELETE)])])
+                    Transaction(
+                        [RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])]
+                    )
+                )
+        elif self.number_of_records == Records.ALL:
+            assert self.num is not None
+            for i in range(self.num):
+                for field in fields_with_values:
+                    field.value = field.typ.num_value(i)
+                transactions.append(
+                    Transaction(
+                        [RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])]
+                    )
                 )
         else:
             raise ValueError(f"Unexpected number of records {self.number_of_records}")
+
+        assert transactions
 
         return transactions

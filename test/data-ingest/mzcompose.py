@@ -43,8 +43,13 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--seed", metavar="SEED", type=str, default=str(time.time()))
+    parser.add_argument(
+        "--seed", metavar="SEED", type=str, default=str(int(time.time()))
+    )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--scale-factor", metavar="SCALE_FACTOR", type=int, default=1000
+    )
     parser.add_argument(
         "--workload",
         metavar="WORKLOAD",
@@ -87,5 +92,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         random.seed(args.seed)
         print(f"--- Testing workload {workload_class.__name__}")
         execute_workload(
-            executor_classes, workload_class(), conn, i, ports, args.verbose
+            executor_classes,
+            workload_class(args.scale_factor),
+            conn,
+            i,
+            ports,
+            args.verbose,
         )
