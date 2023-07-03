@@ -81,6 +81,11 @@ class ConsistencyTestRunner:
                     f" (last executed query #{self.execution_manager.query_counter})"
                 )
 
+            if expression_count % 5000 == 0:
+                self.output_printer.print_status(
+                    f"Random state verification: {self.expression_generator.randomized_picker.random_number(0, 10000)}"
+                )
+
             operation = self.expression_generator.pick_random_operation(True)
 
             shall_abort_after_iteration = self._shall_abort(expression_count, end_time)
