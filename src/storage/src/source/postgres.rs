@@ -131,7 +131,7 @@ impl SourceRender for PostgresSourceConnection {
     ) {
         // Determined which collections need to be snapshot and which already have been.
         let subsource_resume_uppers: BTreeMap<_, _> = config
-            .source_resume_upper
+            .source_resume_uppers
             .iter()
             .map(|(id, upper)| {
                 assert!(

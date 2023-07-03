@@ -35,7 +35,7 @@ use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use crate::render::sources::{OutputIndex, WorkerId};
+use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
     upsert_bincode_opts, InMemoryHashMap, UpsertState, UpsertStateBackend,
 };
@@ -147,7 +147,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     dataflow_paramters: &crate::internal_control::DataflowParameters,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -231,7 +231,7 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     state: F,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -325,7 +325,6 @@ where
                     process_upsert_state_error::<G>(
                         "Failed to rehydrate state".to_string(),
                         e,
-                        source_config.worker_id,
                         &mut health_output,
                         &health_cap,
                     )
@@ -390,7 +389,6 @@ where
                             process_upsert_state_error::<G>(
                                 "Failed to fetch records from state".to_string(),
                                 e,
-                                source_config.worker_id,
                                 &mut health_output,
                                 &health_cap,
                             )
@@ -464,7 +462,6 @@ where
                             process_upsert_state_error::<G>(
                                 "Failed to update records in state".to_string(),
                                 e,
-                                source_config.worker_id,
                                 &mut health_output,
                                 &health_cap,
                             )
@@ -498,11 +495,10 @@ where
 async fn process_upsert_state_error<G: Scope>(
     context: String,
     e: anyhow::Error,
-    worker_id: usize,
     health_output: &mut AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
-        Vec<(usize, usize, HealthStatusUpdate)>,
-        TeeCore<<G as ScopeParent>::Timestamp, Vec<(usize, usize, HealthStatusUpdate)>>,
+        Vec<(OutputIndex, HealthStatusUpdate)>,
+        TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
@@ -513,7 +509,7 @@ async fn process_upsert_state_error<G: Scope>(
         },
         should_halt: true,
     };
-    health_output.give(health_cap, (worker_id, 0, update)).await;
+    health_output.give(health_cap, (0, update)).await;
     std::future::pending::<()>().await;
     unreachable!("pending future never returns");
 }

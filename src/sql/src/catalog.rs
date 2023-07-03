@@ -25,6 +25,7 @@ use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
@@ -42,7 +43,7 @@ use uuid::Uuid;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -168,6 +169,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Gets all roles.
     fn get_roles(&self) -> Vec<&dyn CatalogRole>;
 
+    /// Gets the id of the `mz_system` role.
+    fn mz_system_role_id(&self) -> RoleId;
+
     /// Collects all role IDs that `id` is transitively a member of.
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId>;
 
@@ -236,6 +240,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Gets all cluster replicas.
     fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
 
+    /// Gets all system privileges.
+    fn get_system_privileges(&self) -> &PrivilegeMap;
+
     /// Gets all default privileges.
     fn get_default_privileges(
         &self,
@@ -279,7 +286,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId>;
 
     /// Returns the [`PrivilegeMap`] of the object.
-    fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap>;
+    fn get_privileges(&self, id: &SystemObjectId) -> Option<&PrivilegeMap>;
 
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
     ///
@@ -296,13 +303,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
 
     /// Returns all possible privileges associated with an object type.
-    fn all_object_privileges(&self, object_type: ObjectType) -> AclMode;
+    fn all_object_privileges(&self, object_type: SystemObjectType) -> AclMode;
 
     /// Returns the object type of `object_id`.
     fn get_object_type(&self, object_id: &ObjectId) -> ObjectType;
 
-    /// Returns the name of `object_id`. For use only in error messages and notices.
-    fn get_object_name(&self, object_id: &ObjectId) -> String;
+    /// Returns the system object type of `id`.
+    fn get_system_object_type(&self, id: &SystemObjectId) -> SystemObjectType;
 
     /// Returns the minimal qualification required to unambiguously specify
     /// `qualified_name`.
@@ -406,12 +413,6 @@ pub trait CatalogSchema {
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
-    /// Indicates whether the role is allowed to create more roles.
-    pub create_role: bool,
-    /// Indicates whether the role is allowed to create databases.
-    pub create_db: bool,
-    /// Indicates whether the role is allowed to create clusters.
-    pub create_cluster: bool,
     // Force use of constructor.
     _private: (),
 }
@@ -421,56 +422,22 @@ impl RoleAttributes {
     pub fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
-            create_role: false,
-            create_db: false,
-            create_cluster: false,
             _private: (),
         }
-    }
-
-    /// Adds the create role attribute.
-    pub fn with_create_role(mut self) -> RoleAttributes {
-        self.create_role = true;
-        self
-    }
-
-    /// Adds the create db attribute.
-    pub fn with_create_db(mut self) -> RoleAttributes {
-        self.create_db = true;
-        self
-    }
-
-    /// Adds the create cluster attribute.
-    pub fn with_create_cluster(mut self) -> RoleAttributes {
-        self.create_cluster = true;
-        self
     }
 
     /// Adds all attributes.
     pub fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
-        self.create_role = true;
-        self.create_db = true;
-        self.create_cluster = true;
         self
     }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
-    fn from(
-        PlannedRoleAttributes {
-            inherit,
-            create_role,
-            create_db,
-            create_cluster,
-        }: PlannedRoleAttributes,
-    ) -> RoleAttributes {
+    fn from(PlannedRoleAttributes { inherit }: PlannedRoleAttributes) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
-            create_role: create_role.unwrap_or(default_attributes.create_role),
-            create_db: create_db.unwrap_or(default_attributes.create_db),
-            create_cluster: create_cluster.unwrap_or(default_attributes.create_cluster),
             _private: (),
         }
     }
@@ -478,21 +445,10 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
 
 impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
     fn from(
-        (
-            role,
-            PlannedRoleAttributes {
-                inherit,
-                create_role,
-                create_db,
-                create_cluster,
-            },
-        ): (&dyn CatalogRole, PlannedRoleAttributes),
+        (role, PlannedRoleAttributes { inherit }): (&dyn CatalogRole, PlannedRoleAttributes),
     ) -> RoleAttributes {
         RoleAttributes {
             inherit: inherit.unwrap_or_else(|| role.is_inherit()),
-            create_role: create_role.unwrap_or_else(|| role.create_role()),
-            create_db: create_db.unwrap_or_else(|| role.create_db()),
-            create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
             _private: (),
         }
     }
@@ -502,9 +458,6 @@ impl RustType<proto::RoleAttributes> for RoleAttributes {
     fn into_proto(&self) -> proto::RoleAttributes {
         proto::RoleAttributes {
             inherit: self.inherit,
-            create_role: self.create_role,
-            create_db: self.create_db,
-            create_cluster: self.create_cluster,
         }
     }
 
@@ -512,9 +465,6 @@ impl RustType<proto::RoleAttributes> for RoleAttributes {
         let mut attributes = RoleAttributes::new();
 
         attributes.inherit = proto.inherit;
-        attributes.create_cluster = proto.create_cluster;
-        attributes.create_role = proto.create_role;
-        attributes.create_db = proto.create_db;
 
         Ok(attributes)
     }
@@ -530,15 +480,6 @@ pub trait CatalogRole {
 
     /// Indicates whether the role has inheritance of privileges.
     fn is_inherit(&self) -> bool;
-
-    /// Indicates whether the role has the role creation attribute.
-    fn create_role(&self) -> bool;
-
-    /// Indicates whether the role has the database creation attribute.
-    fn create_db(&self) -> bool;
-
-    /// Indicates whether the role has the cluster creation attribute.
-    fn create_cluster(&self) -> bool;
 
     /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
     /// membership.
@@ -1385,6 +1326,116 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+/// The types of objects in the system.
+pub enum SystemObjectType {
+    /// Catalog object type.
+    Object(ObjectType),
+    /// Entire system.
+    System,
+}
+
+impl SystemObjectType {
+    /// Reports if the object type can be treated as a relation.
+    pub fn is_relation(&self) -> bool {
+        match self {
+            SystemObjectType::Object(object_type) => object_type.is_relation(),
+            SystemObjectType::System => false,
+        }
+    }
+}
+
+impl Display for SystemObjectType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SystemObjectType::Object(object_type) => std::fmt::Display::fmt(&object_type, f),
+            SystemObjectType::System => f.write_str("SYSTEM"),
+        }
+    }
+}
+
+/// Enum used to format object names in error messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorMessageObjectDescription {
+    /// The name of a specific object.
+    Object {
+        /// Type of object.
+        object_type: ObjectType,
+        /// Name of object.
+        object_name: Option<String>,
+    },
+    /// The name of the entire system.
+    System,
+}
+
+impl ErrorMessageObjectDescription {
+    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectId`].
+    pub fn from_id(
+        object_id: &SystemObjectId,
+        catalog: &dyn SessionCatalog,
+    ) -> ErrorMessageObjectDescription {
+        match object_id {
+            SystemObjectId::Object(object_id) => {
+                let object_name = match object_id {
+                    ObjectId::Cluster(cluster_id) => {
+                        catalog.get_cluster(*cluster_id).name().to_string()
+                    }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => catalog
+                        .get_cluster_replica(*cluster_id, *replica_id)
+                        .name()
+                        .to_string(),
+                    ObjectId::Database(database_id) => {
+                        catalog.get_database(database_id).name().to_string()
+                    }
+                    ObjectId::Schema((database_spec, schema_spec)) => {
+                        let name = catalog.get_schema(database_spec, schema_spec).name();
+                        catalog.resolve_full_schema_name(name).to_string()
+                    }
+                    ObjectId::Role(role_id) => catalog.get_role(role_id).name().to_string(),
+                    ObjectId::Item(id) => {
+                        let name = catalog.get_item(id).name();
+                        catalog.resolve_full_name(name).to_string()
+                    }
+                };
+                ErrorMessageObjectDescription::Object {
+                    object_type: catalog.get_object_type(object_id),
+                    object_name: Some(object_name),
+                }
+            }
+            SystemObjectId::System => ErrorMessageObjectDescription::System,
+        }
+    }
+
+    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectType`].
+    pub fn from_object_type(object_type: SystemObjectType) -> ErrorMessageObjectDescription {
+        match object_type {
+            SystemObjectType::Object(object_type) => ErrorMessageObjectDescription::Object {
+                object_type,
+                object_name: None,
+            },
+            SystemObjectType::System => ErrorMessageObjectDescription::System,
+        }
+    }
+}
+
+impl Display for ErrorMessageObjectDescription {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorMessageObjectDescription::Object {
+                object_type,
+                object_name,
+            } => {
+                let object_name = object_name
+                    .as_ref()
+                    .map(|object_name| format!(" {}", object_name.quoted()))
+                    .unwrap_or_else(|| "".to_string());
+                write!(f, "{object_type}{object_name}")
+            }
+            ErrorMessageObjectDescription::System => f.write_str("SYSTEM"),
         }
     }
 }

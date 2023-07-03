@@ -24,6 +24,14 @@ class ReplaceEnvironmentdStatefulSet(Action):
         self.new_tag = new_tag
 
     def execute(self, e: Executor) -> None:
+        new_version = (
+            MzVersion.parse_mz(self.new_tag)
+            if self.new_tag
+            else MzVersion.parse_cargo()
+        )
+        print(
+            f"Replacing environmentd stateful set from version {e.current_mz_version} to version {new_version}"
+        )
         mz = e.cloudtest_application()
         stateful_set = [
             resource
@@ -35,11 +43,7 @@ class ReplaceEnvironmentdStatefulSet(Action):
 
         stateful_set.tag = self.new_tag
         stateful_set.replace()
-        e.current_mz_version = (
-            MzVersion.parse_mz(self.new_tag)
-            if self.new_tag
-            else MzVersion.parse_cargo()
-        )
+        e.current_mz_version = new_version
 
     def join(self, e: Executor) -> None:
         # execute is blocking already

@@ -345,7 +345,10 @@ where
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
             .max_events_per_span(2048)
             .with_tracer(tracer)
-            .and_then(filter);
+            // WARNING, ENTERING SPOOKY ZONE 2.0
+            //
+            // Notice we use `with_filter` here. `and_then` will apply the filter globally.
+            .with_filter(filter);
         let reloader = Arc::new(move |mut filter: EnvFilter| {
             // Re-apply our defaults on reload.
             for directive in &default_directives {

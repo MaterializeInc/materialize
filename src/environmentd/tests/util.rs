@@ -119,6 +119,7 @@ use tower_http::cors::AllowOrigin;
 use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
+use url::Url;
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -528,6 +529,14 @@ impl Server {
             }
         });
         Ok((client, handle))
+    }
+
+    pub fn ws_addr(&self) -> Url {
+        Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            self.inner.http_local_addr()
+        ))
+        .unwrap()
     }
 }
 

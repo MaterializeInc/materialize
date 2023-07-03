@@ -88,10 +88,10 @@ $ set-regex match=s\d+ replacement=SID
 contains:cannot drop schema mz_internal because it is required by the database system
 
 ! DROP VIEW mz_internal.mz_compute_frontiers
-contains:cannot drop item mz_internal.mz_compute_frontiers because it is required by the database system
+contains:cannot drop view mz_internal.mz_compute_frontiers because it is required by the database system
 
 ! DROP SOURCE mz_internal.mz_compute_delays_histogram_raw
-contains:cannot drop item mz_internal.mz_compute_delays_histogram_raw because it is required by the database system
+contains:cannot drop source mz_internal.mz_compute_delays_histogram_raw because it is required by the database system
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)

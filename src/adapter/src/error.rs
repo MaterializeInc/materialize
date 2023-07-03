@@ -111,7 +111,7 @@ pub enum AdapterError {
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// Wrapper around parsing error
-    ParseError(mz_sql_parser::parser::ParserError),
+    ParseError(mz_sql_parser::parser::ParserStatementError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The transaction in in read-only mode and a read already occurred.
@@ -327,7 +327,7 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::ResourceExhaustion { resource_type, .. } => Some(format!(
-                "Drop an existing {resource_type} or contact sales to request a limit increase."
+                "Drop an existing {resource_type} or contact support to request a limit increase."
             )),
             AdapterError::StatementTimeout => Some(
                 "Consider increasing the maximum allowed statement duration for this session by \
@@ -343,6 +343,10 @@ impl AdapterError {
             ),
             _ => None,
         }
+    }
+
+    pub fn internal<E: std::fmt::Display>(context: &str, e: E) -> AdapterError {
+        AdapterError::Internal(format!("{context}: {e}"))
     }
 }
 
@@ -641,8 +645,8 @@ impl From<TimestampError> for AdapterError {
     }
 }
 
-impl From<mz_sql_parser::parser::ParserError> for AdapterError {
-    fn from(e: mz_sql_parser::parser::ParserError) -> Self {
+impl From<mz_sql_parser::parser::ParserStatementError> for AdapterError {
+    fn from(e: mz_sql_parser::parser::ParserStatementError) -> Self {
         AdapterError::ParseError(e)
     }
 }

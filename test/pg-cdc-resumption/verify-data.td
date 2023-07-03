@@ -25,3 +25,6 @@ contains:has been altered
 # Ensure non-definite errors are cleared.
 > SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
 true
+
+! SELECT * FROM t0
+contains:unknown catalog item 't0'

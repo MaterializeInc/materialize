@@ -148,6 +148,7 @@ where
         StatementKind::RevokePrivileges => "revoke_privileges",
         StatementKind::AlterDefaultPrivileges => "alter_default_privileges",
         StatementKind::ReassignOwned => "reassign_owned",
+        StatementKind::ValidateConnection => "validate_connection",
     }
 }
 

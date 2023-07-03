@@ -15,13 +15,26 @@ from materialize.checks.checks import Check
 
 class CreateCluster(Check):
     def manipulate(self) -> List[Testdrive]:
+        # This list MUST be of length 2.
         return [
             Testdrive(dedent(s))
             for s in [
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATECLUSTER
+
                 > CREATE CLUSTER create_cluster1 REPLICAS (replica1 (SIZE '2-2'));
                 """,
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATECLUSTER
+
                 > CREATE CLUSTER create_cluster2 REPLICAS (replica1 (SIZE '2-2'));
                 """,
             ]

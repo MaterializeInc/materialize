@@ -2567,7 +2567,7 @@ SELECT pg_typeof(NULL::int[]::int list);
 ----
 integer list
 
-query error invalid input syntax for type array: parsing multi-dimensional arrays is not supported
+query error casting multi-dimensional array to list; got array with 2 dimensions not yet supported
 SELECT '{{1},{2},{3}}'::int[]::int list::text;
 
 # Verify nested lists

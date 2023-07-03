@@ -78,6 +78,8 @@ pub struct Config {
     /// If unspecified, testdrive creates a temporary directory with a random
     /// name.
     pub temp_dir: Option<String>,
+    /// Source string to print out on errors.
+    pub source: Option<String>,
     /// The default timeout for cancellable operations.
     pub default_timeout: Duration,
     /// The default number of tries for retriable operations.
@@ -339,10 +341,10 @@ impl State {
             }
         }
 
-        // Alter materialize user with all attributes.
+        // Alter materialize user with all system privileges.
         inner_client
             .batch_execute(&format!(
-                "ALTER ROLE {} WITH CREATEDB CREATECLUSTER CREATEROLE",
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
                 self.materialize_user
             ))
             .await?;

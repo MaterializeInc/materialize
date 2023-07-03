@@ -12,8 +12,6 @@ be used to indicate that the privileges should be revoked from all roles
 
 {{< alpha />}}
 
-{{< warning >}} The `CREATEROLE`, `CREATEDB`, and `CREATECLUSTER` privileges are not implemented yet. {{< /warning >}}
-
 ## Syntax
 
 {{< diagram "revoke-privilege.svg" >}}

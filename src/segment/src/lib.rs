@@ -82,6 +82,8 @@
 //! [Segment]: https://segment.com
 //! [`segment`]: https://docs.rs/segment
 
+use std::fmt;
+
 use segment::message::{Batch, BatchMessage, Group, Message, Track, User};
 use segment::{Batcher, Client as _, HttpClient};
 use tokio::sync::mpsc::error::TrySendError;
@@ -102,6 +104,12 @@ const MAX_PENDING_EVENTS: usize = 32_768;
 #[derive(Clone)]
 pub struct Client {
     tx: Sender<BatchMessage>,
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<segment client>")
+    }
 }
 
 impl Client {

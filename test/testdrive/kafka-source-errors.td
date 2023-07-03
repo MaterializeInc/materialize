@@ -15,24 +15,18 @@
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 contains:Source format must be specified
 
-> CREATE CONNECTION no_topic TO KAFKA (BROKER '');
-
-! CREATE SOURCE s
-  FROM KAFKA CONNECTION no_topic
-contains:KAFKA CONNECTION without TOPIC
+! CREATE CONNECTION no_topic TO KAFKA (BROKER '');
+contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
 
 # Verify that incorrect/unreachable brokers throw up an error on source creation.
 
-> CREATE CONNECTION fawlty_kafka_conn
+! CREATE CONNECTION fawlty_kafka_conn
   TO KAFKA (BROKER 'non-existent-broker:9092');
+contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
-
-! CREATE SOURCE fawlty_broker_source
-  FROM KAFKA CONNECTION fawlty_kafka_conn (TOPIC 'testdrive-fawlty-broker-source-${testdrive.seed}')
-contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
 
 > CREATE CONNECTION IF NOT EXISTS fawlty_csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://non-existent-csr:8081'

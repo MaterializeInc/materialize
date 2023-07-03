@@ -1,7 +1,7 @@
 [
   {
     "name": "objects.proto",
-    "md5": "d0a50a214cd50661262397a54a35809f"
+    "md5": "6f150aab3fa095b00753500ab4950af6"
   },
   {
     "name": "objects_v15.proto",
@@ -34,5 +34,17 @@
   {
     "name": "objects_v22.proto",
     "md5": "64a606a4e034cb9ab0e30f8ad02d4d02"
+  },
+  {
+    "name": "objects_v23.proto",
+    "md5": "167bdf10e2e9681049ec4d23352dc15a"
+  },
+  {
+    "name": "objects_v24.proto",
+    "md5": "36393b93b157a0167efaf97f01b70685"
+  },
+  {
+    "name": "objects_v25.proto",
+    "md5": "0a055b56539327ccbb8e23f209843cf2"
   }
 ]

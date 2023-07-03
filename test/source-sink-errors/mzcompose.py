@@ -434,7 +434,7 @@ def unsupported_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 INSERT INTO source1 VALUES (3, '{{1},{2}}')
+                 INSERT INTO source1 VALUES (3, '[2:3]={2,2}')
                  """
         )
     )

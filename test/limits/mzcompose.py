@@ -566,8 +566,14 @@ class Columns(Generator):
             "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
         )
         print("> INSERT INTO t VALUES (" + ", ".join(str(i) for i in cls.all()) + ");")
-        print("> SELECT " + ", ".join(f"f{i}" for i in cls.all()) + " FROM t;")
-        print(" ".join(str(i) for i in cls.all()))
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT "
+            + ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
+            + " FROM t;"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT " + ", ".join(f"f{i} + 1" for i in cls.all()) + " FROM v;")
+        print(" ".join(str(i + 2) for i in cls.all()))
 
 
 class TablesCommaJoinNoCondition(Generator):
@@ -1076,9 +1082,14 @@ class GroupBy(Generator):
         value_list = ", ".join("1" for i in cls.all())
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
-        column_list = ", ".join(f"f{i}" for i in cls.all())
-        print(f"> SELECT COUNT(*), {column_list} FROM t1 GROUP BY {column_list};")
-        print("1 " + " ".join("1" for i in cls.all()))
+        column_list_select = ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
+        column_list_group_by = ", ".join(f"f{i} + 1" for i in cls.all())
+        print(
+            f"> CREATE MATERIALIZED VIEW v AS SELECT COUNT(*), {column_list_select} FROM t1 GROUP BY {column_list_group_by};"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("1 " + " ".join("2" for i in cls.all()))
 
 
 class Unions(Generator):
@@ -1116,6 +1127,58 @@ class UnionsNested(Generator):
         )
         print("  SELECT * FROM t1 " + "".join("  )" for i in cls.all()) + ";")
         print("1")
+
+
+class CaseWhen(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print(
+            "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
+        )
+        print("> INSERT INTO t DEFAULT VALUES")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT CASE "
+            + " ".join(f"WHEN f{i} IS NOT NULL THEN f{i}" for i in cls.all())
+            + " ELSE 123 END FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("123")
+
+
+class Coalesce(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print(
+            "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
+        )
+        print("> INSERT INTO t DEFAULT VALUES")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT COALESCE("
+            + ",".join(f"f{i}" for i in cls.all())
+            + ", 123) FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("123")
+
+
+class Concat(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print("> CREATE TABLE t (f STRING)")
+        print("> INSERT INTO t VALUES (REPEAT('A', 1024))")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT CONCAT("
+            + ",".join("f" for i in cls.all())
+            + ") AS c FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT LENGTH(c) FROM v")
+        print(f"{cls.COUNT*1024}")
 
 
 #

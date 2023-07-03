@@ -19,6 +19,8 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
+use mz_kafka_util::client::MzClientContext;
+use mz_ore::error::ErrorExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::system::Oid;
@@ -203,7 +205,10 @@ pub async fn purify_create_source(
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
-                    _ => sql_bail!("{} is not a kafka connection", item.name()),
+                    _ => sql_bail!(
+                        "{} is not a kafka connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
                 }
             };
 
@@ -221,9 +226,16 @@ pub async fn purify_create_source(
                 .topic
                 .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
 
-            let consumer = kafka_util::create_consumer(&connection_context, &connection, &topic)
+            let consumer = connection
+                .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
                 .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+                .map_err(|e| {
+                    anyhow!(
+                        "Failed to create and connect Kafka consumer: {}",
+                        e.display_with_causes()
+                    )
+                })?;
+            let consumer = Arc::new(consumer);
 
             if let Some(offset_type) = offset_type {
                 // Translate `START TIMESTAMP` to a start offset
@@ -273,7 +285,10 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
-                    _ => sql_bail!("{} is not a postgres connection", item.name()),
+                    _ => sql_bail!(
+                        "{} is not a postgres connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
                 }
             };
             let crate::plan::statement::PgConfigOptionExtracted {
@@ -615,6 +630,8 @@ pub async fn purify_create_source(
                     cols: unsupported_cols,
                 });
             }
+
+            targeted_subsources.sort();
 
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
 

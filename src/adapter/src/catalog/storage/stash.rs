@@ -14,7 +14,7 @@ use mz_controller::clusters::ClusterId;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::RoleAttributes;
+use mz_sql::catalog::{RoleAttributes, SystemObjectType};
 use mz_sql::names::{DatabaseId, SchemaId, PUBLIC_ROLE_NAME};
 use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION};
@@ -77,8 +77,10 @@ pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
     proto::DefaultPrivilegesKey,
     proto::DefaultPrivilegesValue,
 > = TypedCollection::new("default_privileges");
-pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<proto::SystemPrivilegesKey, ()> =
-    TypedCollection::new("system_privileges");
+pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<
+    proto::SystemPrivilegesKey,
+    proto::SystemPrivilegesValue,
+> = TypedCollection::new("system_privileges");
 // If you add a new collection, then don't forget to write a migration that initializes the
 // collection either with some initial values or as empty. See
 // [`mz_stash::upgrade::v17_to_v18`] as an example.
@@ -134,20 +136,14 @@ pub async fn initialize(
         )
         .await?;
 
-    // If provided, generate a new Id and attributes for the bootstrap role.
+    // If provided, generate a new Id for the bootstrap role.
     //
     // Note: Make sure we do this _after_ initializing the ID_ALLOCATOR_COLLECTION.
     let bootstrap_role = if let Some(role) = &options.bootstrap_role {
         let role_id = RoleId::User(id_allocator.allocate(USER_ROLE_ID_ALLOC_KEY.to_string()));
         let role_val = proto::RoleValue {
             name: role.to_string(),
-            attributes: Some(
-                RoleAttributes::new()
-                    .with_create_db()
-                    .with_create_cluster()
-                    .with_create_role()
-                    .into_proto(),
-            ),
+            attributes: Some(RoleAttributes::new().into_proto()),
             membership: Some(RoleMembership::new().into_proto()),
         };
 
@@ -227,7 +223,10 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(mz_sql::catalog::ObjectType::Database).into_proto(),
+                rbac::all_object_privileges(SystemObjectType::Object(
+                    mz_sql::catalog::ObjectType::Database,
+                ))
+                .into_proto(),
             ),
         })
     };
@@ -257,7 +256,7 @@ pub async fn initialize(
     ));
 
     let schema_privileges = vec![
-        rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Schema).into_proto(),
+        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema).into_proto(),
         rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
@@ -319,18 +318,18 @@ pub async fn initialize(
         ]
         .into_iter()
         // Optionally add the bootstrap role to the public schema.
-        .chain(
-            bootstrap_role
-                .as_ref()
-                .map(|(role_id, _)| proto::MzAclItem {
-                    grantee: Some(role_id.clone()),
-                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                    acl_mode: Some(
-                        rbac::all_object_privileges(mz_sql::catalog::ObjectType::Schema)
-                            .into_proto(),
-                    ),
-                }),
-        )
+        .chain(bootstrap_role.as_ref().map(|(role_id, _)| {
+            proto::MzAclItem {
+                grantee: Some(role_id.clone()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                acl_mode: Some(
+                    rbac::all_object_privileges(SystemObjectType::Object(
+                        mz_sql::catalog::ObjectType::Schema,
+                    ))
+                    .into_proto(),
+                ),
+            }
+        }))
         .collect(),
     };
 
@@ -362,6 +361,11 @@ pub async fn initialize(
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
+        proto::MzAclItem {
+            grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
+        },
         rbac::owner_privilege(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
@@ -371,7 +375,10 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(mz_sql::catalog::ObjectType::Cluster).into_proto(),
+                rbac::all_object_privileges(SystemObjectType::Object(
+                    mz_sql::catalog::ObjectType::Cluster,
+                ))
+                .into_proto(),
             ),
         });
     };
@@ -560,39 +567,61 @@ pub async fn initialize(
     DEFAULT_PRIVILEGES_COLLECTION
         .initialize(
             tx,
-            vec![(
-                proto::DefaultPrivilegesKey {
-                    role_id: Some(RoleId::Public.into_proto()),
-                    database_id: None,
-                    schema_id: None,
-                    object_type: mz_sql::catalog::ObjectType::Type.into_proto().into(),
-                    grantee: Some(RoleId::Public.into_proto()),
-                },
-                proto::DefaultPrivilegesValue {
-                    privileges: Some(AclMode::USAGE.into_proto()),
-                },
-            )],
+            vec![
+                // mz_introspection needs USAGE privileges on all clusters for the
+                // prometheus-exporter.
+                (
+                    proto::DefaultPrivilegesKey {
+                        role_id: Some(RoleId::Public.into_proto()),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: mz_sql::catalog::ObjectType::Cluster.into_proto().into(),
+                        grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
+                    },
+                    proto::DefaultPrivilegesValue {
+                        privileges: Some(AclMode::USAGE.into_proto()),
+                    },
+                ),
+                (
+                    proto::DefaultPrivilegesKey {
+                        role_id: Some(RoleId::Public.into_proto()),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: mz_sql::catalog::ObjectType::Type.into_proto().into(),
+                        grantee: Some(RoleId::Public.into_proto()),
+                    },
+                    proto::DefaultPrivilegesValue {
+                        privileges: Some(AclMode::USAGE.into_proto()),
+                    },
+                ),
+            ],
         )
         .await?;
-    SYSTEM_PRIVILEGES_COLLECTION
-        .initialize(
-            tx,
-            vec![(
-                proto::SystemPrivilegesKey {
-                    privileges: Some(proto::MzAclItem {
-                        grantee: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                        grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                        acl_mode: Some(
-                            AclMode::CREATE_CLUSTER
-                                .union(AclMode::CREATE_DB)
-                                .union(AclMode::CREATE_ROLE)
-                                .into_proto(),
-                        ),
-                    }),
-                },
-                (),
-            )],
+    let system_privileges: Vec<_> = vec![(
+        proto::SystemPrivilegesKey {
+            grantee: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+        },
+        proto::SystemPrivilegesValue {
+            acl_mode: Some(rbac::all_object_privileges(SystemObjectType::System).into_proto()),
+        },
+    )]
+    .into_iter()
+    // Optionally add system privileges for the bootstrap role.
+    .chain(bootstrap_role.as_ref().map(|(role_id, _)| {
+        (
+            proto::SystemPrivilegesKey {
+                grantee: Some(role_id.clone()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            },
+            proto::SystemPrivilegesValue {
+                acl_mode: Some(rbac::all_object_privileges(SystemObjectType::System).into_proto()),
+            },
         )
+    }))
+    .collect();
+    SYSTEM_PRIVILEGES_COLLECTION
+        .initialize(tx, system_privileges)
         .await?;
 
     // Initialize all other collections to be empty.

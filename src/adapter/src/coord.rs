@@ -103,7 +103,7 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{CopyFormat, Params, QueryWhen};
+use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
@@ -184,6 +184,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
     ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
+    CreateConnectionValidationReady(CreateConnectionValidationReady),
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
@@ -227,21 +228,22 @@ pub enum Message<T = mz_repr::Timestamp> {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CreateSourceStatementReady {
+pub struct BackgroundWorkResult<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
-    pub result: Result<
-        (
-            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-            CreateSourceStatement<Aug>,
-        ),
-        AdapterError,
-    >,
+    pub result: Result<T, AdapterError>,
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
     pub otel_ctx: OpenTelemetryContext,
 }
+
+pub type CreateSourceStatementReady = BackgroundWorkResult<(
+    Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+    CreateSourceStatement<Aug>,
+)>;
+
+pub type CreateConnectionValidationReady = BackgroundWorkResult<CreateConnectionPlan>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -1636,7 +1638,7 @@ pub async fn serve(
             unsafe_mode,
             all_features,
             build_info,
-            environment_id,
+            environment_id: environment_id.clone(),
             now: now.clone(),
             skip_migrations: false,
             metrics_registry: &metrics_registry,
@@ -1666,6 +1668,7 @@ pub async fn serve(
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
     let metrics = Metrics::register_into(&metrics_registry);
     let metrics_clone = metrics.clone();
+    let segment_client_clone = segment_client.clone();
     let span = tracing::Span::current();
     let coord_now = now.clone();
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
@@ -1750,7 +1753,14 @@ pub async fn serve(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone, now);
+            let client = Client::new(
+                build_info,
+                cmd_tx.clone(),
+                metrics_clone,
+                now,
+                environment_id,
+                segment_client_clone,
+            );
             Ok((handle, client))
         }
         Err(e) => Err(e),

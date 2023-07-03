@@ -219,7 +219,7 @@ contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECR
 #####################################################################
 
 ! DROP VIEW temp_v;
-contains:cannot drop mz_temp.temp_v: still depended upon by catalog item 'mz_temp.double_temp_v'
+contains:cannot drop view temp_v: still depended upon by view double_temp_v
 
 > DROP VIEW double_temp_v;
 

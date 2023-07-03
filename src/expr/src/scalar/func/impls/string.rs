@@ -254,7 +254,7 @@ impl LazyUnaryFunc for CastStringToArray {
         if a.is_null() {
             return Ok(Datum::Null);
         }
-        let datums = strconv::parse_array(
+        let (datums, dims) = strconv::parse_array(
             a.unwrap_str(),
             || Datum::Null,
             |elem_text| {
@@ -266,7 +266,8 @@ impl LazyUnaryFunc for CastStringToArray {
                     .eval(&[Datum::String(elem_text)], temp_storage)
             },
         )?;
-        array_create_scalar(&datums, temp_storage)
+
+        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, datums))?)
     }
 
     /// The output ColumnType of this function

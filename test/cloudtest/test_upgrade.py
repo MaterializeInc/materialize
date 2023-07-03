@@ -42,12 +42,22 @@ class CloudtestUpgrade(Scenario):
 
 
 @pytest.mark.long
-def test_upgrade(aws_region: Optional[str]) -> None:
+def test_upgrade(
+    aws_region: Optional[str], log_filter: Optional[str], dev: bool
+) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
+    print(
+        f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"
+    )
 
-    mz = MaterializeApplication(tag=str(LAST_RELEASED_VERSION), aws_region=aws_region)
+    mz = MaterializeApplication(
+        tag=str(LAST_RELEASED_VERSION),
+        aws_region=aws_region,
+        log_filter=log_filter,
+        release_mode=(not dev),
+    )
     wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
-    executor = CloudtestExecutor(application=mz)
+    executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
     scenario.run()

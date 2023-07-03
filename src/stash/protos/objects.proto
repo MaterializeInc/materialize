@@ -324,9 +324,6 @@ message RoleId {
 
 message RoleAttributes {
     bool inherit = 1;
-    bool create_role = 2;
-    bool create_db = 3;
-    bool create_cluster = 4;
 }
 
 message RoleMembership {
@@ -385,7 +382,12 @@ message DefaultPrivilegesValue {
 }
 
 message SystemPrivilegesKey {
-    MzAclItem privileges = 1;
+    RoleId grantee = 1;
+    RoleId grantor = 2;
+}
+
+message SystemPrivilegesValue {
+    AclMode acl_mode = 1;
 }
 
 message AuditLogEventV1 {

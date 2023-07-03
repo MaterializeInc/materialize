@@ -52,7 +52,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::{CollectionMetadata, CreateResumptionFrontierCalc};
+use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
@@ -81,7 +81,7 @@ use tracing::{info, trace, warn};
 
 use crate::healthcheck::write_to_persist;
 use crate::internal_control::InternalStorageCommand;
-use crate::render::sources::{OutputIndex, WorkerId};
+use crate::render::sources::OutputIndex;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -122,14 +122,17 @@ pub struct RawSourceCreationConfig {
     /// Storage Metadata
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
-    pub resume_upper: Antichain<mz_repr::Timestamp>,
+    pub as_of: Antichain<mz_repr::Timestamp>,
+    /// For each source export, the upper frontier this source should resume ingestion at in the
+    /// source time domain.
+    pub resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
     /// For each source export, the upper frontier this source should resume ingestion at in the
     /// source time domain.
     ///
     /// Since every source has a different timestamp type we carry the timestamps of this frontier
     /// in an encoded `Vec<Row>` form which will get decoded once we reach the connection
     /// specialized functions.
-    pub source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
+    pub source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
@@ -168,40 +171,35 @@ pub struct SourceCreationParams {
 ///
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
-pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
+///
+/// The `resume_stream` parameter will contain frontier updates whenever times are durably
+/// recorded which allows the ingestion to release upstream resources.
+pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    calc: R,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Option<Rc<dyn Any>>,
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
-    R: CreateResumptionFrontierCalc<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
     let id = config.id;
     info!(
         %id,
-        resume_upper = %config.resume_upper.pretty(),
+        as_of = %config.as_of.pretty(),
         "timely-{worker_id} building source pipeline",
     );
-    let (resume_stream, resume_token) =
-        super::resumption::resumption_operator(scope, config.clone(), calc);
 
-    let reclock_follower = {
-        let upper_ts = config.resume_upper.as_option().copied().unwrap();
-        // Same value as our use of `derive_new_compaction_since`.
-        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        ReclockFollower::new(as_of)
-    };
+    let reclock_follower = ReclockFollower::new(config.as_of.clone());
 
     let (resume_tx, resume_rx) = tokio::sync::mpsc::unbounded_channel();
     let (source_tx, source_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -240,7 +238,7 @@ where
 
     let streams = reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
-    let token = Rc::new((token, remap_token, resume_token));
+    let token = Rc::new((token, remap_token));
 
     (streams, health, Some(token))
 }
@@ -266,7 +264,7 @@ fn source_render_operator<G, C>(
         Diff,
     >,
     Stream<G, Infallible>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Rc<dyn Any>,
 )
 where
@@ -344,14 +342,10 @@ where
         }
     });
 
-    let health = health
-        .concat(&derived_health)
-        .map(move |(output_index, status)| (worker_id, output_index, status));
-
     (
         data.as_collection(),
         progress.unwrap_or(derived_progress),
-        health,
+        health.concat(&derived_health),
         token,
     )
 }
@@ -399,9 +393,9 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    resume_upper: Antichain<mz_repr::Timestamp>,
+    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
     primary_source_id: GlobalId,
-    health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    health_stream: &Stream<G, (OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
 ) -> Rc<dyn Any> {
     // Derived config options
@@ -410,6 +404,9 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     let now = storage_state.now.clone();
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
+
+    // Inject the originating worker id to each item before exchanging to the chosen worker
+    let health_stream = health_stream.map(move |status| (healthcheck_worker_id, status));
 
     // We'll route all the work to a single arbitrary worker;
     // there's not much to do, and we need a global view.
@@ -471,21 +468,23 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
             .collect();
 
         // Write the initial starting state to the status shard for all managed sources
-        if is_active_worker && !resume_upper.is_empty() {
+        if is_active_worker {
             for state in health_states.values() {
-                if let Some((status_shard, persist_client)) = state.persist_details {
-                    let status = HealthStatus::Starting;
-                    write_to_persist(
-                        state.source_id,
-                        status.name(),
-                        status.error(),
-                        now.clone(),
-                        persist_client,
-                        status_shard,
-                        &*MZ_SOURCE_STATUS_HISTORY_DESC,
-                        status.hint(),
-                    )
-                    .await;
+                if !resume_uppers[&state.source_id].is_empty() {
+                    if let Some((status_shard, persist_client)) = state.persist_details {
+                        let status = HealthStatus::Starting;
+                        write_to_persist(
+                            state.source_id,
+                            status.name(),
+                            status.error(),
+                            now.clone(),
+                            persist_client,
+                            status_shard,
+                            &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                            status.hint(),
+                        )
+                        .await;
+                    }
                 }
             }
         }
@@ -493,7 +492,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         let mut outputs_seen = BTreeSet::new();
         while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                for (worker_id, output_index, health_event) in rows.drain(..) {
+                for (worker_id, (output_index, health_event)) in rows.drain(..) {
                     let HealthState {
                         source_id,
                         healths,
@@ -685,8 +684,9 @@ where
         timestamp_interval,
         encoding: _,
         storage_metadata,
-        resume_upper,
-        source_resume_upper: _,
+        as_of,
+        resume_uppers: _,
+        source_resume_uppers: _,
         base_metrics: _,
         now,
         persist_clients,
@@ -712,10 +712,6 @@ where
 
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
-        let upper_ts = resume_upper.as_option().copied().unwrap();
-
-        // Same value as our use of `derive_new_compaction_since`.
-        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
         let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
             storage_metadata.clone(),
@@ -752,7 +748,7 @@ where
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        loop {
+        while !cap_set.is_empty() {
             // AsyncInputHandle::next is cancel safe
             tokio::select! {
                 _ = ticker.tick() => {
@@ -844,8 +840,9 @@ where
         timestamp_interval: _,
         encoding: _,
         storage_metadata: _,
-        resume_upper,
-        source_resume_upper: _,
+        as_of: _,
+        resume_uppers,
+        source_resume_uppers: _,
         base_metrics,
         now: _,
         persist_clients: _,
@@ -876,6 +873,8 @@ where
 
         let mut source_metrics = SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
 
+        // Compute the overall resume upper to report for the ingestion
+        let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
         source_metrics.resume_upper.set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());

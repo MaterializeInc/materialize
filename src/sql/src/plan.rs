@@ -44,6 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
+
 use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
@@ -57,7 +58,9 @@ use crate::catalog::{
     CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
     RoleAttributes,
 };
-use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
+use crate::names::{
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId,
+};
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -157,6 +160,7 @@ pub enum Plan {
     AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
     SideEffectingFunc(SideEffectingFunc),
+    ValidateConnection(ValidateConnectionPlan),
 }
 
 impl Plan {
@@ -245,6 +249,7 @@ impl Plan {
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
             StatementKind::Update => vec![PlanKind::ReadThenWrite],
+            StatementKind::ValidateConnection => vec![PlanKind::ValidateConnection],
         }
     }
 
@@ -370,6 +375,7 @@ impl Plan {
             Plan::AlterDefaultPrivileges(_) => "alter default privileges",
             Plan::ReassignOwned(_) => "reassign owned",
             Plan::SideEffectingFunc(_) => "side effecting func",
+            Plan::ValidateConnection(_) => "validate connection",
         }
     }
 }
@@ -557,6 +563,14 @@ pub struct CreateConnectionPlan {
     pub name: QualifiedItemName,
     pub if_not_exists: bool,
     pub connection: Connection,
+    pub validate: bool,
+}
+
+#[derive(Debug)]
+pub struct ValidateConnectionPlan {
+    pub id: GlobalId,
+    /// The connection to validate.
+    pub connection: mz_storage_client::types::connections::Connection,
 }
 
 #[derive(Debug)]
@@ -642,7 +656,7 @@ pub struct DropOwnedPlan {
     /// All object IDs to drop.
     pub drop_ids: Vec<ObjectId>,
     /// The privileges to revoke.
-    pub privilege_revokes: Vec<(ObjectId, MzAclItem)>,
+    pub privilege_revokes: Vec<(SystemObjectId, MzAclItem)>,
     /// The default privileges to revoke.
     pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
 }
@@ -825,9 +839,15 @@ pub struct AlterSinkPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterSourceAction {
+    Resize(AlterOptionParameter),
+    DropSubsourceExports { to_drop: BTreeSet<GlobalId> },
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub size: AlterOptionParameter,
+    pub action: AlterSourceAction,
 }
 
 #[derive(Debug)]
@@ -964,8 +984,8 @@ pub struct RevokeRolePlan {
 pub struct UpdatePrivilege {
     /// The privileges being granted/revoked on an object.
     pub acl_mode: AclMode,
-    /// The ID of the object.
-    pub object_id: ObjectId,
+    /// The ID of the object receiving privileges.
+    pub target_id: SystemObjectId,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }

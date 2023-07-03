@@ -154,6 +154,12 @@ the retry attempts.
 Reported performance improvements are not retried to establish reprodicibility, so should be considered flukes if seen in the CI
 output until reliably reproduced locally.
 
+# Measuring memory consumption
+
+If started with `--measure-memory`, the feature benchmark will measure memory consumption and report any regressions.
+
+`docker stats` is used to measure the memory consumption of the entire Materialize container, which includes CRDB.
+
 # Troubleshooting
 
 ## Benchmark terminated prematurely

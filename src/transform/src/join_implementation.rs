@@ -141,10 +141,20 @@ impl JoinImplementation {
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
             // Canonicalize the equivalence classes
-            mz_expr::canonicalize::canonicalize_equivalences(
-                equivalences,
-                input_types.iter().map(|t| &t.column_types),
-            );
+            if matches!(implementation, Unimplemented) {
+                // Let's do this only if it's the first run of JoinImplementation, in which case we
+                // are guaranteed to produce a new plan, which will be compatible with the modified
+                // equivalences from the below call. Otherwise, if we already have a Differential or
+                // a Delta join, then we might discard the new plan and go with the old plan, which
+                // was created previously for the old equivalences, and might be invalid for the
+                // modified equivalences from the below call. Note that this issue can arise only if
+                // `canonicalize_equivalences` is not idempotent, which unfortunately seems to be
+                // the case.
+                mz_expr::canonicalize::canonicalize_equivalences(
+                    equivalences,
+                    input_types.iter().map(|t| &t.column_types),
+                );
+            }
 
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);

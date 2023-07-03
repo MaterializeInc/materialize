@@ -11,7 +11,9 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
-use crate::catalog::storage::{DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey};
+use crate::catalog::storage::{
+    DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey, SystemPrivilegesValue,
+};
 use crate::catalog::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership, SerializedCatalogItem,
     SerializedRole,
@@ -717,15 +719,35 @@ impl RustType<proto::DefaultPrivilegesValue> for DefaultPrivilegesValue {
 impl RustType<proto::SystemPrivilegesKey> for SystemPrivilegesKey {
     fn into_proto(&self) -> proto::SystemPrivilegesKey {
         proto::SystemPrivilegesKey {
-            privileges: Some(self.privileges.into_proto()),
+            grantee: Some(self.grantee.into_proto()),
+            grantor: Some(self.grantor.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::SystemPrivilegesKey) -> Result<Self, TryFromProtoError> {
         Ok(SystemPrivilegesKey {
-            privileges: proto
-                .privileges
-                .into_rust_if_some("SystemPrivilegesKey::privileges")?,
+            grantee: proto
+                .grantee
+                .into_rust_if_some("SystemPrivilegesKey::grantee")?,
+            grantor: proto
+                .grantor
+                .into_rust_if_some("SystemPrivilegesKey::grantor")?,
+        })
+    }
+}
+
+impl RustType<proto::SystemPrivilegesValue> for SystemPrivilegesValue {
+    fn into_proto(&self) -> proto::SystemPrivilegesValue {
+        proto::SystemPrivilegesValue {
+            acl_mode: Some(self.acl_mode.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::SystemPrivilegesValue) -> Result<Self, TryFromProtoError> {
+        Ok(SystemPrivilegesValue {
+            acl_mode: proto
+                .acl_mode
+                .into_rust_if_some("SystemPrivilegesKey::acl_mode")?,
         })
     }
 }

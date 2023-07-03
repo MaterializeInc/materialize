@@ -27,9 +27,11 @@ use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
-use mz_sql_parser::parser::ParserError;
+use mz_sql_parser::parser::{ParserError, ParserStatementError};
 
-use crate::catalog::{CatalogError, CatalogItemType, ObjectType};
+use crate::catalog::{
+    CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
+};
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
@@ -46,6 +48,7 @@ pub enum PlanError {
     NeverSupported {
         feature: String,
         documentation_link: String,
+        details: Option<String>,
     },
     UnknownColumn {
         table: Option<PartialItemName>,
@@ -87,22 +90,33 @@ pub enum PlanError {
     InvalidId(GlobalId),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
-        expected_type: ObjectType,
-        actual_type: ObjectType,
+        expected_type: SystemObjectType,
+        actual_type: SystemObjectType,
         object_name: String,
     },
     InvalidPrivilegeTypes {
         invalid_privileges: AclMode,
-        object_type: ObjectType,
-        object_name: Option<String>,
+        object_description: ErrorMessageObjectDescription,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
+    ParserStatement(ParserStatementError),
     Parser(ParserError),
     DropViewOnMaterializedView(String),
     DropSubsource {
         subsource: String,
+        source: String,
+    },
+    DropProgressCollection {
+        progress_collection: String,
+        source: String,
+    },
+    DropNonSubsource {
+        non_subsource: String,
+        source: String,
+    },
+    DropLastSubsource {
         source: String,
     },
     AlterViewOnMaterializedView(String),
@@ -183,6 +197,7 @@ pub enum PlanError {
     FromValueRequiresParen,
     VarError(VarError),
     UnsolvablePolymorphicFunctionInput,
+    ShowCommandInView,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -197,6 +212,7 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
@@ -211,8 +227,11 @@ impl PlanError {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
-            Self::DropSubsource { source, .. } => Some(format!(
-                "Use DROP SOURCE {source} to drop this subsource's primary source and all of its other subsources"
+            Self::DropSubsource { source, subsource } => Some(format!(
+                "Use ALTER SOURCE {source} DROP SUBSOURCE {subsource}"
+            )),
+            Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
+                "Use DROP SOURCE {source} to drop the primary source along with all subsources"
             )),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
@@ -291,7 +310,7 @@ impl fmt::Display for PlanError {
                 }
                 Ok(())
             }
-            Self::NeverSupported { feature, documentation_link: documentation_path } => {
+            Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
                 write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
                 Ok(())
             }
@@ -369,13 +388,13 @@ impl fmt::Display for PlanError {
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
+            Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
-            Self::InvalidPrivilegeTypes{ invalid_privileges, object_type, object_name} => {
-                let object_name = object_name.as_ref().map(|object_name| format!(" {}", object_name.quoted())).unwrap_or_else(||"".to_string());
-                write!(f, "invalid privilege types {} for {}{}", invalid_privileges.to_error_string(), object_type, object_name)
+            Self::InvalidPrivilegeTypes{ invalid_privileges, object_description, } => {
+                write!(f, "invalid privilege types {} for {}", invalid_privileges.to_error_string(), object_description)
             },
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
@@ -407,7 +426,10 @@ impl fmt::Display for PlanError {
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }
-            Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
+            Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
+            Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
+            Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
+            Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is a not a subsource of {}", non_subsource.quoted(), source.quoted()),
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
@@ -471,6 +493,7 @@ impl fmt::Display for PlanError {
             Self::UnsolvablePolymorphicFunctionInput => f.write_str(
                 "could not determine polymorphic type because input has type unknown"
             ),
+            Self::ShowCommandInView => f.write_str("SHOW commands are not allowed in views"),
         }
     }
 }
@@ -541,6 +564,12 @@ impl From<EvalError> for PlanError {
 impl From<ParserError> for PlanError {
     fn from(e: ParserError) -> PlanError {
         PlanError::Parser(e)
+    }
+}
+
+impl From<ParserStatementError> for PlanError {
+    fn from(e: ParserStatementError) -> PlanError {
+        PlanError::ParserStatement(e)
     }
 }
 

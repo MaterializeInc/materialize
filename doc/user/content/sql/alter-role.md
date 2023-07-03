@@ -18,12 +18,6 @@ Field               | Use
 --------------------|-------------------------------------------------------------------------
 _role_name_         | A name for the role.
 **INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
-**CREATEROLE**      | Grants the role the ability to create, alter, delete roles and the ability to grant and revoke role membership. This attribute is very powerful. It allows roles to grant and revoke membership in other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role with this attribute can obtain the privileges of any other role in the system.
-**NOCREATEROLE**    | Denies the role the ability to create, alter, delete roles or grant and revoke role membership.
-**CREATEDB**        | Grants the role the ability to create databases.
-**NOCREATEDB**      | Denies the role the ability to create databases.
-**CREATECLUSTER**   | Grants the role the ability to create clusters.
-**NOCREATECLUSTER** | Denies the role the ability to create clusters.
 
 ## Details
 
@@ -35,23 +29,24 @@ attribute when altering an existing role.
 Unlike PostgreSQL, materialize does not currently support `NOINHERIT`.
 
 You may not specify redundant or conflicting sets of options. For example,
-Materialize will reject the statement `ALTER ROLE ... CREATEDB NOCREATEDB` because
-the `CREATEDB` and `NOCREATEDB` options conflict.
+Materialize will reject the statement `ALTER ROLE ... INHERIT INHERIT`.
 
-When RBAC is enabled a role must have the `CREATEROLE` attribute to alter another role.
-Additionally, no role can grant another role an attribute that the altering role doesn't
-have itself.
+Unlike PostgreSQL, Materialize does not use role attributes to determine a roles ability to create
+top level objects such as databases and other roles. Instead, Materialize uses system level
+privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
+
+When RBAC is enabled a role must have the `CREATEROLE` system privilege to alter another role.
 
 ## Examples
 
 ```sql
-ALTER ROLE rj CREATEDB NOCREATECLUSTER;
+ALTER ROLE rj INHERIT;
 ```
 ```sql
-SELECT name, create_db, create_cluster FROM mz_roles WHERE name = 'rj';
+SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 ```
 ```nofmt
-rj  true  false
+rj  true
 ```
 
 ## Related pages

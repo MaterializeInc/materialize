@@ -10,20 +10,14 @@
 # Testing user-focused error messages
 
 > CREATE SECRET pgpass AS 'postgres'
-> CREATE CONNECTION pg TO POSTGRES (
+! CREATE CONNECTION pg TO POSTGRES (
     HOST 'localhost',
     PORT 5433,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-
-# TODO(guswynn): make testdrive support `startswith`
-! CREATE SOURCE "test_error"
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES
-exact:failed to connect to PostgreSQL database
-detail:error connecting to server:
+contains:error connecting to server:
 
 > CREATE MATERIALIZED VIEW mv as SELECT 1;
 

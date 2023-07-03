@@ -61,10 +61,15 @@ pub enum InternalStorageCommand {
         id: GlobalId,
         /// The description of the ingestion/source.
         ingestion_description: IngestionDescription<CollectionMetadata>,
-        /// The frontier at which we should (re-)start ingestion.
-        resumption_frontier: Antichain<mz_repr::Timestamp>,
-        /// The frontier at which we should (re-)start ingestion in the source time domain.
-        source_resumption_frontier: BTreeMap<GlobalId, Vec<Row>>,
+        /// The frontier beyond which ingested updates should be uncompacted. Inputs to the
+        /// ingestion are guaranteed to be readable at this frontier.
+        as_of: Antichain<mz_repr::Timestamp>,
+        /// A frontier in the Materialize time domain with the property that all updates not beyond
+        /// it have already been durably ingested.
+        resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
+        /// A frontier in the source time domain with the property that all updates not beyond it
+        /// have already been durably ingested.
+        source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     },
     /// Render a sink dataflow.
     CreateSinkDataflow(

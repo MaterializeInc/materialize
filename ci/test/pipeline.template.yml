@@ -33,8 +33,9 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
     inputs:
       - "*"
-    timeout_in_minutes: 60
     priority: 1
+    timeout_in_minutes: 60
+    branches: main
     agents:
       queue: builder-linux-aarch64
     coverage: skip
@@ -154,9 +155,10 @@ steps:
       queue: builder-linux-x86_64
 
   - id: miri-test
-    label: Miri test
+    label: Miri test %n
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     inputs: [src]
+    parallelism: 2
     timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
@@ -493,19 +495,6 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: checks-restart-entire-mz
-    label: "Checks + restart of the entire Mz"
-    depends_on: build-x86_64
-    inputs: [misc/python/materialize/checks]
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
-
   - id: checks-restart-environmentd-clusterd-storage
     label: "Checks + restart of environmentd & storage clusterd"
     depends_on: build-x86_64
@@ -546,7 +535,7 @@ steps:
           args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres, --check=PgCdc]
 
   - id: cloudtest
-    label: Cloudtest
+    label: Cloudtest %n
     depends_on: build-x86_64
     parallelism: 3
     timeout_in_minutes: 30

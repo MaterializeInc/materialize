@@ -93,6 +93,7 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
+use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, BUILD_INFO};
@@ -616,7 +617,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let span = tracing::info_span!("environmentd::run").entered();
 
     let metrics_registry = MetricsRegistry::new();
-    let metrics = Metrics::register_into(&metrics_registry);
+    let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
 
@@ -933,11 +934,15 @@ struct Metrics {
 }
 
 impl Metrics {
-    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
+    pub fn register_into(registry: &MetricsRegistry, build_info: BuildInfo) -> Metrics {
         Metrics {
             start_time_environmentd: registry.register(metric!(
                 name: "mz_start_time_environmentd",
                 help: "Time in milliseconds from environmentd start until the adapter is ready.",
+                const_labels: {
+                    "version" => build_info.version,
+                    "build_type" => if cfg!(release) { "release" } else { "debug" }
+                },
             )),
         }
     }

@@ -38,30 +38,39 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogRole, CatalogSchema,
-    CatalogTypeDetails, ObjectType, SessionCatalog,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
+    ErrorMessageObjectDescription, ObjectType, SessionCatalog,
 };
-use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier};
+use mz_sql::names::{
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier,
+    SystemObjectId,
+};
 use mz_sql::plan::{
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan,
-    DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
-    InsertPlan, InspectShardPlan, MaterializedView, MutationKind, OptimizerConfig, Plan, QueryWhen,
-    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
-    SelectPlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan,
-    SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
-    VariableValue, View,
+    AlterSinkPlan, AlterSourceAction, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
+    GrantRolePlan, IndexOption, InsertPlan, InspectShardPlan, MaterializedView, MutationKind,
+    OptimizerConfig, Params, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
+    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SelectPlan, SendDiffsPlan,
+    SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::TransactionMode;
+use mz_sql_parser::ast::{
+    CreateSourceConnection, PgConfigOptionName, TransactionMode, WithOptionValue,
+};
+use mz_sql_parser::ast::{
+    CreateSourceSubsource, DeferredItemName, ReferencedSubsources, Statement,
+};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -71,7 +80,7 @@ use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op,
+    self, Catalog, CatalogItem, Cluster, ConnCatalog, Connection, DataSourceDesc, Op,
     StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
 use crate::command::{ExecuteResponse, Response};
@@ -142,53 +151,26 @@ impl Coordinator {
             .collect::<BTreeMap<_, _>>();
 
         for (source_id, plan, depends_on) in plans {
+            let name = plan.name.clone();
             let source_oid = self.catalog_mut().allocate_oid()?;
-            let source = catalog::Source {
-                create_sql: plan.source.create_sql,
-                data_source: match plan.source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        let cluster_id = self
-                            .create_linked_cluster_ops(
-                                source_id,
-                                &plan.name,
-                                &plan.cluster_config,
-                                &mut ops,
-                                session,
-                            )
-                            .await?;
-                        DataSourceDesc::ingestion(source_id, ingestion, cluster_id)
-                    }
-                    mz_sql::plan::DataSourceDesc::Progress => {
-                        assert!(
-                            matches!(
-                                plan.cluster_config,
-                                mz_sql::plan::SourceSinkClusterConfig::Undefined
-                            ),
-                            "subsources must not have a host config defined"
-                        );
-                        DataSourceDesc::Progress
-                    }
-                    mz_sql::plan::DataSourceDesc::Source => {
-                        assert!(
-                            matches!(
-                                plan.cluster_config,
-                                mz_sql::plan::SourceSinkClusterConfig::Undefined
-                            ),
-                            "subsources must not have a host config defined"
-                        );
-                        DataSourceDesc::Source
-                    }
-                },
-                desc: plan.source.desc,
-                timeline: plan.timeline,
-                depends_on,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+            let cluster_id = match plan.source.data_source {
+                mz_sql::plan::DataSourceDesc::Ingestion(_) => Some(
+                    self.create_linked_cluster_ops(
+                        source_id,
+                        &plan.name,
+                        &plan.cluster_config,
+                        &mut ops,
+                        session,
+                    )
+                    .await?,
+                ),
+                _ => None,
             };
+            let source = catalog::Source::new(source_id, plan, cluster_id, depends_on, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
-                name: plan.name.clone(),
+                name,
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
             });
@@ -1095,116 +1077,136 @@ impl Coordinator {
 
     fn validate_dropped_role_ownership(
         &self,
+        session: &Session,
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
             privileges: &PrivilegeMap,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
-            object_type: ObjectType,
-            object_name: &str,
-            catalog: &Catalog,
+            object_id: &SystemObjectId,
+            catalog: &ConnCatalog,
         ) {
-            let object_type = object_type.to_string().to_lowercase();
             for privilege in privileges.all_values() {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
                     let grantor_name = catalog.get_role(&privilege.grantor).name();
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
                         .push(format!(
-                            "privileges on {object_type} {object_name} granted by {grantor_name}",
+                            "privileges on {object_description} granted by {grantor_name}",
                         ));
                 }
                 if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
                     let grantee_name = catalog.get_role(&privilege.grantee).name();
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
                         .push(format!(
-                            "privileges granted on {object_type} {object_name} to {grantee_name}"
+                            "privileges granted on {object_description} to {grantee_name}"
                         ));
                 }
             }
         }
 
+        let catalog = self.catalog().for_session(session);
         let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for entry in self.catalog.entries() {
+            let id = SystemObjectId::Object(entry.id().into());
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
+                let object_description = ErrorMessageObjectDescription::from_id(&id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!(
-                        "owner of {} {}",
-                        entry.item().typ(),
-                        entry.name().item
-                    ));
+                    .push(format!("owner of {object_description}"));
             }
             privilege_check(
                 entry.privileges(),
                 dropped_roles,
                 &mut dependent_objects,
-                entry.item().typ().into(),
-                &entry.name().item,
-                self.catalog(),
+                &id,
+                &catalog,
             );
         }
         for database in self.catalog.databases() {
+            let database_id = SystemObjectId::Object(database.id().into());
             if let Some(role_name) = dropped_roles.get(&database.owner_id) {
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&database_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("owner of database {}", database.name()));
+                    .push(format!("owner of {object_description}"));
             }
             privilege_check(
                 &database.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                ObjectType::Database,
-                database.name(),
-                self.catalog(),
+                &database_id,
+                &catalog,
             );
             for schema in database.schemas_by_id.values() {
+                let schema_id = SystemObjectId::Object(
+                    (ResolvedDatabaseSpecifier::Id(database.id()), *schema.id()).into(),
+                );
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&schema_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("owner of schema {}", schema.name().schema));
+                        .push(format!("owner of {object_description}"));
                 }
                 privilege_check(
                     &schema.privileges,
                     dropped_roles,
                     &mut dependent_objects,
-                    ObjectType::Schema,
-                    &schema.name().schema,
-                    self.catalog(),
+                    &schema_id,
+                    &catalog,
                 );
             }
         }
         for cluster in self.catalog.clusters() {
+            let cluster_id = SystemObjectId::Object(cluster.id().into());
             if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&cluster_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("owner of cluster {}", cluster.name()));
+                    .push(format!("owner of {object_description}"));
             }
             privilege_check(
                 &cluster.privileges,
                 dropped_roles,
                 &mut dependent_objects,
-                ObjectType::Cluster,
-                cluster.name(),
-                self.catalog(),
+                &cluster_id,
+                &catalog,
             );
             for replica in cluster.replicas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
+                    let replica_id =
+                        SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&replica_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("owner of cluster replica {}", replica.name));
+                        .push(format!("owner of {object_description}"));
                 }
             }
         }
+        privilege_check(
+            self.catalog().system_privileges(),
+            dropped_roles,
+            &mut dependent_objects,
+            &SystemObjectId::System,
+            &catalog,
+        );
         for (default_privilege_object, default_privilege_acl_items) in
             self.catalog.default_privileges()
         {
@@ -1263,14 +1265,15 @@ impl Coordinator {
                 .map(|(object_id, _)| object_id)
                 .collect();
             for invalid_revoke in invalid_revokes {
-                let name = session_catalog.get_object_name(&invalid_revoke);
-                session.add_notice(AdapterNotice::CannotRevoke { name });
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&invalid_revoke, &session_catalog);
+                session.add_notice(AdapterNotice::CannotRevoke { object_description });
             }
         }
 
         let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
             catalog::Op::UpdatePrivilege {
-                object_id,
+                target_id: object_id,
                 privilege,
                 variant: UpdatePrivilegeVariant::Revoke,
             }
@@ -1334,7 +1337,7 @@ impl Coordinator {
         for role_id in dropped_roles.keys() {
             self.catalog().ensure_not_reserved_role(role_id)?;
         }
-        self.validate_dropped_role_ownership(&dropped_roles)?;
+        self.validate_dropped_role_ownership(session, &dropped_roles)?;
         // If any role is a member of a dropped role, then we must revoke that membership.
         let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
         for role in self.catalog().user_roles() {
@@ -3577,32 +3580,259 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_source(
         &mut self,
-        session: &Session,
-        AlterSourcePlan { id, size }: AlterSourcePlan,
+        session: &mut Session,
+        AlterSourcePlan { id, action }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let source = self
-            .catalog()
-            .get_entry(&id)
-            .source()
-            .expect("known to be source");
-        match source.data_source {
-            DataSourceDesc::Ingestion(_) => (),
+        let cur_entry = self.catalog().get_entry(&id);
+        let cur_source = cur_entry.source().expect("known to be source");
+
+        let cur_ingestion = match &cur_source.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }
-        }
-        let cluster_config = alter_storage_cluster_config(size);
-        if let Some(cluster_config) = cluster_config {
-            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
-            ops.push(catalog::Op::AlterSource {
-                id,
-                cluster_config: cluster_config.clone(),
-            });
-            self.catalog_transact(Some(session), ops).await?;
+        };
 
-            self.maybe_alter_linked_cluster(id).await;
+        match action {
+            AlterSourceAction::Resize(size) => {
+                let cluster_config = alter_storage_cluster_config(size);
+                if let Some(cluster_config) = cluster_config {
+                    let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+                    ops.push(catalog::Op::AlterSource {
+                        id,
+                        cluster_config: cluster_config.clone(),
+                    });
+                    self.catalog_transact(Some(session), ops).await?;
+
+                    self.maybe_alter_linked_cluster(id).await;
+                }
+            }
+            AlterSourceAction::DropSubsourceExports { to_drop } => {
+                mz_ore::soft_assert!(!to_drop.is_empty());
+
+                const ALTER_SOURCE: &str = "ALTER SOURCE...DROP TABLES";
+
+                // Stick this in a function so we can reuse it.
+                let create_sql_to_stmt_deps =
+                    |coord: &Coordinator, session: &Session, create_source_sql| {
+                        // Parse statement.
+                        let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
+                            .expect("invalid create sql persisted to catalog")
+                            .into_element()
+                        {
+                            Statement::CreateSource(stmt) => stmt,
+                            _ => unreachable!("proved type is source"),
+                        };
+
+                        let catalog = coord.catalog().for_session(session);
+
+                        // Resolve items in statement
+                        mz_sql::names::resolve(&catalog, create_source_stmt)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                    };
+
+                let (mut create_source_stmt, mut depends_on) =
+                    create_sql_to_stmt_deps(self, session, cur_entry.create_sql())?;
+
+                // Ensure that we are only dropping items on which we depend.
+                for t in &to_drop {
+                    // Remove dependency.
+                    let existed = depends_on.remove(t);
+                    if !existed {
+                        Err(AdapterError::internal(
+                            ALTER_SOURCE,
+                            format!("removed {t}, but {id} did not have dependency"),
+                        ))?;
+                    }
+                }
+
+                // We are doing a lot of unwrapping, so just make an error to reference; all of
+                // these invariants are guaranteed to be true because of how we plan subsources.
+                let purification_err =
+                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
+
+                let referenced_subsources = match create_source_stmt
+                    .referenced_subsources
+                    .as_mut()
+                    .ok_or(purification_err())?
+                {
+                    ReferencedSubsources::SubsetTables(ref mut s) => s,
+                    _ => return Err(purification_err()),
+                };
+
+                let mut dropped_references = BTreeSet::new();
+
+                // Fixup referenced_subsources. We panic rather than return
+                // errors here because `retain` is an infallible operation and
+                // actually erroring here is both incredibly unlikely and
+                // recoverable (users can stop trying to drop subsources if it
+                // panics).
+                referenced_subsources.retain(
+                    |CreateSourceSubsource {
+                         subsource,
+                         reference,
+                     }| {
+                        match subsource
+                            .as_ref()
+                            .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
+                        {
+                            DeferredItemName::Named(name) => match name {
+                                // Retain all sources which we still have a dependency on.
+                                ResolvedItemName::Item { id, .. } => {
+                                    let contains = depends_on.contains(id);
+                                    if !contains {
+                                        dropped_references.insert(reference.clone());
+                                    }
+                                    contains
+                                }
+                                _ => unreachable!("{}", purification_err()),
+                            },
+                            _ => unreachable!("{}", purification_err()),
+                        }
+                    },
+                );
+
+                referenced_subsources.sort();
+
+                // Remove dropped references from text columns.
+                match &mut create_source_stmt.connection {
+                    CreateSourceConnection::Postgres { options, .. } => {
+                        if let Some(text_cols) = options
+                            .iter_mut()
+                            .find(|option| option.name == PgConfigOptionName::TextColumns)
+                        {
+                            match &mut text_cols.value {
+                                Some(WithOptionValue::Sequence(names)) => {
+                                    names.retain(|name| match name {
+                                        WithOptionValue::UnresolvedItemName(
+                                            column_qualified_reference,
+                                        ) => {
+                                            mz_ore::soft_assert!(
+                                                column_qualified_reference.0.len() == 4
+                                            );
+                                            if column_qualified_reference.0.len() == 4 {
+                                                let mut table = column_qualified_reference.clone();
+                                                table.0.truncate(3);
+                                                !dropped_references.contains(&table)
+                                            } else {
+                                                tracing::warn!(
+                                                    "PgConfigOptionName::TextColumns had unexpected value {:?}; should have 4 components",
+                                                    column_qualified_reference
+                                                );
+                                                true
+                                            }
+                                        }
+                                        _ => true,
+                                    });
+
+                                    names.sort();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Open a new catalog, which we will use to re-plan our
+                // statement with the desired subsources.
+                let mut catalog = self.catalog().for_system_session();
+                catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
+
+                // Re-define our source in terms of the amended statement
+                let plan = match mz_sql::plan::plan(
+                    None,
+                    &catalog,
+                    Statement::CreateSource(create_source_stmt),
+                    &Params::empty(),
+                )
+                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
+                {
+                    Plan::CreateSource(plan) => plan,
+                    _ => unreachable!("create source plan is only valid response"),
+                };
+
+                // Ensure we have actually removed the subsource from the source's dependency and
+                // did not in any other way alter the dependencies.
+                let (_, new_depends_on) =
+                    create_sql_to_stmt_deps(self, session, &plan.source.create_sql)?;
+
+                if let Some(id) = new_depends_on.iter().find(|id| to_drop.contains(id)) {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        format!("failed to remove dropped ID {id} from dependencies"),
+                    ))?;
+                }
+
+                if new_depends_on != depends_on {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        format!("expected depends on to be {depends_on:?}, but is actually {new_depends_on:?}"),
+                    ))?;
+                }
+
+                let source = catalog::Source::new(
+                    id,
+                    plan,
+                    // Use the same cluster ID.
+                    Some(cur_ingestion.instance_id),
+                    depends_on.into_iter().collect(),
+                    cur_source.custom_logical_compaction_window,
+                    cur_source.is_retained_metrics_object,
+                );
+
+                // Get new ingestion description for storage.
+                let ingestion = match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => ingestion.clone(),
+                    _ => unreachable!("already verified of type ingestion"),
+                };
+
+                self.controller
+                    .storage
+                    .check_alter_collection(id, ingestion.clone())
+                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
+                // Do not drop this source, even though it's a dependency.
+                let primary_source = btreeset! {ObjectId::Item(id)};
+
+                // CASCADE
+                let drops = self.catalog().object_dependents_except(
+                    &to_drop.into_iter().map(ObjectId::Item).collect(),
+                    session.conn_id(),
+                    primary_source,
+                );
+
+                let DropOps {
+                    mut ops,
+                    dropped_active_db,
+                    dropped_active_cluster,
+                } = self.sequence_drop_common(session, drops)?;
+
+                assert!(
+                    !dropped_active_db && !dropped_active_cluster,
+                    "dropping subsources does not drop DBs or clusters"
+                );
+
+                // Redefine source.
+                ops.push(Op::UpdateItem {
+                    id,
+                    // Look this up again so we don't have to hold an immutable reference to the
+                    // entry for so long.
+                    name: self.catalog.get_entry(&id).name().clone(),
+                    to_item: CatalogItem::Source(source),
+                });
+
+                self.catalog_transact(Some(session), ops).await?;
+
+                // Commit the new ingestion to storage.
+                self.controller
+                    .storage
+                    .alter_collection(id, ingestion)
+                    .await
+                    .expect("altering collection after txn must succeed");
+            }
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
@@ -3798,32 +4028,34 @@ impl Coordinator {
 
         for UpdatePrivilege {
             acl_mode,
-            object_id,
+            target_id,
             grantor,
         } in update_privileges
         {
-            self.catalog()
-                .ensure_not_reserved_object(&object_id, session.conn_id())?;
-
-            let actual_object_type = catalog.get_object_type(&object_id);
+            let actual_object_type = catalog.get_system_object_type(&target_id);
             // For all relations we allow all applicable table privileges, but send a warning if the
             // privilege isn't actually applicable to the object type.
             if actual_object_type.is_relation() {
                 let applicable_privileges = rbac::all_object_privileges(actual_object_type);
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
-                    let object_name = catalog.get_object_name(&object_id);
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&target_id, &catalog);
                     warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
                         non_applicable_privileges,
-                        object_type: actual_object_type,
-                        object_name,
+                        object_description,
                     })
                 }
             }
 
+            if let SystemObjectId::Object(object_id) = &target_id {
+                self.catalog()
+                    .ensure_not_reserved_object(object_id, session.conn_id())?;
+            }
+
             let privileges = self
                 .catalog()
-                .get_privileges(&object_id, session.conn_id())
+                .get_privileges(&target_id, session.conn_id())
                 // Should be unreachable since the parser will refuse to parse grant/revoke
                 // statements on objects without privileges.
                 .ok_or(AdapterError::Unsupported(
@@ -3842,7 +4074,7 @@ impl Coordinator {
                         if !existing_privilege.acl_mode.contains(acl_mode) =>
                     {
                         ops.push(catalog::Op::UpdatePrivilege {
-                            object_id: object_id.clone(),
+                            target_id: target_id.clone(),
                             privilege: MzAclItem {
                                 grantee: *grantee,
                                 grantor,
@@ -3858,7 +4090,7 @@ impl Coordinator {
                             .is_empty() =>
                     {
                         ops.push(catalog::Op::UpdatePrivilege {
-                            object_id: object_id.clone(),
+                            target_id: target_id.clone(),
                             privilege: MzAclItem {
                                 grantee: *grantee,
                                 grantor,

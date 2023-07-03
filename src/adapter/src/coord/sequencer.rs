@@ -339,7 +339,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::AlterSource(plan) => {
-                let result = self.sequence_alter_source(ctx.session(), plan).await;
+                let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
                 ctx.retire(result);
             }
             Plan::AlterSystemSet(plan) => {
@@ -488,6 +488,16 @@ impl Coordinator {
             Plan::ReassignOwned(plan) => {
                 let result = self.sequence_reassign_owned(ctx.session_mut(), plan).await;
                 ctx.retire(result);
+            }
+            Plan::ValidateConnection(plan) => {
+                let connection_context = self.connection_context.clone();
+                mz_ore::task::spawn(|| "coord::validate_connection", async move {
+                    let res = match plan.connection.validate(&connection_context).await {
+                        Ok(()) => Ok(ExecuteResponse::ValidatedConnection),
+                        Err(err) => Err(err.into()),
+                    };
+                    ctx.retire(res);
+                });
             }
         }
     }

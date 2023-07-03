@@ -19,12 +19,24 @@ class CheckDatabaseCreate(Check):
             Testdrive(dedent(s))
             for s in [
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATEDB
+
                 > CREATE DATABASE to_be_created1;
                 > SET DATABASE=to_be_created1;
                 > CREATE TABLE t1 (f1 INTEGER);
                 > INSERT INTO t1 VALUES (1);
                 """,
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATEDB
+
                 > CREATE DATABASE to_be_created2;
                 > SET DATABASE=to_be_created2;
                 > CREATE TABLE t1 (f1 INTEGER);

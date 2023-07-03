@@ -65,6 +65,7 @@ known_errors = [
     "function array_position(",  # insufficient type system, parameter types have to match
     "function list_append(",  # insufficient type system, parameter types have to match
     "function list_prepend(",  # insufficient type system, parameter types have to match
+    "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
     "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
     "range lower bound must be less than or equal to range upper bound",
@@ -128,9 +129,14 @@ known_errors = [
     "pg_cancel_backend in this position not yet supported",
     "unrecognized configuration parameter",
     "numeric field overflow",
+    "bigint out of range",
     "uint8 out of range",
+    "uint4 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
+    "not supported for type time",
+    "coalesce types text and text list cannot be matched",  # Bad typing for ||
+    "coalesce types text list and text cannot be matched",  # Bad typing for ||
 ]
 
 

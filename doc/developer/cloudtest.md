@@ -84,6 +84,13 @@ build in debug mode by passing the `--dev` flag:
 ./pytest --dev [-k TEST]
 ```
 
+⚠️ By default, cloudtest only runs short tests. To include long tests you can include the `-m=long`
+flag:
+
+```
+./pytest -m=long
+```
+
 To check the cluster status:
 
 ```

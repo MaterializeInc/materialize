@@ -96,6 +96,9 @@ pub mod bits;
 #[cfg(feature = "bytes_")]
 pub mod bytes;
 pub mod cast;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
+#[cfg(feature = "async")]
+pub mod channel;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]
 pub mod cli;

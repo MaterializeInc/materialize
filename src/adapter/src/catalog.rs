@@ -57,13 +57,14 @@ use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
     CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-    EnvironmentId, IdReference, NameReference, RoleAttributes, SessionCatalog, TypeReference,
+    EnvironmentId, IdReference, NameReference, RoleAttributes, SessionCatalog, SystemObjectType,
+    TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
+    SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -1615,6 +1616,16 @@ impl CatalogState {
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     state: Cow<'a, CatalogState>,
+    /// Because we don't have any way of removing items from the catalog
+    /// temporarily, we allow the ConnCatalog to pretend that a set of items
+    /// don't exist during resolution.
+    ///
+    /// This feature is necessary to allow re-planning of statements, which is
+    /// either incredibly useful or required when altering item definitions.
+    ///
+    /// Note that uses of this should field should be used by short-lived
+    /// catalogs.
+    unresolvable_ids: BTreeSet<GlobalId>,
     conn_id: ConnectionId,
     cluster: String,
     database: Option<DatabaseId>,
@@ -1633,9 +1644,27 @@ impl ConnCatalog<'_> {
         &*self.state
     }
 
+    /// Prevent planning from resolving item with the provided ID. Instead,
+    /// return an error as if the item did not exist.
+    ///
+    /// This feature is meant exclusively to permit re-planning statements
+    /// during update operations and should not be used otherwise given its
+    /// extremely "powerful" semantics.
+    ///
+    /// # Panics
+    /// If the catalog's role ID is not [`MZ_SYSTEM_ROLE_ID`].
+    pub fn mark_id_unresolvable_for_replanning(&mut self, id: GlobalId) {
+        assert_eq!(
+            self.role_id, MZ_SYSTEM_ROLE_ID,
+            "only the system role can mark IDs unresolvable",
+        );
+        self.unresolvable_ids.insert(id);
+    }
+
     pub fn into_owned(self) -> ConnCatalog<'static> {
         ConnCatalog {
             state: Cow::Owned(self.state.into_owned()),
+            unresolvable_ids: self.unresolvable_ids.clone(),
             conn_id: self.conn_id,
             cluster: self.cluster,
             database: self.database,
@@ -1992,6 +2021,67 @@ pub struct Source {
 }
 
 impl Source {
+    /// Creates a new `Source`.
+    ///
+    /// # Panics
+    /// - If an ingestion-based plan is not given a cluster_id.
+    /// - If a non-ingestion-based source has a defined cluster config in its plan.
+    /// - If a non-ingestion-based source is given a cluster_id.
+    pub fn new(
+        id: GlobalId,
+        plan: CreateSourcePlan,
+        cluster_id: Option<ClusterId>,
+        depends_on: Vec<GlobalId>,
+        custom_logical_compaction_window: Option<Duration>,
+        is_retained_metrics_object: bool,
+    ) -> Source {
+        Source {
+            create_sql: plan.source.create_sql,
+            data_source: match plan.source.data_source {
+                mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => DataSourceDesc::ingestion(
+                    id,
+                    ingestion,
+                    cluster_id.expect("ingestion-based sources must be given a cluster ID"),
+                ),
+                mz_sql::plan::DataSourceDesc::Progress => {
+                    assert!(
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Undefined
+                        ) && cluster_id.is_none(),
+                        "subsources must not have a host config or cluster_id defined"
+                    );
+                    DataSourceDesc::Progress
+                }
+                mz_sql::plan::DataSourceDesc::Source => {
+                    assert!(
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Undefined
+                        ) && cluster_id.is_none(),
+                        "subsources must not have a host config or cluster_id defined"
+                    );
+                    DataSourceDesc::Source
+                }
+            },
+            desc: plan.source.desc,
+            timeline: plan.timeline,
+            depends_on,
+            custom_logical_compaction_window,
+            is_retained_metrics_object,
+        }
+    }
+
+    /// Returns whether this source ingests data from an external source.
+    pub fn is_external(&self) -> bool {
+        match self.data_source {
+            DataSourceDesc::Ingestion(_) => true,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
+        }
+    }
+
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
@@ -2546,7 +2636,18 @@ impl CatalogEntry {
     pub fn connection(&self) -> Result<&Connection, SqlCatalogError> {
         match self.item() {
             CatalogItem::Connection(connection) => Ok(connection),
-            _ => Err(SqlCatalogError::UnknownConnection(self.name().to_string())),
+            _ => {
+                let db_name = match self.name().qualifiers.database_spec {
+                    ResolvedDatabaseSpecifier::Ambient => "".to_string(),
+                    ResolvedDatabaseSpecifier::Id(id) => format!("{id}."),
+                };
+                Err(SqlCatalogError::UnknownConnection(format!(
+                    "{}{}.{}",
+                    db_name,
+                    self.name().qualifiers.schema_spec,
+                    self.name().item
+                )))
+            }
         }
     }
 
@@ -2790,7 +2891,7 @@ impl DefaultPrivileges {
         } else {
             object_type
         };
-        let valid_acl_mode = rbac::all_object_privileges(object_type);
+        let valid_acl_mode = rbac::all_object_privileges(SystemObjectType::Object(object_type));
 
         // Collect all entries that apply to the provided object details.
         // If either `database_id` or `schema_id` are `None`, then we might end up with duplicate
@@ -3232,7 +3333,7 @@ impl Catalog {
                             }),
                             MZ_SYSTEM_ROLE_ID,
                             PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_catalog_privilege(
+                                rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ),
                                 rbac::owner_privilege(
@@ -3262,7 +3363,9 @@ impl Catalog {
                             }),
                             MZ_SYSTEM_ROLE_ID,
                             PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Table),
+                                rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Table,
+                                ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Table,
                                     MZ_SYSTEM_ROLE_ID,
@@ -3300,7 +3403,9 @@ impl Catalog {
                             item,
                             MZ_SYSTEM_ROLE_ID,
                             PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::View),
+                                rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::View,
+                                ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::View,
                                     MZ_SYSTEM_ROLE_ID,
@@ -3347,7 +3452,7 @@ impl Catalog {
                             }),
                             MZ_SYSTEM_ROLE_ID,
                             PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_catalog_privilege(
+                                rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ),
                                 rbac::owner_privilege(
@@ -3904,7 +4009,7 @@ impl Catalog {
                 }),
                 MZ_SYSTEM_ROLE_ID,
                 PrivilegeMap::from_mz_acl_items(vec![
-                    rbac::default_catalog_privilege(mz_sql::catalog::ObjectType::Type),
+                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Type),
                     rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
                 ]),
             );
@@ -4317,12 +4422,10 @@ impl Catalog {
                     continue;
                 }
                 Err(e) => {
+                    let name = c.resolve_full_name(&item.name, None);
                     return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!(
-                            "failed to deserialize item {} ({}): {}",
-                            item.id, item.name, e
-                        ),
-                    }))
+                        detail: format!("failed to deserialize item {} ({}): {}", item.id, name, e),
+                    }));
                 }
             };
             let oid = c.allocate_oid()?;
@@ -4356,6 +4459,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -4374,6 +4478,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -4487,6 +4592,7 @@ impl Catalog {
             .map(|id| id.clone());
         ConnCatalog {
             state: Cow::Borrowed(state),
+            unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
             database,
@@ -4505,6 +4611,7 @@ impl Catalog {
         let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
         ConnCatalog {
             state: Cow::Borrowed(state),
+            unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
             cluster: "default".into(),
             database: state
@@ -4897,8 +5004,18 @@ impl Catalog {
         object_ids: &Vec<ObjectId>,
         conn_id: &ConnectionId,
     ) -> Vec<ObjectId> {
-        let mut seen = BTreeSet::new();
-        self.state.object_dependents(object_ids, conn_id, &mut seen)
+        let seen = BTreeSet::new();
+        self.object_dependents_except(object_ids, conn_id, seen)
+    }
+
+    pub(crate) fn object_dependents_except(
+        &self,
+        object_ids: &Vec<ObjectId>,
+        conn_id: &ConnectionId,
+        mut except: BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        self.state
+            .object_dependents(object_ids, conn_id, &mut except)
     }
 
     pub(crate) fn cluster_replica_dependents(
@@ -5074,16 +5191,23 @@ impl Catalog {
     }
 
     /// Returns the privileges of an object by its ID.
-    pub fn get_privileges(&self, id: &ObjectId, conn_id: &ConnectionId) -> Option<&PrivilegeMap> {
+    pub fn get_privileges(
+        &self,
+        id: &SystemObjectId,
+        conn_id: &ConnectionId,
+    ) -> Option<&PrivilegeMap> {
         match id {
-            ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
-            ObjectId::Database(id) => Some(self.get_database(id).privileges()),
-            ObjectId::Schema((database_spec, schema_spec)) => Some(
-                self.get_schema(database_spec, schema_spec, conn_id)
-                    .privileges(),
-            ),
-            ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
-            ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+            SystemObjectId::Object(id) => match id {
+                ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
+                ObjectId::Database(id) => Some(self.get_database(id).privileges()),
+                ObjectId::Schema((database_spec, schema_spec)) => Some(
+                    self.get_schema(database_spec, schema_spec, conn_id)
+                        .privileges(),
+                ),
+                ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
+                ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+            },
+            SystemObjectId::System => Some(&self.state.system_privileges),
         }
     }
 
@@ -5139,6 +5263,7 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
+            drop_ids,
         )?;
 
         let result = f(&state)?;
@@ -5174,6 +5299,9 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
+        // Provide all of the IDs that are being dropped in this transaction so we can provide
+        // stronger invariants about when we change items' dependencies.
+        drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
@@ -5339,7 +5467,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(state, builtin_table_updates, id, to_name, sink)?;
+                    update_item(state, builtin_table_updates, id, to_name, sink, &drop_ids)?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -5431,7 +5559,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(state, builtin_table_updates, id, to_name, source)?;
+                    update_item(state, builtin_table_updates, id, to_name, source, &drop_ids)?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -6277,7 +6405,7 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdatePrivilege {
-                    object_id,
+                    target_id,
                     privilege,
                     variant,
                 } => {
@@ -6289,65 +6417,96 @@ impl Catalog {
                             privileges.revoke(&privilege);
                         }
                     };
-                    match object_id {
-                        ObjectId::Cluster(id) => {
-                            let cluster_name = state.get_cluster(id).name().to_string();
-                            builtin_table_updates
-                                .push(state.pack_cluster_update(&cluster_name, -1));
-                            let cluster = state.get_cluster_mut(id);
-                            update_privilege_fn(&mut cluster.privileges);
-                            tx.update_cluster(id, cluster)?;
-                            builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
-                        }
-                        ObjectId::Database(id) => {
-                            let database = state.get_database(&id);
-                            builtin_table_updates.push(state.pack_database_update(database, -1));
-                            let database = state.get_database_mut(&id);
-                            update_privilege_fn(&mut database.privileges);
-                            let database = state.get_database(&id);
-                            tx.update_database(id, database)?;
-                            builtin_table_updates.push(state.pack_database_update(database, 1));
-                        }
-                        ObjectId::Schema((database_spec, schema_spec)) => {
-                            let schema_id = schema_spec.clone().into();
-                            builtin_table_updates.push(state.pack_schema_update(
-                                &database_spec,
-                                &schema_id,
-                                -1,
-                            ));
-                            let schema = state.get_schema_mut(
-                                &database_spec,
-                                &schema_spec,
-                                session
-                                    .map(|session| session.conn_id())
-                                    .unwrap_or(&SYSTEM_CONN_ID),
-                            );
-                            update_privilege_fn(&mut schema.privileges);
-                            let database_id = match &database_spec {
-                                ResolvedDatabaseSpecifier::Ambient => None,
-                                ResolvedDatabaseSpecifier::Id(id) => Some(*id),
-                            };
-                            tx.update_schema(database_id, schema_id, schema)?;
-                            builtin_table_updates.push(state.pack_schema_update(
-                                &database_spec,
-                                &schema_spec.into(),
-                                1,
-                            ));
-                        }
-                        ObjectId::Item(id) => {
-                            builtin_table_updates.extend(state.pack_item_update(id, -1));
-                            let entry = state.get_entry_mut(&id);
-                            update_privilege_fn(&mut entry.privileges);
-                            if !entry.item().is_temporary() {
-                                tx.update_item(
-                                    id,
-                                    &entry.name().item,
-                                    &Self::serialize_item(entry.item()),
-                                )?;
+                    match target_id {
+                        SystemObjectId::Object(object_id) => match object_id {
+                            ObjectId::Cluster(id) => {
+                                let cluster_name = state.get_cluster(id).name().to_string();
+                                builtin_table_updates
+                                    .push(state.pack_cluster_update(&cluster_name, -1));
+                                let cluster = state.get_cluster_mut(id);
+                                update_privilege_fn(&mut cluster.privileges);
+                                tx.update_cluster(id, cluster)?;
+                                builtin_table_updates
+                                    .push(state.pack_cluster_update(&cluster_name, 1));
                             }
-                            builtin_table_updates.extend(state.pack_item_update(id, 1));
+                            ObjectId::Database(id) => {
+                                let database = state.get_database(&id);
+                                builtin_table_updates
+                                    .push(state.pack_database_update(database, -1));
+                                let database = state.get_database_mut(&id);
+                                update_privilege_fn(&mut database.privileges);
+                                let database = state.get_database(&id);
+                                tx.update_database(id, database)?;
+                                builtin_table_updates.push(state.pack_database_update(database, 1));
+                            }
+                            ObjectId::Schema((database_spec, schema_spec)) => {
+                                let schema_id = schema_spec.clone().into();
+                                builtin_table_updates.push(state.pack_schema_update(
+                                    &database_spec,
+                                    &schema_id,
+                                    -1,
+                                ));
+                                let schema = state.get_schema_mut(
+                                    &database_spec,
+                                    &schema_spec,
+                                    session
+                                        .map(|session| session.conn_id())
+                                        .unwrap_or(&SYSTEM_CONN_ID),
+                                );
+                                update_privilege_fn(&mut schema.privileges);
+                                let database_id = match &database_spec {
+                                    ResolvedDatabaseSpecifier::Ambient => None,
+                                    ResolvedDatabaseSpecifier::Id(id) => Some(*id),
+                                };
+                                tx.update_schema(database_id, schema_id, schema)?;
+                                builtin_table_updates.push(state.pack_schema_update(
+                                    &database_spec,
+                                    &schema_spec.into(),
+                                    1,
+                                ));
+                            }
+                            ObjectId::Item(id) => {
+                                builtin_table_updates.extend(state.pack_item_update(id, -1));
+                                let entry = state.get_entry_mut(&id);
+                                update_privilege_fn(&mut entry.privileges);
+                                if !entry.item().is_temporary() {
+                                    tx.update_item(
+                                        id,
+                                        &entry.name().item,
+                                        &Self::serialize_item(entry.item()),
+                                    )?;
+                                }
+                                builtin_table_updates.extend(state.pack_item_update(id, 1));
+                            }
+                            ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
+                        },
+                        SystemObjectId::System => {
+                            if let Some(existing_privilege) = state
+                                .system_privileges
+                                .get_acl_item(&privilege.grantee, &privilege.grantor)
+                            {
+                                builtin_table_updates.push(
+                                    state.pack_system_privileges_update(
+                                        existing_privilege.clone(),
+                                        -1,
+                                    ),
+                                );
+                            }
+                            update_privilege_fn(&mut state.system_privileges);
+                            let new_privilege = state
+                                .system_privileges
+                                .get_acl_item(&privilege.grantee, &privilege.grantor);
+                            tx.set_system_privilege(
+                                privilege.grantee,
+                                privilege.grantor,
+                                new_privilege.map(|new_privilege| new_privilege.acl_mode),
+                            )?;
+                            if let Some(new_privilege) = new_privilege {
+                                builtin_table_updates.push(
+                                    state.pack_system_privileges_update(new_privilege.clone(), 1),
+                                );
+                            }
                         }
-                        ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     }
                 }
                 Op::UpdateDefaultPrivilege {
@@ -6578,7 +6737,14 @@ impl Catalog {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     updates.push((id, to_qualified_name, item));
                     for (id, to_name, to_item) in updates {
-                        update_item(state, builtin_table_updates, id, to_name, to_item)?;
+                        update_item(
+                            state,
+                            builtin_table_updates,
+                            id,
+                            to_name,
+                            to_item,
+                            &drop_ids,
+                        )?;
                     }
                 }
                 Op::UpdateOwner { id, new_owner } => match id {
@@ -6746,7 +6912,7 @@ impl Catalog {
                     let ser = Self::serialize_item(&to_item);
                     tx.update_item(id, &name.item, &ser)?;
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    update_item(state, builtin_table_updates, id, name, to_item)?;
+                    update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
                 }
                 Op::UpdateStorageUsage {
                     shard_id,
@@ -6821,6 +6987,9 @@ impl Catalog {
             id: GlobalId,
             to_name: QualifiedItemName,
             to_item: CatalogItem,
+            // This lets us understand which items are dropped in this transaction so we can account
+            // for changes in dependencies.
+            drop_ids: &BTreeSet<GlobalId>,
         ) -> Result<(), AdapterError> {
             let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
             info!(
@@ -6829,7 +6998,25 @@ impl Catalog {
                 state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
                 id
             );
-            assert_eq!(old_entry.uses(), to_item.uses());
+
+            // Ensure any removal from the uses is accompanied by a drop.
+            let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
+                drop_ids.iter().chain(to_item.uses()).collect();
+
+            assert!(
+                old_entry
+                    .uses()
+                    .iter()
+                    .all(|id| to_item_uses_and_dropped_ids.contains(id)),
+                "all of the old entries used items must be accompanied by a drop \
+                old_entry.uses: {:?}\
+                to_item.uses: {:?}\
+                drop_ids {:?}",
+                old_entry.uses(),
+                to_item.uses(),
+                drop_ids,
+            );
+
             let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
             let schema = &mut state.get_schema_mut(
                 &old_entry.name().qualifiers.database_spec,
@@ -7257,6 +7444,10 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
+    pub fn system_privileges(&self) -> &PrivilegeMap {
+        &self.state.system_privileges
+    }
+
     pub fn default_privileges(
         &self,
     ) -> impl Iterator<
@@ -7323,7 +7514,7 @@ impl Catalog {
                 .system_config()
                 .keep_n_source_status_history_entries(),
             upsert_rocksdb_tuning_config: {
-                match mz_rocksdb::RocksDBTuningParameters::from_parameters(
+                match mz_rocksdb_types::RocksDBTuningParameters::from_parameters(
                     self.system_config().upsert_rocksdb_compaction_style(),
                     self.system_config()
                         .upsert_rocksdb_optimize_compaction_memtable_budget(),
@@ -7336,6 +7527,7 @@ impl Catalog {
                     self.system_config()
                         .upsert_rocksdb_bottommost_compression_type(),
                     self.system_config().upsert_rocksdb_batch_size(),
+                    self.system_config().upsert_rocksdb_retry_duration(),
                 ) {
                     Ok(u) => u,
                     Err(e) => {
@@ -7345,7 +7537,7 @@ impl Catalog {
                             failing back to reasonable defaults: {}",
                             e.display_with_causes()
                         );
-                        mz_rocksdb::RocksDBTuningParameters::default()
+                        mz_rocksdb_types::RocksDBTuningParameters::default()
                     }
                 }
             },
@@ -7548,7 +7740,7 @@ pub enum Op {
         new_owner: RoleId,
     },
     UpdatePrivilege {
-        object_id: ObjectId,
+        target_id: SystemObjectId,
         privilege: MzAclItem,
         variant: UpdatePrivilegeVariant,
     },
@@ -7980,6 +8172,10 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
+    fn mz_system_role_id(&self) -> RoleId {
+        MZ_SYSTEM_ROLE_ID
+    }
+
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         self.state.collect_role_membership(id)
     }
@@ -8004,24 +8200,38 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         name: &PartialItemName,
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
-        Ok(self.state.resolve_entry(
+        let r = self.state.resolve_entry(
             self.database.as_ref(),
             &self.effective_search_path(true),
             name,
             &self.conn_id,
-        )?)
+        )?;
+        if self.unresolvable_ids.contains(&r.id()) {
+            Err(SqlCatalogError::UnknownItem(name.to_string()))
+        } else {
+            Ok(r)
+        }
     }
 
     fn resolve_function(
         &self,
         name: &PartialItemName,
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
-        Ok(self.state.resolve_function(
+        let r = self.state.resolve_function(
             self.database.as_ref(),
             &self.effective_search_path(false),
             name,
             &self.conn_id,
-        )?)
+        )?;
+
+        if self.unresolvable_ids.contains(&r.id()) {
+            Err(SqlCatalogError::UnknownFunction {
+                name: name.to_string(),
+                alternative: None,
+            })
+        } else {
+            Ok(r)
+        }
     }
 
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
@@ -8072,6 +8282,10 @@ impl SessionCatalog for ConnCatalog<'_> {
             .into_iter()
             .flat_map(|cluster| cluster.replicas().into_iter())
             .collect()
+    }
+
+    fn get_system_privileges(&self) -> &PrivilegeMap {
+        &self.state.system_privileges
     }
 
     fn get_default_privileges(
@@ -8132,15 +8346,21 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
-    fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap> {
+    fn get_privileges(&self, id: &SystemObjectId) -> Option<&PrivilegeMap> {
         match id {
-            ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
-            ObjectId::Database(id) => Some(self.get_database(id).privileges()),
-            ObjectId::Schema((database_spec, schema_spec)) => {
+            SystemObjectId::System => Some(&self.state.system_privileges),
+            SystemObjectId::Object(ObjectId::Cluster(id)) => {
+                Some(self.get_cluster(*id).privileges())
+            }
+            SystemObjectId::Object(ObjectId::Database(id)) => {
+                Some(self.get_database(id).privileges())
+            }
+            SystemObjectId::Object(ObjectId::Schema((database_spec, schema_spec))) => {
                 Some(self.get_schema(database_spec, schema_spec).privileges())
             }
-            ObjectId::Item(id) => Some(self.get_item(id).privileges()),
-            ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+            SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
+            SystemObjectId::Object(ObjectId::ClusterReplica(_))
+            | SystemObjectId::Object(ObjectId::Role(_)) => None,
         }
     }
 
@@ -8154,7 +8374,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.item_dependents(id, &mut seen)
     }
 
-    fn all_object_privileges(&self, object_type: mz_sql::catalog::ObjectType) -> AclMode {
+    fn all_object_privileges(&self, object_type: mz_sql::catalog::SystemObjectType) -> AclMode {
         rbac::all_object_privileges(object_type)
     }
 
@@ -8169,23 +8389,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
-    fn get_object_name(&self, object_id: &ObjectId) -> String {
-        match object_id {
-            ObjectId::Cluster(cluster_id) => self.get_cluster(*cluster_id).name().to_string(),
-            ObjectId::ClusterReplica((cluster_id, replica_id)) => self
-                .get_cluster_replica(*cluster_id, *replica_id)
-                .name()
-                .to_string(),
-            ObjectId::Database(database_id) => self.get_database(database_id).name().to_string(),
-            ObjectId::Schema((database_spec, schema_spec)) => {
-                let name = self.get_schema(database_spec, schema_spec).name();
-                self.resolve_full_schema_name(name).to_string()
+    fn get_system_object_type(&self, id: &SystemObjectId) -> mz_sql::catalog::SystemObjectType {
+        match id {
+            SystemObjectId::Object(object_id) => {
+                SystemObjectType::Object(self.get_object_type(object_id))
             }
-            ObjectId::Role(role_id) => self.get_role(role_id).name().to_string(),
-            ObjectId::Item(id) => {
-                let name = self.get_item(id).name();
-                self.resolve_full_name(name).to_string()
-            }
+            SystemObjectId::System => SystemObjectType::System,
         }
     }
 
@@ -8319,18 +8528,6 @@ impl mz_sql::catalog::CatalogRole for Role {
 
     fn is_inherit(&self) -> bool {
         self.attributes.inherit
-    }
-
-    fn create_role(&self) -> bool {
-        self.attributes.create_role
-    }
-
-    fn create_db(&self) -> bool {
-        self.attributes.create_db
-    }
-
-    fn create_cluster(&self) -> bool {
-        self.attributes.create_cluster
     }
 
     fn membership(&self) -> &BTreeMap<RoleId, RoleId> {
@@ -8519,7 +8716,7 @@ mod tests {
     use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
-        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::StatementContext;
     use mz_sql::session::vars::VarInput;
@@ -9642,11 +9839,14 @@ mod tests {
 
         assert_eq!(
             None,
-            catalog.get_privileges(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+            catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
+                ClusterId::User(1),
+                1
+            ))))
         );
         assert_eq!(
             None,
-            catalog.get_privileges(&ObjectId::Role(RoleId::User(1)))
+            catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
         );
     }
 }

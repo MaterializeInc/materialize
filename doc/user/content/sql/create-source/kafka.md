@@ -150,7 +150,11 @@ Note that:
 
 #### Headers
 
-Message headers are exposed via the `INCLUDE HEADERS` option, and are included as a column (named `headers` by default) containing a [`list`](/sql/types/list/) of ([`text`](/sql/types/text/), [`bytea`](/sql/types/bytea/)) pairs.
+Message headers can be exposed via the `INCLUDE HEADERS` option. They are included
+as a column (named `headers` by default) containing a [`list`](/sql/types/list/)
+of records of type `(key text, value bytea)`.
+
+The following example demonstrates use of the `INCLUDE HEADERS` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
@@ -161,40 +165,30 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the headers in a message, you can unpack the value:
+To retrieve the value of an individual header in a message, you can use standard
+SQL techniques for working with [`list`](/sql/types/list) and
+[`bytea`](/sql/types/bytea) types. The following example parses the UTF-8
+encoded `client_id` header of the messages from the Kafka topic. Messages
+without a `client_id` header result in null values (`"\N"`) for the parsed
+attribute.
 
 ```sql
-SELECT key,
-       field1,
-       field2,
-       headers[1].value AS kafka_header
-FROM mv_kafka_metadata;
+SELECT
+    id,
+    seller,
+    item,
+    (
+        SELECT convert_from((h).value, 'utf8') AS client_id
+        FROM unnest(headers) AS h
+        WHERE (h).key = 'client_id'
+    )
+FROM kafka_metadata;
 
-  key  |  field1  |  field2  |  kafka_header
--------+----------+----------+----------------
-  foo  |  fooval  |   1000   |     hvalue
-  bar  |  barval  |   5000   |     <null>
-```
-
-, or lookup by key:
-
-```sql
-SELECT key,
-       field1,
-       field2,
-       thekey,
-       value
-FROM (SELECT key,
-             field1,
-             field2,
-             unnest(headers).key AS thekey,
-             unnest(headers).value AS value
-      FROM mv_kafka_metadata) AS km
-WHERE thekey = 'kvalue';
-
-  key  |  field1  |  field2  |  thekey  |  value
--------+----------+----------+----------+--------
-  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+ id | seller |        item        | client_id
+----+--------+--------------------+-----------
+  2 |   1592 | Custom Art         |        23
+  7 |   1509 | Custom Art         |        42
+  3 |   1411 | City Bar Crawl     |      "\N"
 ```
 
 Note that:

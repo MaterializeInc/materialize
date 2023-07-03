@@ -36,7 +36,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }
-mz-rocksdb = { path = "../rocksdb" }
+mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-ssh-util = { path = "../ssh-util" }

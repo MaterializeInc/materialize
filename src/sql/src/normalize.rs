@@ -409,6 +409,7 @@ pub fn create_statement(
         Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection: _,
+            with_options: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;

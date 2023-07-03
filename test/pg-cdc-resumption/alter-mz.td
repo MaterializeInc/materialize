@@ -7,5 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: antithesis-driver
-publish: false
+> ALTER SOURCE mz_source DROP SUBSOURCE t0;
