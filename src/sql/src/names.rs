@@ -1097,6 +1097,10 @@ impl SystemObjectId {
             SystemObjectId::System => None,
         }
     }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, SystemObjectId::System)
+    }
 }
 
 impl From<ObjectId> for SystemObjectId {
