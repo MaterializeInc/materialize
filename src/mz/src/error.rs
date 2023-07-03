@@ -9,7 +9,7 @@
 
 //! This module defines custom error types and structs related to MZ.
 //!
-//! [`ApiError`] is an error struct that represents an error returned by the
+//! [Error::ApiError] is an error struct that represents an error returned by the
 //! Materialize cloud API. It contains information about the HTTP status code and
 //! a vector of error messages.
 //!
@@ -28,7 +28,7 @@ pub enum Error {
     /// An authentication error from the [`mz_frontegg_client`] crate.
     #[error(transparent)]
     AdminError(#[from] mz_frontegg_client::error::Error),
-    /// A Materialize Cloud API error from the [`cloud_api`] crate.
+    /// A Materialize Cloud API error from the [mz_cloud_api] crate.
     #[error(transparent)]
     ApiError(#[from] mz_cloud_api::error::Error),
     /// Indicates an error parsing an endpoint.

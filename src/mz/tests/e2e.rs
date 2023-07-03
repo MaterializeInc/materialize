@@ -122,7 +122,7 @@ mod tests {
         stdout
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_version() {
         // We don't make assertions about the build SHA because caching in CI can
@@ -161,6 +161,7 @@ mod tests {
 
     /// Tests local commands that do not requires interacting with any API.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_local() {
         init_config_file(true);
 
@@ -303,6 +304,7 @@ mod tests {
 
     /// TODO: Re-enable after understanding how to get an CI app-password, admin endpoint and cloud endpoint.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     #[ignore]
     fn test_e2e() {
         init_config_file(false);

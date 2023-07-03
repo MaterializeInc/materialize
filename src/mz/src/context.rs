@@ -15,7 +15,7 @@
 
 //! Context types for command implementations.
 //!
-//! The implementation of each command in the [`command`] module takes exactly
+//! The implementation of each command in the [crate::command] module takes exactly
 //! one of these context types, depending on whether it requires access to a
 //! valid authentication profile and active region.
 
