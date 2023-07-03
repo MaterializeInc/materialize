@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import time
+from inspect import getframeinfo, stack
 from typing import TYPE_CHECKING, Any, Optional
 
 from materialize.checks.executors import Executor
@@ -31,10 +32,11 @@ class Testdrive(Action):
     def __init__(self, input: str) -> None:
         self.input = input
         self.handle: Optional[Any] = None
+        self.caller = getframeinfo(stack()[1][0])
 
     def execute(self, e: Executor) -> None:
         """Pass testdrive actions to be run by an Executor-specific implementation."""
-        self.handle = e.testdrive(self.input)
+        self.handle = e.testdrive(self.input, self.caller)
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)

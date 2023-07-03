@@ -153,7 +153,7 @@ pub async fn disable_region_environment(
     valid_profile: &ValidProfile<'_>,
 ) -> Result<(), reqwest::Error> {
     Retry::default()
-        .max_tries(10)
+        .max_tries(100)
         .retry_async(|_| async {
             client
                 .delete(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())

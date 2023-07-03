@@ -126,6 +126,9 @@ struct Args {
     /// name.
     #[clap(long, value_name = "PATH")]
     temp_dir: Option<String>,
+    /// Source string to print out on errors.
+    #[clap(long, value_name = "SOURCE")]
+    source: Option<String>,
     /// Default timeout for cancellable operations.
     #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "30s", value_name = "DURATION")]
     default_timeout: Duration,
@@ -368,6 +371,7 @@ async fn main() {
         seed: args.seed,
         reset: !args.no_reset,
         temp_dir: args.temp_dir,
+        source: args.source,
         default_timeout: args.default_timeout,
         default_max_tries: args.default_max_tries,
         initial_backoff: args.initial_backoff,
@@ -507,7 +511,9 @@ async fn main() {
         eprint!("+++ ");
         eprintln!("!!! Error Report");
         eprintln!("{} errors were encountered during execution", error_count);
-        if !error_files.is_empty() {
+        if config.source.is_some() {
+            eprintln!("source: {}", config.source.unwrap());
+        } else if !error_files.is_empty() {
             eprintln!(
                 "files involved: {}",
                 error_files.iter().map(|p| p.display()).join(" ")

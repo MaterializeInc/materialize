@@ -1,4 +1,3 @@
-# Copyright 2020 Josh Wills. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,19 +15,20 @@
 
 from setuptools import setup
 
-setup(
-    name="materialize",
-    version="0.2.0",
-    description="Materialize test base.",
-    author="Materialize, Inc.",
-    author_email="support@materialize.com",
-    packages=[
-        "materialize",
-        "materialize.cloudtest",
-        "materialize.cloudtest.app",
-        "materialize.cloudtest.k8s",
-        "materialize.mzcompose",
-    ],
-    package_dir={"materialize": "."},
-    install_requires=["pg8000", "semver", "sqlparse", "kubernetes"],
-)
+if __name__ == "__main__":
+    setup(
+        name="materialize",
+        version="0.2.0",
+        description="Materialize test base.",
+        author="Materialize, Inc.",
+        author_email="support@materialize.com",
+        packages=[
+            "materialize",
+            "materialize.cloudtest",
+            "materialize.cloudtest.app",
+            "materialize.cloudtest.k8s",
+            "materialize.mzcompose",
+        ],
+        package_dir={"materialize": "."},
+        install_requires=["pg8000", "semver", "sqlparse", "kubernetes"],
+    )

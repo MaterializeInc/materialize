@@ -8631,6 +8631,7 @@ dependencies = [
 name = "workspace-hack"
 version = "0.0.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "aws-credential-types",
  "aws-sdk-sts",

@@ -78,6 +78,8 @@ pub struct Config {
     /// If unspecified, testdrive creates a temporary directory with a random
     /// name.
     pub temp_dir: Option<String>,
+    /// Source string to print out on errors.
+    pub source: Option<String>,
     /// The default timeout for cancellable operations.
     pub default_timeout: Duration,
     /// The default number of tries for retriable operations.
@@ -525,6 +527,7 @@ impl Run for PosCommand {
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
+                    "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
