@@ -9,6 +9,7 @@
 
 import random
 import threading
+from inspect import Traceback
 from typing import Any, Optional, Set
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
@@ -28,7 +29,7 @@ class Executor:
     # persisted.
     system_settings: Set[str] = set()
 
-    def testdrive(self, input: str) -> Any:
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> Any:
         assert False
 
     def mzcompose_composition(self) -> Composition:
@@ -48,8 +49,8 @@ class MzcomposeExecutor(Executor):
     def mzcompose_composition(self) -> Composition:
         return self.composition
 
-    def testdrive(self, input: str) -> None:
-        self.composition.testdrive(input)
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
+        self.composition.testdrive(input, caller=caller)
 
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
@@ -57,14 +58,14 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         self.composition = composition
         self.exception: Optional[BaseException] = None
 
-    def testdrive(self, input: str) -> Any:
-        thread = threading.Thread(target=self._testdrive, args=[input])
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> Any:
+        thread = threading.Thread(target=self._testdrive, args=[input, caller])
         thread.start()
         return thread
 
-    def _testdrive(self, input: str) -> None:
+    def _testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
         try:
-            self.composition.testdrive(input)
+            self.composition.testdrive(input, caller=caller)
         except BaseException as e:
             self.exception = e
 
@@ -84,5 +85,7 @@ class CloudtestExecutor(Executor):
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application
 
-    def testdrive(self, input: str) -> None:
-        self.application.testdrive.run(input=input, no_reset=True, seed=self.seed)
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
+        self.application.testdrive.run(
+            input=input, no_reset=True, seed=self.seed, caller=caller
+        )
