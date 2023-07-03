@@ -166,7 +166,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         all_involved_characteristics: Set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Note that function names are always provided in lower case.
-        if db_function.function_name in {
+        if db_function.function_name_in_lower_case in {
             "sum",
             "avg",
             "stddev_samp",
@@ -185,7 +185,7 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return YesIgnore("#19511")
 
-        if db_function.function_name in {"regexp_match"}:
+        if db_function.function_name_in_lower_case in {"regexp_match"}:
             if len(expression.args) == 3 and isinstance(
                 expression.args[2], EnumConstant
             ):
@@ -193,9 +193,10 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # https://github.com/MaterializeInc/materialize/issues/18494
                 return YesIgnore("#18494")
 
-        if db_function.function_name in {"array_agg", "string_agg"} and not isinstance(
-            db_function, DbFunctionWithCustomPattern
-        ):
+        if db_function.function_name_in_lower_case in {
+            "array_agg",
+            "string_agg",
+        } and not isinstance(db_function, DbFunctionWithCustomPattern):
             # The unordered variants are to be ignored.
             # https://github.com/MaterializeInc/materialize/issues/19832
             return YesIgnore("#19832")
@@ -217,6 +218,14 @@ class PreExecutionInconsistencyIgnoreFilter:
 
 class PostExecutionInconsistencyIgnoreFilter:
     def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
+        if error.query_execution.query_template.contains_aggregations:
+            return self.shall_ignore_error_involving_aggregation(error)
+
+        return NoIgnore()
+
+    def shall_ignore_error_involving_aggregation(
+        self, error: ValidationError
+    ) -> IgnoreVerdict:
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
             outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
@@ -227,12 +236,28 @@ class PostExecutionInconsistencyIgnoreFilter:
                 EvaluationStrategyKey.CONSTANT_FOLDING
             ].successful
 
-            if (
-                error.query_execution.query_template.contains_aggregations
-                and not dfr_successful
-                and ctf_successful
-            ):
+            if not dfr_successful and ctf_successful:
                 # see https://github.com/MaterializeInc/materialize/issues/19662
                 return YesIgnore("#19662")
+
+        if error.error_type == ValidationErrorType.ERROR_MISMATCH:
+            query_template = error.query_execution.query_template
+
+            FUNCTIONS_TAKING_SHORTCUTS = {"count"}
+
+            def is_function_taking_shortcut(expression: Expression) -> bool:
+                if isinstance(expression, ExpressionWithArgs):
+                    operation = expression.operation
+                    return (
+                        isinstance(operation, DbFunction)
+                        and operation.function_name_in_lower_case
+                        in FUNCTIONS_TAKING_SHORTCUTS
+                    )
+                return False
+
+            for expression in query_template.select_expressions:
+                if expression.contains(is_function_taking_shortcut):
+                    # see https://github.com/MaterializeInc/materialize/issues/17189
+                    return YesIgnore("#17189")
 
         return NoIgnore()

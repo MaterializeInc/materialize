@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -86,6 +86,12 @@ class Expression:
         hence false if all leaves of this expression are directly consumed by an aggregation.
         This is relevant because when using non-aggregate functions on multiple rows, different evaluation strategies may yield different error messages due to a different row processing order."""
         raise NotImplementedError
+
+    def matches(self, predicate: Callable[[Expression], bool]) -> bool:
+        return predicate(self)
+
+    def contains(self, predicate: Callable[[Expression], bool]) -> bool:
+        return self.matches(predicate)
 
 
 class LeafExpression(Expression):
