@@ -282,3 +282,10 @@ name                nullable    type
  laninline          false       oid
  lanvalidator       false       oid
  lanacl             false       text[]
+
+> SHOW COLUMNS FROM pg_shdescription
+name                nullable    type
+------------------------------------------------------------
+ objoid             false       oid
+ classoid           false       oid
+ description        false       text

@@ -34,6 +34,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_rewrite`](https://www.postgresql.org/docs/current/catalog-pg-rewrite.html)
   * [`pg_roles`](https://www.postgresql.org/docs/current/view-pg-roles.html)
   * [`pg_settings`](https://www.postgresql.org/docs/current/view-pg-settings.html)
+  * [`pg_shdescription`](https://www.postgresql.org/docs/current/catalog-pg-shdescription.html)
   * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
   * [`pg_tablespace`](https://www.postgresql.org/docs/current/catalog-pg-tablespace.html)
   * [`pg_trigger`](https://www.postgresql.org/docs/current/catalog-pg-trigger.html)
