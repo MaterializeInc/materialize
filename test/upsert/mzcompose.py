@@ -161,14 +161,12 @@ def workflow_rehydration(c: Composition) -> None:
             "with DISK",
             Clusterd(
                 name="clusterd1",
-                scratch_directory=True,
             ),
         ),
         (
             "without DISK",
             Clusterd(
                 name="clusterd1",
-                scratch_directory=False,
             ),
         ),
     ]:
