@@ -86,22 +86,24 @@ Apache License, Version 2.0. */}}
       document.addEventListener("click", function (e) {
         const target = e.target;
         if (target.classList.contains("anchorjs-link")) {
-          const initialIcon =  e.target.getAttribute("data-anchorjs-icon");
+          const initialIcon = e.target.getAttribute("data-anchorjs-icon");
           e.target.setAttribute("data-anchorjs-icon", "\u2713");
           setTimeout(() => {
             e.target.setAttribute("data-anchorjs-icon", initialIcon);
-          }, 1000)
+          }, 1000);
           e.preventDefault();
           const copyText = target.href;
 
-          const copyHandler = function(e) {
-            e.clipboardData.setData('text/plain', copyText);
-            e.preventDefault();
-            document.removeEventListener('copy', copyHandler);
-          }
-
-          document.addEventListener('copy', copyHandler, true);
-          document.execCommand("copy");
+          navigator.clipboard
+            .writeText(copyText)
+            .then(() => {
+              // Successful copy
+              console.log("Text copied to clipboard: " + copyText);
+            })
+            .catch((error) => {
+              // Error occurred
+              console.error("Failed to copy text: " + error);
+            });
         }
       });
 
@@ -164,11 +166,11 @@ Apache License, Version 2.0. */}}
       const sidebarCloseButton = document.querySelector("button.close-topics");
       const sidebarWrapper = document.querySelector(".sidebar-wrapper");
       const backdrop = document.querySelector(".backdrop");
-      const allTables  = document.querySelectorAll("table");
+      const allTables = document.querySelectorAll("table");
 
-      allTables.forEach(table => {
-       table.outerHTML = `<div class="table-container">${table.outerHTML}</div>`;
-      })
+      allTables.forEach((table) => {
+        table.outerHTML = `<div class="table-container">${table.outerHTML}</div>`;
+      });
 
       const toggleBodyOverflow = (boolean) => {
         if (boolean) {
@@ -216,7 +218,7 @@ Apache License, Version 2.0. */}}
           mobileLinks.style.display = "none";
           menuToggle.classList.remove("open");
           toggleBodyOverflow(true);
-          backdrop.style.display = 'none'
+          backdrop.style.display = "none";
         }
       });
 
@@ -270,17 +272,17 @@ Apache License, Version 2.0. */}}
         highlightButton("dark");
       });
 
-      const allLinks = document.querySelectorAll('a')
-      console.log(allLinks.length)
+      const allLinks = document.querySelectorAll("a");
+      console.log(allLinks.length);
 
       allLinks.forEach((link) => {
         const firstChild = link.children[0];
-        if(firstChild) {
-          if (firstChild.nodeName === 'CODE') {
-            link.classList.add("link-with-code")
+        if (firstChild) {
+          if (firstChild.nodeName === "CODE") {
+            link.classList.add("link-with-code");
           }
         }
-      })
+      });
     </script>
   </body>
 </html>
