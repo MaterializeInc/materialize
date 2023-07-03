@@ -21,7 +21,9 @@ import importlib
 import importlib.abc
 import importlib.util
 import inspect
+import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -713,6 +715,60 @@ class Composition:
         """Sleep for the specified duration in seconds."""
         print(f"Sleeping for {duration} seconds...")
         time.sleep(duration)
+
+    def container_id(self, service: str) -> str:
+        """Return the container_id for the specified service
+
+        Delegates to `docker compose ps`
+        """
+        output_str = self.invoke("ps", "--quiet", service, capture=True).stdout
+        assert output_str is not None
+
+        output_list = output_str.strip("\n").split("\n")
+        assert len(output_list) == 1
+        assert output_list[0] is not None
+
+        return str(output_list[0])
+
+    def stats(
+        self,
+        service: str,
+    ) -> str:
+        """Delegates to `docker stats`
+
+        Args:
+            service: The service whose container's stats will be probed.
+        """
+
+        return subprocess.run(
+            [
+                "docker",
+                "stats",
+                self.container_id(service),
+                "--format",
+                "{{json .}}",
+                "--no-stream",
+                "--no-trunc",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        ).stdout
+
+    def mem(self, service: str) -> int:
+        stats_str = self.stats(service)
+        stats = json.loads(stats_str)
+        assert service in stats["Name"]
+        mem_str, _ = stats["MemUsage"].split("/")  # "MemUsage":"1.542GiB / 62.8GiB"
+        mem_float = float(re.findall(r"[\d.]+", mem_str)[0])
+        if "MiB" in mem_str:
+            mem_float = mem_float * 10**6
+        elif "GiB" in mem_str:
+            mem_float = mem_float * 10**9
+        else:
+            assert False, f"Unable to parse {mem_str}"
+        return round(mem_float)
 
     def testdrive(
         self,
