@@ -269,3 +269,16 @@ name                nullable    type
  evtfoid            false       oid
  evtenabled         false       char
  evttags            false       text[]
+
+> SHOW COLUMNS FROM pg_language
+name                nullable    type
+------------------------------------------------------------
+ lanname            false       text
+ oid                false       oid
+ lanowner           false       oid
+ lanispl            false       boolean
+ lanpltrusted       false       boolean
+ lanplcallfoid      false       oid
+ laninline          false       oid
+ lanvalidator       false       oid
+ lanacl             false       text[]

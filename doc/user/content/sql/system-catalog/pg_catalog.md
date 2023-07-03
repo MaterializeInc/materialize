@@ -24,6 +24,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_extension`](https://www.postgresql.org/docs/current/catalog-pg-extension.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
   * [`pg_inherits`](https://www.postgresql.org/docs/current/catalog-pg-inherits.html)
+  * [`pg_language`](https://www.postgresql.org/docs/current/catalog-pg-language.html)
   * [`pg_locks`](https://www.postgresql.org/docs/current/view-pg-locks.html)
   * [`pg_matviews`](https://www.postgresql.org/docs/current/view-pg-matviews.html)
   * [`pg_namespace`](https://www.postgresql.org/docs/current/catalog-pg-namespace.html)

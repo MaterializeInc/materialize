@@ -2667,6 +2667,22 @@ pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
     WHERE false",
 };
 
+pub const PG_LANGUAGE: BuiltinView = BuiltinView {
+    name: "pg_language",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_language AS SELECT
+        NULL::pg_catalog.oid  AS oid,
+        NULL::pg_catalog.text AS lanname,
+        NULL::pg_catalog.oid  AS lanowner,
+        NULL::pg_catalog.bool AS lanispl,
+        NULL::pg_catalog.bool AS lanpltrusted,
+        NULL::pg_catalog.oid  AS lanplcallfoid,
+        NULL::pg_catalog.oid  AS laninline,
+        NULL::pg_catalog.oid  AS lanvalidator,
+        NULL::pg_catalog.text[] AS lanacl
+    WHERE false",
+};
+
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_peek_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4011,6 +4027,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_REWRITE),
         Builtin::View(&PG_EXTENSION),
         Builtin::View(&PG_EVENT_TRIGGER),
+        Builtin::View(&PG_LANGUAGE),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
