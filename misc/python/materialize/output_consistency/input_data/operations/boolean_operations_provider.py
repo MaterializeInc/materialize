@@ -12,6 +12,9 @@ from materialize.output_consistency.input_data.params.any_operation_param import
     AnyLikeOtherOperationParam,
     AnyOperationParam,
 )
+from materialize.output_consistency.input_data.params.boolean_operation_param import (
+    BooleanOperationParam,
+)
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
 )
@@ -26,6 +29,30 @@ BOOLEAN_OPERATION_TYPES.append(
     DbOperation(
         "$ = $",
         [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
+        BooleanReturnTypeSpec(),
+    )
+)
+
+BOOLEAN_OPERATION_TYPES.append(
+    DbOperation(
+        "($) AND ($)",
+        [BooleanOperationParam(), BooleanOperationParam()],
+        BooleanReturnTypeSpec(),
+    )
+)
+
+BOOLEAN_OPERATION_TYPES.append(
+    DbOperation(
+        "($) OR ($)",
+        [BooleanOperationParam(), BooleanOperationParam()],
+        BooleanReturnTypeSpec(),
+    )
+)
+
+BOOLEAN_OPERATION_TYPES.append(
+    DbOperation(
+        "NOT ($)",
+        [BooleanOperationParam()],
         BooleanReturnTypeSpec(),
     )
 )

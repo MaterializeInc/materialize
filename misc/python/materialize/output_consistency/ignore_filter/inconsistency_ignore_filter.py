@@ -6,10 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Set
+from typing import List, Set
 
 from attr import dataclass
 
+from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategyKey,
@@ -218,14 +219,9 @@ class PreExecutionInconsistencyIgnoreFilter:
 
 class PostExecutionInconsistencyIgnoreFilter:
     def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
-        if error.query_execution.query_template.contains_aggregations:
-            return self.shall_ignore_error_involving_aggregation(error)
+        query_template = error.query_execution.query_template
+        contains_aggregation = query_template.contains_aggregations
 
-        return NoIgnore()
-
-    def shall_ignore_error_involving_aggregation(
-        self, error: ValidationError
-    ) -> IgnoreVerdict:
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
             outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
@@ -236,28 +232,104 @@ class PostExecutionInconsistencyIgnoreFilter:
                 EvaluationStrategyKey.CONSTANT_FOLDING
             ].successful
 
-            if not dfr_successful and ctf_successful:
+            dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
+
+            if dfr_fails_but_ctf_succeeds and self._uses_shortcut_optimization(
+                query_template.select_expressions, contains_aggregation
+            ):
                 # see https://github.com/MaterializeInc/materialize/issues/19662
                 return YesIgnore("#19662")
 
+            if (
+                dfr_fails_but_ctf_succeeds
+                and query_template.where_expression is not None
+                and self._uses_shortcut_optimization(
+                    [query_template.where_expression], contains_aggregation
+                )
+            ):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return YesIgnore("#17189")
+
         if error.error_type == ValidationErrorType.ERROR_MISMATCH:
-            query_template = error.query_execution.query_template
+            if self._uses_shortcut_optimization(
+                query_template.select_expressions, contains_aggregation
+            ):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return YesIgnore("#17189")
 
-            FUNCTIONS_TAKING_SHORTCUTS = {"count"}
-
-            def is_function_taking_shortcut(expression: Expression) -> bool:
-                if isinstance(expression, ExpressionWithArgs):
-                    operation = expression.operation
-                    return (
-                        isinstance(operation, DbFunction)
-                        and operation.function_name_in_lower_case
-                        in FUNCTIONS_TAKING_SHORTCUTS
-                    )
-                return False
-
-            for expression in query_template.select_expressions:
-                if expression.contains(is_function_taking_shortcut):
-                    # see https://github.com/MaterializeInc/materialize/issues/17189
-                    return YesIgnore("#17189")
+            if query_template.where_expression is not None:
+                # The error message may depend on the evaluation order of the where expression.
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return YesIgnore("#17189")
 
         return NoIgnore()
+
+    def _uses_shortcut_optimization(
+        self, expressions: List[Expression], contains_aggregation: bool
+    ) -> bool:
+        if self._uses_aggregation_shortcut_optimization(
+            expressions, contains_aggregation
+        ):
+            return True
+        if self._uses_null_shortcut_optimization(expressions):
+            return True
+
+        return False
+
+    def _uses_aggregation_shortcut_optimization(
+        self, expressions: List[Expression], contains_aggregation: bool
+    ) -> bool:
+        if not contains_aggregation:
+            # all current known optimizations causing issues involve aggregations
+            return False
+
+        def is_function_taking_shortcut(expression: Expression) -> bool:
+            functions_taking_shortcuts = {"count", "string_agg"}
+
+            if isinstance(expression, ExpressionWithArgs):
+                operation = expression.operation
+                return (
+                    isinstance(operation, DbFunction)
+                    and operation.function_name_in_lower_case
+                    in functions_taking_shortcuts
+                )
+            return False
+
+        for expression in expressions:
+            if expression.contains(is_function_taking_shortcut):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return True
+
+        return False
+
+    def _uses_null_shortcut_optimization(self, expressions: List[Expression]) -> bool:
+        def is_eq_null_comparison(expression: Expression) -> bool:
+            if isinstance(expression, ExpressionWithArgs):
+                operation = expression.operation
+                is_eq_comparison = (
+                    isinstance(operation, DbOperation) and operation.pattern == "$ = $"
+                )
+
+                if not is_eq_comparison:
+                    return False
+
+                is_arg0_null = isinstance(
+                    expression.args[0], DataValue
+                ) and expression.args[0].has_any_characteristic(
+                    {ExpressionCharacteristics.NULL}
+                )
+                is_arg1_null = isinstance(
+                    expression.args[1], DataValue
+                ) and expression.args[1].has_any_characteristic(
+                    {ExpressionCharacteristics.NULL}
+                )
+                return is_arg0_null or is_arg1_null
+
+            return False
+
+        for expression in expressions:
+            if expression.contains(is_eq_null_comparison):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return True
+
+        return False

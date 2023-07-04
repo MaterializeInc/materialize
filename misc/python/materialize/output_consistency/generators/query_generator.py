@@ -9,6 +9,7 @@
 
 from typing import List, Optional
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -170,6 +171,7 @@ class QueryGenerator:
             query = QueryTemplate(
                 expect_error,
                 expression_chunk,
+                None,
                 storage_layout,
                 contains_aggregations,
                 row_selection,
@@ -199,6 +201,7 @@ class QueryGenerator:
                 QueryTemplate(
                     expression.is_expect_error,
                     [expression],
+                    None,
                     expression.storage_layout,
                     False,
                     row_selection,
@@ -211,13 +214,15 @@ class QueryGenerator:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
-            if self.randomized_picker.random_boolean(0.8):
-                # In 80% of the cases, try to pick two or three rows
+            if self.randomized_picker.random_boolean(
+                probability.RESTRICT_VERTICAL_LAYOUT_TO_2_OR_3_ROWS
+            ):
+                # With some probability, try to pick two or three rows
                 max_number_of_rows_to_select = self.randomized_picker.random_number(
                     2, 3
                 )
             else:
-                # In 20% of the cases, pick an arbitrary number of rows
+                # With some probability, pick an arbitrary number of rows
                 max_number_of_rows_to_select = self.randomized_picker.random_number(
                     0, self.vertical_storage_row_count
                 )

@@ -30,12 +30,14 @@ class QueryTemplate:
         self,
         expect_error: bool,
         select_expressions: List[Expression],
+        where_expression: Optional[Expression],
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
         row_selection: DataRowSelection,
     ) -> None:
         self.expect_error = expect_error
         self.select_expressions: List[Expression] = select_expressions
+        self.where_expression = where_expression
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
         self.row_selection = row_selection
@@ -85,8 +87,29 @@ FROM{space_separator}{db_object_name}
         return f",{space_separator}".join(expressions_as_sql)
 
     def _create_where_clause(self) -> str:
-        if self.row_selection.keys is None:
+        where_conditions = []
+
+        row_filter_clause = self._create_row_filter_clause()
+        if row_filter_clause:
+            where_conditions.append(row_filter_clause)
+
+        if self.where_expression:
+            where_conditions.append(self.where_expression.to_sql(True))
+
+        if len(where_conditions) == 0:
             return ""
+
+        # It is important that the condition parts are in parentheses so that they are connected with AND.
+        # Otherwise, a generated condition containing OR at the top level may lift the row filter clause.
+        all_conditions_sql = " AND ".join(
+            [f"({condition})" for condition in where_conditions]
+        )
+        return f"WHERE {all_conditions_sql}"
+
+    def _create_row_filter_clause(self) -> Optional[str]:
+        """Create s SQL clause to only include rows of certain indices"""
+        if self.row_selection.keys is None:
+            return None
 
         if len(self.row_selection.keys) == 0:
             row_index_string = "-1"
@@ -94,7 +117,7 @@ FROM{space_separator}{db_object_name}
             row_index_string = ", ".join(
                 str(index) for index in self.row_selection.keys
             )
-        return f"WHERE {ROW_INDEX_COL_NAME} IN ({row_index_string})"
+        return f"{ROW_INDEX_COL_NAME} IN ({row_index_string})"
 
     def _create_order_by_clause(self) -> str:
         if (
