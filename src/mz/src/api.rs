@@ -9,6 +9,7 @@
 
 use std::fmt::Display;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use mz_ore::retry::Retry;
@@ -154,6 +155,7 @@ pub async fn disable_region_environment(
 ) -> Result<(), reqwest::Error> {
     Retry::default()
         .max_tries(100)
+        .max_duration(Duration::from_secs(30))
         .retry_async(|_| async {
             client
                 .delete(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())
