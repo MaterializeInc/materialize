@@ -96,13 +96,13 @@ impl ConfigFile {
     pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile, Error> {
         match &self.parsed.profiles {
             Some(profiles) => match profiles.get(name) {
-                None => panic!("unknown profile {}", name.quoted()),
+                None => Err(Error::ProfileMissing(name.to_string())),
                 Some(parsed_profile) => Ok(Profile {
                     name,
                     parsed: parsed_profile,
                 }),
             },
-            None => panic!("unknown profile {}", name.quoted()),
+            None => Err(Error::ProfilesMissing),
         }
     }
 
@@ -177,7 +177,7 @@ impl ConfigFile {
             .clone()
             .ok_or(Error::ProfilesMissing)?
             .get(self.profile())
-            .ok_or(Error::ProfileMissing)?
+            .ok_or(Error::ProfileMissing(self.profile().to_string()))?
             .clone();
 
         let out = vec![
@@ -208,7 +208,7 @@ impl ConfigFile {
             None => {
                 let profile = editable["profiles"][self.profile()]
                     .as_table_mut()
-                    .ok_or(Error::ProfileMissing)?;
+                    .ok_or(Error::ProfileMissing(name.to_string()))?;
                 if profile.contains_key(name) {
                     profile.remove(name);
                 }
@@ -292,8 +292,8 @@ impl Profile<'_> {
     }
 
     /// Returns the app password in the profile configuration.
-    pub fn app_password(&self) -> &str {
-        (PROFILE_PARAMS["app-password"].get)(self.parsed).unwrap()
+    pub fn app_password(&self) -> Option<&str> {
+        (PROFILE_PARAMS["app-password"].get)(self.parsed)
     }
 
     /// Returns the region in the profile configuration.

@@ -82,6 +82,7 @@
 // END LINT CONFIG
 
 use std::path::PathBuf;
+use std::process::exit;
 
 use mz::error::Error;
 
@@ -190,7 +191,7 @@ async fn main() -> Result<(), Error> {
     })
     .await?;
 
-    match args.command {
+    let res = match args.command {
         Command::AppPassword(cmd) => command::app_password::run(cx, cmd).await,
         Command::Config(cmd) => command::config::run(cx, cmd).await,
         Command::Profile(cmd) => command::profile::run(cx, cmd).await,
@@ -198,5 +199,12 @@ async fn main() -> Result<(), Error> {
         Command::Secret(cmd) => command::secret::run(cx, cmd).await,
         Command::Sql(cmd) => command::sql::run(cx, cmd).await,
         Command::User(cmd) => command::user::run(cx, cmd).await,
+    };
+
+    if let Err(e) = res {
+        println!("{}", e);
+        exit(1);
     }
+
+    Ok(())
 }

@@ -32,23 +32,23 @@ pub enum Error {
     #[error(transparent)]
     ApiError(#[from] mz_cloud_api::error::Error),
     /// Indicates an error parsing an endpoint.
-    #[error("Error trying to parse the url: {0}")]
+    #[error("Error parsing URL: {0}.\n\nTo resolve this issue, please verify the correctness of the URLs in the configuration file or the ones passed as parameters.")]
     UrlParseError(#[from] ParseError),
     /// Error parsing (serializing/deserializing) a JSON.
     #[error("Error parsing JSON: {0}")]
     JsonParseError(#[from] serde_json::Error),
     /// Error parsing an App Password.
-    #[error(transparent)]
+    #[error("Error: {0}. \n\nTo resolve this issue, please verify the correctness of the app-password in the configuration file.")]
     AppPasswordParseError(#[from] mz_frontegg_auth::AppPasswordParseError),
     /// Error indicating that a profile is missing the app-password.
-    #[error("Error, missing app-password.")]
+    #[error("Error: The current profile does not have an app-password.")]
     AppPasswordMissing,
     /// Error indicating that the profiles are missing in the config file.
-    #[error("Error, missing profiles.")]
+    #[error("Error: No profiles available in the configuration file. \n\nTo resolve this issue, you can add a new profile using the following command: `mz profile init`")]
     ProfilesMissing,
     /// Error indicating that the profile is missing in the config file.
-    #[error("Error, missing profile.")]
-    ProfileMissing,
+    #[error("Error: The profile '{0}' is missing in the configuration file. \n\nTo resolve this issue, you can either: \n1. Add the missing profile using the command `mz profile --profile {0} init` \n2. Set another existing profile using the command: `mz config set profile <profile_name>`.")]
+    ProfileMissing(String),
     /// Error finding the region's cloud provider.
     #[error("Error finding the region's cloud provider.")]
     CloudProviderMissing,
@@ -81,6 +81,6 @@ pub enum Error {
     LoginOperationCanceled,
     /// Error that happens occures when the clientid or secret are invalid.
     /// It is a simpler alternative for parsing errors.
-    #[error("Invalid credentials. Please, try again or communicate with support.")]
+    #[error("Invalid app-password.")]
     InvalidAppPassword,
 }
