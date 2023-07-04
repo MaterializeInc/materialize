@@ -30,10 +30,12 @@ class DataType:
 
     @staticmethod
     def random_value(record_size: RecordSize) -> Any:
+        """Generate a random value, should be possible for all types."""
         raise NotImplementedError
 
     @staticmethod
-    def num_value(num: int) -> Any:
+    def numeric_value(num: int) -> Any:
+        """Generate a value that corresponds to `num`, so that it will always be the same value for the same input `num`, but fits into the type. This doesn't make sense for a type like boolean."""
         raise NotImplementedError
 
     @staticmethod
@@ -64,15 +66,13 @@ class IntType(DataType):
             return random.randint(-127, 128)
         elif record_size == RecordSize.SMALL:
             return random.randint(-32768, 32767)
-        elif record_size == RecordSize.MEDIUM:
+        elif record_size in (RecordSize.MEDIUM, RecordSize.LARGE):
             return random.randint(-2147483648, 2147483647)
-        elif record_size == RecordSize.LARGE:
-            return random.randint(-9223372036854775808, 9223372036854775807)
         else:
             raise ValueError(f"Unexpected record size {record_size}")
 
     @staticmethod
-    def num_value(num: int) -> Any:
+    def numeric_value(num: int) -> Any:
         return num
 
     @staticmethod
@@ -95,7 +95,7 @@ class LongType(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
     @staticmethod
-    def num_value(num: int) -> Any:
+    def numeric_value(num: int) -> Any:
         return num
 
     @staticmethod
@@ -121,7 +121,7 @@ class FloatType(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
     @staticmethod
-    def num_value(num: int) -> Any:
+    def numeric_value(num: int) -> Any:
         return num
 
     @staticmethod
@@ -132,24 +132,7 @@ class FloatType(DataType):
             return "float4"
 
 
-class DoubleType(DataType):
-    @staticmethod
-    def random_value(record_size: RecordSize) -> Any:
-        if record_size == RecordSize.TINY:
-            return random.random()
-        elif record_size == RecordSize.SMALL:
-            return random.uniform(-100, 100)
-        elif record_size == RecordSize.MEDIUM:
-            return random.uniform(-1_000_000, 1_000_000)
-        elif record_size == RecordSize.LARGE:
-            return random.uniform(-1_000_000_000, 1_000_000_000_00)
-        else:
-            raise ValueError(f"Unexpected record size {record_size}")
-
-    @staticmethod
-    def num_value(num: int) -> Any:
-        return num
-
+class DoubleType(FloatType):
     @staticmethod
     def name(backend: Backend) -> str:
         if backend == Backend.AVRO:
@@ -173,7 +156,7 @@ class StringType(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
     @staticmethod
-    def num_value(num: int) -> Any:
+    def numeric_value(num: int) -> Any:
         return f"key{num}"
 
     @staticmethod
@@ -182,6 +165,3 @@ class StringType(DataType):
             return "string"
         else:
             return "text"
-
-
-# TODO: BYTES, RECORD, ENUM, ARRAY, MAP, FIXED

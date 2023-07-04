@@ -10,9 +10,8 @@
 import random
 import time
 
-from materialize.checks.all_checks import *  # noqa: F401 F403
-from materialize.checks.scenarios import *  # noqa: F401 F403
-from materialize.data_ingest.executor import KafkaExecutor, PgCdcExecutor
+from materialize.data_ingest.executor import KafkaExecutor, PgExecutor
+from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import Workload, execute_workload
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
@@ -85,7 +84,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
     conn.autocommit = False
 
-    executor_classes = [KafkaExecutor, PgCdcExecutor]
+    executor_classes = [KafkaExecutor, PgExecutor]
     ports = {s: c.default_port(s) for s in services}
 
     for i, workload_class in enumerate(workloads):

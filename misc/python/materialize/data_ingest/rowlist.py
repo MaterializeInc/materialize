@@ -14,7 +14,7 @@ from materialize.data_ingest.row import Row
 
 class RowList:
     rows: List[Row]
-    # generator_properties
+    # TODO: Implement generator_properties
 
     def __init__(self, rows: List[Row]):
         self.rows = rows

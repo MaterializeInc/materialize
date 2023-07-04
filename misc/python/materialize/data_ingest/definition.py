@@ -19,9 +19,10 @@ from materialize.data_ingest.transaction import Transaction
 
 
 class Records(Enum):
+    ALL = 0  #  Only applies to DELETE operations
     ONE = 1
-    MANY = 2
-    ALL = 3
+    SOME = 1_000
+    MANY = 1_000_000
 
 
 class Keyspace(Enum):
@@ -43,35 +44,32 @@ class Definition:
 
 class Insert(Definition):
     def __init__(self, count: Records, record_size: RecordSize):
-        self.count = count
+        self.count = count.value
         self.record_size = record_size
         self.current_key = 0
 
     def max_key(self) -> int:
-        if self.count == Records.ONE:
-            return 1
-        elif self.count == Records.MANY:
-            return 1000
-        else:
-            raise ValueError(f"Unexpected count {self.count}")
+        if self.count < 1:
+            raise ValueError(
+                f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
+            )
+        return self.count
 
     def generate(self, fields: List[Field]) -> List[Transaction]:
-        if self.count == Records.ONE:
-            count = 1
-        elif self.count == Records.MANY:
-            count = 1000
-        else:
-            raise ValueError(f"Unexpected count {self.count}")
+        if self.count < 1:
+            raise ValueError(
+                f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
+            )
 
         fields_with_values = deepcopy(fields)
 
         transactions = []
-        for i in range(count):
+        for i in range(self.count):
             for field in fields_with_values:
                 if field.is_key:
-                    field.value = field.typ.num_value(self.current_key)
+                    field.set_numeric_value(self.current_key)
                 else:
-                    field.value = field.typ.random_value(self.record_size)
+                    field.set_random_value(self.record_size)
             self.current_key += 1
             transactions.append(
                 Transaction(
@@ -94,29 +92,27 @@ class Insert(Definition):
 class Upsert(Definition):
     def __init__(self, keyspace: Keyspace, count: Records, record_size: RecordSize):
         self.keyspace = keyspace
-        self.count = count
+        self.count = count.value
         self.record_size = record_size
 
     def generate(self, fields: List[Field]) -> List[Transaction]:
-        if self.count == Records.ONE:
-            count = 1
-        elif self.count == Records.MANY:
-            count = 1000
-        else:
-            raise ValueError(f"Unexpected count {self.count}")
+        if self.count < 1:
+            raise ValueError(
+                f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
+            )
 
         fields_with_values = deepcopy(fields)
 
         transactions = []
-        for i in range(count):
+        for i in range(self.count):
             for field in fields_with_values:
                 if field.is_key:
                     if self.keyspace == Keyspace.SINGLE_VALUE:
-                        field.value = field.typ.num_value(0)
+                        field.value = field.data_type.numeric_value(0)
                     else:
                         raise NotImplementedError
                 else:
-                    field.value = field.typ.random_value(self.record_size)
+                    field.value = field.data_type.random_value(self.record_size)
 
             transactions.append(
                 Transaction(
@@ -154,14 +150,14 @@ class Delete(Definition):
 
         if self.number_of_records == Records.ONE:
             for field in fields_with_values:
-                field.value = field.typ.random_value(self.record_size)
+                field.value = field.data_type.random_value(self.record_size)
             transactions.append(
                 Transaction([RowList([Row(fields_with_values, Operation.DELETE)])])
             )
-        elif self.number_of_records == Records.MANY:
-            for i in range(1000):
+        elif self.number_of_records in (Records.SOME, Records.MANY):
+            for i in range(self.number_of_records.value):
                 for field in fields_with_values:
-                    field.value = field.typ.random_value(self.record_size)
+                    field.value = field.data_type.random_value(self.record_size)
                 transactions.append(
                     Transaction(
                         [RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])]
@@ -171,7 +167,7 @@ class Delete(Definition):
             assert self.num is not None
             for i in range(self.num):
                 for field in fields_with_values:
-                    field.value = field.typ.num_value(i)
+                    field.value = field.data_type.numeric_value(i)
                 transactions.append(
                     Transaction(
                         [RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])]

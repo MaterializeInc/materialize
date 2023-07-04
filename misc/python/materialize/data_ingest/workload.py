@@ -10,7 +10,7 @@
 import random
 import time
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 import pg8000
 
@@ -39,13 +39,12 @@ class Workload:
     cycle: List[Definition]
     num_cycles: int
 
-    def generate(self, fields: List[Field]) -> List[Transaction]:
-        transactions = []
+    def generate(self, fields: List[Field]) -> Iterator[Transaction]:
         for i in range(self.num_cycles):
             cycle = deepcopy(self.cycle)
             for definition in cycle:
-                transactions.extend(definition.generate(fields))
-        return transactions
+                for transaction in definition.generate(fields):
+                    yield transaction
 
 
 class SingleSensorUpdating(Workload):
@@ -98,27 +97,23 @@ def execute_workload(
 ) -> None:
     fields = []
 
+    types = (StringType, IntType, LongType, FloatType, DoubleType)
+
     for i in range(random.randint(1, 10)):
-        typ = random.choice((StringType, IntType, LongType, FloatType, DoubleType))
-        fields.append(Field(f"key{i}", typ, True))
+        fields.append(Field(f"key{i}", random.choice(types), True))
     for i in range(random.randint(0, 20)):
-        typ = random.choice((StringType, IntType, LongType, FloatType, DoubleType))
-        fields.append(Field(f"value{i}", typ, False))
+        fields.append(Field(f"value{i}", random.choice(types), False))
     print(f"With fields: {fields}")
 
-    transactions = workload.generate(fields)
-    # print(transactions)
-
-    pg_executor = PgExecutor(num, ports, fields)
     executors = [
         executor_class(num, conn, ports, fields) for executor_class in executor_classes
     ]
-    run_executors = [pg_executor] + executors
-    if verbose:
-        run_executors = [PrintExecutor()] + executors
+    pg_executor = PgExecutor(num, conn=None, ports=ports, fields=fields)
 
-    for executor in run_executors:
-        executor.run(transactions)
+    run_executors = ([PrintExecutor()] if verbose else []) + [pg_executor] + executors
+    for transaction in workload.generate(fields):
+        for executor in run_executors:
+            executor.run(transaction)
 
     order_str = ", ".join(str(i + 1) for i in range(len(fields)))
 
@@ -141,7 +136,7 @@ def execute_workload(
                     break
                 print("Check for correctness again to make sure the result is stable")
                 correct_once = True
-                time.sleep(10)
+                time.sleep(sleep_time)
                 continue
             else:
                 print(f"Unexpected ({type(executor).__name__}): {actual_result}")
