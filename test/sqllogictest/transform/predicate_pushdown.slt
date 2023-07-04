@@ -16,6 +16,11 @@ ALTER SYSTEM SET enable_with_mutually_recursive = true
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE x (a int not null, u int, b bool)
 

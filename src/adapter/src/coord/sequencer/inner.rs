@@ -798,6 +798,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateMaterializedViewPlan,
+        planning_depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateMaterializedViewPlan {
             name,
@@ -824,19 +825,18 @@ impl Coordinator {
             return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
-        // Generate the optimized expression, which allows us to know exacly what we depend on.
-        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
-        let depends_on: Vec<_> = optimized_expr.depends_on().into_iter().collect();
-
-        // Validate after generating the optimized expression.
-        self.validate_timeline_context(depends_on.clone())?;
-        self.validate_system_column_references(ambiguous_columns, &depends_on)?;
-
+        // Validate any references in the materialized view's expression. We do
+        // this on the unoptimized plan to better reflect what the user typed.
+        // We want to reject queries that depend on log sources, for example,
+        // even if we can *technically* optimize that reference away.
+        let expr_depends_on: Vec<_> = view_expr.depends_on().into_iter().collect();
+        self.validate_timeline_context(expr_depends_on.iter().cloned())?;
+        self.validate_system_column_references(ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
         // TODO(teskje): Remove this check once arrangement-based log sources
         // are replaced with persist-based ones.
-        let log_names = depends_on
+        let log_names = expr_depends_on
             .iter()
             .flat_map(|id| self.catalog().introspection_dependencies(*id))
             .map(|id| self.catalog().get_entry(&id).name().item.clone())
@@ -855,6 +855,7 @@ impl Coordinator {
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
 
+        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
 
         // Pick the least valid read timestamp as the as-of for the view
@@ -862,7 +863,7 @@ impl Coordinator {
         // amount of historical detail.
         let id_bundle = self
             .index_oracle(cluster_id)
-            .sufficient_collections(&depends_on);
+            .sufficient_collections(&expr_depends_on);
         let as_of = self.least_valid_read(&id_bundle);
 
         let mut ops = Vec::new();
@@ -879,7 +880,7 @@ impl Coordinator {
                 create_sql,
                 optimized_expr,
                 desc: desc.clone(),
-                depends_on,
+                depends_on: planning_depends_on,
                 cluster_id,
             }),
             owner_id: *session.current_role_id(),

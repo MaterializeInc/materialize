@@ -224,6 +224,122 @@ query error unknown catalog item 'v'
 SELECT * FROM v
 
 
+# Test: a view on a materialized view that optimizes to the empty set
+# still prevents the underlying view from being dropped.
+# See: https://github.com/MaterializeInc/materialize/issues/20315
+
+statement ok
+CREATE VIEW v AS SELECT 1 AS c
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM v WHERE c IS NULL
+
+statement error cannot drop view v: still depended upon by materialized view mv
+DROP VIEW v
+
+statement ok
+DROP VIEW v CASCADE
+
+query I
+SELECT count(*) FROM mz_materialized_views WHERE name = 'mv'
+----
+0
+
+# mz_scheduling_elapsed_raw, a log source, is optimized away, but should still count as a dependency
+query error db error: ERROR: materialized view objects cannot depend on log sources
+CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_internal.mz_scheduling_elapsed_raw WHERE FALSE);
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER NOT NULL PRIMARY KEY);
+
+statement ok
+CREATE TABLE t2 (f1 INTEGER NOT NULL PRIMARY KEY);
+
+# Folds to Constant, t1 is optimized away but must still be counted as a dependency
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE;
+
+statement error db error: ERROR: cannot drop table t1: still depended upon by materialized view mv
+DROP TABLE t1
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+# In the cases below, t2 is optimized away but should still be present as a dependency
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT t1.* FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1);
+
+statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
+DROP TABLE t2
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE AND EXISTS (SELECT * FROM t2);
+
+statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
+DROP TABLE t2
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE TRUE OR EXISTS (SELECT * FROM t2);
+
+statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
+DROP TABLE t2
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT (SELECT f1 FROM t2 WHERE FALSE) FROM t1;
+
+statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
+DROP TABLE t2
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+# No need to evaluate second argument of COALESCE if first is non-null
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT COALESCE(1, (SELECT * FROM t2 LIMIT 1)) FROM t1;
+
+statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
+DROP TABLE t2
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+statement ok
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
+
+# Mention of int4_list is optimized away
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE NULL::int4_list IS NOT NULL;
+
+statement error db error: ERROR: cannot drop type int4_list: still depended upon by materialized view mv
+DROP TYPE int4_list
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+statement ok
+DROP TYPE int4_list
+
+statement ok
+DROP TABLE t1
+
+statement ok
+DROP TABLE t2
+
+
 # Test: Materialized view prevents dropping its cluster.
 
 statement ok
