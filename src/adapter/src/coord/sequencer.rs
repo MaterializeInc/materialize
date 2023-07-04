@@ -165,7 +165,7 @@ impl Coordinator {
             }
             Plan::CreateMaterializedView(plan) => {
                 let result = self
-                    .sequence_create_materialized_view(ctx.session_mut(), plan)
+                    .sequence_create_materialized_view(ctx.session_mut(), plan, depends_on)
                     .await;
                 ctx.retire(result);
             }
