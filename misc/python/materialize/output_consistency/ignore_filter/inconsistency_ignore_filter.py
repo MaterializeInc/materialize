@@ -10,6 +10,7 @@ from typing import List, Set
 
 from attr import dataclass
 
+from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategyKey,
@@ -266,6 +267,18 @@ class PostExecutionInconsistencyIgnoreFilter:
     def _uses_shortcut_optimization(
         self, expressions: List[Expression], contains_aggregation: bool
     ) -> bool:
+        if self._uses_aggregation_shortcut_optimization(
+            expressions, contains_aggregation
+        ):
+            return True
+        if self._uses_null_shortcut_optimization(expressions):
+            return True
+
+        return False
+
+    def _uses_aggregation_shortcut_optimization(
+        self, expressions: List[Expression], contains_aggregation: bool
+    ) -> bool:
         if not contains_aggregation:
             # all current known optimizations causing issues involve aggregations
             return False
@@ -284,6 +297,38 @@ class PostExecutionInconsistencyIgnoreFilter:
 
         for expression in expressions:
             if expression.contains(is_function_taking_shortcut):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return True
+
+        return False
+
+    def _uses_null_shortcut_optimization(self, expressions: List[Expression]) -> bool:
+        def is_eq_null_comparison(expression: Expression) -> bool:
+            if isinstance(expression, ExpressionWithArgs):
+                operation = expression.operation
+                is_eq_comparison = (
+                    isinstance(operation, DbOperation) and operation.pattern == "$ = $"
+                )
+
+                if not is_eq_comparison:
+                    return False
+
+                is_arg0_null = isinstance(
+                    expression.args[0], DataValue
+                ) and expression.args[0].has_any_characteristic(
+                    {ExpressionCharacteristics.NULL}
+                )
+                is_arg1_null = isinstance(
+                    expression.args[1], DataValue
+                ) and expression.args[1].has_any_characteristic(
+                    {ExpressionCharacteristics.NULL}
+                )
+                return is_arg0_null or is_arg1_null
+
+            return False
+
+        for expression in expressions:
+            if expression.contains(is_eq_null_comparison):
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return True
 
