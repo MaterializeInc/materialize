@@ -233,7 +233,9 @@ class PostExecutionInconsistencyIgnoreFilter:
 
             dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
 
-            if contains_aggregation and dfr_fails_but_ctf_succeeds:
+            if dfr_fails_but_ctf_succeeds and self._uses_shortcut_optimization(
+                query_template.select_expressions, contains_aggregation
+            ):
                 # see https://github.com/MaterializeInc/materialize/issues/19662
                 return YesIgnore("#19662")
 
