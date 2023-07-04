@@ -206,8 +206,8 @@ pub struct BatchBuilderConfig {
 
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
-    pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
-        let writer_key = WriterKey::Id(writer_id.clone());
+    pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
+        let writer_key = WriterKey::for_version(&value.build_version);
         BatchBuilderConfig {
             writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
