@@ -84,8 +84,7 @@ associated open Github issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    annotate_logged_errors(args.log_files)
-    return 0
+    return annotate_logged_errors(args.log_files)
 
 
 def annotate_errors(errors: List[str], title: str, style: str) -> None:
@@ -117,11 +116,12 @@ def annotate_errors(errors: List[str], title: str, style: str) -> None:
     )
 
 
-def annotate_logged_errors(log_files: List[str]) -> None:
+def annotate_logged_errors(log_files: List[str]) -> int:
+    """Returns the number of unknown errors"""
     error_logs = get_error_logs(log_files)
 
     if not error_logs:
-        return
+        return 0
 
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
@@ -190,6 +190,10 @@ def annotate_logged_errors(log_files: List[str]) -> None:
         "error",
     )
     annotate_errors(known_errors, "Known errors in logs, ignoring", "info")
+
+    if unknown_errors:
+        print("Unknown errors found in logs, marking run as failed")
+    return len(unknown_errors)
 
 
 def get_error_logs(log_files: List[str]) -> List[ErrorLog]:
