@@ -10,6 +10,11 @@
 # Regression test for https://github.com/MaterializeInc/materialize/issues/9027
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE orders ( o_orderkey integer, o_custkey integer NOT NULL, o_orderstatus text NOT NULL, o_totalprice decimal(15, 2) NOT NULL, o_orderdate DATE NOT NULL, o_orderpriority text NOT NULL, o_clerk text NOT NULL, o_shippriority integer NOT NULL, o_comment text NOT NULL);
 
