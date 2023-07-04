@@ -28,7 +28,7 @@ DELETE FROM table
 ----
 DELETE FROM table
 =>
-Delete(DeleteStatement { table_name: Name(UnresolvedObjectName([Ident("table")])), alias: None, using: [], selection: None })
+Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("table")])), alias: None, using: [], selection: None })
 
 parse-statement roundtrip
 DELETE FROM foo WHERE name = 5
@@ -40,4 +40,4 @@ DELETE FROM foo WHERE name = 5
 ----
 DELETE FROM foo WHERE name = 5
 =>
-Delete(DeleteStatement { table_name: Name(UnresolvedObjectName([Ident("foo")])), alias: None, using: [], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("name")]), expr2: Some(Value(Number("5"))) }) })
+Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("foo")])), alias: None, using: [], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("name")]), expr2: Some(Value(Number("5"))) }) })

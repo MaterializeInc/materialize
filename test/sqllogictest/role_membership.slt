@@ -1,0 +1,388 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# Give materialize the CREATEROLE system privilege.
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO materialize;
+----
+COMPLETE 0
+
+statement ok
+CREATE VIEW role_members AS
+  SELECT
+    role.name AS role,
+    member.name AS member,
+    grantor.name AS grantor
+  FROM mz_role_members membership
+  LEFT JOIN mz_roles role ON membership.role_id = role.id
+  LEFT JOIN mz_roles member ON membership.member = member.id
+  LEFT JOIN mz_roles grantor ON membership.grantor = grantor.id
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+CREATE ROLE group1
+
+query TTT
+SELECT * FROM role_members
+----
+
+statement ok
+GRANT group1 TO joe
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe  mz_system
+
+# Dropping a role also removes it from role_members
+simple conn=mz_system,user=mz_system
+DROP ROLE group1
+----
+COMPLETE 0
+
+query TTT
+SELECT * FROM mz_role_members
+----
+
+statement ok
+CREATE ROLE group1
+
+statement ok
+GRANT group1 TO joe
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe  mz_system
+
+# Dropped roles have their membership revoked
+
+simple conn=mz_system,user=mz_system
+DROP ROLE joe
+----
+COMPLETE 0
+
+query TTT
+SELECT * FROM mz_role_members
+----
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+GRANT group1 TO joe
+
+statement ok
+CREATE ROLE group2
+
+simple conn=mz_system,user=mz_system
+GRANT group2 TO joe
+----
+COMPLETE 0
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe  mz_system
+group2  joe  mz_system
+
+statement ok
+GRANT group2 TO group1
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe     mz_system
+group2  joe     mz_system
+group2  group1  mz_system
+
+# Redundant grants don't error or show up multiple times in mz_role_membership or change the grantor
+simple conn=mz_system,user=mz_system
+GRANT group1 TO joe
+----
+COMPLETE 0
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe     mz_system
+group2  joe     mz_system
+group2  group1  mz_system
+
+# Test circular membership errors
+
+statement error role "joe" is a member of role "joe"
+GRANT joe TO joe
+
+statement error role "joe" is a member of role "group1"
+GRANT joe TO group1
+
+statement ok
+REVOKE group1 FROM joe
+
+query TTT
+SELECT * FROM role_members
+----
+group2  joe     mz_system
+group2  group1  mz_system
+
+# Redundant revokes don't error
+
+statement ok
+REVOKE group1 FROM joe
+
+query TTT
+SELECT * FROM role_members
+----
+group2  joe     mz_system
+group2  group1  mz_system
+
+# Dropped roles are revoked from all members
+
+statement ok
+DROP ROLE group2
+
+query TTT
+SELECT * FROM mz_role_members
+----
+
+query TTT
+SELECT * FROM role_members
+----
+
+# Dropped roles have their membership revoked
+
+statement ok
+DROP ROLE joe
+
+query TTT
+SELECT * FROM role_members
+----
+
+statement ok
+CREATE ROLE joe
+
+# Cannot grant or revoke system role
+
+statement error role name "mz_system" is reserved
+GRANT mz_system TO joe
+
+statement error role name "mz_system" is reserved
+GRANT joe TO mz_system
+
+statement error role name "mz_system" is reserved
+REVOKE mz_system FROM joe
+
+statement error role name "mz_system" is reserved
+REVOKE joe FROM mz_system
+
+# Prevent granting and revoking to/from PUBLIC role
+
+statement error role name "public" is reserved
+GRANT group1 TO public
+
+statement error role name "public" is reserved
+GRANT public TO group1
+
+statement error role name "public" is reserved
+REVOKE group1 FROM public
+
+statement error role name "public" is reserved
+REVOKE public FROM group1
+
+statement ok
+DROP ROLE group1
+
+statement ok
+DROP ROLE joe
+
+# SHOW ROLES/USERS is not yet implemented
+statement error SHOW ROLES not yet supported
+show roles
+
+statement error SHOW ROLES not yet supported
+show users
+
+# Test grant/revoke multiple roles
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+CREATE ROLE group1
+
+statement ok
+CREATE ROLE group2
+
+statement ok
+CREATE ROLE group3
+
+statement error unknown role 'bob'
+GRANT group3 TO joe, group1, bob
+
+query TTT
+SELECT * FROM role_members
+----
+
+statement error role name "mz_system" is reserved
+GRANT group3 TO joe, group1, mz_system
+
+query TTT
+SELECT * FROM role_members
+----
+
+statement ok
+GRANT group3 TO joe, group1
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     mz_system
+group3  group1  mz_system
+
+statement error role "joe" is a member of role "group3"
+GRANT joe TO group1, group3
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     mz_system
+group3  group1  mz_system
+
+statement ok
+GRANT group3 TO group1, group2
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     mz_system
+group3  group1  mz_system
+group3  group2  mz_system
+
+statement error unknown role 'bob'
+REVOKE group3 FROM joe, group1, bob
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     mz_system
+group3  group1  mz_system
+group3  group2  mz_system
+
+statement error role name "mz_system" is reserved
+REVOKE group3 FROM joe, group1, mz_system
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     mz_system
+group3  group1  mz_system
+group3  group2  mz_system
+
+statement ok
+REVOKE group3 FROM joe, group1
+
+query TTT
+SELECT * FROM role_members
+----
+group3  group2  mz_system
+
+statement ok
+REVOKE group3 FROM joe, group2
+
+query TTT
+SELECT * FROM role_members
+----
+
+# Test pg_auth_members
+
+statement ok
+GRANT group3 TO joe, group1, group2
+
+statement ok
+GRANT group1 TO joe
+
+query I
+SELECT COUNT(*) FROM pg_auth_members
+----
+4
+
+query TTTB
+SELECT role.name, member.name, grantor.name, members.admin_option
+FROM pg_auth_members members
+LEFT JOIN mz_roles role ON members.roleid = role.oid
+LEFT JOIN mz_roles member ON members.member = member.oid
+LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
+----
+group1  joe     mz_system  false
+group3  joe     mz_system  false
+group3  group1  mz_system  false
+group3  group2  mz_system  false
+
+statement ok
+DROP ROLE group1, group2, group3, joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+CREATE ROLE mike
+
+statement ok
+CREATE ROLE group1
+
+statement ok
+CREATE ROLE group2
+
+statement ok
+GRANT group1, group2 TO joe, mike
+
+query TTTB
+SELECT role.name, member.name, grantor.name, members.admin_option
+FROM pg_auth_members members
+LEFT JOIN mz_roles role ON members.roleid = role.oid
+LEFT JOIN mz_roles member ON members.member = member.oid
+LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
+----
+group1  joe     mz_system  false
+group2  joe     mz_system  false
+group1  mike    mz_system  false
+group2  mike    mz_system  false
+
+statement ok
+REVOKE group1, group2 FROM joe, mike
+
+query TTTB
+SELECT role.name, member.name, grantor.name, members.admin_option
+FROM pg_auth_members members
+LEFT JOIN mz_roles role ON members.roleid = role.oid
+LEFT JOIN mz_roles member ON members.member = member.oid
+LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
+----
+
+statement ok
+DROP ROLE group1, group2, joe, mike
+
+# Disable RBAC checks
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0

@@ -82,16 +82,16 @@ def cargo(
         sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
         rustflags += [f"-L{sysroot}/lib"]
         extra_env = {
-            f"CMAKE_SYSTEM_NAME": "Linux",
+            "CMAKE_SYSTEM_NAME": "Linux",
             f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-            f"CARGO_TARGET_DIR": str(ROOT / "target-xcompile"),
-            f"TARGET_AR": f"{_target}-ar",
-            f"TARGET_CPP": f"{_target}-cpp",
-            f"TARGET_CC": f"{_target}-cc",
-            f"TARGET_CXX": f"{_target}-c++",
-            f"TARGET_CXXSTDLIB": "static=stdc++",
-            f"TARGET_LD": f"{_target}-ld",
-            f"TARGET_RANLIB": f"{_target}-ranlib",
+            "CARGO_TARGET_DIR": str(ROOT / "target-xcompile"),
+            "TARGET_AR": f"{_target}-ar",
+            "TARGET_CPP": f"{_target}-cpp",
+            "TARGET_CC": f"{_target}-cc",
+            "TARGET_CXX": f"{_target}-c++",
+            "TARGET_CXXSTDLIB": "static=stdc++",
+            "TARGET_LD": f"{_target}-ld",
+            "TARGET_RANLIB": f"{_target}-ranlib",
         }
     else:
         # NOTE(benesch): The required Rust flags have to be duplicated with

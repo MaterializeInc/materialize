@@ -98,11 +98,6 @@
 //! The replica must send the required responses to computation commands. This includes commands it
 //! has received in the initialization phase that have not already been responded to.
 //!
-//! The replica may also send [`FrontierUppers`] and [`SubscribeResponse::DroppedAt`] responses
-//! for compute collections that it wasn’t instructed to create through a [`CreateDataflows`]
-//! command. This accounts for replicas reporting the dropping of unneeded collections during
-//! reconciliation ([#16247]). The compute controller should ignore these responses.
-//!
 //! [`ComputeCommand`]: self::command::ComputeCommand
 //! [`CreateTimely`]: self::command::ComputeCommand::CreateTimely
 //! [`CreateInstance`]: self::command::ComputeCommand::CreateInstance
@@ -116,7 +111,6 @@
 //! [`FrontierUppers`]: self::response::ComputeResponse::FrontierUppers
 //! [`Canceled`]: self::response::PeekResponse::Canceled
 //! [`SubscribeResponse::DroppedAt`]: self::response::SubscribeResponse::DroppedAt
-//! [#16247]: https://github.com/MaterializeInc/materialize/issues/16274
 
 pub mod command;
 pub mod history;

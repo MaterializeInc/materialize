@@ -9,13 +9,12 @@
 
 use std::iter;
 
-use rand::prelude::{Rng, SmallRng};
-use rand::seq::SliceRandom;
-use rand::SeedableRng;
-
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, Row};
 use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
+use rand::prelude::{Rng, SmallRng};
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
 
 /// CREATE TABLE organizations
 ///   (
@@ -66,6 +65,9 @@ const ACCOUNTS_OUTPUT: usize = 3;
 const AUCTIONS_OUTPUT: usize = 4;
 const BIDS_OUTPUT: usize = 5;
 
+// Note that this generator never issues retractions; if you change this,
+// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+// must be updated.
 impl Generator for Auction {
     fn by_seed(
         &self,

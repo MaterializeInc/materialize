@@ -38,10 +38,6 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{< diagram "strat.svg" >}}
 
-#### `key_constraint`
-
-{{< diagram "key-constraint.svg" >}}
-
 #### `with_options`
 
 {{< diagram "with-options.svg" >}}
@@ -81,7 +77,7 @@ By default, the message key is decoded using the same format as the message valu
 To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
 
 ```sql
-CREATE SOURCE current_predictions
+CREATE SOURCE kafka_upsert
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT
@@ -92,13 +88,22 @@ Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
 
-#### Defining primary keys
+#### Null keys
 
-{{< warning >}}
-Materialize will **not enforce** the constraint and will produce wrong results if it's not unique.
-{{</ warning >}}
+If a message with a `NULL` key is detected, Materialize sets the source into an
+error state. To recover an errored source, you must produce a record with a
+`NULL` value and a `NULL` key to the topic, to force a retraction.
 
-Primary keys are **automatically** inferred for Kafka sources using the `UPSERT` or `DEBEZIUM` envelopes. For other source configurations, you can manually define a column (or set of columns) as a primary key using the `PRIMARY KEY (...) NOT ENFORCED` [syntax](#key_constraint). This enables optimizations and constructs that rely on a key to be present when it cannot be inferred.
+As an example, you can use [`kcat`](https://docs.confluent.io/platform/current/clients/kafkacat-usage.html)
+to produce an empty message:
+
+```bash
+echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
+  -X security.protocol=SASL_SSL \
+  -X sasl.mechanisms=SCRAM-SHA-256 \
+  -X sasl.username=$KAFKA_USERNAME \
+  -X sasl.password=$KAFKA_PASSWORD
+```
 
 ### Using Debezium
 
@@ -116,7 +121,7 @@ CREATE SOURCE kafka_repl
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
-For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/integrations/debezium/).
+For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
 
 ### Exposing source metadata
 
@@ -145,7 +150,11 @@ Note that:
 
 #### Headers
 
-Message headers are exposed via the `INCLUDE HEADERS` option, and are included as a column (named `headers` by default) containing a [`list`](/sql/types/list/) of ([`text`](/sql/types/text/), [`bytea`](/sql/types/bytea/)) pairs.
+Message headers can be exposed via the `INCLUDE HEADERS` option. They are included
+as a column (named `headers` by default) containing a [`list`](/sql/types/list/)
+of records of type `(key text, value bytea)`.
+
+The following example demonstrates use of the `INCLUDE HEADERS` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
@@ -156,40 +165,30 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the headers in a message, you can unpack the value:
+To retrieve the value of an individual header in a message, you can use standard
+SQL techniques for working with [`list`](/sql/types/list) and
+[`bytea`](/sql/types/bytea) types. The following example parses the UTF-8
+encoded `client_id` header of the messages from the Kafka topic. Messages
+without a `client_id` header result in null values (`"\N"`) for the parsed
+attribute.
 
 ```sql
-SELECT key,
-       field1,
-       field2,
-       headers[1].value AS kafka_header
-FROM mv_kafka_metadata;
+SELECT
+    id,
+    seller,
+    item,
+    (
+        SELECT convert_from((h).value, 'utf8') AS client_id
+        FROM unnest(headers) AS h
+        WHERE (h).key = 'client_id'
+    )
+FROM kafka_metadata;
 
-  key  |  field1  |  field2  |  kafka_header
--------+----------+----------+----------------
-  foo  |  fooval  |   1000   |     hvalue
-  bar  |  barval  |   5000   |     <null>
-```
-
-, or lookup by key:
-
-```sql
-SELECT key,
-       field1,
-       field2,
-       thekey,
-       value
-FROM (SELECT key,
-             field1,
-             field2,
-             unnest(headers).key AS thekey,
-             unnest(headers).value AS value
-      FROM mv_kafka_metadata) AS km
-WHERE thekey = 'kvalue';
-
-  key  |  field1  |  field2  |  thekey  |  value
--------+----------+----------+----------+--------
-  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+ id | seller |        item        | client_id
+----+--------+--------------------+-----------
+  2 |   1592 | Custom Art         |        23
+  7 |   1509 | Custom Art         |        42
+  3 |   1411 | City Bar Crawl     |      "\N"
 ```
 
 Note that:
@@ -262,6 +261,43 @@ using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax d
 
 A strategy of `LATEST` (the default) will choose the latest writer schema from the schema registry to use as a reader schema. `ID` or `INLINE` will allow specifying a schema from the registry by ID or inline in the `CREATE SOURCE` statement, respectively.
 
+### Monitoring source progress
+
+By default, Kafka sources expose progress metadata as a subsource that you can
+use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
+
+The following metadata is available for each source as a progress subsource:
+
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`partition`    | `numrange`                               | The upstream Kafka partition.
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset consumed from each upstream Kafka partition.
+
+And can be queried using:
+
+```sql
+SELECT
+  partition, "offset"
+FROM
+  (
+    SELECT
+      -- Take the upper of the range, which is null for non-partition rows
+      -- Cast partition to u64, which is more ergonomic
+      upper(partition)::uint8 AS partition, "offset"
+    FROM
+      <src_name>_progress
+  )
+WHERE
+  -- Remove all non-partition rows
+  partition IS NOT NULL;
+```
+
+As long as any offset continues increasing, Materialize is consuming data from
+the upstream Kafka broker. For more details on monitoring source ingestion
+progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
 ## Examples
 
 ### Creating a connection
@@ -300,7 +336,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Kafka broker is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -321,7 +357,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check out [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 
@@ -342,7 +378,7 @@ BROKERS (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -369,16 +405,16 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
-CREATE CONNECTION csr_connection
-  FOR CONFLUENT SCHEMA REGISTRY
+CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
   URL '<CONFLUENT_REGISTRY_URL>',
   USERNAME = SECRET csr_username,
-  PASSWORD = SECRET csr_password;
+  PASSWORD = SECRET csr_password
+);
 ```
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Confluent Schema Registry server is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+If your Confluent Schema Registry server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -397,7 +433,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check out [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 ```sql
@@ -415,7 +451,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -423,6 +459,8 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 
 {{< tabs tabID="1" >}}
 {{< tab "Avro">}}
+
+**Using Confluent Schema Registry**
 
 ```sql
 CREATE SOURCE avro_source
@@ -441,7 +479,6 @@ CREATE SOURCE json_source
   WITH (SIZE = '3xsmall');
 ```
 
-
 ```sql
 CREATE MATERIALIZED VIEW typed_kafka_source AS
   SELECT
@@ -454,12 +491,53 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
 {{< /tab >}}
 {{< tab "Protobuf">}}
 
+**Using Confluent Schema Registry**
+
 ```sql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   WITH (SIZE = '3xsmall');
 ```
+
+**Using an inline schema**
+
+If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause to specify a Protobuf schema descriptor inline. Protobuf does not serialize a schema with the message, so before creating a source you must:
+
+* Compile the Protobuf schema into a descriptor file using [`protoc`](https://grpc.io/docs/protoc-installation/):
+
+  ```proto
+  // example.proto
+  syntax = "proto3";
+  message Batch {
+      int32 id = 1;
+      // ...
+  }
+  ```
+
+  ```bash
+  protoc --include_imports --descriptor_set_out=example.pb example.proto
+  ```
+
+* Encode the descriptor file into a SQL byte string:
+
+  ```bash
+  $ printf '\\x' && xxd -p example.pb | tr -d '\n'
+  \x0a300a0d62696...
+  ```
+
+* Create the source using the encoded descriptor bytes from the previous step
+  (including the `\x` at the beginning):
+
+  ```sql
+  CREATE SOURCE proto_source
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+    FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...'
+    WITH (SIZE = '3xsmall');
+  ```
+
+  For more details about Protobuf message names and descriptors, check the
+  [Protobuf format](../#protobuf) documentation.
 
 {{< /tab >}}
 {{< tab "Text/bytes">}}

@@ -18,14 +18,20 @@ from materialize.xcompile import Arch
 
 def main() -> None:
     repos = [
-        mzbuild.Repository(Path("."), Arch.X86_64),
-        mzbuild.Repository(Path("."), Arch.AARCH64),
+        mzbuild.Repository(Path("."), Arch.X86_64, coverage=False),
+        mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
     ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]
 
-    print(f"--- Tagging Docker images")
+    def include_image(image: mzbuild.Image) -> bool:
+        # Images must always be publishable to be tagged. Only mainline images
+        # get tagged for releases, but even non-mainline images get `unstable`
+        # tags.
+        return image.publish and (not buildkite_tag or image.mainline)
+
+    print("--- Tagging Docker images")
     deps = [
-        repo.resolve_dependencies(image for image in repo if image.publish)
+        repo.resolve_dependencies(image for image in repo if include_image(image))
         for repo in repos
     ]
 
@@ -41,6 +47,12 @@ def main() -> None:
     else:
         mzbuild.publish_multiarch_images("unstable", deps)
         mzbuild.publish_multiarch_images(f'unstable-{git.rev_parse("HEAD")}', deps)
+
+        # Sync image descriptions to Docker Hub. The image descriptions are the
+        # same across architectures, so we arbitrarily choose the first
+        # repository.
+        for image in repos[0]:
+            image.sync_description()
 
 
 if __name__ == "__main__":

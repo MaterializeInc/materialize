@@ -11,28 +11,12 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.util import MzVersion
 
 
 def schemas() -> str:
-    return dedent(
-        """
-       $ set keyschema={
-           "type": "record",
-           "name": "Key",
-           "fields": [
-               {"name": "key1", "type": "string"}
-           ]
-         }
-
-       $ set schema={
-           "type" : "record",
-           "name" : "test",
-           "fields" : [
-               {"name":"f1", "type":"string"}
-           ]
-         }
-       """
-    )
+    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 class SinkUpsert(Check):
@@ -81,6 +65,11 @@ class SinkUpsert(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
+                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "I2${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
                 {"key1": "U2${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
@@ -96,6 +85,11 @@ class SinkUpsert(Check):
                   ENVELOPE DEBEZIUM
                 """,
                 """
+                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "I3${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
                 {"key1": "U3${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
@@ -113,6 +107,17 @@ class SinkUpsert(Check):
         return Testdrive(
             dedent(
                 """
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATECLUSTER
+
                 > SELECT * FROM sink_source_view;
                 I2 B 1000
                 I3 C 1000
@@ -195,9 +200,18 @@ class SinkTables(Check):
             schemas()
             + dedent(
                 """
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_table_keys = true;
+                """
+                if self.current_version >= MzVersion(0, 55, 0)
+                else ""
+            )
+            + dedent(
+                """
                 > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
                 > CREATE DEFAULT INDEX ON sink_large_transaction_table;
 
+                > SET statement_timeout = '120s';
                 > INSERT INTO sink_large_transaction_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;

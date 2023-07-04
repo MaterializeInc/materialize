@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -98,13 +96,6 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
-use serde::{Deserialize, Serialize};
-use timely::order::TotalOrder;
-use timely::progress::Timestamp;
-use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse, ReplicaId,
@@ -126,6 +117,12 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::StorageController;
+use serde::{Deserialize, Serialize};
+use timely::order::TotalOrder;
+use timely::progress::Timestamp;
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use uuid::Uuid;
 
 pub mod clusters;
 
@@ -154,6 +151,10 @@ pub struct ControllerConfig {
     pub postgres_factory: StashFactory,
     /// The metrics registry.
     pub metrics_registry: MetricsRegistry,
+    /// Whether clusters have scratch directories enabled.
+    pub scratch_directory_enabled: bool,
+    /// The URL for Persist PubSub.
+    pub persist_pubsub_url: String,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -231,6 +232,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
     metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
     metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
+
+    /// The URL for Persist PubSub.
+    persist_pubsub_url: String,
 }
 
 impl<T> Controller<T> {
@@ -347,6 +351,7 @@ where
             &config.postgres_factory,
             envd_epoch,
             config.metrics_registry.clone(),
+            config.scratch_directory_enabled,
         )
         .await;
 
@@ -367,6 +372,7 @@ where
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
+            persist_pubsub_url: config.persist_pubsub_url,
         }
     }
 }

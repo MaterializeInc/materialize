@@ -8,10 +8,10 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/overview/key-concepts/#indexes) on a source, view, or materialized
+`CREATE INDEX` creates an in-memory [index](/get-started/key-concepts/#indexes) on a source, view, or materialized
 view.
 
-Indexes assemble and maintain a query's results in memory within a [cluster](/overview/key-concepts#clusters),
+Indexes assemble and maintain a query's results in memory within a [cluster](/get-started/key-concepts#clusters),
 which provides future queries the data
 they need in a format they can immediately use. In particular, creating indexes
 can be very helpful for the [`JOIN`](../join) operator, which needs to build

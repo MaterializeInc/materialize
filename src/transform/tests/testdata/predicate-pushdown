@@ -225,7 +225,7 @@ build apply=PredicatePushdown
   [(call_binary gt #1 5)]
 )
 ----
-TopK group_by=[#1] order_by=[#1 desc nulls_first] limit=1 monotonic=false
+TopK group_by=[#1] order_by=[#1 desc nulls_first] limit=1
   Filter (#1 > 5)
     Constant
       - ("a", 1)

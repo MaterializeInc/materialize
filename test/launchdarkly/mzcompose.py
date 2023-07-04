@@ -161,6 +161,27 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 4 GiB - 1 byte.
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 
+        def sys(command: str) -> None:
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                        "$ postgres-execute connection=mz_system",
+                        command,
+                    ]
+                )
+            )
+
+        # Assert that we can turn off synchronization
+        sys("ALTER SYSTEM SET enable_launchdarkly=off")
+        sys("ALTER SYSTEM SET max_result_size=1234")
+        # The new value should not be replaced, even after 15 seconds
+        sleep(15)
+        c.testdrive("\n".join(["> SHOW max_result_size", "1234"]))
+        # The value should be reset after we turn the kill switch back off
+        sys("ALTER SYSTEM SET enable_launchdarkly=on")
+        c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
+
         # Remove custom targeting.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
@@ -180,7 +201,6 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 1 GiB (the default when targeting is
         # turned off).
         c.testdrive("\n".join(["> SHOW max_result_size", "1073741824"]))
-
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
         raise UIError(

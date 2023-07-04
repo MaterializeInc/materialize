@@ -1,7 +1,6 @@
-# `materialized` Docker image
-
-This directory builds an all-in-one Docker image of Materialize for our internal
-development and testing.
+This is an all-in-one Docker image of Materialize, a fast, distributed SQL
+database built on streaming internals. This image is used for **internal**
+development and testing of Materialize.
 
 > **Warning**
 >

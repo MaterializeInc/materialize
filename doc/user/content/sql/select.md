@@ -67,7 +67,7 @@ and re-order results.
 ### Ad hoc queries
 
 Queries over non-materialized views will create an ephemeral dataflow to compute
-the results. These dataflows are bound to the active [cluster](/overview/key-concepts#clusters),
+the results. These dataflows are bound to the active [cluster](/get-started/key-concepts#clusters),
  which you can change using:
 
 ```sql
@@ -92,11 +92,8 @@ For an example, see [Using CTEs](#using-ctes).
 
 CTEs have the following limitations, which we are working to improve:
 
-- CTEs only support `SELECT` queries. {{% gh 4867 %}}
-- Materialize inlines the CTE where it's referenced, which could cause
-  unexpected performance characteristics for especially complex expressions. {{%
-  gh 4867 %}}
-- `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+- `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE. {{% gh 19486 %}}
+- `WITH RECURSIVE` CTEs are not supported. Non-standard support for recursive CTEs is under active development {{% gh 17012 %}}.
 
 ### Query hints
 
@@ -107,7 +104,7 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
+`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions, and some [Top K patterns](/guides/top-k), more efficiently with this information.
 
 For an example, see [Using query hints](#using-query-hints).
 

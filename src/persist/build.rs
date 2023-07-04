@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -83,5 +81,5 @@ fn main() {
     prost_build::Config::new()
         .btree_map(["."])
         .compile_protos(&["persist/src/persist.proto"], &[".."])
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

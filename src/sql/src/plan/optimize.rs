@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-///! This module defines the API and logic for running optimization pipelines.
-use crate::plan::expr::HirRelationExpr;
+//! This module defines the API and logic for running optimization pipelines.
 
-use super::{PlanError, StatementContext};
+use crate::plan::expr::HirRelationExpr;
+use crate::plan::{PlanError, StatementContext};
 
 /// Feature flags for the [`HirRelationExpr::optimize_and_lower()`] logic.
 #[derive(Debug)]
@@ -33,6 +33,6 @@ impl HirRelationExpr {
         self,
         _config: &OptimizerConfig,
     ) -> Result<mz_expr::MirRelationExpr, PlanError> {
-        Ok(self.lower())
+        self.lower()
     }
 }

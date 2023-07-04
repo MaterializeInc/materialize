@@ -10,6 +10,7 @@
 import csv
 import re
 import tempfile
+from contextlib import closing
 from pathlib import Path
 from typing import Optional, cast
 
@@ -120,28 +121,41 @@ def init(
     info(f'Initializing "{scenario}" as the DB under test')
 
     try:
-        db = sql.Database(
-            port=db_port,
-            host=db_host,
-            user=db_user,
-            password=db_pass,
-            require_ssl=db_require_ssl,
-        )
+        # connect to the default database in order to re-create the
+        # database for the selected scenario
+        with closing(
+            sql.Database(
+                port=db_port,
+                host=db_host,
+                user=db_user,
+                database=None,
+                password=db_pass,
+                require_ssl=db_require_ssl,
+            )
+        ) as db:
+            db.drop_database(scenario)
+            db.create_database(scenario)
 
-        db.drop_database(scenario)
-        db.create_database(scenario)
-
-        db.set_database(scenario)
-
-        statements = sql.parse_from_file(scenario.schema_path())
-        if no_indexes:
-            idx_re = re.compile(r"(create|create\s+default|drop)\s+index\s+")
-            statements = [
-                statement
-                for statement in statements
-                if not idx_re.match(statement.lower())
-            ]
-        db.execute_all(statements)
+        # re-connect to the database for the selected scenario
+        with closing(
+            sql.Database(
+                port=db_port,
+                host=db_host,
+                user=db_user,
+                database=str(scenario),
+                password=db_pass,
+                require_ssl=db_require_ssl,
+            )
+        ) as db:
+            statements = sql.parse_from_file(scenario.schema_path())
+            if no_indexes:
+                idx_re = re.compile(r"(create|create\s+default|drop)\s+index\s+")
+                statements = [
+                    statement
+                    for statement in statements
+                    if not idx_re.match(statement.lower())
+                ]
+            db.execute_all(statements)
     except Exception as e:
         raise click.ClickException(f"init command failed: {e}")
 
@@ -155,6 +169,7 @@ def init(
 @click.option("--db-host", **Opt.db_host)
 @click.option("--db-user", **Opt.db_user)
 @click.option("--db-pass", **Opt.db_pass)
+@click.option("--db-require-ssl", **Opt.db_require_ssl)
 def run(
     scenario: Scenario,
     samples: int,
@@ -171,38 +186,40 @@ def run(
     info(f'Running "{scenario}" scenario')
 
     try:
-        db = sql.Database(
-            port=db_port,
-            host=db_host,
-            user=db_user,
-            password=db_pass,
-            require_ssl=db_require_ssl,
-        )
-        db.set_database(scenario)
+        with closing(
+            sql.Database(
+                port=db_port,
+                host=db_host,
+                user=db_user,
+                database=str(scenario),
+                password=db_pass,
+                require_ssl=db_require_ssl,
+            )
+        ) as db:
+            db_version = db.mz_version() or db.version()
+            df = pd.DataFrame.from_records(
+                [
+                    (
+                        query.name(),
+                        sample,
+                        cast(
+                            np.timedelta64,
+                            db.explain(query, timing=True).optimization_time(),
+                        ).astype(int),
+                    )
+                    for sample in range(samples)
+                    for query in [
+                        sql.Query(query)
+                        for query in sql.parse_from_file(scenario.workload_path())
+                    ]
+                ],
+                columns=["query", "sample", "data"],
+            ).pivot(index="sample", columns="query", values="data")
 
-        df = pd.DataFrame.from_records(
-            [
-                (
-                    query.name(),
-                    sample,
-                    cast(
-                        np.timedelta64,
-                        db.explain(query, timing=True).optimization_time(),
-                    ).astype(int),
-                )
-                for sample in range(samples)
-                for query in [
-                    sql.Query(query)
-                    for query in sql.parse_from_file(scenario.workload_path())
-                ]
-            ],
-            columns=["query", "sample", "data"],
-        ).pivot(index="sample", columns="query", values="data")
+            if print_results:
+                print(df.to_string())
 
-        if print_results:
-            print(df.to_string())
-
-        results_path = util.results_path(repository, scenario, db.mz_version())
+        results_path = util.results_path(repository, scenario, db_version)
         info(f'Writing results to "{results_path}"')
         df.to_csv(results_path, index=False, quoting=csv.QUOTE_MINIMAL)
     except Exception as e:

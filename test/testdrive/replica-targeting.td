@@ -18,9 +18,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 #
 # This test works by querying introspection sources, which are the only compute
 # collections that can have different contents between replicas. Specifically,
-# we look at the distinct `worker_id`s present in `mz_worker_compute_frontiers`
+# we look at the distinct `worker_id`s present in `mz_compute_frontiers_per_worker`
 # for replicas with different worker counts. We know that
-# `mz_worker_compute_frontiers` always contains entries, because it tracks the
+# `mz_compute_frontiers_per_worker` always contains entries, because it tracks the
 # frontiers of introspection sources as well.
 
 > CREATE CLUSTER test REPLICAS (
@@ -33,12 +33,12 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r1
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_worker_compute_frontiers ORDER BY worker_id
+> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
-    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_worker_compute_frontiers
+    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_compute_frontiers_per_worker
   )
 > FETCH c
 <TIMESTAMP> 1 1
@@ -46,13 +46,13 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r2
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_worker_compute_frontiers ORDER BY worker_id
+> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 1
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
-    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_worker_compute_frontiers
+    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_compute_frontiers_per_worker
   )
 > FETCH c
 <TIMESTAMP> 1 2
@@ -60,7 +60,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r4
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_worker_compute_frontiers ORDER BY worker_id
+> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 1
 2
@@ -68,7 +68,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
-    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_worker_compute_frontiers
+    SELECT count(DISTINCT worker_id) FROM mz_internal.mz_compute_frontiers_per_worker
   )
 > FETCH c
 <TIMESTAMP> 1 4

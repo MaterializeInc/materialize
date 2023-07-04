@@ -23,6 +23,7 @@ pub mod date;
 pub mod datetime;
 pub mod interval;
 pub mod jsonb;
+pub mod mz_acl_item;
 pub mod numeric;
 pub mod range;
 pub mod regex;

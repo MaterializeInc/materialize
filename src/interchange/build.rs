@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -88,5 +86,5 @@ fn main() {
         .file_descriptor_set_path(out_dir.join("file_descriptor_set.pb"))
         .btree_map(["."])
         .compile_protos(&["benchmark.proto"], &["testdata"])
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

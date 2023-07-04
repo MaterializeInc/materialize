@@ -9,7 +9,7 @@
 
 //! Types to build async operators with general shapes.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
@@ -18,20 +18,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use differential_dataflow::operators::arrange::agent::ShutdownButton;
 use futures_util::task::ArcWake;
+use futures_util::FutureExt;
 use polonius_the_crab::{polonius, WithLifetime};
-use timely::communication::{message::RefOrMut, Pull};
+use timely::communication::message::RefOrMut;
+use timely::communication::{Message, Pull, Push};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::counter::CounterCore as PushCounter;
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputWrapper};
+use timely::dataflow::operators::generic::{
+    InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
+};
 use timely::dataflow::operators::{Capability, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
-use timely::{Container, PartialOrder};
+use timely::{Container, Data, PartialOrder};
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
@@ -45,9 +50,16 @@ pub struct OperatorBuilder<G: Scope> {
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
     operator_waker: Arc<TimelyWaker>,
-    /// Holds type erased closures that should drain a handle when called. These handles will be
+    /// Holds type erased closures that drain an input handle when called. These handles will be
     /// automatically drained when the operator is scheduled and the logic future has exited
     drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
+    /// Holds type erased closures that flush an output handle when called. These handles will be
+    /// automatically drained when the operator is scheduled after the logic future has been polled
+    output_flushes: Vec<Box<dyn FnMut()>>,
+    /// A handle to check whether all workers have pressed the shutdown button.
+    shutdown_handle: ButtonHandle,
+    /// A button to coordinate shutdown of this operator among workers.
+    shutdown_button: Button,
 }
 
 /// An async Waker that activates a specific operator when woken and marks the task as ready
@@ -69,6 +81,15 @@ impl ArcWake for TimelyWaker {
 
 /// Async handle to an operator's input stream
 pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
+    state: NextFutState<T, D, P>,
+    /// A scratch container used to gain mutable access to batches
+    buffer: D,
+}
+
+/// This struct holds the state that is captured by the `NextFut` future. This definition is
+/// mandatory for the implementation of `AsyncInputHandle::next_mut` which needs to perform a
+/// disjoint capture on this state and the buffer that is about to be swapped.
+struct NextFutState<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
     /// The underying synchronous input handle
     sync_handle: ManuallyDrop<InputHandleCore<T, D, P>>,
     /// Frontier information of input streams shared with the operator. Each frontier is paired
@@ -84,17 +105,52 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>
 }
 
 impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInputHandle<T, D, P> {
-    /// Produces a future that will resolve to the next event of this input stream
+    /// Produces a future that will resolve to the next event of this input stream with shared
+    /// access to the data.
     ///
     /// # Cancel safety
     ///
     /// The returned future is cancel-safe
-    pub fn next(&mut self) -> impl Future<Output = Option<Event<'_, T, D>>> + '_ {
-        NextFut { handle: Some(self) }
+    pub fn next(&mut self) -> impl Future<Output = Option<Event<T, &D>>> + '_ {
+        let fut = NextFut {
+            state: Some(&mut self.state),
+        };
+        fut.map(|event| {
+            Some(match event? {
+                Event::Data(cap, data) => match data {
+                    RefOrMut::Ref(data) => Event::Data(cap, data),
+                    RefOrMut::Mut(data) => Event::Data(cap, &*data),
+                },
+                Event::Progress(frontier) => Event::Progress(frontier),
+            })
+        })
+    }
+
+    /// Produces a future that will resolve to the next event of this input stream with mutable
+    /// access to the data.
+    ///
+    /// # Cancel safety
+    ///
+    /// The returned future is cancel-safe
+    pub fn next_mut(&mut self) -> impl Future<Output = Option<Event<T, &mut D>>> + '_ {
+        let fut = NextFut {
+            state: Some(&mut self.state),
+        };
+        fut.map(|event| {
+            Some(match event? {
+                Event::Data(cap, data) => {
+                    data.swap(&mut self.buffer);
+                    Event::Data(cap, &mut self.buffer)
+                }
+                Event::Progress(frontier) => Event::Progress(frontier),
+            })
+        })
     }
 }
 
-impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Drop for AsyncInputHandle<T, D, P> {
+impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> Drop
+    for NextFutState<T, D, P>
+{
     fn drop(&mut self) {
         // SAFETY: We're in a Drop impl so this runs only once
         let mut sync_handle = unsafe { ManuallyDrop::take(&mut self.sync_handle) };
@@ -106,13 +162,13 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Drop for AsyncInputH
 
 /// The future returned by `AsyncInputHandle::next`
 struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
-    handle: Option<&'handle mut AsyncInputHandle<T, D, P>>,
+    state: Option<&'handle mut NextFutState<T, D, P>>,
 }
 
 /// An event of an input stream
-pub enum Event<'a, T: Timestamp, D> {
+pub enum Event<T: Timestamp, D> {
     /// A data event
-    Data(InputCapability<T>, RefOrMut<'a, D>),
+    Data(InputCapability<T>, D),
     /// A progress event
     Progress(Antichain<T>),
 }
@@ -120,11 +176,23 @@ pub enum Event<'a, T: Timestamp, D> {
 impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
     for NextFut<'handle, T, D, P>
 {
-    type Output = Option<Event<'handle, T, D>>;
+    type Output = Option<Event<T, RefOrMut<'handle, D>>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let handle: &'handle mut AsyncInputHandle<T, D, P> =
-            self.handle.take().expect("future polled after completion");
+        let state: &'handle mut NextFutState<T, D, P> =
+            self.state.take().expect("future polled after completion");
+
+        // Check for frontier notifications first, to urge operators to retire pending work
+        let mut shared_frontiers = state.shared_frontiers.borrow_mut();
+        let (ref frontier, ref mut pending) = shared_frontiers[state.index];
+        if *pending {
+            *pending = false;
+            return Poll::Ready(Some(Event::Progress(frontier.clone())));
+        } else if frontier.is_empty() {
+            // If the frontier is empty and is not pending it means that there is no more data left
+            return Poll::Ready(None);
+        };
+        drop(shared_frontiers);
 
         // This type serves as a type-level function that "shows" the `polonius` function how to
         // create a version of the output type with a specific lifetime 'lt. It does this by
@@ -136,41 +204,140 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
         // The polonius function encodes a safe but rejected pattern by the current borrow checker.
         // Explaining is beyond the scope of this comment but the docs have a great explanation:
         // https://docs.rs/polonius-the-crab/latest/polonius_the_crab/index.html
-        match polonius::<NextHTB<T, D>, _, _, _>(handle, |handle| {
-            handle.sync_handle.next().ok_or(())
-        }) {
+        match polonius::<NextHTB<T, D>, _, _, _>(state, |state| state.sync_handle.next().ok_or(()))
+        {
             Ok((cap, data)) => Poll::Ready(Some(Event::Data(cap, data))),
-            Err((handle, ())) => {
-                // There is no more data but there may be a pending frontier notification
-                let mut shared_frontiers = handle.shared_frontiers.borrow_mut();
-                let (ref frontier, ref mut pending) = shared_frontiers[handle.index];
-                if *pending {
-                    *pending = false;
-                    Poll::Ready(Some(Event::Progress(frontier.clone())))
-                } else if frontier.is_empty() {
-                    // If the frontier is empty and is not pending it means that there is no more
-                    // data left in this input stream
-                    Poll::Ready(None)
-                } else {
-                    drop(shared_frontiers);
-                    // Nothing else to produce so install the provided waker in the reactor
-                    handle
-                        .reactor_registry
-                        .upgrade()
-                        .expect("handle outlived its operator")
-                        .borrow_mut()
-                        .push(cx.waker().clone());
-                    self.handle = Some(handle);
-                    Poll::Pending
-                }
+            Err((state, ())) => {
+                // Nothing else to produce so install the provided waker in the reactor
+                state
+                    .reactor_registry
+                    .upgrade()
+                    .expect("handle outlived its operator")
+                    .borrow_mut()
+                    .push(cx.waker().clone());
+                self.state = Some(state);
+                Poll::Pending
             }
+        }
+    }
+}
+
+// TODO: delete and use CapabilityTrait instead once TimelyDataflow/timely-dataflow#512 gets merged
+pub trait CapabilityTrait<T: Timestamp> {
+    fn session<'a, D, P>(
+        &'a self,
+        handle: &'a mut OutputHandleCore<'_, T, D, P>,
+    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+    where
+        D: Container,
+        P: Push<BundleCore<T, D>>;
+}
+
+impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
+    #[inline]
+    fn session<'a, D, P>(
+        &'a self,
+        handle: &'a mut OutputHandleCore<'_, T, D, P>,
+    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+    where
+        D: Container,
+        P: Push<BundleCore<T, D>>,
+    {
+        handle.session(self)
+    }
+}
+
+impl<T: Timestamp> CapabilityTrait<T> for Capability<T> {
+    #[inline]
+    fn session<'a, D, P>(
+        &'a self,
+        handle: &'a mut OutputHandleCore<'_, T, D, P>,
+    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+    where
+        D: Container,
+        P: Push<BundleCore<T, D>>,
+    {
+        handle.session(self)
+    }
+}
+
+pub struct AsyncOutputHandle<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> {
+    // The field order is important here as the handle is borrowing from the wrapper. See also the
+    // safety argument in the constructor
+    handle: Rc<RefCell<OutputHandleCore<'static, T, D, P>>>,
+    wrapper: Rc<Pin<Box<OutputWrapper<T, D, P>>>>,
+}
+
+impl<T, D, P> AsyncOutputHandle<T, D, P>
+where
+    T: Timestamp,
+    D: Container,
+    P: Push<BundleCore<T, D>> + 'static,
+{
+    fn new(wrapper: OutputWrapper<T, D, P>) -> Self {
+        let mut wrapper = Rc::new(Box::pin(wrapper));
+        // SAFETY:
+        // get_unchecked_mut is safe because we are not moving the wrapper
+        //
+        // transmute is safe because:
+        // * We're erasing the lifetime but we guarantee through field order that the handle will
+        //   be dropped before the wrapper, thus manually enforcing the lifetime.
+        // * We never touch wrapper again after this point
+        let handle = unsafe {
+            let handle = Rc::get_mut(&mut wrapper)
+                .unwrap()
+                .as_mut()
+                .get_unchecked_mut()
+                .activate();
+            std::mem::transmute::<OutputHandleCore<'_, T, D, P>, OutputHandleCore<'static, T, D, P>>(
+                handle,
+            )
+        };
+        Self {
+            wrapper,
+            handle: Rc::new(RefCell::new(handle)),
+        }
+    }
+
+    #[allow(clippy::unused_async)]
+    #[inline]
+    pub async fn give_container<C: CapabilityTrait<T>>(&mut self, cap: &C, container: &mut D) {
+        let mut handle = self.handle.borrow_mut();
+        cap.session(&mut handle).give_container(container);
+    }
+
+    fn cease(&mut self) {
+        self.handle.borrow_mut().cease()
+    }
+}
+
+impl<'a, T, D, P> AsyncOutputHandle<T, Vec<D>, P>
+where
+    T: Timestamp,
+    D: Data,
+    P: Push<BundleCore<T, Vec<D>>> + 'static,
+{
+    #[allow(clippy::unused_async)]
+    pub async fn give<C: CapabilityTrait<T>>(&mut self, cap: &C, data: D) {
+        let mut handle = self.handle.borrow_mut();
+        cap.session(&mut handle).give(data);
+    }
+}
+
+impl<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> Clone
+    for AsyncOutputHandle<T, D, P>
+{
+    fn clone(&self) -> Self {
+        Self {
+            handle: Rc::clone(&self.handle),
+            wrapper: Rc::clone(&self.wrapper),
         }
     }
 }
 
 impl<G: Scope> OperatorBuilder<G> {
     /// Allocates a new generic async operator builder from its containing scope.
-    pub fn new(name: String, scope: G) -> Self {
+    pub fn new(name: String, mut scope: G) -> Self {
         let builder = OperatorBuilderRc::new(name, scope.clone());
         let info = builder.operator_info();
         let activator = scope.activator_for(&info.address);
@@ -180,6 +347,7 @@ impl<G: Scope> OperatorBuilder<G> {
             active: AtomicBool::new(false),
             task_ready: AtomicBool::new(true),
         };
+        let (shutdown_handle, shutdown_button) = button(&mut scope, &info.address);
 
         OperatorBuilder {
             builder,
@@ -188,6 +356,9 @@ impl<G: Scope> OperatorBuilder<G> {
             activator,
             operator_waker: Arc::new(operator_waker),
             drain_pipe: Default::default(),
+            output_flushes: Default::default(),
+            shutdown_handle,
+            shutdown_button,
         }
     }
 
@@ -232,11 +403,14 @@ impl<G: Scope> OperatorBuilder<G> {
         let sync_handle = self.builder.new_input_connection(stream, pact, connection);
 
         AsyncInputHandle {
-            sync_handle: ManuallyDrop::new(sync_handle),
-            shared_frontiers: Rc::clone(&self.shared_frontiers),
-            reactor_registry: Rc::downgrade(&self.registered_wakers),
-            index,
-            drain_pipe: Rc::clone(&self.drain_pipe),
+            state: NextFutState {
+                sync_handle: ManuallyDrop::new(sync_handle),
+                shared_frontiers: Rc::clone(&self.shared_frontiers),
+                reactor_registry: Rc::downgrade(&self.registered_wakers),
+                index,
+                drain_pipe: Rc::clone(&self.drain_pipe),
+            },
+            buffer: D::default(),
         }
     }
 
@@ -244,10 +418,12 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new_output<D: Container>(
         &mut self,
     ) -> (
-        OutputWrapper<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
         StreamCore<G, D>,
     ) {
-        self.builder.new_output()
+        let connection =
+            vec![Antichain::from_elem(Default::default()); self.builder.shape().inputs()];
+        self.new_output_connection(connection)
     }
 
     /// Adds a new output with connetion information, returning the output handle and stream.
@@ -264,17 +440,25 @@ impl<G: Scope> OperatorBuilder<G> {
         &mut self,
         connection: Vec<Antichain<<G::Timestamp as Timestamp>::Summary>>,
     ) -> (
-        OutputWrapper<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
         StreamCore<G, D>,
     ) {
-        self.builder.new_output_connection(connection)
+        let (wrapper, stream) = self.builder.new_output_connection(connection);
+
+        let handle = AsyncOutputHandle::new(wrapper);
+
+        let mut flush_handle = handle.clone();
+        self.output_flushes
+            .push(Box::new(move || flush_handle.cease()));
+
+        (handle, stream)
     }
 
     /// Creates an operator implementation from supplied logic constructor. It returns a shutdown
     /// button that when pressed it will cause the logic future to be dropped and input handles to
     /// be drained. The button can be converted into a token by using
-    /// [`ShutdownButton::press_on_drop`]
-    pub fn build<B, L>(self, constructor: B) -> ShutdownButton<()>
+    /// [`Button::press_on_drop`]
+    pub fn build<B, L>(self, constructor: B) -> Button
     where
         B: FnOnce(Vec<Capability<G::Timestamp>>) -> L,
         L: Future + 'static,
@@ -283,8 +467,8 @@ impl<G: Scope> OperatorBuilder<G> {
         let registered_wakers = self.registered_wakers;
         let shared_frontiers = self.shared_frontiers;
         let drain_pipe = self.drain_pipe;
-        let token = Rc::new(RefCell::new(Some(())));
-        let button = ShutdownButton::new(Rc::clone(&token), self.activator);
+        let mut output_flushes = self.output_flushes;
+        let mut shutdown_handle = self.shutdown_handle;
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
@@ -298,107 +482,310 @@ impl<G: Scope> OperatorBuilder<G> {
                         }
                     }
                 }
-                // Then, wake up any registered Wakers for the input streams while taking care to
-                // not reactivate the timely operator since that would lead to an infinite loop.
-                // This ensures that the input handles wake up properly when managed by other
-                // executors, e.g a `select!` that provides its own Waker implementation.
-                {
-                    operator_waker.active.store(true, Ordering::SeqCst);
-                    let mut registered_wakers = registered_wakers.borrow_mut();
-                    for waker in registered_wakers.drain(..) {
-                        waker.wake();
+
+                // If our worker pressed the button we stop scheduling the logic future and/or
+                // draining the input handles to stop producing data and frontier updates
+                // downstream.
+                if shutdown_handle.local_pressed() {
+                    // When all workers press their buttons we drop the logic future which will
+                    // also register all the handles for drainage
+                    if shutdown_handle.all_pressed() {
+                        logic_fut = None;
+                        let mut drains = drain_pipe.borrow_mut();
+                        for drain in drains.iter_mut() {
+                            (drain)()
+                        }
+                        false
+                    } else {
+                        true
                     }
-                    operator_waker.active.store(false, Ordering::SeqCst);
-                }
+                } else {
+                    // Wake up any registered Wakers for the input streams while taking care to not
+                    // reactivate the timely operator since that would lead to an infinite loop.
+                    // This ensures that the input handles wake up properly when managed by other
+                    // executors, e.g a `select!` that provides its own Waker implementation.
+                    {
+                        operator_waker.active.store(true, Ordering::SeqCst);
+                        let mut registered_wakers = registered_wakers.borrow_mut();
+                        for waker in registered_wakers.drain(..) {
+                            waker.wake();
+                        }
+                        operator_waker.active.store(false, Ordering::SeqCst);
+                    }
 
-                // If the shutdown button got pressed we should immediately drop the logic future
-                // which will also register all the handles for drainage
-                if token.borrow().is_none() {
-                    logic_fut = None;
-                }
-
-                // Schedule the logic future if any of the wakers above marked the task as ready
-                if let Some(fut) = logic_fut.as_mut() {
-                    if operator_waker.task_ready.load(Ordering::SeqCst) {
-                        let waker = futures_util::task::waker_ref(&operator_waker);
-                        let mut cx = Context::from_waker(&waker);
-                        operator_waker.task_ready.store(false, Ordering::SeqCst);
-                        if Pin::new(fut).poll(&mut cx).is_ready() {
-                            // We're done with logic so deallocate the task
-                            logic_fut = None;
+                    // Schedule the logic future if any of the wakers above marked the task as ready
+                    if let Some(fut) = logic_fut.as_mut() {
+                        if operator_waker.task_ready.load(Ordering::SeqCst) {
+                            let waker = futures_util::task::waker_ref(&operator_waker);
+                            let mut cx = Context::from_waker(&waker);
+                            operator_waker.task_ready.store(false, Ordering::SeqCst);
+                            if Pin::new(fut).poll(&mut cx).is_ready() {
+                                // We're done with logic so deallocate the task
+                                logic_fut = None;
+                            }
+                            // Flush all the outputs before exiting
+                            for flush in output_flushes.iter_mut() {
+                                (flush)();
+                            }
                         }
                     }
-                }
-                // The timely operator needs to be kept alive if the task is pending
-                if logic_fut.is_some() {
-                    true
-                } else {
-                    // Othewise we should drain any dropped handles
-                    let mut drains = drain_pipe.borrow_mut();
-                    for drain in drains.iter_mut() {
-                        (drain)()
+
+                    // The timely operator needs to be kept alive if the task is pending
+                    if logic_fut.is_some() {
+                        true
+                    } else {
+                        // Othewise we should drain any dropped handles
+                        let mut drains = drain_pipe.borrow_mut();
+                        for drain in drains.iter_mut() {
+                            (drain)()
+                        }
+                        false
                     }
-                    false
                 }
             }
         });
 
-        button
+        self.shutdown_button
+    }
+
+    /// Creates a fallible operator implementation from supplied logic constructor. If the `Future`
+    /// resolves to an error it will be emitted in the returned error stream and then the operator
+    /// will wait indefinitely until the shutdown button is pressed.
+    ///
+    /// # Capability handling
+    ///
+    /// Unlike [`OperatorBuilder::build`], this method does not give owned capabilities to the
+    /// constructor. All initial capabilities are wrapped in an `Option` and a mutable reference to
+    /// them is given instead. This is done to avoid storing owned capabilities in the state of the
+    /// logic future which would make using the `?` operator unsafe, since the frontiers would
+    /// incorrectly advance, potentially causing incorrect actions downstream.
+    ///
+    /// ```ignore
+    /// builder.build_fallible(|caps| Box::pin(async move {
+    ///     // Assert that we have the number of capabilities we expect
+    ///     // `cap` will be a `&mut Option<Capability<T>>`:
+    ///     let [cap]: &mut [_; 1] = caps.try_into().unwrap();
+    ///
+    ///     // Using cap to send data:
+    ///     output.give(cap.as_ref().unwrap(), 42);
+    ///
+    ///     // Using cap to downgrade it:
+    ///     cap.as_mut().unwrap().downgrade();
+    ///
+    ///     // Explicitly dropping the capability:
+    ///     // Simply running `drop(cap)` will only drop the reference and not the capability itself!
+    ///     *cap = None;
+    ///
+    ///     // !! BIG WARNING !!:
+    ///     // It is tempting to `take` the capability out of the option for convenience. This will
+    ///     // move the capability into the future state, tying its lifetime to it, which will get
+    ///     // dropped when an error is hit, causing incorrect progress statements.
+    ///     let cap = cap.take().unwrap(); // DO NOT DO THIS
+    /// }));
+    /// ```
+    pub fn build_fallible<E: 'static, F>(
+        mut self,
+        constructor: F,
+    ) -> (Button, StreamCore<G, Vec<Rc<E>>>)
+    where
+        F: for<'a> FnOnce(
+                &'a mut [Option<Capability<G::Timestamp>>],
+            ) -> Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>
+            + 'static,
+    {
+        // Create a new completely disconnected output
+        let disconnected = vec![Antichain::new(); self.builder.shape().inputs()];
+        let (mut error_output, error_stream) = self.new_output_connection(disconnected);
+        let button = self.build(|mut caps| async move {
+            let error_cap = caps.pop().unwrap();
+            let mut caps = caps.into_iter().map(Some).collect::<Vec<_>>();
+            if let Err(err) = constructor(&mut *caps).await {
+                error_output.give(&error_cap, Rc::new(err)).await;
+                drop(error_cap);
+                // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
+                // the capabilities and could produce incorrect progress statements.
+                std::future::pending().await
+            }
+        });
+        (button, error_stream)
     }
 
     /// Creates operator info for the operator.
     pub fn operator_info(&self) -> OperatorInfo {
         self.builder.operator_info()
     }
+
+    /// Returns the activator for the operator.
+    pub fn activator(&self) -> &Activator {
+        &self.activator
+    }
+}
+
+/// Creates a new coordinated button the worker configuration described by `scope`.
+pub fn button<G: Scope>(scope: &mut G, addr: &[usize]) -> (ButtonHandle, Button) {
+    let index = scope.new_identifier();
+    let (pushers, puller) = scope.allocate(index, addr);
+
+    let local_pressed = Rc::new(Cell::new(false));
+
+    let handle = ButtonHandle {
+        buttons_remaining: scope.peers(),
+        local_pressed: Rc::clone(&local_pressed),
+        puller,
+    };
+
+    let token = Button {
+        pushers,
+        local_pressed,
+    };
+
+    (handle, token)
+}
+
+/// A button that can be used to coordinate an action after all workers have pressed it.
+pub struct ButtonHandle {
+    /// The number of buttons still unpressed among workers.
+    buttons_remaining: usize,
+    /// A flag indicating whether this worker has pressed its button.
+    local_pressed: Rc<Cell<bool>>,
+    puller: Box<dyn Pull<Message<bool>>>,
+}
+
+impl ButtonHandle {
+    /// Returns whether this worker has pressed its button.
+    pub fn local_pressed(&mut self) -> bool {
+        self.local_pressed.get()
+    }
+
+    /// Returns whether all workers have pressed their buttons.
+    pub fn all_pressed(&mut self) -> bool {
+        while self.puller.recv().is_some() {
+            self.buttons_remaining -= 1;
+        }
+        self.buttons_remaining == 0
+    }
+}
+
+pub struct Button {
+    pushers: Vec<Box<dyn Push<Message<bool>>>>,
+    local_pressed: Rc<Cell<bool>>,
+}
+
+impl Button {
+    /// Presses the button. It is safe to call this function multiple times.
+    pub fn press(&mut self) {
+        for mut pusher in self.pushers.drain(..) {
+            pusher.send(Message::from_typed(true));
+            pusher.done();
+        }
+        self.local_pressed.set(true);
+    }
+
+    /// Converts this button into a deadman's switch that will automatically press the button when
+    /// dropped.
+    pub fn press_on_drop(self) -> PressOnDropButton {
+        PressOnDropButton(self)
+    }
+}
+
+pub struct PressOnDropButton(Button);
+
+impl Drop for PressOnDropButton {
+    fn drop(&mut self) {
+        self.0.press();
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
-    use std::time::Duration;
-
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
+    use timely::WorkerConfig;
 
-    #[tokio::test]
-    async fn async_operator() {
-        // Run timely in a separate thread
-        #[allow(clippy::disallowed_methods)]
-        let extracted = tokio::task::spawn_blocking(|| {
-            let capture = timely::example(|scope| {
-                let input = (0..10).to_stream(scope);
+    use super::*;
 
-                let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
-                let mut input_handle = op.new_input(&input, Pipeline);
-                let (mut output, output_stream) = op.new_output();
+    #[mz_ore::test]
+    fn async_operator() {
+        let capture = timely::example(|scope| {
+            let input = (0..10).to_stream(scope);
 
-                op.build(move |_capabilities| async move {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    while let Some(event) = input_handle.next().await {
-                        match event {
-                            Event::Data(cap, data) => {
-                                let cap = cap.retain();
-                                for item in data.iter().copied() {
-                                    tokio::time::sleep(Duration::from_millis(10)).await;
-                                    let mut output_handle = output.activate();
-                                    let mut session = output_handle.session(&cap);
-                                    session.give(item);
-                                }
+            let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
+            let mut input_handle = op.new_input(&input, Pipeline);
+            let (mut output, output_stream) = op.new_output();
+
+            op.build(move |_capabilities| async move {
+                tokio::task::yield_now().await;
+                while let Some(event) = input_handle.next().await {
+                    match event {
+                        Event::Data(cap, data) => {
+                            let cap = cap.retain();
+                            for item in data.iter().copied() {
+                                tokio::task::yield_now().await;
+                                output.give(&cap, item).await;
                             }
-                            Event::Progress(_frontier) => {}
+                        }
+                        Event::Progress(_frontier) => {}
+                    }
+                }
+            });
+
+            output_stream.capture()
+        });
+        let extracted = capture.extract();
+
+        assert_eq!(extracted, vec![(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])]);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    fn gh_18837() {
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), |worker| {
+            let index = worker.index();
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (_output, output_stream) = producer.new_output::<Vec<usize>>();
+                let producer_button = producer.build(move |mut capabilities| async move {
+                    let mut cap = capabilities.pop().unwrap();
+                    if index != 0 {
+                        return;
+                    }
+                    // Worker 0 downgrades to 1 and keeps the capability around forever
+                    cap.downgrade(&1);
+                    std::future::pending().await
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                let mut input_handle = consumer.new_input(&output_stream, Pipeline);
+                let consumer_button = consumer.build(move |_| async move {
+                    while let Some(event) = input_handle.next().await {
+                        if let Event::Progress(frontier) = event {
+                            // We should never observe a frontier greater than [1]
+                            assert!(frontier.less_equal(&1));
                         }
                     }
                 });
 
-                output_stream.capture()
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
             });
-            capture.extract()
-        })
-        .await
-        .expect("timely panicked");
 
-        assert_eq!(extracted, vec![(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])]);
+            // Run dataflow until only worker 0 holds the frontier to [1]
+            for _ in 0..100 {
+                worker.step();
+            }
+            // Then drop the tokens of worker 0
+            if index == 0 {
+                drop(tokens)
+            }
+            // And step the dataflow some more to ensure consumers don't observe frontiers advancing.
+            for _ in 0..100 {
+                worker.step();
+            }
+        })
+        .expect("timely panicked");
     }
 }

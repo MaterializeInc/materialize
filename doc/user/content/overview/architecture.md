@@ -28,5 +28,5 @@ The architecture is broken into three logical components:
 
 ## Learn more
 
-- [Key Concepts](/overview/key-concepts/) to better understand Materialize's API
+- [Key Concepts](/get-started/key-concepts/) to better understand Materialize's API
 - [Get started](/get-started) to try out Materialize

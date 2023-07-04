@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -82,11 +80,11 @@
 use std::collections::BTreeSet;
 use std::ops::Deref;
 
+use mz_repr::GlobalId;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::GlobalId;
-
 mod id;
+mod interpret;
 mod linear;
 mod relation;
 mod scalar;
@@ -95,31 +93,26 @@ pub mod explain;
 pub mod virtual_syntax;
 pub mod visit;
 
-pub use relation::canonicalize;
-
-pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
-pub use id::{ProtoId, ProtoLocalId};
+pub use id::{Id, LocalId, PartitionId, ProtoId, ProtoLocalId, ProtoPartitionId, SourceInstanceId};
+pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace};
+pub use linear::plan::{MfpPlan, SafeMfpPlan};
+pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{
-    memoize_expr,
-    plan::{MfpPlan, SafeMfpPlan},
-    util::{join_permutations, permutation_for_arrangement},
-    MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
+    memoize_expr, MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
-pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
-pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
+pub use relation::func::{AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, TableFunc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
-    compare_columns, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
-    MirRelationExpr, ProtoAggregateExpr, RowSetFinishing, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, RECURSION_LIMIT,
-};
-pub use relation::{
-    JoinInputCharacteristics, ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing,
-    ProtoTableFunc,
+    canonicalize, compare_columns, non_nullable_columns, AggregateExpr, CollectionPlan,
+    ColumnOrder, JoinImplementation, JoinInputCharacteristics, LetRecLimit, MirRelationExpr,
+    ProtoAggregateExpr, ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc,
+    RowSetFinishing, WindowFrame, WindowFrameBound, WindowFrameUnits, RECURSION_LIMIT,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
-pub use scalar::{like_pattern, EvalError, FilterCharacteristics, MirScalarExpr};
-pub use scalar::{ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr};
+pub use scalar::{
+    like_pattern, EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit,
+    ProtoEvalError, ProtoMirScalarExpr,
+};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.

@@ -21,7 +21,12 @@ _alias_ | Only permit references to _table_name_ as _alias_.
 
 ## Details
 
-`DELETE` cannot currently be used inside [transactions](../begin).
+### Known limitations
+
+* `DELETE` cannot be used inside [transactions](../begin).
+* `DELETE` can reference [user-created tables](../create-table) but not [sources](../create-source).
+* **Low performance.** While processing a `DELETE` statement, Materialize cannot
+  process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
 ## Examples
 

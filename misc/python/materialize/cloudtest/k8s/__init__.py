@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
+from textwrap import dedent
 from typing import Any, Optional
 
 import pg8000
@@ -29,14 +30,27 @@ from kubernetes.client.exceptions import ApiException
 from kubernetes.config import new_client_from_config  # type: ignore
 from pg8000 import Connection, Cursor
 
-from materialize import ROOT, mzbuild
+from materialize import ROOT, mzbuild, ui
 
 
 class K8sResource:
-    def kubectl(self, *args: str) -> str:
-        return subprocess.check_output(
-            ["kubectl", "--context", self.context(), *args]
-        ).decode("ascii")
+    def kubectl(self, *args: str, input: Optional[str] = None) -> str:
+        try:
+            return subprocess.check_output(
+                ["kubectl", "--context", self.context(), *args], text=True, input=input
+            )
+        except subprocess.CalledProcessError as e:
+            print(
+                dedent(
+                    f"""
+                    cmd: {e.cmd}
+                    returncode: {e.returncode}
+                    stdout: {e.stdout}
+                    stderr: {e.stderr}
+                    """
+                )
+            )
+            raise e
 
     def api(self) -> CoreV1Api:
         api_client = new_client_from_config(context=self.context())
@@ -68,7 +82,10 @@ class K8sResource:
         if tag is not None:
             return f"materialize/{service}:{tag}"
         else:
-            repo = mzbuild.Repository(ROOT, release_mode=release_mode)
+            coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+            repo = mzbuild.Repository(
+                ROOT, release_mode=release_mode, coverage=coverage
+            )
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]
             return rimage.spec()
@@ -141,10 +158,11 @@ class K8sService(K8sResource):
         self,
         port: Optional[str] = None,
         user: str = "materialize",
+        autocommit: bool = True,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the service"""
         conn = self.sql_conn(port=port, user=user)
-        conn.autocommit = True
+        conn.autocommit = autocommit
         return conn.cursor()
 
     def sql(
@@ -314,3 +332,21 @@ class K8sSecret(K8sResource):
         core_v1_api.create_namespaced_secret(
             body=self.secret, namespace=self.namespace()  # type: ignore
         )
+
+
+def cluster_pod_name(cluster_id: str, replica_id: str, process: int = 0) -> str:
+    # Replica IDs now appear as `GlobalId`s in `mz_cluster_replicas`, while
+    # the pod names still contain only the numeric ID.
+    # TODO(teskje): Change pod names to contain the replica `GlobalId`.
+    replica_id = replica_id.lstrip("u")
+
+    return f"pod/cluster-{cluster_id}-replica-{replica_id}-{process}"
+
+
+def cluster_service_name(cluster_id: str, replica_id: str) -> str:
+    # Replica IDs now appear as `GlobalId`s in `mz_cluster_replicas`, while
+    # the pod names still contain only the numeric ID.
+    # TODO(teskje): Change pod names to contain the replica `GlobalId`.
+    replica_id = replica_id.lstrip("u")
+
+    return f"service/cluster-{cluster_id}-replica-{replica_id}"

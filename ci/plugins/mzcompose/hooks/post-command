@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+. misc/shlib/shlib.bash
+
+run() {
+    bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+}
+
+# Run before potential "run down" in coverage
+docker ps --all --quiet | xargs --no-run-if-empty docker inspect > docker-inspect.log
+
+export_cov() {
+    bin/ci-builder run stable rust-cov export \
+      --ignore-filename-regex=.cargo/ \
+      --ignore-filename-regex=target/release/ \
+      --ignore-filename-regex=/cargo/ \
+      --ignore-filename-regex=/mnt/build/ \
+      --ignore-filename-regex=/rustc/ \
+      --format=lcov "$1" --instr-profile=coverage/"$BUILDKITE_JOB_ID".profdata src/ \
+      > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
+}
+
+if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
+    ci_unimportant_heading "Generate coverage information"
+    run --mz-quiet down --volumes
+
+    if [ -n "$(find . -name '*.profraw')" ]; then
+        # Workaround for "invalid instrumentation profile data (file header is corrupt)"
+        find . -name '*.profraw' | while read -r i; do
+            bin/ci-builder run stable rust-profdata show "$i" > /dev/null || rm "$i"
+        done
+        find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
+        find . -name '*.profraw' -delete
+
+        ARGS=()
+        for program in clusterd environmentd sqllogictest testdrive; do
+            if [ -f coverage/"$program" ]; then
+                export_cov coverage/"$program"
+                ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
+            fi
+        done
+        rm coverage/"$BUILDKITE_JOB_ID".profdata
+        if [ "${#ARGS[@]}" != 0 ]; then
+            bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+            rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
+            bin/ci-builder run stable xz -0 coverage/"$BUILDKITE_JOB_ID".lcov
+            buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.xz
+        fi
+    fi
+fi
+
+ci_unimportant_heading "Upload log artifacts"
+
+run logs --no-color > services.log
+# shellcheck disable=SC2024
+sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
+netstat -ant > netstat-ant.log
+netstat -panelot > netstat-panelot.log
+ps aux > ps-aux.log
+docker ps -a --no-trunc > docker-ps-a.log
+
+artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log docker-inspect.log sar.log)
+artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+buildkite-agent artifact upload "$artifacts_str"
+bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"

@@ -164,6 +164,61 @@ SET transaction_isolation = 'snapshot isolation'
 statement ok
 SET transaction_isolation = 'strict serializable'
 
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement ok
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+statement ok
+SET TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+statement ok
+BEGIN;
+
+statement ok
+SET TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement ok
+COMMIT
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+## Last isolation level write wins
+statement ok
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE, ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement error Expected transaction mode, found EOF
+SET TRANSACTION
+
+statement error SET TRANSACTION <access-mode> are not supported
+SET TRANSACTION READ ONLY
+
 # Test that a failed transaction will not commit var changes.
 
 statement ok
@@ -206,3 +261,160 @@ COMPLETE 0
 
 statement error parameter "idle_in_transaction_session_timeout" requires a "duration" value
 SET idle_in_transaction_session_timeout TO '-10ms'
+
+statement error unrecognized configuration parameter
+SELECT current_setting('unknown')
+
+statement error does not exist
+SELECT current_setting(true)
+
+query T
+SELECT current_setting('unknown', true)
+----
+NULL
+
+query T
+SELECT current_setting('unknown', 'true')
+----
+NULL
+
+statement error does not exist
+SELECT current_setting('datestyle', 3)
+
+statement error unrecognized configuration parameter
+SELECT current_setting('unknown', false)
+
+query T
+SELECT current_setting('dateSTYLE')
+----
+ISO, MDY
+
+statement ok
+SET cluster_replica = 'r1'
+
+query T
+SELECT current_setting('cluster') || '.' || current_setting('cluster_replica')
+----
+default.r1
+
+query T
+SELECT current_setting('max_tables')
+----
+100
+
+# Test multi-valued variable planning.
+
+simple
+set datestyle = iso,mdy;
+show datestyle;
+set datestyle = iso, mdy;
+show datestyle;
+set datestyle = "iso,mdy";
+show datestyle;
+set datestyle = "iso, mdy";
+show datestyle;
+set datestyle = 'iso,mdy';
+show datestyle;
+set datestyle = 'iso, mdy';
+show datestyle;
+set datestyle = '"iso", "mdy", "iso", "mdy"', "mdy", "iso", "ISO", "IsO", "mDy";
+show datestyle;
+----
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+
+statement error parameter "database" cannot have value "one","two": expects a single value
+set database = one, two
+
+# Test invalid values for float vars
+# TODO(jkosh44) the error messages here are bad, but the best we can do right now. A user will
+# never see this anyway since it's only exposed to admins.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_credit_consumption_rate = '-100.5'
+----
+db error: ERROR: parameter "max_credit_consumption_rate" cannot have value "-100.5": only supports non-negative, non-NaN numeric values
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_credit_consumption_rate = NaN
+----
+db error: ERROR: parameter "max_credit_consumption_rate" cannot have value "NaN": only supports non-negative, non-NaN numeric values
+
+statement ok
+SET SCHEMA 'non-resolvable-name'
+
+statement ok
+SET SCHEMA TO 'non-resolvable-name'
+
+statement ok
+SET SCHEMA = 'non-resolvable-name'
+
+query T
+SHOW SCHEMA
+----
+NULL
+
+statement ok
+SET SCHEMA TO 'public'
+
+query T
+SHOW SCHEMA
+----
+public
+
+statement error Expected end of statement, found comma
+SET SCHEMA TO public, private, playground
+
+statement ok
+CREATE SCHEMA s
+
+statement ok
+SET SCHEMA TO s
+
+query T
+SHOW SCHEMA
+----
+s
+
+statement ok
+RESET SCHEMA
+
+query T
+SHOW SCHEMA
+----
+public
+
+statement ok
+SET SCHEMA TO s
+
+query T
+SHOW SCHEMA
+----
+s
+
+statement ok
+SET SCHEMA TO DEFAULT
+
+query T
+SHOW SCHEMA
+----
+public

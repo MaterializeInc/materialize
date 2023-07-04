@@ -14,13 +14,18 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::anyhow;
-use serde::{Deserialize, Serialize};
-
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
+use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use uncased::UncasedStr;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
@@ -28,22 +33,22 @@ use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     self, AstInfo, Cte, CteBlock, CteMutRec, Ident, Query, Raw, RawClusterName, RawDataType,
-    RawObjectName, Statement, UnresolvedObjectName,
+    RawItemName, Statement, UnresolvedItemName,
 };
-use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
+use crate::catalog::{CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
 use crate::plan::PlanError;
 
 /// A fully-qualified human readable name of an item in the catalog.
 ///
 /// Catalog names compare case sensitively. Use
-/// [`normalize::unresolved_object_name`] to
-/// perform proper case folding if converting an [`UnresolvedObjectName`] to a
-/// `FullObjectName`.
+/// [`normalize::unresolved_item_name`] to
+/// perform proper case folding if converting an [`UnresolvedItemName`] to a
+/// `FullItemName`.
 ///
-/// [`normalize::unresolved_object_name`]: crate::normalize::unresolved_object_name
+/// [`normalize::unresolved_item_name`]: crate::normalize::unresolved_item_name
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct FullObjectName {
+pub struct FullItemName {
     /// The database name.
     pub database: RawDatabaseSpecifier,
     /// The schema name.
@@ -52,7 +57,7 @@ pub struct FullObjectName {
     pub item: String,
 }
 
-impl fmt::Display for FullObjectName {
+impl fmt::Display for FullItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
             write!(f, "{}.", database)?;
@@ -61,47 +66,42 @@ impl fmt::Display for FullObjectName {
     }
 }
 
-impl From<FullObjectName> for UnresolvedObjectName {
-    fn from(full_name: FullObjectName) -> UnresolvedObjectName {
+impl From<FullItemName> for UnresolvedItemName {
+    fn from(full_name: FullItemName) -> UnresolvedItemName {
         let mut name_parts = Vec::new();
         if let RawDatabaseSpecifier::Name(database) = full_name.database {
             name_parts.push(Ident::new(database));
         }
         name_parts.push(Ident::new(full_name.schema));
         name_parts.push(Ident::new(full_name.item));
-        UnresolvedObjectName(name_parts)
+        UnresolvedItemName(name_parts)
     }
 }
 
 /// A fully-qualified non-human readable name of an item in the catalog using IDs for the database
 /// and schema.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct QualifiedObjectName {
-    pub qualifiers: ObjectQualifiers,
+pub struct QualifiedItemName {
+    pub qualifiers: ItemQualifiers,
     pub item: String,
 }
 
-impl fmt::Display for QualifiedObjectName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let ResolvedDatabaseSpecifier::Id(id) = &self.qualifiers.database_spec {
-            write!(f, "{}.", id)?;
-        }
-        write!(f, "{}.{}", self.qualifiers.schema_spec, self.item)
-    }
-}
+// Do not implement [`Display`] for [`QualifiedItemName`]. [`FullItemName`] should always be
+// displayed instead.
+static_assertions::assert_not_impl_any!(QualifiedItemName: fmt::Display);
 
 /// An optionally-qualified human-readable name of an item in the catalog.
 ///
-/// This is like a [`FullObjectName`], but either the database or schema name may be
+/// This is like a [`FullItemName`], but either the database or schema name may be
 /// omitted.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PartialObjectName {
+pub struct PartialItemName {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub item: String,
 }
 
-impl PartialObjectName {
+impl PartialItemName {
     // Whether either self or other might be a (possibly differently qualified)
     // version of the other.
     pub fn matches(&self, other: &Self) -> bool {
@@ -117,7 +117,7 @@ impl PartialObjectName {
     }
 }
 
-impl fmt::Display for PartialObjectName {
+impl fmt::Display for PartialItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
             write!(f, "{}.", database)?;
@@ -129,13 +129,13 @@ impl fmt::Display for PartialObjectName {
     }
 }
 
-impl From<FullObjectName> for PartialObjectName {
-    fn from(n: FullObjectName) -> PartialObjectName {
+impl From<FullItemName> for PartialItemName {
+    fn from(n: FullItemName) -> PartialItemName {
         let database = match n.database {
             RawDatabaseSpecifier::Ambient => None,
             RawDatabaseSpecifier::Name(name) => Some(name),
         };
-        PartialObjectName {
+        PartialItemName {
             database,
             schema: Some(n.schema),
             item: n.item,
@@ -143,13 +143,27 @@ impl From<FullObjectName> for PartialObjectName {
     }
 }
 
-impl From<String> for PartialObjectName {
+impl From<String> for PartialItemName {
     fn from(item: String) -> Self {
-        PartialObjectName {
+        PartialItemName {
             database: None,
             schema: None,
             item,
         }
+    }
+}
+
+impl From<PartialItemName> for UnresolvedItemName {
+    fn from(partial_name: PartialItemName) -> UnresolvedItemName {
+        let mut name_parts = Vec::new();
+        if let Some(database) = partial_name.database {
+            name_parts.push(Ident::new(database));
+        }
+        if let Some(schema) = partial_name.schema {
+            name_parts.push(Ident::new(schema));
+        }
+        name_parts.push(Ident::new(partial_name.item));
+        UnresolvedItemName(name_parts)
     }
 }
 
@@ -235,13 +249,24 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 }
 
 /// An id of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+)]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
     Ambient,
     /// A normal database with a name.
     Id(DatabaseId),
+}
+
+impl ResolvedDatabaseSpecifier {
+    pub fn id(&self) -> Option<DatabaseId> {
+        match self {
+            ResolvedDatabaseSpecifier::Ambient => None,
+            ResolvedDatabaseSpecifier::Id(id) => Some(*id),
+        }
+    }
 }
 
 impl fmt::Display for ResolvedDatabaseSpecifier {
@@ -259,9 +284,18 @@ impl AstDisplay for ResolvedDatabaseSpecifier {
     }
 }
 
-impl From<u64> for ResolvedDatabaseSpecifier {
-    fn from(id: u64) -> Self {
-        Self::Id(DatabaseId(id))
+impl From<DatabaseId> for ResolvedDatabaseSpecifier {
+    fn from(id: DatabaseId) -> Self {
+        Self::Id(id)
+    }
+}
+
+impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
+    fn from(id: Option<DatabaseId>) -> Self {
+        match id {
+            Some(id) => Self::Id(id),
+            None => Self::Ambient,
+        }
     }
 }
 
@@ -272,7 +306,7 @@ impl From<u64> for ResolvedDatabaseSpecifier {
  * their Id.
  */
 /// An id of a schema.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SchemaSpecifier {
     /// A temporary schema
     Temporary,
@@ -282,6 +316,24 @@ pub enum SchemaSpecifier {
 
 impl SchemaSpecifier {
     const TEMPORARY_SCHEMA_ID: u64 = 0;
+
+    pub fn is_system(&self) -> bool {
+        match self {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => id.is_system(),
+        }
+    }
+
+    pub fn is_user(&self) -> bool {
+        match self {
+            SchemaSpecifier::Temporary => true,
+            SchemaSpecifier::Id(id) => id.is_user(),
+        }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, SchemaSpecifier::Temporary)
+    }
 }
 
 impl fmt::Display for SchemaSpecifier {
@@ -299,12 +351,13 @@ impl AstDisplay for SchemaSpecifier {
     }
 }
 
-impl From<u64> for SchemaSpecifier {
-    fn from(id: u64) -> Self {
-        if id == Self::TEMPORARY_SCHEMA_ID {
-            Self::Temporary
-        } else {
-            Self::Id(SchemaId(id))
+impl From<SchemaId> for SchemaSpecifier {
+    fn from(id: SchemaId) -> SchemaSpecifier {
+        match id {
+            SchemaId::User(id) if id == SchemaSpecifier::TEMPORARY_SCHEMA_ID => {
+                SchemaSpecifier::Temporary
+            }
+            schema_id => SchemaSpecifier::Id(schema_id),
         }
     }
 }
@@ -312,7 +365,7 @@ impl From<u64> for SchemaSpecifier {
 impl From<&SchemaSpecifier> for SchemaId {
     fn from(schema_spec: &SchemaSpecifier) -> Self {
         match schema_spec {
-            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
             SchemaSpecifier::Id(id) => id.clone(),
         }
     }
@@ -321,21 +374,9 @@ impl From<&SchemaSpecifier> for SchemaId {
 impl From<SchemaSpecifier> for SchemaId {
     fn from(schema_spec: SchemaSpecifier) -> Self {
         match schema_spec {
-            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
             SchemaSpecifier::Id(id) => id,
         }
-    }
-}
-
-impl From<&SchemaSpecifier> for u64 {
-    fn from(schema_spec: &SchemaSpecifier) -> Self {
-        SchemaId::from(schema_spec).0
-    }
-}
-
-impl From<SchemaSpecifier> for u64 {
-    fn from(schema_spec: SchemaSpecifier) -> Self {
-        SchemaId::from(schema_spec).0
     }
 }
 
@@ -346,17 +387,17 @@ impl From<SchemaSpecifier> for u64 {
 pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectQualifiers {
+pub struct ItemQualifiers {
     pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_spec: SchemaSpecifier,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ResolvedObjectName {
-    Object {
+pub enum ResolvedItemName {
+    Item {
         id: GlobalId,
-        qualifiers: ObjectQualifiers,
-        full_name: FullObjectName,
+        qualifiers: ItemQualifiers,
+        full_name: FullItemName,
         // Whether this object, when printed out, should use [id AS name] syntax. We
         // want this for things like tables and sources, but not for things like
         // types.
@@ -369,20 +410,27 @@ pub enum ResolvedObjectName {
     Error,
 }
 
-impl ResolvedObjectName {
+impl ResolvedItemName {
     pub fn full_name_str(&self) -> String {
         match self {
-            ResolvedObjectName::Object { full_name, .. } => full_name.to_string(),
-            ResolvedObjectName::Cte { name, .. } => name.clone(),
-            ResolvedObjectName::Error => "error in name resolution".to_string(),
+            ResolvedItemName::Item { full_name, .. } => full_name.to_string(),
+            ResolvedItemName::Cte { name, .. } => name.clone(),
+            ResolvedItemName::Error => "error in name resolution".to_string(),
+        }
+    }
+
+    pub fn full_item_name(&self) -> &FullItemName {
+        match self {
+            ResolvedItemName::Item { full_name, .. } => full_name,
+            _ => panic!("cannot call object_full_name on non-object"),
         }
     }
 }
 
-impl AstDisplay for ResolvedObjectName {
+impl AstDisplay for ResolvedItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ResolvedObjectName::Object {
+            ResolvedItemName::Item {
                 id,
                 qualifiers: _,
                 full_name,
@@ -402,13 +450,13 @@ impl AstDisplay for ResolvedObjectName {
                     f.write_str("]");
                 }
             }
-            ResolvedObjectName::Cte { name, .. } => f.write_node(&Ident::new(name)),
-            ResolvedObjectName::Error => {}
+            ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new(name)),
+            ResolvedItemName::Error => {}
         }
     }
 }
 
-impl std::fmt::Display for ResolvedObjectName {
+impl std::fmt::Display for ResolvedItemName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(self.to_ast_string().as_str())
     }
@@ -425,6 +473,16 @@ pub enum ResolvedSchemaName {
 }
 
 impl ResolvedSchemaName {
+    /// Panics if this is `Self::Error`.
+    pub fn database_spec(&self) -> &ResolvedDatabaseSpecifier {
+        match self {
+            ResolvedSchemaName::Schema { database_spec, .. } => database_spec,
+            ResolvedSchemaName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
+
     /// Panics if this is `Self::Error`.
     pub fn schema_spec(&self) -> &SchemaSpecifier {
         match self {
@@ -455,6 +513,18 @@ impl AstDisplay for ResolvedSchemaName {
 pub enum ResolvedDatabaseName {
     Database { id: DatabaseId, name: String },
     Error,
+}
+
+impl ResolvedDatabaseName {
+    /// Panics if this is `Self::Error`.
+    pub fn database_id(&self) -> &DatabaseId {
+        match self {
+            ResolvedDatabaseName::Database { id, .. } => id,
+            ResolvedDatabaseName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
 }
 
 impl AstDisplay for ResolvedDatabaseName {
@@ -489,6 +559,18 @@ impl AstDisplay for ResolvedClusterName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedClusterReplicaName {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+}
+
+impl AstDisplay for ResolvedClusterReplicaName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{}.{}]", self.cluster_id, self.replica_id))
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedDataType {
     AnonymousList(Box<ResolvedDataType>),
     AnonymousMap {
@@ -497,8 +579,8 @@ pub enum ResolvedDataType {
     },
     Named {
         id: GlobalId,
-        qualifiers: ObjectQualifiers,
-        full_name: FullObjectName,
+        qualifiers: ItemQualifiers,
+        full_name: FullItemName,
         modifiers: Vec<i64>,
         print_id: bool,
     },
@@ -558,7 +640,7 @@ impl AstDisplay for ResolvedDataType {
 impl ResolvedDataType {
     /// Return the name of `self`'s item without qualification or IDs.
     ///
-    /// This is used to generate to generate default column names for cast operations.
+    /// This is used to generate default column names for cast operations.
     pub fn unqualified_item_name(&self) -> String {
         let mut res = String::new();
         match self {
@@ -583,6 +665,40 @@ impl ResolvedDataType {
         }
         res
     }
+
+    /// Return the name of `self`'s without IDs or modifiers.
+    ///
+    /// This is used for error messages.
+    pub fn human_readable_name(&self) -> String {
+        let mut res = String::new();
+        match self {
+            ResolvedDataType::AnonymousList(element_type) => {
+                res += &element_type.human_readable_name();
+                res += " list";
+            }
+            ResolvedDataType::AnonymousMap {
+                key_type,
+                value_type,
+            } => {
+                res += "map[";
+                res += &key_type.human_readable_name();
+                res += "=>";
+                res += &value_type.human_readable_name();
+                res += "]";
+            }
+            ResolvedDataType::Named { full_name, .. } => {
+                if let RawDatabaseSpecifier::Name(database) = &full_name.database {
+                    res += database;
+                    res += ".";
+                }
+                res += &full_name.schema;
+                res += ".";
+                res += &full_name.item;
+            }
+            ResolvedDataType::Error => {}
+        }
+        res
+    }
 }
 
 impl fmt::Display for ResolvedDataType {
@@ -591,31 +707,78 @@ impl fmt::Display for ResolvedDataType {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedRoleName {
+    pub id: RoleId,
+    pub name: String,
+}
+
+impl AstDisplay for ResolvedRoleName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{} AS {}]", self.id, self.name));
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResolvedObjectName {
+    Cluster(ResolvedClusterName),
+    ClusterReplica(ResolvedClusterReplicaName),
+    Database(ResolvedDatabaseName),
+    Schema(ResolvedSchemaName),
+    Role(ResolvedRoleName),
+    Item(ResolvedItemName),
+}
+
+impl AstDisplay for ResolvedObjectName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedObjectName::Cluster(n) => f.write_node(n),
+            ResolvedObjectName::ClusterReplica(n) => f.write_node(n),
+            ResolvedObjectName::Database(n) => f.write_node(n),
+            ResolvedObjectName::Schema(n) => f.write_node(n),
+            ResolvedObjectName::Role(n) => f.write_node(n),
+            ResolvedObjectName::Item(n) => f.write_node(n),
+        }
+    }
+}
+
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
-    type ObjectName = ResolvedObjectName;
+    type ItemName = ResolvedItemName;
     type SchemaName = ResolvedSchemaName;
     type DatabaseName = ResolvedDatabaseName;
     type ClusterName = ResolvedClusterName;
     type DataType = ResolvedDataType;
     type CteId = LocalId;
+    type RoleName = ResolvedRoleName;
+    type ObjectName = ResolvedObjectName;
 }
 
 /// The identifier for a schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct SchemaId(pub u64);
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
+pub enum SchemaId {
+    User(u64),
+    System(u64),
+}
 
 impl SchemaId {
-    /// Constructs a new schema identifier. It is the caller's responsibility
-    /// to provide a unique `id`.
-    pub fn new(id: u64) -> Self {
-        SchemaId(id)
+    pub fn is_user(&self) -> bool {
+        matches!(self, SchemaId::User(_))
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, SchemaId::System(_))
     }
 }
 
 impl fmt::Display for SchemaId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            SchemaId::System(id) => write!(f, "s{}", id),
+            SchemaId::User(id) => write!(f, "u{}", id),
+        }
     }
 }
 
@@ -623,26 +786,71 @@ impl FromStr for SchemaId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: u64 = s.parse()?;
-        Ok(SchemaId(val))
+        if s.len() < 2 {
+            return Err(PlanError::Unstructured(format!(
+                "couldn't parse SchemaId {}",
+                s
+            )));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(SchemaId::System(val)),
+            Some('u') => Ok(SchemaId::User(val)),
+            _ => Err(PlanError::Unstructured(format!(
+                "couldn't parse SchemaId {}",
+                s
+            ))),
+        }
+    }
+}
+
+impl RustType<proto::SchemaId> for SchemaId {
+    fn into_proto(&self) -> proto::SchemaId {
+        let value = match self {
+            SchemaId::User(id) => proto::schema_id::Value::User(*id),
+            SchemaId::System(id) => proto::schema_id::Value::System(*id),
+        };
+
+        proto::SchemaId { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::SchemaId) -> Result<Self, TryFromProtoError> {
+        let value = proto
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("SchemaId::value"))?;
+        let id = match value {
+            proto::schema_id::Value::User(id) => SchemaId::User(id),
+            proto::schema_id::Value::System(id) => SchemaId::System(id),
+        };
+        Ok(id)
     }
 }
 
 /// The identifier for a database.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct DatabaseId(pub u64);
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
+pub enum DatabaseId {
+    User(u64),
+    System(u64),
+}
 
 impl DatabaseId {
-    /// Constructs a new database identifier. It is the caller's responsibility
-    /// to provide a unique `id`.
-    pub fn new(id: u64) -> Self {
-        DatabaseId(id)
+    pub fn is_user(&self) -> bool {
+        matches!(self, DatabaseId::User(_))
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, DatabaseId::System(_))
     }
 }
 
 impl fmt::Display for DatabaseId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            DatabaseId::System(id) => write!(f, "s{}", id),
+            DatabaseId::User(id) => write!(f, "u{}", id),
+        }
     }
 }
 
@@ -650,50 +858,250 @@ impl FromStr for DatabaseId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: u64 = s.parse()?;
-        Ok(DatabaseId(val))
+        if s.len() < 2 {
+            return Err(PlanError::Unstructured(format!(
+                "couldn't parse DatabaseId {}",
+                s
+            )));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(DatabaseId::System(val)),
+            Some('u') => Ok(DatabaseId::User(val)),
+            _ => Err(PlanError::Unstructured(format!(
+                "couldn't parse DatabaseId {}",
+                s
+            ))),
+        }
     }
 }
 
-/// The identifier for a role.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum RoleId {
-    System(u64),
-    User(u64),
+impl RustType<proto::DatabaseId> for DatabaseId {
+    fn into_proto(&self) -> proto::DatabaseId {
+        let value = match self {
+            DatabaseId::User(id) => proto::database_id::Value::User(*id),
+            DatabaseId::System(id) => proto::database_id::Value::System(*id),
+        };
+
+        proto::DatabaseId { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::DatabaseId) -> Result<Self, TryFromProtoError> {
+        match proto.value {
+            Some(proto::database_id::Value::User(id)) => Ok(DatabaseId::User(id)),
+            Some(proto::database_id::Value::System(id)) => Ok(DatabaseId::System(id)),
+            None => Err(TryFromProtoError::missing_field("DatabaseId::value")),
+        }
+    }
 }
 
-impl RoleId {
+pub static PUBLIC_ROLE_NAME: Lazy<&UncasedStr> = Lazy::new(|| UncasedStr::new("PUBLIC"));
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum ObjectId {
+    Cluster(ClusterId),
+    ClusterReplica((ClusterId, ReplicaId)),
+    Database(DatabaseId),
+    Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
+    Role(RoleId),
+    Item(GlobalId),
+}
+
+impl ObjectId {
+    pub fn unwrap_cluster_id(self) -> ClusterId {
+        match self {
+            ObjectId::Cluster(id) => id,
+            _ => panic!("ObjectId::unwrap_cluster_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_cluster_replica_id(self) -> (ClusterId, ReplicaId) {
+        match self {
+            ObjectId::ClusterReplica(id) => id,
+            _ => panic!("ObjectId::unwrap_cluster_replica_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_database_id(self) -> DatabaseId {
+        match self {
+            ObjectId::Database(id) => id,
+            _ => panic!("ObjectId::unwrap_database_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_schema_id(self) -> (ResolvedDatabaseSpecifier, SchemaSpecifier) {
+        match self {
+            ObjectId::Schema(id) => id,
+            _ => panic!("ObjectId::unwrap_schema_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_role_id(self) -> RoleId {
+        match self {
+            ObjectId::Role(id) => id,
+            _ => panic!("ObjectId::unwrap_role_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_item_id(self) -> GlobalId {
+        match self {
+            ObjectId::Item(id) => id,
+            _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
+        }
+    }
+
     pub fn is_system(&self) -> bool {
-        matches!(self, Self::System(_))
+        match self {
+            ObjectId::Cluster(cluster_id) => cluster_id.is_system(),
+            // replica IDs aren't namespaced so we rely on the cluster ID.
+            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_system(),
+            ObjectId::Database(database_id) => database_id.is_system(),
+            ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
+            ObjectId::Role(role_id) => role_id.is_system(),
+            ObjectId::Item(global_id) => global_id.is_system(),
+        }
     }
 
     pub fn is_user(&self) -> bool {
-        matches!(self, Self::User(_))
-    }
-}
-
-impl FromStr for RoleId {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(anyhow!("couldn't parse role id {}", s));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(Self::System(val)),
-            'u' => Ok(Self::User(val)),
-            _ => Err(anyhow!("couldn't parse role id {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for RoleId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::System(id) => write!(f, "s{}", id),
-            Self::User(id) => write!(f, "u{}", id),
+            ObjectId::Cluster(cluster_id) => cluster_id.is_user(),
+            // replica IDs aren't namespaced so we rely on the cluster ID.
+            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_user(),
+            ObjectId::Database(database_id) => database_id.is_user(),
+            ObjectId::Schema((_database_id, schema_id)) => schema_id.is_user(),
+            ObjectId::Role(role_id) => role_id.is_user(),
+            ObjectId::Item(global_id) => global_id.is_user(),
         }
+    }
+}
+
+impl TryFrom<ResolvedObjectName> for ObjectId {
+    type Error = anyhow::Error;
+
+    fn try_from(name: ResolvedObjectName) -> Result<ObjectId, Self::Error> {
+        match name {
+            ResolvedObjectName::Cluster(name) => Ok(ObjectId::Cluster(name.id)),
+            ResolvedObjectName::ClusterReplica(name) => {
+                Ok(ObjectId::ClusterReplica((name.cluster_id, name.replica_id)))
+            }
+            ResolvedObjectName::Database(name) => Ok(ObjectId::Database(*name.database_id())),
+            ResolvedObjectName::Schema(name) => match name {
+                ResolvedSchemaName::Schema {
+                    database_spec,
+                    schema_spec,
+                    ..
+                } => Ok(ObjectId::Schema((database_spec, schema_spec))),
+                ResolvedSchemaName::Error => Err(anyhow!("error in name resolution")),
+            },
+            ResolvedObjectName::Role(name) => Ok(ObjectId::Role(name.id)),
+            ResolvedObjectName::Item(name) => match name {
+                ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
+                ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
+                ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
+            },
+        }
+    }
+}
+
+impl From<ClusterId> for ObjectId {
+    fn from(id: ClusterId) -> Self {
+        ObjectId::Cluster(id)
+    }
+}
+
+impl From<&ClusterId> for ObjectId {
+    fn from(id: &ClusterId) -> Self {
+        ObjectId::Cluster(*id)
+    }
+}
+
+impl From<(ClusterId, ReplicaId)> for ObjectId {
+    fn from(id: (ClusterId, ReplicaId)) -> Self {
+        ObjectId::ClusterReplica(id)
+    }
+}
+
+impl From<&(ClusterId, ReplicaId)> for ObjectId {
+    fn from(id: &(ClusterId, ReplicaId)) -> Self {
+        ObjectId::ClusterReplica(*id)
+    }
+}
+
+impl From<DatabaseId> for ObjectId {
+    fn from(id: DatabaseId) -> Self {
+        ObjectId::Database(id)
+    }
+}
+
+impl From<&DatabaseId> for ObjectId {
+    fn from(id: &DatabaseId) -> Self {
+        ObjectId::Database(*id)
+    }
+}
+
+impl From<ItemQualifiers> for ObjectId {
+    fn from(qualifiers: ItemQualifiers) -> Self {
+        ObjectId::Schema((qualifiers.database_spec, qualifiers.schema_spec))
+    }
+}
+
+impl From<&ItemQualifiers> for ObjectId {
+    fn from(qualifiers: &ItemQualifiers) -> Self {
+        ObjectId::Schema((qualifiers.database_spec, qualifiers.schema_spec))
+    }
+}
+
+impl From<(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: (ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(id)
+    }
+}
+
+impl From<&(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: &(ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(*id)
+    }
+}
+
+impl From<RoleId> for ObjectId {
+    fn from(id: RoleId) -> Self {
+        ObjectId::Role(id)
+    }
+}
+
+impl From<&RoleId> for ObjectId {
+    fn from(id: &RoleId) -> Self {
+        ObjectId::Role(*id)
+    }
+}
+
+impl From<GlobalId> for ObjectId {
+    fn from(id: GlobalId) -> Self {
+        ObjectId::Item(id)
+    }
+}
+
+impl From<&GlobalId> for ObjectId {
+    fn from(id: &GlobalId) -> Self {
+        ObjectId::Item(*id)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum SystemObjectId {
+    /// The ID of a specific object.
+    Object(ObjectId),
+    /// Identifier for the entire system.
+    System,
+}
+
+impl SystemObjectId {
+    pub fn object_id(&self) -> Option<&ObjectId> {
+        match self {
+            SystemObjectId::Object(object_id) => Some(object_id),
+            SystemObjectId::System => None,
+        }
+    }
+}
+
+impl From<ObjectId> for SystemObjectId {
+    fn from(id: ObjectId) -> Self {
+        SystemObjectId::Object(id)
     }
 }
 
@@ -770,13 +1178,13 @@ impl<'a> NameResolver<'a> {
             }
             RawDataType::Other { name, typ_mod } => {
                 let (full_name, item) = match name {
-                    RawObjectName::Name(name) => {
-                        let name = normalize::unresolved_object_name(name)?;
+                    RawItemName::Name(name) => {
+                        let name = normalize::unresolved_item_name(name)?;
                         let item = self.catalog.resolve_item(&name)?;
                         let full_name = self.catalog.resolve_full_name(item.name());
                         (full_name, item)
                     }
-                    RawObjectName::Id(id, name) => {
+                    RawItemName::Id(id, name) => {
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item(&gid);
                         let full_name = normalize::full_name(name)?;
@@ -792,6 +1200,98 @@ impl<'a> NameResolver<'a> {
                     print_id: true,
                 })
             }
+        }
+    }
+
+    fn fold_raw_object_name_name_internal(
+        &mut self,
+        name: RawItemName,
+        consider_function: bool,
+    ) -> ResolvedItemName {
+        match name {
+            RawItemName::Name(raw_name) => {
+                let raw_name = match normalize::unresolved_item_name(raw_name) {
+                    Ok(raw_name) => raw_name,
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e);
+                        }
+                        return ResolvedItemName::Error;
+                    }
+                };
+
+                // Check if unqualified name refers to a CTE.
+                if raw_name.database.is_none() && raw_name.schema.is_none() {
+                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
+                    if let Some(id) = self.ctes.get(&norm_name) {
+                        return ResolvedItemName::Cte {
+                            id: *id,
+                            name: norm_name,
+                        };
+                    }
+                }
+
+                let r = if consider_function {
+                    self.catalog.resolve_function(&raw_name)
+                } else {
+                    self.catalog.resolve_item(&raw_name)
+                };
+
+                match r {
+                    Ok(item) => {
+                        self.ids.insert(item.id());
+                        let print_id = !matches!(
+                            item.item_type(),
+                            CatalogItemType::Func | CatalogItemType::Type
+                        );
+                        ResolvedItemName::Item {
+                            id: item.id(),
+                            qualifiers: item.name().qualifiers.clone(),
+                            full_name: self.catalog.resolve_full_name(item.name()),
+                            print_id,
+                        }
+                    }
+                    Err(mut e) => {
+                        if self.status.is_ok() {
+                            match &mut e {
+                                CatalogError::UnknownFunction { name, alternative } => {
+                                    // Suggest using the `jsonb_` version of
+                                    // `json_` functions that do not exist.
+                                    let name: Vec<&str> = name.split('.').collect();
+                                    match name.split_last() {
+                                        Some((i, q)) if i.starts_with("json_") && q.len() < 2 => {
+                                            let mut jsonb_version = q
+                                                .iter()
+                                                .map(|q| Ident::new(*q))
+                                                .collect::<Vec<_>>();
+                                            jsonb_version
+                                                .push(Ident::new(i.replace("json_", "jsonb_")));
+                                            let jsonb_version = RawItemName::Name(
+                                                UnresolvedItemName(jsonb_version),
+                                            );
+                                            let _ = self.fold_raw_object_name_name_internal(
+                                                jsonb_version.clone(),
+                                                true,
+                                            );
+
+                                            if self.status.is_ok() {
+                                                *alternative = Some(jsonb_version.to_string());
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            self.status = Err(e.into());
+                        }
+                        ResolvedItemName::Error
+                    }
+                }
+            }
+            // We don't want to hit this code path, but immaterial if we do
+            name @ RawItemName::Id(..) => self.fold_item_name(name),
         }
     }
 }
@@ -839,7 +1339,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 CteBlock::Simple(result_ctes)
             }
-            CteBlock::MutuallyRecursive(ctes) => {
+            CteBlock::MutuallyRecursive(MutRecBlock { options, ctes }) => {
                 let mut result_ctes = Vec::<CteMutRec<Aug>>::new();
 
                 let initial_id = self.ctes.len();
@@ -868,7 +1368,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         query,
                     });
                 }
-                CteBlock::MutuallyRecursive(result_ctes)
+                CteBlock::MutuallyRecursive(MutRecBlock {
+                    options: options
+                        .into_iter()
+                        .map(|option| self.fold_mut_rec_block_option(option))
+                        .collect(),
+                    ctes: result_ctes,
+                })
             }
         };
 
@@ -903,63 +1409,20 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         panic!("this should have been handled when walking the CTE");
     }
 
-    fn fold_object_name(
+    fn fold_item_name(
         &mut self,
-        object_name: <Raw as AstInfo>::ObjectName,
-    ) -> <Aug as AstInfo>::ObjectName {
-        match object_name {
-            RawObjectName::Name(raw_name) => {
-                let raw_name = match normalize::unresolved_object_name(raw_name) {
-                    Ok(raw_name) => raw_name,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e);
-                        }
-                        return ResolvedObjectName::Error;
-                    }
-                };
-
-                // Check if unqualified name refers to a CTE.
-                if raw_name.database.is_none() && raw_name.schema.is_none() {
-                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
-                    if let Some(id) = self.ctes.get(&norm_name) {
-                        return ResolvedObjectName::Cte {
-                            id: *id,
-                            name: norm_name,
-                        };
-                    }
-                }
-
-                match self.catalog.resolve_item(&raw_name) {
-                    Ok(item) => {
-                        self.ids.insert(item.id());
-                        let print_id = !matches!(
-                            item.item_type(),
-                            CatalogItemType::Func | CatalogItemType::Type
-                        );
-                        ResolvedObjectName::Object {
-                            id: item.id(),
-                            qualifiers: item.name().qualifiers.clone(),
-                            full_name: self.catalog.resolve_full_name(item.name()),
-                            print_id,
-                        }
-                    }
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e.into());
-                        }
-                        ResolvedObjectName::Error
-                    }
-                }
-            }
-            RawObjectName::Id(id, raw_name) => {
+        item_name: <Raw as AstInfo>::ItemName,
+    ) -> <Aug as AstInfo>::ItemName {
+        match item_name {
+            name @ RawItemName::Name(..) => self.fold_raw_object_name_name_internal(name, false),
+            RawItemName::Id(id, raw_name) => {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        return ResolvedObjectName::Error;
+                        return ResolvedItemName::Error;
                     }
                 };
                 let item = match self.catalog.try_get_item(&gid) {
@@ -968,7 +1431,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(PlanError::InvalidId(gid));
                         }
-                        return ResolvedObjectName::Error;
+                        return ResolvedItemName::Error;
                     }
                 };
 
@@ -979,10 +1442,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(e);
                         }
-                        return ResolvedObjectName::Error;
+                        return ResolvedItemName::Error;
                     }
                 };
-                ResolvedObjectName::Object {
+                ResolvedItemName::Item {
                     id: gid,
                     qualifiers: item.name().qualifiers.clone(),
                     full_name,
@@ -1122,36 +1585,34 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             Ident(i) => Ident(self.fold_ident(i)),
             DataType(dt) => DataType(self.fold_data_type(dt)),
             Secret(secret) => {
-                let object_name = self.fold_object_name(secret);
-                match &object_name {
-                    ResolvedObjectName::Object { id, .. } => {
+                let item_name = self.fold_item_name(secret);
+                match &item_name {
+                    ResolvedItemName::Item { id, .. } => {
                         let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
                             self.status =
-                                Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
+                                Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                         }
                     }
-                    ResolvedObjectName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
+                    ResolvedItemName::Cte { .. } => {
+                        self.status = Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                     }
-                    ResolvedObjectName::Error => {}
+                    ResolvedItemName::Error => {}
                 }
-                Secret(object_name)
+                Secret(item_name)
             }
-            Object(obj) => {
-                let object_name = self.fold_object_name(obj);
-                match &object_name {
-                    ResolvedObjectName::Object { .. } => {}
-                    ResolvedObjectName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidObject(Box::new(object_name.clone())));
+            Item(obj) => {
+                let item_name = self.fold_item_name(obj);
+                match &item_name {
+                    ResolvedItemName::Item { .. } => {}
+                    ResolvedItemName::Cte { .. } => {
+                        self.status = Err(PlanError::InvalidObject(Box::new(item_name.clone())));
                     }
-                    ResolvedObjectName::Error => {}
+                    ResolvedItemName::Error => {}
                 }
-                Object(object_name)
+                Item(item_name)
             }
-            UnresolvedObjectName(name) => {
-                UnresolvedObjectName(self.fold_unresolved_object_name(name))
-            }
+            UnresolvedItemName(name) => UnresolvedItemName(self.fold_unresolved_item_name(name)),
             ClusterReplicas(replicas) => ClusterReplicas(
                 replicas
                     .into_iter()
@@ -1159,6 +1620,139 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     .collect(),
             ),
             ConnectionKafkaBroker(broker) => ConnectionKafkaBroker(self.fold_kafka_broker(broker)),
+        }
+    }
+
+    fn fold_role_name(&mut self, name: <Raw as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
+        match self.catalog.resolve_role(name.as_str()) {
+            Ok(role) => ResolvedRoleName {
+                id: role.id(),
+                name: role.name().to_string(),
+            },
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e.into());
+                }
+                // garbage value that will be ignored since there's an error.
+                ResolvedRoleName {
+                    id: RoleId::User(0),
+                    name: "".to_string(),
+                }
+            }
+        }
+    }
+    fn fold_object_name(
+        &mut self,
+        name: <Raw as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
+        match name {
+            UnresolvedObjectName::Cluster(name) => ResolvedObjectName::Cluster(
+                self.fold_cluster_name(RawClusterName::Unresolved(name)),
+            ),
+            UnresolvedObjectName::ClusterReplica(name) => {
+                match self.catalog.resolve_cluster_replica(&name) {
+                    Ok(cluster_replica) => {
+                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
+                            cluster_id: cluster_replica.cluster_id(),
+                            replica_id: cluster_replica.replica_id(),
+                        })
+                    }
+                    Err(e) => {
+                        self.status = Err(e.into());
+                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
+                            // The ID is arbitrary here; we just need some dummy
+                            // value to return.
+                            cluster_id: ClusterId::System(0),
+                            replica_id: 0,
+                        })
+                    }
+                }
+            }
+            UnresolvedObjectName::Database(name) => {
+                ResolvedObjectName::Database(self.fold_database_name(name))
+            }
+            UnresolvedObjectName::Schema(name) => {
+                ResolvedObjectName::Schema(self.fold_schema_name(name))
+            }
+            UnresolvedObjectName::Role(name) => ResolvedObjectName::Role(self.fold_role_name(name)),
+            UnresolvedObjectName::Item(name) => {
+                ResolvedObjectName::Item(self.fold_item_name(RawItemName::Name(name)))
+            }
+        }
+    }
+
+    fn fold_function(
+        &mut self,
+        node: mz_sql_parser::ast::Function<Raw>,
+    ) -> mz_sql_parser::ast::Function<Aug> {
+        mz_sql_parser::ast::Function {
+            name: match node.name {
+                name @ RawItemName::Name(..) => self.fold_raw_object_name_name_internal(name, true),
+                _ => self.fold_item_name(node.name),
+            },
+            args: self.fold_function_args(node.args),
+            filter: node.filter.map(|expr| Box::new(self.fold_expr(*expr))),
+            over: node.over.map(|over| self.fold_window_spec(over)),
+            distinct: node.distinct,
+        }
+    }
+
+    fn fold_table_factor(
+        &mut self,
+        node: mz_sql_parser::ast::TableFactor<Raw>,
+    ) -> mz_sql_parser::ast::TableFactor<Aug> {
+        use mz_sql_parser::ast::TableFactor::*;
+        match node {
+            Table { name, alias } => Table {
+                name: self.fold_item_name(name),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+            },
+            Function {
+                function,
+                alias,
+                with_ordinality,
+            } => {
+                match &function.name {
+                    RawItemName::Name(name) => {
+                        if *name == UnresolvedItemName::unqualified("values") && self.status.is_ok()
+                        {
+                            self.status = Err(PlanError::FromValueRequiresParen);
+                        }
+                    }
+                    _ => {}
+                }
+
+                Function {
+                    function: self.fold_function(function),
+                    alias: alias.map(|alias| self.fold_table_alias(alias)),
+                    with_ordinality,
+                }
+            }
+            RowsFrom {
+                functions,
+                alias,
+                with_ordinality,
+            } => RowsFrom {
+                functions: functions
+                    .into_iter()
+                    .map(|f| self.fold_function(f))
+                    .collect(),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+                with_ordinality,
+            },
+            Derived {
+                lateral,
+                subquery,
+                alias,
+            } => Derived {
+                lateral,
+                subquery: Box::new(self.fold_query(*subquery)),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+            },
+            NestedJoin { join, alias } => NestedJoin {
+                join: Box::new(self.fold_table_with_joins(*join)),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+            },
         }
     }
 }
@@ -1212,9 +1806,9 @@ impl<'a> TransientResolver<'a> {
 }
 
 impl Fold<Aug, Aug> for TransientResolver<'_> {
-    fn fold_object_name(&mut self, object_name: ResolvedObjectName) -> ResolvedObjectName {
-        match object_name {
-            ResolvedObjectName::Object {
+    fn fold_item_name(&mut self, item_name: ResolvedItemName) -> ResolvedItemName {
+        match item_name {
+            ResolvedItemName::Item {
                 id: transient_id @ GlobalId::Transient(_),
                 qualifiers,
                 full_name,
@@ -1223,7 +1817,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
                 let id = match self.allocation.get(&transient_id) {
                     Some(id) => *id,
                     None => {
-                        let obj = ResolvedObjectName::Object {
+                        let obj = ResolvedItemName::Item {
                             id: transient_id,
                             qualifiers: qualifiers.clone(),
                             full_name: full_name.clone(),
@@ -1233,7 +1827,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
                         transient_id
                     }
                 };
-                ResolvedObjectName::Object {
+                ResolvedItemName::Item {
                     id,
                     qualifiers,
                     full_name,
@@ -1273,6 +1867,15 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
     ) -> <Aug as AstInfo>::SchemaName {
         node
     }
+    fn fold_role_name(&mut self, node: <Aug as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
+        node
+    }
+    fn fold_object_name(
+        &mut self,
+        node: <Aug as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
+        node
+    }
 }
 
 pub fn resolve_transient_ids<N>(
@@ -1294,8 +1897,8 @@ pub struct DependencyVisitor {
 }
 
 impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
-    fn visit_object_name(&mut self, object_name: &'ast <Aug as AstInfo>::ObjectName) {
-        if let ResolvedObjectName::Object { id, .. } = object_name {
+    fn visit_item_name(&mut self, item_name: &'ast <Aug as AstInfo>::ItemName) {
+        if let ResolvedItemName::Item { id, .. } = item_name {
             self.ids.insert(*id);
         }
     }
@@ -1339,8 +1942,8 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
         node.print_name = Some(self.catalog.get_cluster(node.id).name().into());
     }
 
-    fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
-        if let ResolvedObjectName::Object {
+    fn visit_item_name_mut(&mut self, name: &mut ResolvedItemName) {
+        if let ResolvedItemName::Item {
             id,
             full_name,
             print_id,

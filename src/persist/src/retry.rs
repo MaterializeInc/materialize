@@ -22,6 +22,8 @@ use rand::{Rng, SeedableRng};
 pub struct Retry {
     /// The initial backoff for the retry operation.
     pub initial_backoff: Duration,
+    /// The backoff multiplier.
+    pub multiplier: u32,
     /// Clamps the maximum backoff for the retry operation.
     pub clamp_backoff: Duration,
     /// A seed for the random jitter.
@@ -37,6 +39,7 @@ impl Retry {
             // Chosen to meet the following arbitrary criteria: a power of two
             // that's close to the AWS Aurora latency of 6ms.
             initial_backoff: Duration::from_millis(4),
+            multiplier: 2,
             // Chosen to meet the following arbitrary criteria: between 10s and
             // 60s.
             clamp_backoff: Duration::from_secs(16),
@@ -89,7 +92,7 @@ impl RetryStream {
         let sleep = self.backoff.mul_f64(jitter);
         tokio::time::sleep(sleep).await;
         self.attempt += 1;
-        self.backoff = std::cmp::min(self.backoff * 2, self.cfg.clamp_backoff);
+        self.backoff = std::cmp::min(self.backoff * self.cfg.multiplier, self.cfg.clamp_backoff);
         self
     }
 }

@@ -28,6 +28,9 @@ The long-running tests will simulate actual production runs of Materialize on
 gigabytes to terabytes of data over several hours to days, and will therefore
 report their results asynchronously (perhaps nightly or weekly).
 
+For how to run tests on your PR with a code coverage report see
+[Code Coverage for Pull Requests](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/code-coverage.md).
+
 Details about each of the test suites follow.
 
 ## Unit/integration tests
@@ -69,7 +72,7 @@ pervasively throughout Cargo, and eventually you get used to it. (It's also the
 POSIX-blessed syntax for indicating that you want option parsing to stop, so you
 might be familiar with it from other command-line tools.)
 
-Without `--nocapture`, `println!()` and `dbg!()` output from tests can go
+Without `--nocapture`, `println!()` and `dbg!()`, output from tests can go
 missing, making debugging a very frustrating experience.
 
 The second argument worth special mention is the filter argument, which only

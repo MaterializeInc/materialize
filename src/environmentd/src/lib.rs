@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -87,22 +85,17 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{bail, Context};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use tokio::sync::oneshot;
-use tower_http::cors::AllowOrigin;
-
-use mz_adapter::catalog::storage::BootstrapArgs;
+use anyhow::{anyhow, bail, Context};
+use mz_adapter::catalog::storage::{stash, BootstrapArgs};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator::NamespacedOrchestrator;
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -111,7 +104,13 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rand::seq::SliceRandom;
+use tokio::sync::oneshot::error::RecvError;
+use tokio::sync::{mpsc, oneshot};
+use tower_http::cors::AllowOrigin;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;
@@ -128,10 +127,12 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 #[derive(Debug, Clone)]
 pub struct Config {
     // === Special modes. ===
-    /// Whether to permit usage of unsafe features.
+    /// Whether to permit usage of unsafe features. This is never meant to run
+    /// in production.
     pub unsafe_mode: bool,
-    /// Whether to enable persisted introspection sources.
-    pub persisted_introspection: bool,
+    /// Whether the environmentd is running on a local dev machine. This is
+    /// never meant to run in production or CI.
+    pub all_features: bool,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -169,7 +170,7 @@ pub struct Config {
     /// The PostgreSQL URL for the adapter stash.
     pub adapter_stash_url: String,
 
-    // === Cloud options. ===
+    // === Bootstrap options. ===
     /// The cloud ID of this environment.
     pub environment_id: EnvironmentId,
     /// Availability zones in which storage and compute resources may be
@@ -186,9 +187,11 @@ pub struct Config {
     pub bootstrap_builtin_cluster_replica_size: String,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
-    pub bootstrap_system_parameters: BTreeMap<String, String>,
+    pub system_parameter_defaults: BTreeMap<String, String>,
     /// The interval at which to collect storage usage information.
     pub storage_usage_collection_interval: Duration,
+    /// How long to retain storage usage records for.
+    pub storage_usage_retention_period: Option<Duration>,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
@@ -205,6 +208,10 @@ pub struct Config {
     /// An invertible map from system parameter names to LaunchDarkly feature
     /// keys to use when propagating values from the latter to the former.
     pub launchdarkly_key_map: BTreeMap<String, String>,
+    /// What role, if any, should be initially created with elevated privileges.
+    pub bootstrap_role: Option<String>,
+    /// Generation we want deployed. Generally only present when doing a production deploy.
+    pub deploy_generation: Option<u64>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -215,38 +222,26 @@ pub struct Config {
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
+    /// When waiting for leader promotion, the server will send the socket addr of
+    /// the internal http server
+    pub waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
 }
 
 /// Configures TLS encryption for connections.
 #[derive(Debug, Clone)]
 pub struct TlsConfig {
-    /// The TLS mode to use.
-    pub mode: TlsMode,
     /// The path to the TLS certificate.
     pub cert: PathBuf,
     /// The path to the TLS key.
     pub key: PathBuf,
 }
 
-/// Configures how strictly to enforce TLS encryption and authentication.
-#[derive(Debug, Clone)]
-pub enum TlsMode {
-    /// Require that all clients connect with TLS, but do not require that they
-    /// present a client certificate.
-    Require,
-}
-
 /// Start an `environmentd` server.
 #[tracing::instrument(name = "environmentd::serve", level = "info", skip_all)]
-pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
+pub async fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;
-    let stash = config
-        .controller
-        .postgres_factory
-        .open(config.adapter_stash_url.clone(), None, tls)
-        .await?;
 
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
@@ -266,19 +261,17 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             };
             let pgwire_tls = mz_pgwire::TlsConfig {
                 context: context.clone(),
-                mode: match tls_config.mode {
-                    TlsMode::Require => mz_pgwire::TlsMode::Enable,
-                },
+                mode: mz_pgwire::TlsMode::Require,
             };
             let http_tls = http::TlsConfig {
                 context,
-                mode: match tls_config.mode {
-                    TlsMode::Require => http::TlsMode::Enable,
-                },
+                mode: http::TlsMode::Require,
             };
             (Some(pgwire_tls), Some(http_tls))
         }
     };
+
+    let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
 
     // Initialize network listeners.
     //
@@ -290,6 +283,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         server::listen(config.internal_sql_listen_addr).await?;
     let (internal_http_listener, internal_http_conns) =
         server::listen(config.internal_http_listen_addr).await?;
+
+    let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
+    let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
 
     // Start the internal HTTP server.
     //
@@ -303,9 +299,97 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             metrics_registry: config.metrics_registry.clone(),
             tracing_handle: config.tracing_handle,
             adapter_client_rx: internal_http_adapter_client_rx,
+            active_connection_count: Arc::clone(&active_connection_count),
+            promote_leader: promote_leader_tx,
+            ready_to_promote: ready_to_promote_rx,
         });
         server::serve(internal_http_conns, internal_http_server)
     });
+
+    'leader_promotion: {
+        let Some(deploy_generation) = config.deploy_generation else { break 'leader_promotion };
+        tracing::info!("Requested deploy generation {deploy_generation}");
+        let mut stash = match config
+            .controller
+            .postgres_factory
+            .open_savepoint(config.adapter_stash_url.clone(), tls.clone())
+            .await
+        {
+            Ok(stash) => stash,
+            Err(e) => {
+                if e.can_recover_with_write_mode() {
+                    tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                    break 'leader_promotion;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
+        // TODO: once all stashes have a deploy_generation, don't need to handle the Option
+        let stash_generation = stash
+            .with_transaction(move |tx| {
+                Box::pin(async move { stash::deploy_generation(&tx).await })
+            })
+            .await?;
+        tracing::info!("Found stash generation {stash_generation:?}");
+        if stash_generation < Some(deploy_generation) {
+            tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
+            if let Err(e) = mz_adapter::catalog::storage::Connection::open(
+                stash,
+                config.now.clone(),
+                &BootstrapArgs {
+                    default_cluster_replica_size: config
+                        .bootstrap_default_cluster_replica_size
+                        .clone(),
+                    builtin_cluster_replica_size: config
+                        .bootstrap_builtin_cluster_replica_size
+                        .clone(),
+                    default_availability_zone: mz_adapter::DUMMY_AVAILABILITY_ZONE.into(),
+                    bootstrap_role: config.bootstrap_role.clone(),
+                },
+                None,
+            )
+            .await
+            {
+                return Err(anyhow!(e).context("Stash upgrade would have failed with this error"));
+            }
+
+            if let Err(()) = ready_to_promote_tx.send(()) {
+                return Err(anyhow!(
+                    "internal http server closed its end of ready_to_promote"
+                ));
+            }
+
+            tracing::info!("Waiting for user to promote this envd to leader");
+            if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
+                waiting_on_leader_promotion
+                    .send(internal_http_listener.local_addr())
+                    .await
+                    .expect("other side disappeared");
+            }
+            if let Err(RecvError { .. }) = promote_leader_rx.await {
+                return Err(anyhow!(
+                    "internal http server closed its end of promote_leader"
+                ));
+            }
+        } else if stash_generation == Some(deploy_generation) {
+            tracing::info!("Server requested generation {deploy_generation} which is equal to stash's generation");
+            if let Some(waiting_on_leader_promotion) = config.waiting_on_leader_promotion.take() {
+                waiting_on_leader_promotion
+                    .send(internal_http_listener.local_addr())
+                    .await
+                    .expect("other side disappeared");
+            }
+        } else {
+            mz_ore::halt!("Server started with requested generation {deploy_generation} but stash was already at {stash_generation:?}. Deploy generations must increase monotonically");
+        }
+    }
+
+    let stash = config
+        .controller
+        .postgres_factory
+        .open(config.adapter_stash_url.clone(), None, tls)
+        .await?;
 
     // Load the adapter catalog from disk.
     if !config
@@ -329,26 +413,24 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             // availability zone installed.
             default_availability_zone: config
                 .availability_zones
-                .first()
+                .choose(&mut rand::thread_rng())
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
+            bootstrap_role: config.bootstrap_role,
         },
+        config.deploy_generation,
     )
     .await?;
 
     // Initialize storage usage client.
     let storage_usage_client = StorageUsageClient::open(
-        config.controller.persist_location.blob_uri.clone(),
-        &config.controller.persist_clients,
-    )
-    .await
-    .context("opening storage usage client")?;
-
-    // TODO(teskje): Remove this migration in v0.42, since v0.41+ will only create orchestrator
-    // resources in the "cluster" namespace.
-    tracing::info!("SPECIAL MIGRATION: removing legacy orchestrator services");
-    remove_orchestrator_services(config.controller.orchestrator.namespace("compute")).await?;
-    remove_orchestrator_services(config.controller.orchestrator.namespace("storage")).await?;
+        config
+            .controller
+            .persist_clients
+            .open(config.controller.persist_location.clone())
+            .await
+            .context("opening storage usage client")?,
+    );
 
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
@@ -358,6 +440,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         let ld_key_map = config.launchdarkly_key_map;
         let env_id = config.environment_id.clone();
         let metrics_registry = config.metrics_registry.clone();
+        let now = config.now.clone();
         // The `SystemParameterFrontend::new` call needs to be wrapped in a
         // spawn_blocking call because the LaunchDarkly SDK initialization uses
         // `reqwest::blocking::client`. This should be revisited after the SDK
@@ -370,6 +453,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                     &metrics_registry,
                     ld_sdk_key.as_str(),
                     ld_key_map,
+                    now,
                 )
             },
         )
@@ -385,7 +469,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         dataflow_client: controller,
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
-        persisted_introspection: config.persisted_introspection,
+        all_features: config.all_features,
         build_info: &BUILD_INFO,
         environment_id: config.environment_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
@@ -395,15 +479,17 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         cluster_replica_sizes: config.cluster_replica_sizes,
         default_storage_cluster_size: config.default_storage_cluster_size,
         availability_zones: config.availability_zones,
-        bootstrap_system_parameters: config.bootstrap_system_parameters,
+        system_parameter_defaults: config.system_parameter_defaults,
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        storage_usage_retention_period: config.storage_usage_retention_period,
         segment_client: segment_client.clone(),
         egress_ips: config.egress_ips,
         system_parameter_frontend: system_parameter_frontend.clone(),
         aws_account_id: config.aws_account_id,
         aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+        active_connection_count: Arc::clone(&active_connection_count),
     })
     .await?;
 
@@ -416,11 +502,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Launch SQL server.
     task::spawn(|| "sql_server", {
         let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
-            tls: pgwire_tls,
+            tls: pgwire_tls.clone(),
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
             metrics: metrics.clone(),
             internal: false,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(sql_conns, sql_server)
     });
@@ -428,11 +515,21 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Launch internal SQL server.
     task::spawn(|| "internal_sql_server", {
         let internal_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
-            tls: None,
+            tls: pgwire_tls.map(|mut pgwire_tls| {
+                // Allow, but do not require, TLS connections on the internal
+                // port. Some users of the internal SQL server do not support
+                // TLS, while others require it, so we allow both.
+                //
+                // TODO(benesch): migrate all internal applications to TLS and
+                // remove `TlsMode::Allow`.
+                pgwire_tls.mode = mz_pgwire::TlsMode::Allow;
+                pgwire_tls
+            }),
             adapter_client: adapter_client.clone(),
             frontegg: None,
             metrics,
             internal: true,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(internal_sql_conns, internal_sql_server)
     });
@@ -444,6 +541,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             frontegg: config.frontegg.clone(),
             adapter_client: adapter_client.clone(),
             allowed_origin: config.cors_allowed_origin,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(http_conns, http_server)
     });
@@ -507,13 +605,4 @@ impl Server {
     pub fn internal_http_local_addr(&self) -> SocketAddr {
         self.internal_http_listener.local_addr()
     }
-}
-
-async fn remove_orchestrator_services(
-    orchestrator: Arc<dyn NamespacedOrchestrator>,
-) -> Result<(), anyhow::Error> {
-    for name in orchestrator.list_services().await? {
-        orchestrator.drop_service(&name).await?;
-    }
-    Ok(())
 }

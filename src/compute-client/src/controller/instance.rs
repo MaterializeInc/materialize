@@ -15,20 +15,24 @@ use std::num::NonZeroI64;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
+use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterStartupEpoch;
+use mz_expr::RowSetFinishing;
+use mz_ore::cast::CastFrom;
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::{GlobalId, Row};
+use mz_storage_client::controller::{ReadPolicy, StorageController};
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
 
-use mz_build_info::BuildInfo;
-use mz_cluster_client::client::ClusterStartupEpoch;
-use mz_expr::RowSetFinishing;
-use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::{ReadPolicy, StorageController};
-
+use crate::controller::error::CollectionMissing;
+use crate::controller::replica::{Replica, ReplicaConfig};
+use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
+use crate::metrics::UIntGauge;
 use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -36,10 +40,6 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
 use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use crate::types::sources::SourceInstanceDesc;
-
-use super::error::CollectionMissing;
-use super::replica::{Replica, ReplicaConfig};
-use super::{CollectionState, ComputeControllerResponse, ReplicaId};
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -115,8 +115,8 @@ pub(super) struct Instance<T> {
     /// Only if both these conditions hold is dropping a collection's state, and the associated
     /// read holds on its inputs, sound.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
-    /// IDs of arranged log sources maintained by this compute instance.
-    arranged_logs: BTreeMap<LogVariant, GlobalId>,
+    /// IDs of log sources maintained by this compute instance.
+    log_sources: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
     ///
     /// New entries are added for all peeks initiated through [`ActiveInstance::peek`].
@@ -141,7 +141,7 @@ pub(super) struct Instance<T> {
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
-    history: ComputeCommandHistory<T>,
+    history: ComputeCommandHistory<UIntGauge, T>,
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
     /// Ready compute controller responses to be delivered.
@@ -208,6 +208,29 @@ impl<T> Instance<T> {
             targeting.then_some(*id)
         })
     }
+
+    /// Refresh the controller state metrics for this instance.
+    ///
+    /// We could also do state metric updates directly in response to state changes, but that would
+    /// mean littering the code with metric update calls. Encapsulating state metric maintenance in
+    /// a single method is less noisy.
+    ///
+    /// This method is invoked by `ActiveComputeController::process`, which we expect to
+    /// be periodically called during normal operation.
+    pub(super) fn refresh_state_metrics(&self) {
+        self.metrics
+            .replica_count
+            .set(u64::cast_from(self.replicas.len()));
+        self.metrics
+            .collection_count
+            .set(u64::cast_from(self.collections.len()));
+        self.metrics
+            .peek_count
+            .set(u64::cast_from(self.peeks.len()));
+        self.metrics
+            .subscribe_count
+            .set(u64::cast_from(self.subscribes.len()));
+    }
 }
 
 impl<T> Instance<T>
@@ -228,16 +251,17 @@ where
                 (*id, state)
             })
             .collect();
+        let history = ComputeCommandHistory::new(metrics.for_history());
 
         let mut instance = Self {
             build_info,
             initialized: false,
             replicas: Default::default(),
             collections,
-            arranged_logs,
+            log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
-            history: Default::default(),
+            history,
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
             envd_epoch,
@@ -385,22 +409,15 @@ where
             return Err(ReplicaExists(id));
         }
 
-        // Initialize state for per-replica log collections.
-        for (log_id, _) in config.logging.sink_logs.values() {
-            self.compute
-                .collections
-                .insert(*log_id, CollectionState::new_log_collection());
-        }
-
-        config.logging.index_logs = self.compute.arranged_logs.clone();
-        let maintained_logs: BTreeSet<_> = config.logging.log_identifiers().collect();
+        config.logging.index_logs = self.compute.log_sources.clone();
+        let log_ids: BTreeSet<_> = config.logging.index_logs.values().collect();
 
         // Initialize frontier tracking for the new replica
         // and clean up any dropped collections that we can
         let mut updates = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
-            if collection.log_collection && !maintained_logs.contains(compute_id) {
+            if collection.log_collection && !log_ids.contains(compute_id) {
                 continue;
             }
 
@@ -602,13 +619,6 @@ where
 
             // Initialize tracking of subscribes.
             for subscribe_id in dataflow.subscribe_ids() {
-                // Creating subscribes during initialization is known to be defunct (#16247).
-                // We still do our best to handle this scenario gracefully, so we only log an error
-                // here.
-                if !self.compute.initialized {
-                    tracing::error!("creating subscribes during initialization is not supported");
-                }
-
                 self.compute
                     .subscribes
                     .insert(subscribe_id, ActiveSubscribe::new());
@@ -657,7 +667,7 @@ where
                     from: se.from,
                     from_desc: se.from_desc,
                     connection,
-                    as_of: se.as_of,
+                    with_snapshot: se.with_snapshot,
                     up_to: se.up_to,
                 };
                 sink_exports.insert(id, desc);
@@ -831,6 +841,7 @@ where
     /// # Panics
     ///
     /// Panics if any of the `updates` references an absent collection.
+    /// Panics if any of the `updates` regresses an existing write frontier.
     #[tracing::instrument(level = "debug", skip(self))]
     fn update_write_frontiers(
         &mut self,
@@ -855,6 +866,15 @@ where
             let old_upper = collection
                 .replica_write_frontiers
                 .insert(replica_id, new_upper.clone());
+
+            // Safety check against frontier regressions.
+            if let Some(old) = &old_upper {
+                assert!(
+                    PartialOrder::less_equal(old, new_upper),
+                    "Frontier regression: {old:?} -> {new_upper:?}, \
+                     collection={id}, replica={replica_id}",
+                );
+            }
 
             if new_upper.is_empty() {
                 dropped_collection_ids.push(*id);
@@ -1076,14 +1096,36 @@ where
         list: Vec<(GlobalId, Antichain<T>)>,
         replica_id: ReplicaId,
     ) {
-        // We should not receive updates for collections we don't track. It is possible that we
-        // currently do due to a bug where replicas send `FrontierUppers` for collections they drop
-        // during reconciliation.
-        // TODO(teskje): Revisit this after #16247 is resolved.
-        let updates: Vec<_> = list
-            .into_iter()
-            .filter(|(id, _)| self.compute.collections.contains_key(id))
-            .collect();
+        // According to the compute protocol, replicas are not allowed to send `FrontierUppers`
+        // that regress frontiers they have reported previously. We still perform a check here,
+        // rather than risking the controller becoming confused trying to handle regressions.
+        let mut updates = Vec::with_capacity(list.len());
+        for (id, new_frontier) in list {
+            let Ok(coll) = self.compute.collection(id) else {
+                tracing::warn!(
+                    ?replica_id,
+                    "Frontier update for unknown collection {id}: {:?}",
+                    new_frontier.elements(),
+                );
+                tracing::error!("Replica reported an untracked collection frontier");
+                continue;
+            };
+
+            if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
+                if !PartialOrder::less_equal(old_frontier, &new_frontier) {
+                    tracing::warn!(
+                        ?replica_id,
+                        "Frontier of collection {id} regressed: {:?} -> {:?}",
+                        old_frontier.elements(),
+                        new_frontier.elements(),
+                    );
+                    tracing::error!("Replica reported a regressed collection frontier");
+                    continue;
+                }
+            }
+
+            updates.push((id, new_frontier));
+        }
 
         self.update_write_frontiers(replica_id, &updates);
     }
@@ -1141,11 +1183,9 @@ where
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        // We should not receive updates for collections we don't track. It is possible that we
-        // currently do due to a bug where replicas send `DroppedAt` responses for subscribes they
-        // drop during reconciliation.
-        // TODO(teskje): Revisit this after #16247 is resolved.
         if !self.compute.collections.contains_key(&subscribe_id) {
+            tracing::warn!(?replica_id, "Response for unknown subscribe {subscribe_id}",);
+            tracing::error!("Replica sent a response for an unknown subscibe");
             return None;
         }
 

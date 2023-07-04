@@ -166,7 +166,7 @@ function Views(props) {
         SELECT
           id, name, records
         FROM
-          mz_internal.mz_records_per_dataflow_global
+          mz_internal.mz_records_per_dataflow
         ${whereFragment}
         ORDER BY
           records DESC
@@ -273,16 +273,14 @@ function View(props) {
         SELECT
           name, records
         FROM
-          mz_internal.mz_records_per_dataflow_global
+          mz_internal.mz_records_per_dataflow
         WHERE
           id = ${props.dataflowId};
 
         -- 1) Find the address id's value for this dataflow (innermost subselect).
         -- 2) Find all address ids whose first slot value is that (second innermost subselect).
         -- 3) Find all address values in that set (top select).
-        -- DISTINCT is useful (but not necessary) because it removes the duplicates
-        -- caused by multiple workers.
-        SELECT DISTINCT
+        SELECT
           id, address
         FROM
           mz_internal.mz_dataflow_addresses
@@ -296,7 +294,7 @@ function View(props) {
               WHERE
                 address[1]
                   = (
-                      SELECT DISTINCT
+                      SELECT
                         address[1]
                       FROM
                         mz_internal.mz_dataflow_addresses
@@ -305,7 +303,7 @@ function View(props) {
                     )
             );
 
-        SELECT DISTINCT
+        SELECT
           id, name
         FROM
           mz_internal.mz_dataflow_operators
@@ -319,7 +317,7 @@ function View(props) {
               WHERE
                 address[1]
                   = (
-                      SELECT DISTINCT
+                      SELECT
                         address[1]
                       FROM
                         mz_internal.mz_dataflow_addresses
@@ -329,11 +327,11 @@ function View(props) {
             );
 
         SELECT
-          id, from_index, to_index, sum(sent) as sent
+          id, from_index, to_index, sent
         FROM
           mz_internal.mz_dataflow_channels AS channels
           LEFT JOIN mz_internal.mz_message_counts AS counts
-              ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
+              ON channels.id = counts.channel_id
         WHERE
           id
           IN (
@@ -344,19 +342,17 @@ function View(props) {
               WHERE
                 address[1]
                   = (
-                      SELECT DISTINCT
+                      SELECT
                         address[1]
                       FROM
                         mz_internal.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflowId}
                     )
-            )
-        GROUP BY id, from_index, to_index
-        ;
+            );
 
         SELECT
-          id, sum(elapsed_ns)
+          id, elapsed_ns
         FROM
           mz_internal.mz_scheduling_elapsed
         WHERE
@@ -369,25 +365,21 @@ function View(props) {
               WHERE
                 address[1]
                   = (
-                      SELECT DISTINCT
+                      SELECT
                         address[1]
                       FROM
                         mz_internal.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflowId}
                     )
-            )
-        GROUP BY
-          id;
+            );
 
         SELECT
-          id, sum(records)
+          id, records
         FROM
           mz_internal.mz_records_per_dataflow_operator
         WHERE
-          dataflow_id = ${props.dataflowId}
-        GROUP BY
-          id;
+          dataflow_id = ${props.dataflowId};
       `);
       if (stats_table.rows.length !== 1) {
         throw `unknown dataflow id ${props.dataflowId}`;

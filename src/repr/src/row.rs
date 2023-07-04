@@ -16,6 +16,7 @@ use std::mem::{size_of, transmute};
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
 use mz_persist_types::Codec64;
@@ -27,24 +28,22 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
-use mz_ore::cast::{CastFrom, ReinterpretCast};
-
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
 };
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
+use crate::adt::mz_acl_item::MzAclItem;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::arb_datum;
-use crate::scalar::DatumKind;
+use crate::scalar::{arb_datum, DatumKind};
 use crate::{Datum, Timestamp};
 
-mod encoding;
+pub(crate) mod encoding;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 
@@ -168,8 +167,9 @@ impl Ord for Row {
 #[allow(missing_debug_implementations)]
 mod columnation {
 
-    use super::Row;
     use columnation::{Columnation, Region, StableRegion};
+
+    use crate::Row;
 
     /// Region allocation for `Row` data.
     ///
@@ -225,6 +225,10 @@ mod columnation {
             I: Iterator<Item = &'a Self> + Clone,
         {
             self.region.reserve(regions.map(|r| r.region.len()).sum());
+        }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.region.heap_size(callback)
         }
     }
 }
@@ -400,6 +404,7 @@ enum Tag {
     UInt64,
     MzTimestamp,
     Range,
+    MzAclItem,
 }
 
 // --------------------------------------------------------------------------------
@@ -617,43 +622,49 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Range => {
             // See notes on `push_range_with` for details about encoding.
             let flag_byte = read_byte(data, offset);
-            let flags =
-                range::Flags::from_bits(flag_byte).expect("range flags must be encoded validly");
+            let flags = range::InternalFlags::from_bits(flag_byte)
+                .expect("range flags must be encoded validly");
 
-            if flags.contains(range::Flags::EMPTY) {
+            if flags.contains(range::InternalFlags::EMPTY) {
                 assert!(
-                    flags == range::Flags::EMPTY,
+                    flags == range::InternalFlags::EMPTY,
                     "empty ranges contain only RANGE_EMPTY flag"
                 );
 
                 return Datum::Range(Range { inner: None });
             }
 
-            let lower_bound = if flags.contains(range::Flags::LB_INFINITE) {
+            let lower_bound = if flags.contains(range::InternalFlags::LB_INFINITE) {
                 None
             } else {
                 Some(DatumNested::extract(data, offset))
             };
 
             let lower = RangeBound {
-                inclusive: flags.contains(range::Flags::LB_INCLUSIVE),
+                inclusive: flags.contains(range::InternalFlags::LB_INCLUSIVE),
                 bound: lower_bound,
             };
 
-            let upper_bound = if flags.contains(range::Flags::UB_INFINITE) {
+            let upper_bound = if flags.contains(range::InternalFlags::UB_INFINITE) {
                 None
             } else {
                 Some(DatumNested::extract(data, offset))
             };
 
             let upper = RangeBound {
-                inclusive: flags.contains(range::Flags::UB_INCLUSIVE),
+                inclusive: flags.contains(range::InternalFlags::UB_INCLUSIVE),
                 bound: upper_bound,
             };
 
             Datum::Range(Range {
                 inner: Some(RangeInner { lower, upper }),
             })
+        }
+        Tag::MzAclItem => {
+            const N: usize = MzAclItem::binary_size();
+            let mz_acl_item = MzAclItem::decode_binary(&read_byte_array::<N>(data, offset))
+                .expect("invalid mz_aclitem");
+            Datum::MzAclItem(mz_acl_item)
         }
     }
 }
@@ -875,34 +886,25 @@ where
                 }
             }
         }
-        Datum::Range(Range { inner }) => {
+        Datum::Range(range) => {
             // See notes on `push_range_with` for details about encoding.
             data.push(Tag::Range.into());
+            data.push(range.internal_flag_bits());
 
-            match inner {
-                None => {
-                    data.push(range::Flags::EMPTY.bits());
-                }
-                Some(RangeInner { lower, upper }) => {
-                    let mut flags = range::Flags::empty();
-
-                    flags.set(range::Flags::LB_INFINITE, lower.bound.is_none());
-                    flags.set(range::Flags::UB_INFINITE, upper.bound.is_none());
-                    flags.set(range::Flags::LB_INCLUSIVE, lower.inclusive);
-                    flags.set(range::Flags::UB_INCLUSIVE, upper.inclusive);
-
-                    data.push(flags.bits());
-
-                    for bound in [lower.bound, upper.bound] {
-                        if let Some(bound) = bound {
-                            match bound.datum() {
-                                Datum::Null => panic!("cannot push Datum::Null into range"),
-                                d => push_datum(data, d),
-                            }
+            if let Some(RangeInner { lower, upper }) = range.inner {
+                for bound in [lower.bound, upper.bound] {
+                    if let Some(bound) = bound {
+                        match bound.datum() {
+                            Datum::Null => panic!("cannot push Datum::Null into range"),
+                            d => push_datum(data, d),
                         }
                     }
                 }
             }
+        }
+        Datum::MzAclItem(mz_acl_item) => {
+            data.push(Tag::MzAclItem.into());
+            data.extend_from_slice(&mz_acl_item.encode_binary());
         }
     }
 }
@@ -1003,6 +1005,7 @@ pub fn datum_size(datum: &Datum) -> usize {
                     .sum(),
             }
         }
+        Datum::MzAclItem(_) => 1 + MzAclItem::binary_size(),
     }
 }
 
@@ -1305,7 +1308,7 @@ impl RowPacker<'_> {
         for dim in dims {
             self.row
                 .data
-                .extend_from_slice(&u64::cast_from(dim.lower_bound).to_le_bytes());
+                .extend_from_slice(&i64::cast_from(dim.lower_bound).to_le_bytes());
             self.row
                 .data
                 .extend_from_slice(&u64::cast_from(dim.length).to_le_bytes());
@@ -1389,7 +1392,7 @@ impl RowPacker<'_> {
             None => {
                 self.row.data.push(Tag::Range.into());
                 // Untagged bytes only contains the `RANGE_EMPTY` flag value.
-                self.row.data.push(range::Flags::EMPTY.bits());
+                self.row.data.push(range::InternalFlags::EMPTY.bits());
                 Ok(())
             }
             Some(inner) => self.push_range_with(
@@ -1446,12 +1449,12 @@ impl RowPacker<'_> {
         let start = self.row.data.len();
         self.row.data.push(Tag::Range.into());
 
-        let mut flags = range::Flags::empty();
+        let mut flags = range::InternalFlags::empty();
 
-        flags.set(range::Flags::LB_INFINITE, lower.bound.is_none());
-        flags.set(range::Flags::UB_INFINITE, upper.bound.is_none());
-        flags.set(range::Flags::LB_INCLUSIVE, lower.inclusive);
-        flags.set(range::Flags::UB_INCLUSIVE, upper.inclusive);
+        flags.set(range::InternalFlags::LB_INFINITE, lower.bound.is_none());
+        flags.set(range::InternalFlags::UB_INFINITE, upper.bound.is_none());
+        flags.set(range::InternalFlags::LB_INCLUSIVE, lower.inclusive);
+        flags.set(range::InternalFlags::UB_INCLUSIVE, upper.inclusive);
 
         let mut expected_datums = 0;
 
@@ -1888,7 +1891,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_assumptions() {
         assert_eq!(size_of::<Tag>(), 1);
         #[cfg(target_endian = "big")]
@@ -1898,7 +1901,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn miri_test_arena() {
         let arena = RowArena::new();
 
@@ -1924,7 +1927,7 @@ mod tests {
         assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn miri_test_round_trip() {
         fn round_trip(datums: Vec<Datum>) {
             let row = Row::pack(datums.clone());
@@ -1979,7 +1982,7 @@ mod tests {
         ]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_array() {
         // Construct an array using `Row::push_array` and verify that it unpacks
         // correctly.
@@ -2006,7 +2009,7 @@ mod tests {
         assert_eq!(arr1, arr2);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multidimensional_array() {
         let datums = vec![
             Datum::Int32(1),
@@ -2044,7 +2047,7 @@ mod tests {
         assert_eq!(array.elements().into_iter().collect::<Vec<_>>(), datums);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_array_max_dimensions() {
         let mut row = Row::default();
         let max_dims = usize::from(MAX_ARRAY_DIMENSIONS);
@@ -2079,7 +2082,7 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_array_wrong_cardinality() {
         let mut row = Row::default();
         let res = row.packer().push_array(
@@ -2105,7 +2108,7 @@ mod tests {
         assert!(row.data.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_nesting() {
         let mut row = Row::default();
         row.packer().push_dict_with(|row| {
@@ -2137,7 +2140,7 @@ mod tests {
         assert_eq!(v, Datum::String("bob"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_dict_errors() -> Result<(), Box<dyn std::error::Error>> {
         let pack = |ok| {
             let mut row = Row::default();
@@ -2163,7 +2166,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_datum_sizes() {
         let arena = RowArena::new();
 
@@ -2219,7 +2223,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_range_errors() {
         fn test_range_errors_inner<'a>(
             datums: Vec<Vec<Datum<'a>>>,
@@ -2280,7 +2284,7 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    #[test]
+    #[mz_ore::test]
     fn row_size_is_stable() {
         // nothing depends on this being exactly 32, we just want it to be an active decision if we
         // change it

@@ -15,13 +15,13 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
+use mz_persist::location::{
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
-
-use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL,
-};
 
 use crate::maelstrom::api::{ErrorCode, MaelstromError};
 use crate::maelstrom::node::Handle;
@@ -110,15 +110,14 @@ impl Consensus for MaelstromConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         let create_if_not_exists = expected.is_none();
 
         let from = match expected {
             Some(expected) => match self.hydrate_seqno(key, expected).await? {
                 Ok(x) => Value::from(&MaelstromVersionedData::from(x)),
                 Err(_) => {
-                    let from = expected.next();
-                    return Ok(Err(self.scan(key, from, SCAN_ALL).await?));
+                    return Ok(CaSResult::ExpectationMismatch);
                 }
             },
             None => Value::Null,
@@ -140,16 +139,12 @@ impl Consensus for MaelstromConsensus {
                     .lock()
                     .await
                     .insert((key.to_string(), SeqNo(new.seqno)), new.data.clone());
-                Ok(Ok(()))
+                Ok(CaSResult::Committed)
             }
             Err(MaelstromError {
                 code: ErrorCode::PreconditionFailed,
                 ..
-            }) => {
-                let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-                let current = self.scan(key, from, SCAN_ALL).await?;
-                Ok(Err(current))
-            }
+            }) => Ok(CaSResult::ExpectationMismatch),
             Err(err) => Err(ExternalError::from(anyhow::Error::new(err))),
         }
     }
@@ -182,7 +177,7 @@ impl MaelstromBlob {
 
 #[async_trait]
 impl Blob for MaelstromBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("blob/{}", key)))
@@ -195,9 +190,9 @@ impl Blob for MaelstromBlob {
         let value = value
             .as_str()
             .ok_or_else(|| anyhow!("invalid blob at {}: {:?}", key, value))?;
-        let value = serde_json::from_str(value)
+        let value: Vec<u8> = serde_json::from_str(value)
             .map_err(|err| anyhow!("invalid blob at {}: {}", key, err))?;
-        Ok(Some(value))
+        Ok(Some(SegmentedBytes::from(value)))
     }
 
     async fn list_keys_and_metadata(
@@ -238,7 +233,7 @@ impl Blob for MaelstromBlob {
 #[derive(Debug)]
 pub struct CachingBlob {
     blob: Arc<dyn Blob + Send + Sync>,
-    cache: Mutex<BTreeMap<String, Vec<u8>>>,
+    cache: Mutex<BTreeMap<String, SegmentedBytes>>,
 }
 
 impl CachingBlob {
@@ -252,7 +247,7 @@ impl CachingBlob {
 
 #[async_trait]
 impl Blob for CachingBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         // Fetch the cached value if there is one.
         let cache = self.cache.lock().await;
         if let Some(value) = cache.get(key) {

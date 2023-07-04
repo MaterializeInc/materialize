@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,13 +79,12 @@
 
 use std::collections::BTreeMap;
 
+pub use mz_lowertest_derive::MzReflect;
+use mz_ore::result::ResultExt;
+use mz_ore::str::{separated, StrExt};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-
-use mz_ore::{result::ResultExt, str::separated, str::StrExt};
-
-pub use mz_lowertest_derive::MzReflect;
 
 /* #region Parts of the public interface related to collecting information
 about the fields of structs and enums. */
@@ -126,7 +123,7 @@ pub struct ReflectedTypeInfo {
 
 /// Converts `s` into a [proc_macro2::TokenStream]
 pub fn tokenize(s: &str) -> Result<TokenStream, String> {
-    s.parse::<TokenStream>().map_err_to_string()
+    s.parse::<TokenStream>().map_err_to_string_with_causes()
 }
 
 /// Changes `"\"foo\""` to `"foo"`

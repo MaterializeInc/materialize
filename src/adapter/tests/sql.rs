@@ -56,8 +56,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -88,24 +86,24 @@
 
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-
+use mz_adapter::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
 use mz_sql::catalog::CatalogDatabase;
-use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
+use mz_sql::names::{self, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
+use tokio::sync::Mutex;
 
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn datadriven() {
-    datadriven::walk_async("tests/testdata", |mut f| async {
+    datadriven::walk_async("tests/testdata/sql", |mut f| async {
         // The datadriven API takes an `FnMut` closure, and can't express to Rust that
         // it will finish polling each returned future before calling the closure
         // again, so we have to wrap the catalog in a share-able type. Datadriven
@@ -133,7 +131,7 @@ async fn datadriven() {
                                 .resolve_schema_in_database(
                                     &database_spec,
                                     DEFAULT_SCHEMA,
-                                    SYSTEM_CONN_ID,
+                                    &SYSTEM_CONN_ID,
                                 )
                                 .unwrap()
                                 .id
@@ -145,8 +143,8 @@ async fn datadriven() {
                                     vec![Op::CreateItem {
                                         id,
                                         oid,
-                                        name: QualifiedObjectName {
-                                            qualifiers: ObjectQualifiers {
+                                        name: QualifiedItemName {
+                                            qualifiers: ItemQualifiers {
                                                 database_spec,
                                                 schema_spec,
                                             },
@@ -159,8 +157,9 @@ async fn datadriven() {
                                             conn_id: None,
                                             depends_on: vec![],
                                             custom_logical_compaction_window: None,
-                                            is_retained_metrics_relation: false,
+                                            is_retained_metrics_object: false,
                                         }),
+                                        owner_id: MZ_SYSTEM_ROLE_ID,
                                     }],
                                     |_| Ok(()),
                                 )

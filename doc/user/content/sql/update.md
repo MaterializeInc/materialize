@@ -21,9 +21,12 @@ _alias_ | Only permit references to _table_name_ as _alias_.
 
 ## Details
 
-`UPDATE` cannot currently...
-- Be used inside [transactions](../begin)
-- Reference other tables
+### Known limitations
+
+* `UPDATE` cannot be used inside [transactions](../begin).
+* `UPDATE` can reference [user-created tables](../create-table) but not [sources](../create-source).
+* **Low performance.** While processing an `UPDATE` statement, Materialize cannot
+  process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
 ## Examples
 

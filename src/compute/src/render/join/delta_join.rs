@@ -12,19 +12,26 @@
 //! Consult [DeltaJoinPlan] documentation for details.
 
 #![allow(clippy::op_ref)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
-use timely::dataflow::Scope;
-use timely::progress::Antichain;
-
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::{AsCollection, Collection};
 use mz_compute_client::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_compute_client::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::{Map, OkErr};
+use timely::dataflow::Scope;
+use timely::progress::timestamp::Refines;
+use timely::progress::Antichain;
 
-use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
+use crate::render::RenderTimestamp;
 
 impl<G> Context<G, Row>
 where
@@ -127,9 +134,6 @@ where
                     // Collects error streams for the region scope. Concats before leaving.
                     let mut region_errs = Vec::with_capacity(inputs.len());
 
-                    use differential_dataflow::AsCollection;
-                    use timely::dataflow::operators::Map;
-
                     // Ensure this input is rendered, and extract its update stream.
                     let val = arrangements
                         .get(&(source_relation, source_key))
@@ -198,6 +202,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     } else {
                                         build_halfjoin(
@@ -207,6 +212,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     }
                                 }
@@ -219,6 +225,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     } else {
                                         build_halfjoin(
@@ -228,6 +235,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     }
                                 }
@@ -291,12 +299,6 @@ where
     }
 }
 
-use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::BatchReader;
-use differential_dataflow::trace::Cursor;
-use differential_dataflow::trace::TraceReader;
-use differential_dataflow::Collection;
-
 /// Constructs a `half_join` from supplied arguments.
 ///
 /// This method exists to factor common logic from four code paths that are generic over the type of trace.
@@ -314,6 +316,7 @@ fn build_halfjoin<G, Tr, CF>(
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
+    shutdown_token: ShutdownToken,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -346,10 +349,6 @@ where
         }
     });
 
-    use crate::render::RenderTimestamp;
-    use differential_dataflow::AsCollection;
-    use timely::dataflow::operators::OkErr;
-
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
@@ -364,6 +363,10 @@ where
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                // Check the shutdown token to avoid doing unnecessary work when the dataflow is
+                // shutting down.
+                shutdown_token.probe()?;
+
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
@@ -396,6 +399,10 @@ where
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                // Check the shutdown token to avoid doing unnecessary work when the dataflow is
+                // shutting down.
+                shutdown_token.probe()?;
+
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
                 let row = closure
@@ -426,11 +433,6 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
 {
-    use differential_dataflow::AsCollection;
-    use mz_timely_util::operator::StreamExt;
-    use timely::dataflow::channels::pact::Pipeline;
-
-    use timely::progress::timestamp::Refines;
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
         inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));

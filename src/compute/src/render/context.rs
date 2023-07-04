@@ -11,36 +11,39 @@
 //! dataflow.
 
 use std::collections::BTreeMap;
+use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arrange, Arranged};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use differential_dataflow::trace::BatchReader;
-use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::Collection;
-use differential_dataflow::Data;
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::{Collection, Data};
 use mz_compute_client::plan::AvailableCollections;
-use timely::communication::message::RefOrMut;
-use timely::container::columnation;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::{scopes::Child, Scope, ScopeParent};
-use timely::progress::timestamp::Refines;
-use timely::progress::{Antichain, Timestamp};
-
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::communication::message::RefOrMut;
+use timely::container::columnation;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, ScopeParent};
+use timely::progress::timestamp::Refines;
+use timely::progress::{Antichain, Timestamp};
 
+use crate::render::errors::ErrorLogger;
+use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
-pub(crate) type Arrangement<S, V> =
-    Arranged<S, TraceRowHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
+pub(crate) type KeyArrangement<S, K, V> =
+    Arranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
+pub(crate) type Arrangement<S, V> = KeyArrangement<S, V, V>;
 pub(crate) type ErrArrangement<S> =
     Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type ArrangementImport<S, V, T> = Arranged<
@@ -78,16 +81,20 @@ where
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
     pub dataflow_id: usize,
-    /// Indicates a frontier that can be used to compact input timestamps
-    /// without affecting the results. We *should* apply it, to sources and
-    /// imported traces, both because it improves performance, and because
-    /// potentially incorrect results are visible in sinks.
+    /// Frontier before which updates should not be emitted.
+    ///
+    /// We *must* apply it to sinks, to ensure correct outputs.
+    /// We *should* apply it to sources and imported traces, because it improves performance.
     pub as_of_frontier: Antichain<T>,
     /// Frontier after which updates should not be emitted.
     /// Used to limit the amount of work done when appropriate.
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
+    /// A token that operators can probe to know whether the dataflow is shutting down.
+    pub(super) shutdown_token: ShutdownToken,
+    /// The implementation to use for rendering linear joins.
+    pub(super) linear_join_impl: LinearJoinImpl,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -113,6 +120,8 @@ where
             as_of_frontier,
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
+            shutdown_token: Default::default(),
+            linear_join_impl: Default::default(),
         }
     }
 }
@@ -159,6 +168,46 @@ where
     /// Look up a collection bundle by an identifier.
     pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, V, T>> {
         self.bindings.get(&id).cloned()
+    }
+
+    pub(super) fn error_logger(&self) -> ErrorLogger {
+        ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
+    }
+}
+
+/// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
+/// datalow is shutting down.
+///
+/// Instances created through the `Default` impl act as if the dataflow never shuts down.
+/// Instances created through [`ShutdownToken::new`] defer to the wrapped token.
+#[derive(Clone, Default)]
+pub(super) struct ShutdownToken(Option<Weak<()>>);
+
+impl ShutdownToken {
+    /// Construct a `ShutdownToken` instance that defers to `token`.
+    pub(super) fn new(token: Weak<()>) -> Self {
+        Self(Some(token))
+    }
+
+    /// Probe the token for dataflow shutdown.
+    ///
+    /// This method is meant to be used with the `?` operator: It returns `None` if the dataflow is
+    /// in the process of shutting down and `Some` otherwise.
+    pub(super) fn probe(&self) -> Option<()> {
+        match &self.0 {
+            Some(t) => t.upgrade().map(|_| ()),
+            None => Some(()),
+        }
+    }
+
+    /// Returns whether the dataflow is in the process of shutting down.
+    pub(super) fn in_shutdown(&self) -> bool {
+        self.probe().is_none()
+    }
+
+    /// Returns a reference to the wrapped `Weak`.
+    pub(crate) fn get_inner(&self) -> Option<&Weak<()>> {
+        self.0.as_ref()
     }
 }
 
@@ -744,8 +793,6 @@ where
     }
 }
 
-use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::Capability;
 struct PendingWork<C>
 where
     C: Cursor,

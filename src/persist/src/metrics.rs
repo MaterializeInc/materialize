@@ -74,6 +74,7 @@ pub struct PostgresConsensusMetrics {
     pub(crate) connpool_acquires: IntCounter,
     pub(crate) connpool_acquire_seconds: Counter,
     pub(crate) connpool_connections_created: Counter,
+    pub(crate) connpool_connection_errors: Counter,
     pub(crate) connpool_ttl_reconnections: Counter,
 }
 
@@ -96,6 +97,10 @@ impl PostgresConsensusMetrics {
             connpool_connections_created: registry.register(metric!(
                 name: "mz_persist_postgres_connpool_connections_created",
                 help: "times a connection was created",
+            )),
+            connpool_connection_errors: registry.register(metric!(
+                name: "mz_persist_postgres_connpool_connection_errors",
+                help: "number of errors when establishing a new connection",
             )),
             connpool_ttl_reconnections: registry.register(metric!(
                 name: "mz_persist_postgres_connpool_ttl_reconnections",

@@ -13,12 +13,11 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::NowFn;
-use mz_persist_types::codec_impls::UnitSchema;
-use timely::progress::Antichain;
-
 use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::types::sources::SourceData;
+use timely::progress::Antichain;
 
 pub async fn write_to_persist(
     collection_id: GlobalId,
@@ -28,6 +27,7 @@ pub async fn write_to_persist(
     client: &PersistClient,
     status_shard: ShardId,
     relation_desc: &RelationDesc,
+    hint: Option<&str>,
 ) {
     let now_ms = now();
     let row = mz_storage_client::healthcheck::pack_status_row(
@@ -35,6 +35,7 @@ pub async fn write_to_persist(
         new_status,
         new_error,
         now_ms,
+        hint,
     );
 
     let mut handle = client

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 import pytest
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
 def pytest_configure(config: "Config") -> None:
@@ -31,6 +31,16 @@ def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
         aws_region=pytestconfig.getoption("aws_region"),
         log_filter=pytestconfig.getoption("log_filter"),
     )
+
+
+@pytest.fixture(scope="session")
+def log_filter(pytestconfig: pytest.Config) -> Any:
+    return pytestconfig.getoption("log_filter")
+
+
+@pytest.fixture(scope="session")
+def dev(pytestconfig: pytest.Config) -> Any:
+    return pytestconfig.getoption("dev")
 
 
 @pytest.fixture(scope="session")

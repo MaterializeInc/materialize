@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::fmt::Debug;
-use std::str;
 use std::time::Duration;
+use std::{cmp, str};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;

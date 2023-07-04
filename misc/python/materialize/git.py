@@ -15,7 +15,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Set, Union
 
-import semver.version
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version
 
 from materialize import spawn
 
@@ -84,18 +87,22 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(*, fetch: bool = True) -> List[semver.version.Version]:
+def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> List[Version]:
     """List all the version-like tags in the repo
 
     Args:
         fetch: If false, don't automatically run `git fetch --tags`.
+        prefix: A prefix to strip from each tag before attempting to parse the
+            tag as a version.
     """
     if fetch:
         _fetch()
     tags = []
     for t in spawn.capture(["git", "tag"]).splitlines():
+        if not t.startswith(prefix):
+            continue
         try:
-            tags.append(semver.version.Version.parse(t.lstrip("v")))
+            tags.append(Version.parse(t.removeprefix(prefix)))
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 
@@ -135,7 +142,7 @@ def describe() -> str:
 
 def fetch() -> str:
     """Fetch from all configured default fetch remotes"""
-    return spawn.capture(["git", "fetch", "--tags"]).strip()
+    return spawn.capture(["git", "fetch", "--all", "--tags", "--force"]).strip()
 
 
 _fetch = fetch  # renamed because an argument shadows the fetch name in get_tags

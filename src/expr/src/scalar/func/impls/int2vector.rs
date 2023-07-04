@@ -9,11 +9,10 @@
 
 use std::fmt;
 
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
@@ -57,6 +56,10 @@ impl LazyUnaryFunc for CastInt2VectorToArray {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        true // A noop is trivially monotone.
     }
 }
 
@@ -105,6 +108,10 @@ impl LazyUnaryFunc for CastInt2VectorToString {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToInt2Vector)
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

@@ -40,7 +40,7 @@ SELECT * FROM mv
 
 # Test: Materialized view creation can be skipped if a materialized view already exists.
 
-statement error catalog item 'mv' already exists
+statement error materialized view "materialize.public.mv" already exists
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 statement ok
@@ -211,7 +211,7 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 statement ok
 CREATE VIEW v AS SELECT * FROM mv
 
-statement error cannot drop materialize.public.mv: still depended upon by catalog item 'materialize.public.v'
+statement error cannot drop materialized view mv: still depended upon by view v
 DROP MATERIALIZED VIEW mv
 
 
@@ -256,6 +256,13 @@ SHOW CREATE MATERIALIZED VIEW mv
 name                  create_sql
 materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
 
+# Test: SHOW CREATE MATERIALIZED VIEW as mz_introspection
+
+simple conn=mz_introspection,user=mz_introspection
+SHOW CREATE MATERIALIZED VIEW mv
+----
+materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT 1
+COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
 
@@ -346,7 +353,7 @@ mv_primary_idx  mv  default {?column?}
 # Test: Creating materialized views that depend on log sources is forbidden.
 
 statement error materialized view objects cannot depend on log sources
-CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, worker_id, name FROM mz_internal.mz_dataflow_operators;
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_internal.mz_dataflow_operators;
 
 
 # Test: Attempting to use view commands on materialized views gives helpful errors.
@@ -363,6 +370,49 @@ ALTER VIEW mv RENAME TO mv2
 statement error materialize\.public\.mv is not a view\nHINT: Use EXPLAIN \[\.\.\.\] MATERIALIZED VIEW to explain a materialized view\.
 EXPLAIN WITH(arity, join_impls) VIEW mv
 
+# We should not be able to create materialized views on top of 'SHOW' commands.
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_clusters AS SELECT name FROM (SHOW CLUSTERS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_cluster_replicas AS SELECT cluster, replica, size, ready FROM (SHOW CLUSTER REPLICAS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_columns AS SELECT name, nullable, type FROM (SHOW COLUMNS FROM mz_tables);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_connections AS SELECT name, type FROM (SHOW CONNECTIONS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_databases AS SELECT name FROM (SHOW DATABASES);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_indexes AS SELECT name, on, cluster, key FROM (SHOW INDEXES);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_mat_views AS SELECT name, cluster FROM (SHOW MATERIALIZED VIEWS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_objects AS SELECT name FROM (SHOW OBJECTS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_schemas AS SELECT name FROM (SHOW SCHEMAS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
+
+statement error SHOW commands are not allowed in views
+CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
 
 # Cleanup
 

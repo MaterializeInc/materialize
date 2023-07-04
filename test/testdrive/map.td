@@ -48,10 +48,10 @@ name
 bool
 
 ! DROP TYPE bool
-contains:cannot drop item pg_catalog.bool because it is required by the database system
+contains:cannot drop type bool because it is required by the database system
 
 ! DROP TYPE public.bool
-contains:cannot drop materialize.public.bool: still depended upon by catalog item 'materialize.public.another_custom'
+contains:cannot drop type public.bool: still depended upon by type another_custom
 
 > DROP TYPE another_custom
 

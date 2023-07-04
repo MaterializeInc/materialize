@@ -18,6 +18,7 @@ BenchmarkingSequence = Union[MeasurementSource, List[Union[Action, MeasurementSo
 
 class RootScenario:
     SCALE: float = 6
+    FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenarioo
 
     def __init__(self, scale: float) -> None:
         self._name = self.__class__.__name__

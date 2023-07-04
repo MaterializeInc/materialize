@@ -17,16 +17,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
-use timely::progress::Antichain;
-use timely::PartialOrder;
-use tracing::warn;
-
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
 use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
+    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection,
 };
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -37,17 +33,21 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use timely::progress::Antichain;
+use timely::PartialOrder;
+use tracing::warn;
 
 use crate::catalog::{
     Catalog, CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View,
 };
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::util::ResultExt;
-use crate::AdapterError;
+use crate::util::{viewable_variables, ResultExt};
+use crate::{rbac, AdapterError};
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {
@@ -68,11 +68,20 @@ pub enum ExprPrepStyle<'a> {
     /// The expression is being prepared to run once at the specified logical
     /// time in the specified session.
     OneShot {
-        logical_time: Option<mz_repr::Timestamp>,
+        logical_time: EvalTime,
         session: &'a Session,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
     AsOfUpTo,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum EvalTime {
+    Time(mz_repr::Timestamp),
+    /// Skips mz_now() calls.
+    Deferred,
+    /// Errors on mz_now() calls.
+    NotAvailable,
 }
 
 impl Coordinator {
@@ -87,7 +96,7 @@ impl Coordinator {
             .instance_ref(instance)
             .expect("compute instance does not exist");
         DataflowBuilder {
-            catalog: self.catalog.state(),
+            catalog: self.catalog().state(),
             compute,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
@@ -146,18 +155,18 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for dataflow in dataflows.into_iter() {
+        for mut dataflow in dataflows.into_iter() {
             output_ids.extend(dataflow.export_ids());
-            let mut plan = self.finalize_dataflow(dataflow, instance)?;
             // If the only outputs of the dataflow are sinks, we might
             // be able to turn off the computation early, if they all
             // have non-trivial `up_to`s.
-            if plan.index_exports.is_empty() {
-                plan.until = Antichain::from_elem(Timestamp::MIN);
-                for (_, sink) in &plan.sink_exports {
-                    plan.until.join_assign(&sink.up_to);
+            if dataflow.index_exports.is_empty() {
+                dataflow.until = Antichain::from_elem(Timestamp::MIN);
+                for (_, sink) in &dataflow.sink_exports {
+                    dataflow.until.join_assign(&sink.up_to);
                 }
             }
+            let plan = self.finalize_dataflow(dataflow, instance)?;
             dataflow_plans.push(plan);
         }
         self.controller
@@ -208,9 +217,13 @@ impl Coordinator {
     /// invariants such as ensuring that the `as_of` frontier is in advance of
     /// the various `since` frontiers of participating data inputs.
     ///
-    /// In particular, there are requirement on the `as_of` field for the dataflow
+    /// In particular, there are requirements on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
+    ///
+    /// Additionally, this method requires that the `until` field of the dataflow
+    /// has been set, so that any plan improvements based on its difference to `as_of`
+    /// can be carried out.
     ///
     /// This method will return an error if the finalization fails. DO NOT call this
     /// method for DDL. Instead, use the non-fallible version [`Self::must_finalize_dataflow`].
@@ -262,7 +275,13 @@ impl Coordinator {
                 .unwrap_or_terminate("Normalize failed; unrecoverable error");
         }
 
-        mz_compute_client::plan::Plan::finalize_dataflow(dataflow).map_err(AdapterError::Internal)
+        mz_compute_client::plan::Plan::finalize_dataflow(
+            dataflow,
+            self.catalog()
+                .system_config()
+                .enable_monotonic_oneshot_selects(),
+        )
+        .map_err(AdapterError::Internal)
     }
 }
 
@@ -400,7 +419,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             .expect("can only create indexes on items with a valid description")
             .typ()
             .clone();
-        let name = index_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(index_entry.name(), index_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
@@ -445,7 +467,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         id: GlobalId,
         sink_description: ComputeSinkDesc,
     ) -> Result<(), AdapterError> {
-        dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
@@ -467,7 +488,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     pub fn build_materialized_view_dataflow(
         &mut self,
         id: GlobalId,
-        as_of: Antichain<Timestamp>,
         internal_view_id: GlobalId,
     ) -> Result<DataflowDesc, AdapterError> {
         let mview_entry = self.catalog.get_entry(&id);
@@ -478,7 +498,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             ),
         };
 
-        let name = mview_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(mview_entry.name(), mview_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
 
         self.import_view_into_dataflow(&internal_view_id, &mview.optimized_expr, &mut dataflow)?;
@@ -493,10 +516,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 value_desc: mview.desc.clone(),
                 storage_metadata: (),
             }),
-            as_of: SinkAsOf {
-                frontier: as_of,
-                strict: false,
-            },
+            with_snapshot: true,
             up_to: Antichain::default(),
         };
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
@@ -510,7 +530,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Source => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
         }
     }
 
@@ -687,7 +709,7 @@ pub fn prep_scalar_expr(
 fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
-    logical_time: Option<mz_repr::Timestamp>,
+    logical_time: EvalTime,
     session: &Session,
 ) -> Result<MirScalarExpr, AdapterError> {
     let pack_1d_array = |datums: Vec<Datum>| {
@@ -701,6 +723,16 @@ fn eval_unmaterializable_func(
                 datums,
             )
             .expect("known to be a valid array");
+        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+    };
+    let pack_dict = |mut datums: Vec<(String, String)>| {
+        datums.sort();
+        let mut row = Row::default();
+        row.packer().push_dict(
+            datums
+                .iter()
+                .map(|(key, value)| (key.as_str(), Datum::from(value.as_str()))),
+        );
         Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
     };
     let pack = |datum| {
@@ -738,17 +770,31 @@ fn eval_unmaterializable_func(
                     .collect(),
             )
         }
+        UnmaterializableFunc::ViewableVariables => pack_dict(
+            viewable_variables(state, session)
+                .map(|var| (var.name().to_lowercase(), var.value()))
+                .collect(),
+        ),
         UnmaterializableFunc::CurrentTimestamp => {
             let t: Datum = session.pcx().wall_time.try_into()?;
             pack(t)
         }
-        UnmaterializableFunc::CurrentUser => pack(Datum::from(&*session.user().name)),
+        UnmaterializableFunc::CurrentUser => pack(Datum::from(
+            state.get_role(session.current_role_id()).name(),
+        )),
+        UnmaterializableFunc::SessionUser => pack(Datum::from(
+            state.get_role(session.session_role_id()).name(),
+        )),
+        UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
+            rbac::is_rbac_enabled_for_session(state.system_config(), session),
+        )),
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))
         }
         UnmaterializableFunc::MzNow => match logical_time {
-            None => coord_bail!("cannot call mz_now in this context"),
-            Some(logical_time) => pack(Datum::MzTimestamp(logical_time)),
+            EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
+            EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
+            EvalTime::NotAvailable => coord_bail!("cannot call mz_now in this context"),
         },
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
         UnmaterializableFunc::MzUptime => {
@@ -762,9 +808,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
-        UnmaterializableFunc::PgBackendPid => {
-            pack(Datum::Int32(i32::reinterpret_cast(session.conn_id())))
-        }
+        UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(i32::reinterpret_cast(
+            session.conn_id().unhandled(),
+        ))),
         UnmaterializableFunc::PgPostmasterStartTime => {
             let t: Datum = state.config().start_time.try_into()?;
             pack(t)

@@ -10,7 +10,7 @@ menu:
 `CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
 incrementally updated as new data arrives.
 
-A materialized view specifies a [cluster](/overview/key-concepts/#clusters) that
+A materialized view specifies a [cluster](/get-started/key-concepts/#clusters) that
 is tasked with keeping its results up-to-date, but **can be referenced in
 any cluster**. This allows you to effectively decouple the computational
 resources used for view maintenance from the resources used for query serving.

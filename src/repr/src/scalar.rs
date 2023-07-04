@@ -20,6 +20,8 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
+use mz_lowertest::MzReflect;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -27,24 +29,22 @@ use proptest::strategy::Union;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use mz_lowertest::MzReflect;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-
 use crate::adt::array::{Array, ArrayDimension};
 use crate::adt::char::{Char, CharLength};
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+use crate::adt::mz_acl_item::{AclMode, MzAclItem};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::row::DatumNested;
-use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
-
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
+use crate::role_id::RoleId;
+use crate::row::DatumNested;
+use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
 
 /// A single value.
 ///
@@ -126,6 +126,8 @@ pub enum Datum<'a> {
     MzTimestamp(crate::Timestamp),
     /// A range of values, e.g. [-1, 1).
     Range(Range<DatumNested<'a>>),
+    /// A list of privileges granted to a user.
+    MzAclItem(MzAclItem),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -741,6 +743,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the mz_acl_item value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::MzAclItem`].
+    #[track_caller]
+    pub fn unwrap_mz_acl_item(&self) -> MzAclItem {
+        match self {
+            Datum::MzAclItem(mz_acl_item) => *mz_acl_item,
+            _ => panic!("Datum::unwrap_mz_acl_item called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -856,6 +871,8 @@ impl<'a> Datum<'a> {
                         }
                     }
                     (Datum::Range(_), _) => false,
+                    (Datum::MzAclItem(_), ScalarType::MzAclItem) => true,
+                    (Datum::MzAclItem(_), _) => false,
                 }
             }
         }
@@ -893,6 +910,12 @@ impl<'a> From<i32> for Datum<'a> {
 impl<'a> From<i64> for Datum<'a> {
     fn from(i: i64) -> Datum<'a> {
         Datum::Int64(i)
+    }
+}
+
+impl<'a> From<u8> for Datum<'a> {
+    fn from(u: u8) -> Datum<'a> {
+        Datum::UInt8(u)
     }
 }
 
@@ -1040,6 +1063,12 @@ impl<'a> From<crate::Timestamp> for Datum<'a> {
     }
 }
 
+impl<'a> From<MzAclItem> for Datum<'a> {
+    fn from(mz_acl_item: MzAclItem) -> Self {
+        Datum::MzAclItem(mz_acl_item)
+    }
+}
+
 impl<'a, T> From<Option<T>> for Datum<'a>
 where
     Datum<'a>: From<T>,
@@ -1112,6 +1141,13 @@ impl fmt::Display for Datum<'_> {
             }
             Datum::Uuid(u) => write!(f, "{}", u),
             Datum::Array(array) => {
+                if array.dims().into_iter().any(|dim| dim.lower_bound != 1) {
+                    write_delimited(f, "", array.dims().into_iter(), |f, e| {
+                        let (lower, upper) = e.dimension_bounds();
+                        write!(f, "[{}:{}]", lower, upper)
+                    })?;
+                    f.write_str("=")?;
+                }
                 f.write_str("{")?;
                 write_delimited(f, ", ", &array.elements, |f, e| write!(f, "{}", e))?;
                 f.write_str("}")
@@ -1131,6 +1167,7 @@ impl fmt::Display for Datum<'_> {
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
             Datum::Range(i) => write!(f, "{}", i),
+            Datum::MzAclItem(mz_acl_item) => write!(f, "{mz_acl_item}"),
         }
     }
 }
@@ -1266,6 +1303,8 @@ pub enum ScalarType {
     Range {
         element_type: Box<ScalarType>,
     },
+    /// The type of [`Datum::MzAclItem`]
+    MzAclItem,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1351,6 +1390,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ScalarType::Range { element_type } => Range(Box::new(ProtoRange {
                     element_type: Some(element_type.into_proto()),
                 })),
+                ScalarType::MzAclItem => MzAclItem(()),
             }),
         }
     }
@@ -1430,6 +1470,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                         .into_rust_if_some("ProtoRange::element_type")?,
                 ),
             }),
+            MzAclItem(()) => Ok(ScalarType::MzAclItem),
         }
     }
 }
@@ -1844,6 +1885,15 @@ impl<'a, E> DatumType<'a, E> for RegType {
     }
 }
 
+impl<S> AsColumnType for Char<S>
+where
+    S: AsRef<str>,
+{
+    fn as_column_type() -> ColumnType {
+        ScalarType::Char { length: None }.nullable(false)
+    }
+}
+
 impl<'a, E> DatumType<'a, E> for Char<&'a str> {
     fn nullable() -> bool {
         false
@@ -1875,6 +1925,15 @@ impl<'a, E> DatumType<'a, E> for Char<String> {
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(temp_storage.push_string(self.0)))
+    }
+}
+
+impl<S> AsColumnType for VarChar<S>
+where
+    S: AsRef<str>,
+{
+    fn as_column_type() -> ColumnType {
+        ScalarType::Char { length: None }.nullable(false)
     }
 }
 
@@ -1960,6 +2019,29 @@ impl<'a, E> DatumType<'a, E> for JsonbRef<'a> {
 impl<'a> AsColumnType for JsonbRef<'a> {
     fn as_column_type() -> ColumnType {
         ScalarType::Jsonb.nullable(false)
+    }
+}
+
+impl AsColumnType for MzAclItem {
+    fn as_column_type() -> ColumnType {
+        ScalarType::MzAclItem.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for MzAclItem {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::MzAclItem(mz_acl_item)) => Ok(mz_acl_item),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::MzAclItem(self))
     }
 }
 
@@ -2221,7 +2303,7 @@ impl<'a> ScalarType {
 
     /// Derives a column type from this scalar type with the specified
     /// nullability.
-    pub fn nullable(self, nullable: bool) -> ColumnType {
+    pub const fn nullable(self, nullable: bool) -> ColumnType {
         ColumnType {
             nullable,
             scalar_type: self,
@@ -2337,7 +2419,7 @@ impl<'a> ScalarType {
 
     /// Returns various interesting datums for a ScalarType (max, min, 0 values,
     /// etc.).
-    pub fn interesting_datums(&self) -> impl Iterator<Item = Datum> {
+    pub fn interesting_datums(&self) -> impl Iterator<Item = Datum<'static>> {
         // TODO: Is there a better way than packing everything into Lazys and
         // Rows? `&[Datum::X(x)]` doesn't seem to work because some Datum
         // variants need to call non-const functions to construct themselves.
@@ -2558,6 +2640,40 @@ impl<'a> ScalarType {
             ])
         });
         static RANGE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static MZACLITEM: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::all(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::User(42),
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::User(42),
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::all(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::User(42),
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::User(42),
+                    acl_mode: AclMode::all(),
+                }),
+            ])
+        });
 
         match self {
             ScalarType::Bool => (*BOOL).iter(),
@@ -2593,6 +2709,7 @@ impl<'a> ScalarType {
             ScalarType::Int2Vector => (*INT2VECTOR).iter(),
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
             ScalarType::Range { .. } => (*RANGE).iter(),
+            ScalarType::MzAclItem { .. } => (*MZACLITEM).iter(),
         }
     }
 
@@ -2636,6 +2753,7 @@ impl<'a> ScalarType {
             ScalarType::RegClass,
             ScalarType::Int2Vector,
             ScalarType::MzTimestamp,
+            ScalarType::MzAclItem,
             // TODO: Fill in some variants of these.
             /*
             ScalarType::Array(_),
@@ -2656,6 +2774,53 @@ impl<'a> ScalarType {
             }
             */
         ]
+    }
+
+    /// Returns the appropriate element type for making a [`ScalarType::Array`] whose elements are
+    /// of `self`.
+    ///
+    /// If the type is not compatible with making an array, returns in the error position.
+    pub fn array_of_self_elem_type(self) -> Result<ScalarType, ScalarType> {
+        match self {
+            t @ (ScalarType::Bool
+            | ScalarType::Int16
+            | ScalarType::Int32
+            | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
+            | ScalarType::Float32
+            | ScalarType::Float64
+            | ScalarType::Numeric { .. }
+            | ScalarType::Date
+            | ScalarType::Time
+            | ScalarType::Timestamp
+            | ScalarType::TimestampTz
+            | ScalarType::Interval
+            | ScalarType::PgLegacyChar
+            | ScalarType::Bytes
+            | ScalarType::String
+            | ScalarType::VarChar { .. }
+            | ScalarType::Jsonb
+            | ScalarType::Uuid
+            | ScalarType::Record { .. }
+            | ScalarType::Oid
+            | ScalarType::RegProc
+            | ScalarType::RegType
+            | ScalarType::RegClass
+            | ScalarType::Int2Vector
+            | ScalarType::MzTimestamp
+            | ScalarType::Range { .. }
+            | ScalarType::MzAclItem { .. }) => Ok(t),
+
+            ScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
+
+            // https://github.com/MaterializeInc/materialize/issues/7613
+            t @ (ScalarType::Char { .. }
+            // not sensible to put in arrays
+            | ScalarType::Map { .. }
+            | ScalarType::List { .. }) => Err(t),
+        }
     }
 }
 
@@ -2834,10 +2999,10 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         add_arb_duration(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
             .prop_map(PropDatum::Time)
             .boxed(),
-        add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+        arb_naive_date_time()
             .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
-        add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
+        arb_utc_date_time()
             .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
         arb_interval().prop_map(PropDatum::Interval).boxed(),
@@ -2859,6 +3024,16 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         ])
     })
     .boxed()
+}
+
+/// Generates an arbitrary [`NaiveDateTime`].
+pub fn arb_naive_date_time() -> impl Strategy<Value = NaiveDateTime> {
+    add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+}
+
+/// Generates an arbitrary [`DateTime`] in [`Utc`].
+pub fn arb_utc_date_time() -> impl Strategy<Value = DateTime<Utc>> {
+    add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
 }
 
 fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
@@ -3140,7 +3315,7 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn verify_base_eq_record_nullability() {
     let s1 = ScalarType::Record {
         fields: vec![(
@@ -3172,11 +3347,13 @@ fn verify_base_eq_record_nullability() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
 
+    use super::*;
+
     proptest! {
-       #[test]
+       #[mz_ore::test]
+       #[cfg_attr(miri, ignore)] // too slow
         fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
             assert!(actual.is_ok());
@@ -3185,7 +3362,8 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
             let PropArray(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
@@ -3193,7 +3371,8 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
             let PropList(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
@@ -3201,7 +3380,8 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
             let PropDict(row, elts) = array;
             let datums: Vec<(&str, Datum<'_>)> = elts.iter().map(|(k, e)| (k.as_str(), e.into())).collect();
@@ -3209,7 +3389,8 @@ mod tests {
             assert_eq!(unpacked_datums, datums);
         }
 
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
             let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
             let row = Row::pack(&datums);
@@ -3217,7 +3398,8 @@ mod tests {
             assert_eq!(datums, unpacked);
         }
 
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn range_packing_unpacks_correctly(range in arb_range()) {
             let PropRange(row, prop_range) = range;
             let row = row.unpack_first();

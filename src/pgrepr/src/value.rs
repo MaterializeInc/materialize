@@ -9,23 +9,22 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::io;
-use std::str;
+use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
-use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
-use uuid::Uuid;
-
 use mz_ore::cast::ReinterpretCast;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::range::Range;
+use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
 use mz_repr::{Datum, RelationType, Row, RowArena, ScalarType};
+use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
+use uuid::Uuid;
 
 use crate::types::{UINT2, UINT4, UINT8};
 use crate::{Format, Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
@@ -107,6 +106,8 @@ pub enum Value {
     MzTimestamp(mz_repr::Timestamp),
     /// A contiguous range of values along a domain.
     Range(Range<Box<Value>>),
+    /// A list of privileges granted to a role.
+    MzAclItem(MzAclItem),
 }
 
 impl Value {
@@ -134,6 +135,7 @@ impl Value {
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
             (Datum::MzTimestamp(t), ScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
+            (Datum::MzAclItem(mai), ScalarType::MzAclItem) => Some(Value::MzAclItem(mai)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
@@ -296,6 +298,7 @@ impl Value {
 
                 buf.make_datum(|packer| packer.push_range(range).unwrap())
             }
+            Value::MzAclItem(mz_acl_item) => Datum::MzAclItem(mz_acl_item),
         }
     }
 
@@ -376,6 +379,7 @@ impl Value {
                 None => Ok::<_, ()>(buf.write_null()),
             })
             .expect("provided closure never fails"),
+            Value::MzAclItem(mz_acl_item) => strconv::format_mz_acl_item(buf, *mz_acl_item),
         }
     }
 
@@ -395,7 +399,12 @@ impl Value {
                 buf.put_u32(elem_type.oid());
                 for dim in dims {
                     buf.put_i32(pg_len("array dimension length", dim.length)?);
-                    buf.put_i32(pg_len("array dimension lower bound", dim.lower_bound)?);
+                    buf.put_i32(dim.lower_bound.try_into().map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            "array dimension lower bound does not fit into an i32",
+                        )
+                    })?);
                 }
                 for elem in elements {
                     encode_element(buf, elem.as_ref(), elem_type)?;
@@ -482,7 +491,31 @@ impl Value {
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
             Value::Numeric(a) => a.to_sql(&PgType::NUMERIC, buf),
             Value::MzTimestamp(t) => t.to_string().to_sql(&PgType::TEXT, buf),
-            Value::Range(_) => Err("binary encodings of range types not yet implemented".into()),
+            Value::Range(range) => {
+                buf.put_u8(range.pg_flag_bits());
+
+                let elem_type = match ty {
+                    Type::Range { element_type } => element_type,
+                    _ => unreachable!(),
+                };
+
+                if let Some(RangeInner { lower, upper }) = &range.inner {
+                    for bound in [&lower.bound, &upper.bound] {
+                        if let Some(bound) = bound {
+                            let base = buf.len();
+                            buf.put_i32(0);
+                            bound.encode_binary(elem_type, buf)?;
+                            let len = pg_len("encoded range bound", buf.len() - base - 4)?;
+                            buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
+                        }
+                    }
+                }
+                Ok(postgres_types::IsNull::No)
+            }
+            Value::MzAclItem(mz_acl_item) => {
+                buf.extend_from_slice(&mz_acl_item.encode_binary());
+                Ok(postgres_types::IsNull::No)
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -513,21 +546,11 @@ impl Value {
         let s = str::from_utf8(raw)?;
         Ok(match ty {
             Type::Array(elem_type) => {
-                let elements = strconv::parse_array(
+                let (elements, dims) = strconv::parse_array(
                     s,
                     || None,
                     |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
                 )?;
-                // At the moment, we only support one dimensional arrays. Note
-                // that empty arrays are represented as zero dimensional arrays,
-                // per PostgreSQL.
-                let mut dims = vec![];
-                if !elements.is_empty() {
-                    dims.push(ArrayDimension {
-                        lower_bound: 1,
-                        length: elements.len(),
-                    })
-                }
                 Value::Array { dims, elements }
             }
             Type::Int2Vector { .. } => {
@@ -578,6 +601,7 @@ impl Value {
             Type::Range { element_type } => Value::Range(strconv::parse_range(s, |elem_text| {
                 Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
             })?),
+            Type::MzAclItem => Value::MzAclItem(strconv::parse_mz_acl_item(s)?),
         })
     }
 
@@ -636,6 +660,10 @@ impl Value {
                 Ok(Value::MzTimestamp(t))
             }
             Type::Range { .. } => Err("binary decoding of range types is not implemented".into()),
+            Type::MzAclItem => {
+                let mz_acl_item = MzAclItem::decode_binary(raw)?;
+                Ok(Value::MzAclItem(mz_acl_item))
+            }
         }
     }
 }
@@ -672,4 +700,33 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .zip(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.
+    #[mz_ore::test]
+    fn decode_text_error_smoke_test() {
+        let bool_array = Value::Array {
+            dims: vec![ArrayDimension {
+                lower_bound: 0,
+                length: 1,
+            }],
+            elements: vec![Some(Value::Bool(true))],
+        };
+
+        let mut buf = BytesMut::new();
+        bool_array.encode_text(&mut buf);
+        let buf = buf.to_vec();
+
+        let int_array_tpe = Type::Array(Box::new(Type::Int4));
+        let decoded_int_array = Value::decode_text(&int_array_tpe, &buf);
+
+        assert_eq!(
+            decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
+            "invalid input syntax for type array: Specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
+        );
+    }
 }

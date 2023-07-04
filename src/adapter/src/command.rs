@@ -11,6 +11,7 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -18,18 +19,18 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use mz_sql::plan::PlanKind;
-use tokio::sync::oneshot;
-use tokio::sync::watch;
-
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
-use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
-use mz_sql::plan::ExecuteTimeout;
+use mz_sql::ast::{FetchDirection, Raw, Statement};
+use mz_sql::catalog::ObjectType;
+use mz_sql::plan::{ExecuteTimeout, PlanKind};
+use mz_sql::session::vars::Var;
+use tokio::sync::{oneshot, watch};
 
-use crate::client::ConnectionId;
+use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
+use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::util::Transmittable;
@@ -38,7 +39,6 @@ use crate::util::Transmittable;
 pub enum Command {
     Startup {
         session: Session,
-        create_user_if_not_exists: bool,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     },
@@ -48,10 +48,10 @@ pub enum Command {
         stmt: Statement<Raw>,
         param_types: Vec<Option<ScalarType>>,
         session: Session,
-        tx: oneshot::Sender<Response<()>>,
+        tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
-    Describe {
+    Prepare {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
@@ -72,12 +72,6 @@ pub enum Command {
         span: tracing::Span,
     },
 
-    StartTransaction {
-        implicit: Option<usize>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
-    },
-
     Commit {
         action: EndTransactionAction,
         session: Session,
@@ -85,13 +79,17 @@ pub enum Command {
     },
 
     CancelRequest {
-        conn_id: ConnectionId,
+        conn_id: ConnectionIdType,
         secret_key: u32,
+    },
+
+    PrivilegedCancelRequest {
+        conn_id: ConnectionId,
     },
 
     DumpCatalog {
         session: Session,
-        tx: oneshot::Sender<Response<String>>,
+        tx: oneshot::Sender<Response<CatalogDump>>,
     },
 
     CopyRows {
@@ -100,12 +98,60 @@ pub enum Command {
         rows: Vec<Row>,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        ctx_extra: ExecuteContextExtra,
+    },
+
+    GetSystemVars {
+        session: Session,
+        tx: oneshot::Sender<Response<GetVariablesResponse>>,
+    },
+
+    SetSystemVars {
+        vars: BTreeMap<String, String>,
+        session: Session,
+        tx: oneshot::Sender<Response<()>>,
     },
 
     Terminate {
         session: Session,
         tx: Option<oneshot::Sender<Response<()>>>,
     },
+}
+
+impl Command {
+    pub fn session(&self) -> Option<&Session> {
+        match self {
+            Command::Startup { session, .. }
+            | Command::Declare { session, .. }
+            | Command::Prepare { session, .. }
+            | Command::VerifyPreparedStatement { session, .. }
+            | Command::Execute { session, .. }
+            | Command::Commit { session, .. }
+            | Command::DumpCatalog { session, .. }
+            | Command::CopyRows { session, .. }
+            | Command::GetSystemVars { session, .. }
+            | Command::SetSystemVars { session, .. }
+            | Command::Terminate { session, .. } => Some(session),
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
+        }
+    }
+
+    pub fn session_mut(&mut self) -> Option<&mut Session> {
+        match self {
+            Command::Startup { session, .. }
+            | Command::Declare { session, .. }
+            | Command::Prepare { session, .. }
+            | Command::VerifyPreparedStatement { session, .. }
+            | Command::Execute { session, .. }
+            | Command::Commit { session, .. }
+            | Command::DumpCatalog { session, .. }
+            | Command::CopyRows { session, .. }
+            | Command::GetSystemVars { session, .. }
+            | Command::SetSystemVars { session, .. }
+            | Command::Terminate { session, .. } => Some(session),
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -116,7 +162,7 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
-/// The response to [`ConnClient::startup`](crate::ConnClient::startup).
+/// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
     /// Notifications associated with session startup.
@@ -168,15 +214,69 @@ impl fmt::Display for StartupMessage {
     }
 }
 
+/// The response to [`SessionClient::dump_catalog`](crate::SessionClient::dump_catalog).
+#[derive(Debug, Clone)]
+pub struct CatalogDump(String);
+
+impl CatalogDump {
+    pub fn new(raw: String) -> Self {
+        CatalogDump(raw)
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl Transmittable for CatalogDump {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
+/// The response to [`SessionClient::get_system_vars`](crate::SessionClient::get_system_vars).
+#[derive(Debug, Clone)]
+pub struct GetVariablesResponse(BTreeMap<String, String>);
+
+impl GetVariablesResponse {
+    pub fn new<'a>(vars: impl Iterator<Item = &'a dyn Var>) -> Self {
+        GetVariablesResponse(
+            vars.map(|var| (var.name().to_string(), var.value()))
+                .collect(),
+        )
+    }
+}
+
+impl Transmittable for GetVariablesResponse {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
+impl IntoIterator for GetVariablesResponse {
+    type Item = (String, String);
+    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
 #[derive(EnumKind, Derivative)]
 #[derivative(Debug)]
 #[enum_kind(ExecuteResponseKind)]
 pub enum ExecuteResponse {
+    /// The default privileges were altered.
+    AlteredDefaultPrivileges,
     /// The requested object was altered.
     AlteredObject(ObjectType),
     /// The index was altered.
     AlteredIndexLogicalCompaction,
+    /// The role was altered.
+    AlteredRole,
     /// The system configuration was altered.
     AlteredSystemConfiguration,
     /// The query was canceled.
@@ -191,6 +291,7 @@ pub enum ExecuteResponse {
         id: GlobalId,
         columns: Vec<usize>,
         params: CopyFormatParams<'static>,
+        ctx_extra: ExecuteContextExtra,
     },
     /// The requested connection was created.
     CreatedConnection,
@@ -234,34 +335,10 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
-    /// The requested connection was dropped
-    DroppedConnection,
-    /// The requested cluster was dropped.
-    DroppedCluster,
-    /// The requested cluster replica was dropped.
-    DroppedClusterReplica,
-    /// The requested database was dropped.
-    DroppedDatabase,
-    /// The requested role was dropped.
-    DroppedRole,
-    /// The requested schema was dropped.
-    DroppedSchema,
-    /// The requested source was dropped.
-    DroppedSource,
-    /// The requested table was dropped.
-    DroppedTable,
-    /// The requested view was dropped.
-    DroppedView,
-    /// The requested materialized view was dropped.
-    DroppedMaterializedView,
-    /// The requested index was dropped.
-    DroppedIndex,
-    /// The requested sink was dropped.
-    DroppedSink,
-    /// The requested type was dropped.
-    DroppedType,
-    /// The requested secret was dropped.
-    DroppedSecret,
+    /// The requested object was dropped.
+    DroppedObject(ObjectType),
+    /// The requested objects were dropped.
+    DroppedOwned,
     /// The provided query was empty.
     EmptyQuery,
     /// Fetch results from a cursor.
@@ -273,12 +350,22 @@ pub enum ExecuteResponse {
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
     },
+    /// The requested privilege was granted.
+    GrantedPrivilege,
+    /// The requested role was granted.
+    GrantedRole,
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
     /// The specified prepared statement was created.
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested objects were reassigned.
+    ReassignOwned,
+    /// The requested privilege was revoked.
+    RevokedPrivilege,
+    /// The requested role was revoked.
+    RevokedRole,
     /// Rows will be delivered via the specified future.
     SendingRows {
         #[derivative(Debug = "ignore")]
@@ -298,19 +385,29 @@ pub enum ExecuteResponse {
     /// contained receiver.
     Subscribing { rx: RowBatchStream },
     /// The active transaction committed.
-    TransactionCommitted,
+    TransactionCommitted {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The active transaction rolled back.
-    TransactionRolledBack,
+    TransactionRolledBack {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+    /// A connection was validated.
+    ValidatedConnection,
 }
 
 impl ExecuteResponse {
     pub fn tag(&self) -> Option<String> {
         use ExecuteResponse::*;
         match self {
+            AlteredDefaultPrivileges => Some("ALTER DEFAULT PRIVILEGES".into()),
             AlteredObject(o) => Some(format!("ALTER {}", o)),
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
+            AlteredRole => Some("ALTER ROLE".into()),
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
             Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
@@ -337,22 +434,12 @@ impl ExecuteResponse {
             Deleted(n) => Some(format!("DELETE {}", n)),
             DiscardedTemp => Some("DISCARD TEMP".into()),
             DiscardedAll => Some("DISCARD ALL".into()),
-            DroppedConnection => Some("DROP CONNECTION".into()),
-            DroppedCluster => Some("DROP CLUSTER".into()),
-            DroppedClusterReplica => Some("DROP CLUSTER REPLICA".into()),
-            DroppedDatabase => Some("DROP DATABASE".into()),
-            DroppedRole => Some("DROP ROLE".into()),
-            DroppedSchema => Some("DROP SCHEMA".into()),
-            DroppedSource => Some("DROP SOURCE".into()),
-            DroppedTable => Some("DROP TABLE".into()),
-            DroppedView => Some("DROP VIEW".into()),
-            DroppedMaterializedView => Some("DROP MATERIALIZED VIEW".into()),
-            DroppedIndex => Some("DROP INDEX".into()),
-            DroppedSink => Some("DROP SINK".into()),
-            DroppedType => Some("DROP TYPE".into()),
-            DroppedSecret => Some("DROP SECRET".into()),
+            DroppedObject(o) => Some(format!("DROP {o}")),
+            DroppedOwned => Some("DROP OWNED".into()),
             EmptyQuery => None,
             Fetch { .. } => None,
+            GrantedPrivilege => Some("GRANT".into()),
+            GrantedRole => Some("GRANT ROLE".into()),
             Inserted(n) => {
                 // "On successful completion, an INSERT command returns a
                 // command tag of the form `INSERT <oid> <count>`."
@@ -365,14 +452,18 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            ReassignOwned => Some("REASSIGN OWNED".into()),
+            RevokedPrivilege => Some("REVOKE".into()),
+            RevokedRole => Some("REVOKE ROLE".into()),
             SendingRows { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
             Subscribing { .. } => None,
-            TransactionCommitted => Some("COMMIT".into()),
-            TransactionRolledBack => Some("ROLLBACK".into()),
+            TransactionCommitted { .. } => Some("COMMIT".into()),
+            TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
+            ValidatedConnection => Some("VALIDATE CONNECTION".into()),
         }
     }
 
@@ -384,12 +475,23 @@ impl ExecuteResponse {
 
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
-            AlterItemRename | AlterNoop | AlterSecret | AlterSink | AlterSource | RotateKeys => {
+            AlterClusterRename
+            | AlterCluster
+            | AlterClusterReplicaRename
+            | AlterOwner
+            | AlterItemRename
+            | AlterNoop
+            | AlterSecret
+            | AlterSink
+            | AlterSource
+            | RotateKeys => {
                 vec![AlteredObject]
             }
+            AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }
+            AlterRole => vec![AlteredRole],
             AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
                 vec![AlteredSystemConfiguration]
             }
@@ -402,7 +504,7 @@ impl ExecuteResponse {
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
             CreateClusterReplica => vec![CreatedClusterReplica],
-            CreateSource => vec![CreatedSource, CreatedSources],
+            CreateSource | CreateSources => vec![CreatedSource, CreatedSources],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
             CreateTable => vec![CreatedTable],
@@ -414,34 +516,30 @@ impl ExecuteResponse {
             Declare => vec![DeclaredCursor],
             DiscardTemp => vec![DiscardedTemp],
             DiscardAll => vec![DiscardedAll],
-            DropDatabase => vec![DroppedDatabase],
-            DropSchema => vec![DroppedSchema],
-            DropRoles => vec![DroppedRole],
-            DropClusters => vec![DroppedCluster],
-            DropClusterReplicas => vec![DroppedClusterReplica],
-            DropItems => vec![
-                DroppedConnection,
-                DroppedSource,
-                DroppedTable,
-                DroppedView,
-                DroppedMaterializedView,
-                DroppedIndex,
-                DroppedSink,
-                DroppedType,
-                DroppedSecret,
-            ],
+            DropObjects => vec![DroppedObject],
+            DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
+            Explain | Select | ShowAllVariables | ShowCreate | ShowVariable | InspectShard => {
                 vec![CopyTo, SendingRows]
             }
-            Execute | ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
+            Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
+            GrantPrivileges => vec![GrantedPrivilege],
+            GrantRole => vec![GrantedRole],
+            CopyRows => vec![Inserted],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
-            PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
+            PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
+            RevokePrivileges => vec![RevokedPrivilege],
+            RevokeRole => vec![RevokedRole],
+            PlanKind::SetVariable | ResetVariable | PlanKind::SetTransaction => {
+                vec![ExecuteResponseKind::SetVariable]
+            }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
+            SideEffectingFunc => vec![SendingRows],
+            ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }
 }

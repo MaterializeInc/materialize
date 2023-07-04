@@ -13,12 +13,10 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
+use mz_lowertest::MzReflect;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest::prop_compose;
 use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
-
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 
@@ -120,13 +118,14 @@ prop_compose! {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     use super::*;
-    use mz_proto::protobuf_roundtrip;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn regex_protobuf_roundtrip( expect in any_regex() ) {
             let actual =  protobuf_roundtrip::<_, ProtoRegex>(&expect);
             assert!(actual.is_ok());

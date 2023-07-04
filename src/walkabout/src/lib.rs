@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -109,9 +107,7 @@ mod parse;
 
 pub mod ir;
 
-pub use gen::gen_fold;
-pub use gen::gen_visit;
-pub use gen::gen_visit_mut;
+pub use gen::{gen_fold, gen_visit, gen_visit_mut};
 
 /// Loads type definitions from the specified module.
 ///

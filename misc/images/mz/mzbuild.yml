@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 name: mz
+description: The CLI for Materialize.
+mainline: false
 pre-image:
   - type: cargo-build
     bin: [mz]

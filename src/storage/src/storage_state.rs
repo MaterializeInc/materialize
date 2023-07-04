@@ -36,28 +36,28 @@
 //! when running code that requires `async`. This is needed because a timely
 //! main loop cannot run `async` code.
 //!
-//! ## Example flow of commands for `CreateSources`
+//! ## Example flow of commands for `RunIngestions`
 //!
 //! With external commands, internal commands, and the async worker,
 //! understanding where and how commands from the controller are realized can
-//! get complicated. We will follow the complete flow for `CreateSources`, as an
+//! get complicated. We will follow the complete flow for `RunIngestions`, as an
 //! example:
 //!
-//! 1. Worker receives a [`StorageCommand::CreateSources`] command from the
+//! 1. Worker receives a [`StorageCommand::RunIngestions`] command from the
 //!    controller.
 //! 2. This command is processed in [`StorageState::handle_storage_command`].
 //!    This step cannot render dataflows, because it does not have access to the
 //!    timely worker. It will only set up state that stays over the whole
 //!    lifetime of the source, such as the `reported_frontier`. Putting in place
-//!    this reported frontier will enable frontier reporting for that source.
-//!    We will not start reporting when we only see an internal command for
-//!    rendering a dataflow, which can "overtake" the external `CreateSources`
+//!    this reported frontier will enable frontier reporting for that source. We
+//!    will not start reporting when we only see an internal command for
+//!    rendering a dataflow, which can "overtake" the external `RunIngestions`
 //!    command.
 //! 3. During processing of that command, we call
-//!    [`AsyncStorageWorker::calculate_resume_upper`], which causes a command to
+//!    [`AsyncStorageWorker::update_frontiers`], which causes a command to
 //!    be sent to the async worker.
 //! 4. We eventually get a response from the async worker:
-//!    [`AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper`].
+//!    [`AsyncStorageWorkerResponse::FrontiersUpdated`].
 //! 5. This response is handled in [`Worker::handle_async_worker_response`].
 //! 6. Handling that response causes a
 //!    [`InternalStorageCommand::CreateIngestionDataflow`] to be broadcast to
@@ -65,17 +65,42 @@
 //! 7. This message will be processed (on each worker) in
 //!    [`Worker::handle_internal_storage_command`]. This is what will cause the
 //!    required dataflow to be rendered on all workers.
+//!
+//! The process described above assumes that the `RunIngestions` is _not_ an
+//! update, i.e. it is in response to a `CREATE SOURCE`-like statement.
+//!
+//! The primary distinction when handling a `RunIngestions` that represents an
+//! update, is that it might fill out new internal state in the mid-level
+//! clients on the way toward being run.
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
+use anyhow::Context;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
+use fail::fail_point;
+use mz_ore::now::NowFn;
+use mz_ore::vec::VecExt;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::read::ReadHandle;
+use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_storage_client::client::{
+    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
+    StorageResponse,
+};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -86,21 +111,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace};
 
-use mz_ore::halt;
-use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::ReadHandle;
-use mz_persist_client::ShardId;
-use mz_repr::{Diff, GlobalId, Timestamp};
-use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-use mz_storage_client::client::{StorageCommand, StorageResponse};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::{IngestionDescription, SourceData};
-
 use crate::decode::metrics::DecodeMetrics;
-use crate::internal_control::{self, InternalCommandSender, InternalStorageCommand};
+use crate::internal_control::{
+    self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
+};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
@@ -145,6 +159,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         sink_metrics: SinkBaseMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
+        instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
     ) -> Self {
         // It is very important that we only create the internal control
@@ -200,15 +215,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
             connection_context,
+            instance_context,
             persist_clients,
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
             sink_handles: BTreeMap::new(),
-            dropped_ids: Vec::new(),
+            dropped_ids: BTreeSet::new(),
             source_statistics: BTreeMap::new(),
             sink_statistics: BTreeMap::new(),
             internal_cmd_tx: command_sequencer,
             async_worker,
+            dataflow_parameters: Default::default(),
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -256,6 +273,8 @@ pub struct StorageState {
     pub timely_worker_peers: usize,
     /// Configuration for source and sink connections.
     pub connection_context: ConnectionContext,
+    /// Other configuration for sources and sinks.
+    pub instance_context: StorageInstanceContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<PersistClientCache>,
@@ -268,7 +287,7 @@ pub struct StorageState {
     /// See: [SinkHandle]
     pub sink_handles: BTreeMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
-    pub dropped_ids: Vec<GlobalId>,
+    pub dropped_ids: BTreeSet<GlobalId>,
 
     /// Stats objects shared with operators to allow them to update the metrics
     /// we report in `StatisticsUpdates` responses.
@@ -287,6 +306,50 @@ pub struct StorageState {
     /// Async worker companion, used for running code that requires async, which
     /// the timely main loop cannot do.
     pub async_worker: Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>,
+
+    /// Dynamically configurable parameters that control how dataflows are rendered.
+    pub dataflow_parameters: DataflowParameters,
+}
+
+/// Extra context for a storage instance.
+/// This is extra information that is used when rendering source
+/// and sinks that is not tied to the source/connection configuration itself.
+#[derive(Clone)]
+pub struct StorageInstanceContext {
+    /// A directory that can be used for scratch work.
+    pub scratch_directory: Option<PathBuf>,
+    /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
+    /// across sources!). This `Env` lets us control some resources (like background threads)
+    /// process-wide.
+    pub rocksdb_env: rocksdb::Env,
+}
+
+impl StorageInstanceContext {
+    /// Build a new `StorageInstanceContext`.
+    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
+        if let Some(scratch_directory) = &scratch_directory {
+            tokio::fs::create_dir_all(scratch_directory)
+                .await
+                .with_context(|| {
+                    format!(
+                        "creating scratch directory: {}",
+                        scratch_directory.display()
+                    )
+                })?;
+        }
+        Ok(Self {
+            scratch_directory,
+            rocksdb_env: rocksdb::Env::new()?,
+        })
+    }
+
+    /// Constructs a new connection context for usage in tests.
+    pub fn for_tests(rocksdb_env: rocksdb::Env) -> Self {
+        Self {
+            scratch_directory: None,
+            rocksdb_env,
+        }
+    }
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -308,6 +371,7 @@ impl SinkHandle {
         sink_id: GlobalId,
         from_metadata: &CollectionMetadata,
         shard_id: ShardId,
+        initial_since: Antichain<Timestamp>,
         persist_clients: Arc<PersistClientCache>,
     ) -> SinkHandle {
         let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
@@ -330,6 +394,14 @@ impl SinkHandle {
                 )
                 .await
                 .expect("opening reader for shard");
+
+            assert!(
+                !PartialOrder::less_than(&initial_since, read_handle.since()),
+                "could not acquire a SinkHandle that can hold the \
+                initial since {:?}, the since is already at {:?}",
+                initial_since,
+                read_handle.since()
+            );
 
             let mut downgrade_to = read_handle.since().clone();
             'downgrading: loop {
@@ -532,22 +604,27 @@ impl<'w, A: Allocate> Worker<'w, A> {
         async_response: AsyncStorageWorkerResponse<mz_repr::Timestamp>,
     ) {
         match async_response {
-            AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper(
+            AsyncStorageWorkerResponse::FrontiersUpdated {
                 id,
                 ingestion_description,
-                resumption_frontier,
-            ) => {
+                as_of,
+                resume_uppers,
+                source_resume_uppers,
+            } => {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
                 // assert.
-                assert!(
-                    self.timely_worker.index() == 0,
+                assert_eq!(
+                    self.timely_worker.index(),
+                    0,
                     "only worker #0 is doing async processing"
                 );
                 internal_cmd_tx.broadcast(InternalStorageCommand::CreateIngestionDataflow {
                     id,
                     ingestion_description,
-                    resumption_frontier,
+                    as_of,
+                    resume_uppers,
+                    source_resume_uppers,
                 });
             }
         }
@@ -570,8 +647,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                 let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
                 if let Some(ingestion_description) = maybe_ingestion {
-                    // Yank the token of the previously existing source
-                    // dataflow.
+                    // Yank the token of the previously existing source dataflow.Note that this
+                    // token also includes any source exports/subsources.
+
                     let maybe_token = self.storage_state.source_tokens.remove(&id);
 
                     if maybe_token.is_none() {
@@ -593,7 +671,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // putting undue pressure on worker 0 we can pick the
                     // designated worker for a source/sink based on `id.hash()`.
                     if self.timely_worker.index() == 0 {
-                        async_worker.calculate_resume_upper(id, ingestion_description);
+                        async_worker.update_frontiers(id, ingestion_description);
                     }
 
                     // Continue with other commands.
@@ -626,24 +704,32 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     return;
                 }
 
+                // Suspensions might come in for source exports; they are suspended and
+                // restarted alongside their primary sources.
+                if self
+                    .storage_state
+                    .ingestions
+                    .values()
+                    .any(|v| v.source_exports.contains_key(&id))
+                {
+                    return;
+                }
+
                 panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
                 ingestion_description,
-                resumption_frontier,
+                as_of,
+                resume_uppers,
+                source_resume_uppers,
             } => {
                 info!(
                     "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
-                    resumption_frontier
+                    as_of
                 );
-
-                // An empty resume upper means that we can never write down any
-                // more data for this ingestion. We therefore don't render a
-                // dataflow for it.
-                let is_closed = resumption_frontier.is_empty();
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     // This is a separate line cause rustfmt :(
@@ -658,20 +744,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state
                         .source_statistics
                         .insert(*export_id, stats);
+                }
 
+                for id in ingestion_description.subsource_ids() {
                     // If there is already a shared upper, we re-use it, to make
                     // sure that parties that are already using the shared upper
                     // can continue doing so.
                     let source_upper = self
                         .storage_state
                         .source_uppers
-                        .entry(export_id.clone())
+                        .entry(id.clone())
                         .or_insert_with(|| {
-                            Rc::new(RefCell::new(if is_closed {
-                                Antichain::new()
-                            } else {
-                                Antichain::from_elem(mz_repr::Timestamp::minimum())
-                            }))
+                            Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())))
                         });
 
                     let mut source_upper = source_upper.borrow_mut();
@@ -681,15 +765,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
-                if !is_closed {
-                    crate::render::build_ingestion_dataflow(
-                        self.timely_worker,
-                        &mut self.storage_state,
-                        ingestion_id,
-                        ingestion_description,
-                        resumption_frontier,
-                    );
-                }
+                crate::render::build_ingestion_dataflow(
+                    self.timely_worker,
+                    &mut self.storage_state,
+                    ingestion_id,
+                    ingestion_description,
+                    as_of,
+                    resume_uppers,
+                    source_resume_uppers,
+                );
             }
             InternalStorageCommand::CreateSinkDataflow(sink_id, sink_description) => {
                 info!(
@@ -728,16 +812,44 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
             }
             InternalStorageCommand::DropDataflow(id) => {
-                // Clean up per-source / per-sink state.
-                self.storage_state.source_uppers.remove(&id);
-                self.storage_state.source_tokens.remove(&id);
-                self.storage_state.source_statistics.remove(&id);
+                let ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.get(&id) {
+                    // Without the source dataflow running, all source exports
+                    // should also be considered dropped. n.b. `source_exports`
+                    // includes `id`
+                    Some(IngestionDescription { source_exports, .. }) => {
+                        source_exports.keys().cloned().collect()
+                    }
+                    None => {
+                        let mut ids = BTreeSet::new();
+                        ids.insert(id);
+                        ids
+                    }
+                };
 
-                self.storage_state.sink_tokens.remove(&id);
+                mz_ore::soft_assert!(ids.contains(&id));
+
+                for id in &ids {
+                    // Clean up per-source / per-sink state.
+                    self.storage_state.source_uppers.remove(id);
+                    self.storage_state.source_tokens.remove(id);
+                    self.storage_state.source_statistics.remove(id);
+
+                    self.storage_state.sink_tokens.remove(id);
+                }
+
+                // The actual prometheus metrics and other state will be dropped
+                // when the dataflow shuts down and drop's its `Rc`'s to the stats
+                // objects. Also, these are always cloned during rendering,
+                // but not inside dataflows, so we don't have TOCTOU issue here!
+                self.storage_state.source_statistics.remove(&id);
+                self.storage_state.sink_statistics.remove(&id);
 
                 // Report the dataflow as dropped once we went through the whole
                 // control flow from external command to this internal command.
-                self.storage_state.dropped_ids.push(id);
+                self.storage_state.dropped_ids.extend(ids);
+            }
+            InternalStorageCommand::UpdateConfiguration(pg, rocksdb) => {
+                self.storage_state.dataflow_parameters.update(pg, rocksdb)
             }
         }
     }
@@ -780,15 +892,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !new_uppers.is_empty() {
-            // Sinks maintain a read handle over their input data, in case environmentd is unable
-            // to maintain the global read hold. It's tempting to use environmentd's AllowCompaction
-            // messages to maintain an even more conservative hold... but environmentd only sends
-            // clusterd AllowCompaction messages for its own id, not for its dependencies.
-            for (id, upper) in &new_uppers {
-                if let Some(handle) = &self.storage_state.sink_handles.get(id) {
-                    handle.downgrade_since(upper.clone());
-                }
-            }
             self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
         }
     }
@@ -874,42 +977,95 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .keys()
             .collect::<BTreeSet<_>>();
         let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
+
+        let mut drop_commands = BTreeSet::new();
+        let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
+
         for command in &mut commands {
             match command {
                 StorageCommand::CreateTimely { .. } => {
                     panic!("CreateTimely must be captured before")
                 }
-                StorageCommand::CreateSources(ingestions) => {
+                StorageCommand::AllowCompaction(sinces) => {
+                    // collect all "drop commands". These are `AllowCompaction`
+                    // commands that compact to the empty since. Then, later, we make sure
+                    // we retain only those `Create*` commands that are not dropped. We
+                    // assume that the `AllowCompaction` command is ordered after the
+                    // `Create*` commands but don't assert that.
+                    // WIP: Should we assert?
+                    let drops = sinces.drain_filter_swapping(|(_id, since)| since.is_empty());
+                    drop_commands.extend(drops.map(|(id, _since)| id));
+                }
+                StorageCommand::RunIngestions(ingestions) => {
+                    // Ensure that ingestions are forward-rolling alter compatible.
+                    for ingestion in ingestions {
+                        let prev = running_ingestion_descriptions
+                            .insert(ingestion.id, ingestion.description.clone());
+
+                        if let Some(prev_ingest) = prev {
+                            // If the new ingestion is not exactly equal to the currently running
+                            // ingestion, we must either track that we need to synthesize an update
+                            // command to change the ingestion, or panic.
+                            prev_ingest
+                                .alter_compatible(ingestion.id, &ingestion.description)
+                                .expect("only alter compatible ingestions permitted");
+                        }
+                    }
+                }
+                StorageCommand::InitializationComplete
+                | StorageCommand::UpdateConfiguration(_)
+                | StorageCommand::CreateSinks(_) => (),
+            }
+        }
+
+        let mut seen_most_recent_ingestion = BTreeSet::new();
+
+        // We iterate over this backward to ensure that we keep only the most recent ingestion
+        // description.
+        for command in commands.iter_mut().rev() {
+            match command {
+                StorageCommand::CreateTimely { .. } => {
+                    panic!("CreateTimely must be captured before")
+                }
+                StorageCommand::RunIngestions(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
+                        if drop_commands.remove(&ingestion.id)
+                            || self.storage_state.dropped_ids.contains(&ingestion.id)
+                        {
+                            // Make sure that we report back that the ID was
+                            // dropped.
+                            self.storage_state.dropped_ids.insert(ingestion.id);
 
-                        if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
-                            trace!(
-                                worker_id = self.timely_worker.index(),
-                                has_token = self.storage_state.source_tokens.contains_key(&ingestion.id),
-                                "reconciliation, existing ingestion: {}", ingestion.id
-                            );
-
-                            stale_ingestions.remove(&ingestion.id);
-                            // If we've been asked to create an ingestion that is
-                            // already installed, the descriptions must match
-                            // exactly.
-                            if *existing != ingestion.description {
-                                halt!(
-                                    "new ingestion with ID {} does not match existing ingestion:\n{:?}\nvs\n{:?}",
-                                    ingestion.id,
-                                    ingestion.description,
-                                    existing,
-                                );
-                            }
                             false
                         } else {
-                            true
+                            stale_ingestions.remove(&ingestion.id);
+
+                            let running_ingestion =
+                                self.storage_state.ingestions.get(&ingestion.id);
+
+                            // Ingestion statements are only considered updates if they are
+                            // currently running.
+                            ingestion.update = running_ingestion.is_some();
+
+                            // We keep only:
+                            // - The most recent version of the ingestion, which
+                            //   is why these commands are run in reverse.
+                            // - Ingestions whose descriptions are not exactly
+                            //   those that are currently running.
+                            seen_most_recent_ingestion.insert(ingestion.id)
+                                && running_ingestion != Some(&ingestion.description)
                         }
                     })
                 }
                 StorageCommand::CreateSinks(exports) => {
                     exports.retain_mut(|export| {
-                        if let Some(existing) = self.storage_state.exports.get(&export.id) {
+                        if drop_commands.remove(&export.id) {
+                            // Make sure that we report back that the ID was
+                            // dropped.
+                            self.storage_state.dropped_ids.insert(export.id);
+
+                            false
+                        } else if let Some(existing) = self.storage_state.exports.get(&export.id) {
                             stale_exports.remove(&export.id);
                             // If we've been asked to create an export that is
                             // already installed, the descriptions must match
@@ -930,6 +1086,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 | StorageCommand::AllowCompaction(_) => (),
             }
         }
+
+        // Make sure all the "drop commands" matched up with a source or sink.
+        // This is also what the regular handler logic for `AllowCompaction`
+        // would do.
+        assert!(
+            drop_commands.is_empty(),
+            "AllowCompaction commands for non-existent IDs {:?}",
+            drop_commands
+        );
 
         trace!(
             worker_id = self.timely_worker.index(),
@@ -983,32 +1148,57 @@ impl StorageState {
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
                 params.persist.apply(self.persist_clients.cfg());
+
+                // This needs to be broadcast by one worker and go through
+                // the internal command fabric, to ensure consistent
+                // ordering of dataflow rendering across all workers.
+                if worker_index == 0 {
+                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
+                        params.pg_replication_timeouts,
+                        params.upsert_rocksdb_tuning_config,
+                    ))
+                }
             }
-            StorageCommand::CreateSources(ingestions) => {
-                for ingestion in ingestions {
+            StorageCommand::RunIngestions(ingestions) => {
+                for RunIngestionCommand {
+                    id,
+                    description,
+                    update,
+                } in ingestions
+                {
                     // Remember the ingestion description to facilitate possible
                     // reconciliation later.
-                    self.ingestions
-                        .insert(ingestion.id, ingestion.description.clone());
+                    let prev = self.ingestions.insert(id, description.clone());
+
+                    assert!(
+                        prev.is_some() == update,
+                        "can only and must update reported frontiers if RunIngestion is update"
+                    );
 
                     // Initialize shared frontier reporting.
-                    for (export_id, _export) in ingestion.description.source_exports.iter() {
-                        self.reported_frontiers.insert(
-                            *export_id,
-                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                        );
+                    for id in description.subsource_ids() {
+                        match self.reported_frontiers.entry(id) {
+                            Entry::Occupied(_) => {
+                                assert!(update, "tried to re-insert frontier for {}", id)
+                            }
+                            Entry::Vacant(v) => {
+                                v.insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                            }
+                        };
                     }
 
-                    // This needs to be done by one worker, which will
-                    // broadcasts a `CreateIngestionDataflow` command to all
-                    // workers based on the response that contains the
-                    // resumption upper.
+                    // This needs to be done by one worker, which will broadcasts a
+                    // `CreateIngestionDataflow` command to all workers based on the response that
+                    // contains the resumption upper.
                     //
-                    // Doing this separately on each worker could lead to
-                    // differing resume_uppers which might lead to all kinds of
-                    // mayhem.
+                    // Doing this separately on each worker could lead to differing resume_uppers
+                    // which might lead to all kinds of mayhem.
+                    //
+                    // n.b. the ingestion on each worker uses the description from worker 0––not the
+                    // ingestion in the local storage state. This is something we might have
+                    // interest in fixing in the future, e.g. #19907
                     if worker_index == 0 {
-                        async_worker.calculate_resume_upper(ingestion.id, ingestion.description);
+                        async_worker.update_frontiers(id, description);
                     }
                 }
             }
@@ -1029,13 +1219,14 @@ impl StorageState {
                             export.id,
                             &export.description.from_storage_metadata,
                             export.description.from_storage_metadata.data_shard,
+                            export.description.as_of.frontier.clone(),
                             Arc::clone(&self.persist_clients),
                         ),
                     );
 
-                    // This needs to be broadcast by one worker and go through
-                    // the internal command fabric, to ensure consistent
-                    // ordering of dataflow rendering across all workers.
+                    // This needs to be broadcast by one worker and go through the internal command
+                    // fabric, to ensure consistent ordering of dataflow rendering across all
+                    // workers.
                     if worker_index == 0 {
                         internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
                             export.id,
@@ -1046,14 +1237,46 @@ impl StorageState {
             }
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
+                    match self.exports.get_mut(&id) {
+                        Some(export_description) => {
+                            // Update our knowledge of the `as_of`, in case we need to internally
+                            // restart a sink in the future.
+                            export_description.as_of.downgrade(&frontier);
+
+                            // Sinks maintain a read handle over their input data to ensure that we
+                            // can restart at the `as_of` that we store and update in the export
+                            // description.
+                            //
+                            // Communication between the storage controller and this here worker is
+                            // asynchronous, so we might learn that the controller downgraded a
+                            // since after it has downgraded it's handle. Keeping a handle here
+                            // ensures that we can restart based on our local state.
+                            //
+                            // NOTE: It's important that we only downgrade `SinkHandle` after
+                            // updating the sink `as_of`.
+                            let sink_handle =
+                                self.sink_handles.get(&id).expect("missing SinkHandle");
+                            sink_handle.downgrade_since(frontier.clone());
+                        }
+                        None if self.ingestions.contains_key(&id) => (),
+                        None => panic!("AllowCompaction command for non-existent {id}"),
+                    }
+
                     if frontier.is_empty() {
+                        fail_point!("crash_on_drop");
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         //
                         // This handler removes state that is put in place by
-                        // the handler for `CreateSources`/`CreateSinks`, while
+                        // the handler for `RunIngestions`/`CreateSinks`, while
                         // the handler for the internal command does the same
                         // for the state put in place by its corresponding
                         // creation command.
+
+                        // Cleanup exports and ingestions immediately to ensure
+                        // they are not re-rendered in the case of
+                        // reconciliation.
+                        self.exports.remove(&id);
+                        self.ingestions.remove(&id);
 
                         // This will stop reporting of frontiers.
                         self.reported_frontiers.remove(&id);

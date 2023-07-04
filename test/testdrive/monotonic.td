@@ -12,6 +12,9 @@
 # they do not test that the analysis doesn't have false positives on
 # non-monotonic sources.
 
+# TODO: Once we have support for more "LOAD GENERATOR"-based monotonic
+# sources these tests can be migrated to `monotonic.slt`.
+
 $ set non-dbz-schema={
     "type": "record",
     "name": "cpx",

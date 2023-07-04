@@ -11,25 +11,22 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationType};
+use mz_storage_client::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationType};
-use mz_storage_client::controller::CollectionMetadata;
-
 use crate::plan::Plan;
-
-use super::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use super::sources::{SourceInstanceArguments, SourceInstanceDesc};
-
-use self::proto_dataflow_description::{
+use crate::types::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
+use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use crate::types::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -66,6 +63,23 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub until: Antichain<T>,
     /// Human readable name
     pub debug_name: String,
+}
+
+impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
+    /// Tests if the dataflow refers to a single timestamp, namely
+    /// that `as_of` has a single coordinate and that the `until`
+    /// value corresponds to the `as_of` value plus one.
+    pub fn is_single_time(&self) -> bool {
+        // TODO: this would be much easier to check if `until` was a strict lower bound,
+        // and we would be testing that `until == as_of`.
+        let Some(as_of) = self.as_of.as_ref() else { return false; };
+        !as_of.is_empty()
+            && as_of
+                .as_option()
+                .and_then(|as_of| as_of.checked_add(1))
+                .as_ref()
+                == self.until.as_option()
+    }
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
@@ -197,6 +211,29 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         }
         panic!("GlobalId {} not found in DataflowDesc", id);
     }
+
+    /// Calls r and s on any sub-members of those types in self. Halts at the first error return.
+    pub fn visit_children<R, S, E>(&mut self, r: R, s: S) -> Result<(), E>
+    where
+        R: Fn(&mut OptimizedMirRelationExpr) -> Result<(), E>,
+        S: Fn(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        for BuildDesc { plan, .. } in &mut self.objects_to_build {
+            r(plan)?;
+        }
+        for (source_instance_desc, _) in self.source_imports.values_mut() {
+            let Some(mfp) =  source_instance_desc.arguments.operators.as_mut() else {
+                continue;
+            };
+            for expr in mfp.expressions.iter_mut() {
+                s(expr)?;
+            }
+            for (_, expr) in mfp.predicates.iter_mut() {
+                s(expr)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<P, S, T> DataflowDescription<P, S, T>
@@ -239,7 +276,12 @@ where
     /// Computes the set of identifiers upon which the specified collection
     /// identifier depends.
     ///
-    /// `id` must specify a valid object in `objects_to_build`.
+    /// `collection_id` must specify a valid object in `objects_to_build`.
+    ///
+    /// This method includes identifiers for e.g. intermediate views, and should be filtered
+    /// if one only wants sources and indexes.
+    ///
+    /// This method is safe for mutually recursive view defintions.
     pub fn depends_on(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
         let mut out = BTreeSet::new();
         self.depends_on_into(collection_id, &mut out);
@@ -247,11 +289,6 @@ where
     }
 
     /// Like `depends_on`, but appends to an existing `BTreeSet`.
-    ///
-    /// This method includes identifiers for e.g. intermediate views, and should be filtered
-    /// if one only wants sources and indexes.
-    ///
-    /// This method is safe for mutually recursive view defintions.
     pub fn depends_on_into(&self, collection_id: GlobalId, out: &mut BTreeSet<GlobalId>) {
         out.insert(collection_id);
         if self.source_imports.contains_key(&collection_id) {
@@ -285,6 +322,19 @@ where
                 self.depends_on_into(id, out)
             }
         }
+    }
+
+    /// Computes the set of imports upon which the specified collection depends.
+    ///
+    /// This method behaves like `depends_on` but filters out internal dependencies that are not
+    /// included in the dataflow imports.
+    pub fn depends_on_imports(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
+        let is_import = |id: &GlobalId| {
+            self.source_imports.contains_key(id) || self.index_imports.contains_key(id)
+        };
+
+        let deps = self.depends_on(collection_id);
+        deps.into_iter().filter(is_import).collect()
     }
 }
 
@@ -567,10 +617,9 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use crate::types::dataflows::DataflowDescription;
 
@@ -580,7 +629,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
 
-        #[test]
+        #[mz_ore::test]
         fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
             assert!(actual.is_ok());

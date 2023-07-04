@@ -7,24 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-use std::iter;
-use std::vec;
+use std::{fmt, iter, vec};
 
 use anyhow::bail;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-
-use crate::{Datum, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
     ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
 };
+use crate::{Datum, ScalarType};
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -542,7 +538,7 @@ impl RelationDesc {
     /// Verifies that `d` meets all of the constraints for the `i`th column of `self`.
     ///
     /// n.b. The only constraint MZ currently supports in NOT NULL, but this
-    /// structure will  be simple to extend.
+    /// structure will be simple to extend.
     pub fn constraints_met(&self, i: usize, d: &Datum) -> Result<(), NotNullViolation> {
         let name = &self.names[i];
         let typ = &self.typ.column_types[i];

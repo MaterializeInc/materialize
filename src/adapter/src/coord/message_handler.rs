@@ -13,30 +13,28 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use anyhow::anyhow;
 use chrono::DurationRound;
-use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Level};
-
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
-use mz_persist_client::ShardId;
+use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
-use mz_sql::plan::{Plan, SendDiffsPlan};
+use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
+use rand::{rngs, Rng, SeedableRng};
+use tracing::{event, warn, Instrument, Level};
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
-use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
+use crate::coord::appends::Deferred;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
-    SendDiffs, SinkConnectionReady,
+    Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message, PeekStage,
+    PeekStageFinish, PeekValidity, PendingReadTxn, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterError, AdapterNotice};
+use crate::{catalog, AdapterNotice};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -55,11 +53,21 @@ impl Coordinator {
             Message::CreateSourceStatementReady(ready) => {
                 self.message_create_source_statement_ready(ready).await
             }
+            Message::CreateConnectionValidationReady(ready) => {
+                self.message_create_connection_validation_ready(ready).await
+            }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
+            Message::Execute {
+                portal_name,
+                ctx,
+                span,
+            } => {
+                let span = tracing::debug_span!(parent: &span, "message (execute)");
+                self.handle_execute(portal_name, ctx).instrument(span).await;
+            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
             Message::GroupCommitInitiate => {
                 self.try_group_commit().await;
             }
@@ -88,15 +96,14 @@ impl Coordinator {
             }
             Message::RealTimeRecencyTimestamp {
                 conn_id,
-                transient_revision,
                 real_time_recency_ts,
+                validity,
             } => {
-                self.message_real_time_recency_timestamp(
-                    conn_id,
-                    transient_revision,
-                    real_time_recency_ts,
-                )
-                .await;
+                self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
+                    .await;
+            }
+            Message::RetireExecute { data } => {
+                self.retire_execute(data);
             }
         }
     }
@@ -129,8 +136,9 @@ impl Coordinator {
                     persist_location: _,
                     relation_desc: _,
                 } = &collection.collection_metadata;
-                [*data_shard, *remap_shard].into_iter().chain(*status_shard)
+                [*remap_shard, *status_shard, Some(*data_shard)].into_iter()
             })
+            .filter_map(|shard| shard)
             .collect();
 
         let collection_metric = self
@@ -142,17 +150,7 @@ impl Coordinator {
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
             let collection_metric_timer = collection_metric.start_timer();
-            let mut shard_sizes = client.shard_sizes().await;
-
-            // Don't record usage for shards that are no longer live.
-            // Technically the storage is in use, but we never free it, and
-            // we don't want to bill the customer for it.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/8185
-            shard_sizes.retain(|shard_id, _| match shard_id {
-                None => true,
-                Some(shard_id) => live_shards.contains(shard_id),
-            });
+            let shard_sizes = client.shards_usage_referenced(live_shards).await;
             collection_metric_timer.observe_duration();
 
             // It is not an error for shard sizes to become ready after
@@ -164,7 +162,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shard_sizes: BTreeMap<Option<ShardId>, u64>) {
+    async fn storage_usage_update(&mut self, shards_usage: ShardsUsageReferenced) {
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
@@ -172,10 +170,10 @@ impl Coordinator {
         let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
 
         let mut ops = vec![];
-        for (shard_id, size_bytes) in shard_sizes {
+        for (shard_id, shard_usage) in shards_usage.by_shard {
             ops.push(catalog::Op::UpdateStorageUsage {
-                shard_id: shard_id.map(|shard_id| shard_id.to_string()),
-                size_bytes,
+                shard_id: Some(shard_id.to_string()),
+                size_bytes: shard_usage.size_bytes(),
                 collection_timestamp,
             });
         }
@@ -197,7 +195,7 @@ impl Coordinator {
         const SEED_LEN: usize = 32;
         let mut seed = [0; SEED_LEN];
         for (i, byte) in self
-            .catalog
+            .catalog()
             .state()
             .config()
             .environment_id
@@ -256,7 +254,7 @@ impl Coordinator {
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     let remove = active_subscribe.process_response(response);
                     if remove {
-                        self.remove_active_subscribe(&sink_id);
+                        self.remove_active_subscribe(sink_id).await;
                     }
                 }
             }
@@ -278,12 +276,12 @@ impl Coordinator {
 
                 if old.as_ref() != Some(&new) {
                     let retraction = old.map(|old| {
-                        self.catalog
+                        self.catalog()
                             .state()
                             .pack_replica_heartbeat_update(replica_id, old, -1)
                     });
                     let insertion = self
-                        .catalog
+                        .catalog()
                         .state()
                         .pack_replica_heartbeat_update(replica_id, new, 1);
                     let updates = if let Some(retraction) = retraction {
@@ -291,8 +289,7 @@ impl Coordinator {
                     } else {
                         vec![insertion]
                     };
-                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                        .await;
+                    self.buffer_builtin_table_updates(updates);
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
@@ -308,12 +305,12 @@ impl Coordinator {
                 let old = std::mem::replace(m, Some(new.clone()));
                 if old.as_ref() != Some(&new) {
                     let retractions = old.map(|old| {
-                        self.catalog
+                        self.catalog()
                             .state()
                             .pack_replica_metric_updates(replica_id, &old, -1)
                     });
                     let insertions = self
-                        .catalog
+                        .catalog()
                         .state()
                         .pack_replica_metric_updates(replica_id, &new, 1);
                     let updates = if let Some(retractions) = retractions {
@@ -324,8 +321,7 @@ impl Coordinator {
                     } else {
                         insertions
                     };
-                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                        .await;
+                    self.buffer_builtin_table_updates(updates);
                 }
             }
             ControllerResponse::ComputeReplicaWriteFrontiers(updates) => {
@@ -343,34 +339,29 @@ impl Coordinator {
                     let old = std::mem::replace(m, new.clone());
                     if old != new {
                         let retractions = self
-                            .catalog
+                            .catalog()
                             .state()
                             .pack_replica_write_frontiers_updates(replica_id, &old, -1);
                         builtin_updates.extend(retractions.into_iter());
 
                         let insertions = self
-                            .catalog
+                            .catalog()
                             .state()
                             .pack_replica_write_frontiers_updates(replica_id, &new, 1);
                         builtin_updates.extend(insertions.into_iter());
                     }
                 }
 
-                self.send_builtin_table_updates(
-                    builtin_updates,
-                    BuiltinTableUpdateSource::Background,
-                )
-                .await;
+                self.buffer_builtin_table_updates(builtin_updates);
             }
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx, session))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     async fn message_create_source_statement_ready(
         &mut self,
         CreateSourceStatementReady {
-            mut session,
-            tx,
+            mut ctx,
             result,
             params,
             depends_on,
@@ -390,30 +381,29 @@ impl Coordinator {
         // for connectors that were altered while we were purifying.
         if !depends_on
             .iter()
-            .all(|id| self.catalog.try_get_entry(id).is_some())
+            .all(|id| self.catalog().try_get_entry(id).is_some())
         {
-            self.handle_execute_inner(original_stmt, params, session, tx)
-                .await;
+            self.handle_execute_inner(original_stmt, params, ctx).await;
             return;
         }
 
         let (subsource_stmts, stmt) = match result {
             Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e), session),
+            Err(e) => return ctx.retire(Err(e)),
         };
 
-        let mut plans = vec![];
+        let mut plans: Vec<CreateSourcePlans> = vec![];
         let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
         for (transient_id, subsource_stmt) in subsource_stmts {
             let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
-            let source_id = match self.catalog.allocate_user_id().await {
+            let source_id = match self.catalog_mut().allocate_user_id().await {
                 Ok(id) => id,
-                Err(e) => return tx.send(Err(e.into()), session),
+                Err(e) => return ctx.retire(Err(e.into())),
             };
             let plan = match self.plan_statement(
-                &mut session,
+                ctx.session_mut(),
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
             ) {
@@ -421,42 +411,82 @@ impl Coordinator {
                 Ok(_) => {
                     unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
                 }
-                Err(e) => return tx.send(Err(e), session),
+                Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push((source_id, plan, depends_on));
+            plans.push((source_id, plan, depends_on).into());
         }
 
         // Then, we'll rewrite the source statement to point to the newly minted global ids and
         // plan it too
         let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
             Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
         let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
-        let source_id = match self.catalog.allocate_user_id().await {
+        let source_id = match self.catalog_mut().allocate_user_id().await {
             Ok(id) => id,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
-            Ok(Plan::CreateSource(plan)) => plan,
-            Ok(_) => {
-                unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
-            }
-            Err(e) => return tx.send(Err(e), session),
-        };
-        plans.push((source_id, plan, depends_on));
+        let plan =
+            match self.plan_statement(ctx.session_mut(), Statement::CreateSource(stmt), &params) {
+                Ok(Plan::CreateSource(plan)) => plan,
+                Ok(_) => {
+                    unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
+                }
+                Err(e) => return ctx.retire(Err(e)),
+            };
+        plans.push((source_id, plan, depends_on).into());
 
         // Finally, sequence all plans in one go
-        let result = self.sequence_create_source(&mut session, plans).await;
-        tx.send(result, session);
+        self.sequence_plan(ctx, Plan::CreateSources(plans), Vec::new())
+            .await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self, session_and_tx))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_create_connection_validation_ready(
+        &mut self,
+        CreateConnectionValidationReady {
+            ctx,
+            result,
+            params,
+            original_stmt,
+            depends_on,
+            otel_ctx,
+        }: CreateConnectionValidationReady,
+    ) {
+        otel_ctx.attach_as_parent();
+
+        // Ensure that all dependencies still exist after validation, as a
+        // `DROP SECRET` may have sneaked in. If any have gone missing, we
+        // revalidate the original statement. This will either produce a nice
+        // "unknown secret" error, or pick up a new connector that has
+        // replaced the dropped connector.
+        //
+        // WARNING: If we support `ALTER SECRET`, we'll need to also check
+        // for connectors that were altered while we were purifying.
+        if !depends_on
+            .iter()
+            .all(|id| self.catalog().try_get_entry(id).is_some())
+        {
+            self.handle_execute_inner(original_stmt, params, ctx).await;
+            return;
+        }
+
+        let plan = match result {
+            Ok(ok) => ok,
+            Err(e) => return ctx.retire(Err(e)),
+        };
+
+        self.sequence_plan(ctx, Plan::CreateConnection(plan), depends_on)
+            .await;
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     async fn message_sink_connection_ready(
         &mut self,
         SinkConnectionReady {
-            session_and_tx,
+            ctx,
             id,
             oid,
             create_export_token,
@@ -469,7 +499,7 @@ impl Coordinator {
                 // connection, which means there is external state (like
                 // a Kafka topic) that's been created on our behalf. If
                 // we fail now, we'll leak that external state.
-                if self.catalog.try_get_entry(&id).is_some() {
+                if self.catalog().try_get_entry(&id).is_some() {
                     // TODO(benesch): this `expect` here is possibly scary, but
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
@@ -479,7 +509,7 @@ impl Coordinator {
                         oid,
                         connection,
                         create_export_token,
-                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
+                        ctx.as_ref().map(|ctx| ctx.session()),
                     )
                     .await
                     // XXX(chae): I really don't like this -- especially as we're now doing cross
@@ -492,20 +522,22 @@ impl Coordinator {
                     // perspective we did, as there is state (e.g. a
                     // Kafka topic) they need to clean up.
                 }
-                if let Some((session, tx)) = session_and_tx {
-                    tx.send(Ok(ExecuteResponse::CreatedSink), session);
+                if let Some(ctx) = ctx {
+                    ctx.retire(Ok(ExecuteResponse::CreatedSink));
                 }
             }
             Err(e) => {
                 // Drop the placeholder sink if still present.
-                if self.catalog.try_get_entry(&id).is_some() {
-                    let ops = self.catalog.drop_items_ops(&[id]);
-                    self.catalog_transact(
-                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
-                        ops,
-                    )
-                    .await
-                    .expect("deleting placeholder sink cannot fail");
+                if self.catalog().try_get_entry(&id).is_some() {
+                    let ops = self
+                        .catalog()
+                        .item_dependents(id)
+                        .into_iter()
+                        .map(catalog::Op::DropObject)
+                        .collect();
+                    self.catalog_transact(ctx.as_ref().map(|ctx| ctx.session()), ops)
+                        .await
+                        .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
                     // attempting to create the connection, in which case we don't need to do
@@ -516,8 +548,8 @@ impl Coordinator {
                     .controller
                     .storage
                     .cancel_prepare_export(create_export_token);
-                if let Some((session, tx)) = session_and_tx {
-                    tx.send(Err(e), session);
+                if let Some(ctx) = ctx {
+                    ctx.retire(Err(e));
                 }
             }
         }
@@ -533,12 +565,11 @@ impl Coordinator {
         if let Some(ready) = self.write_lock_wait_group.pop_front() {
             match ready {
                 Deferred::Plan(mut ready) => {
-                    ready.session.grant_write_lock(write_lock_guard);
+                    ready.ctx.session_mut().grant_write_lock(write_lock_guard);
                     // Write statements never need to track catalog
                     // dependencies.
                     let depends_on = vec![];
-                    self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
-                        .await;
+                    self.sequence_plan(ready.ctx, ready.plan, depends_on).await;
                 }
                 Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
             }
@@ -547,47 +578,13 @@ impl Coordinator {
         // here.
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(id, kind))]
-    fn message_send_diffs(
-        &mut self,
-        SendDiffs {
-            mut session,
-            tx,
-            id,
-            diffs,
-            kind,
-            returning,
-        }: SendDiffs,
-    ) {
-        event!(Level::TRACE, diffs = format!("{:?}", diffs));
-        match diffs {
-            Ok(diffs) => {
-                tx.send(
-                    self.sequence_send_diffs(
-                        &mut session,
-                        SendDiffsPlan {
-                            id,
-                            updates: diffs,
-                            kind,
-                            returning,
-                        },
-                    ),
-                    session,
-                );
-            }
-            Err(e) => {
-                tx.send(Err(e), session);
-            }
-        }
-    }
-
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(cluster) = self.catalog.try_get_cluster(event.cluster_id) else {
+        let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
             return;
         };
         let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
@@ -606,7 +603,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("updating cluster status cannot fail");
 
-            let cluster = self.catalog.get_cluster(event.cluster_id);
+            let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = &cluster.replicas_by_id[&event.replica_id];
             let new_status = replica.status();
 
@@ -652,12 +649,14 @@ impl Coordinator {
         }
 
         if !ready_txns.is_empty() {
-            self.catalog
+            self.catalog_mut()
                 .confirm_leadership()
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
             for ready_txn in ready_txns {
-                ready_txn.finish();
+                if let Some((ctx, result)) = ready_txn.finish() {
+                    ctx.retire(result);
+                }
             }
         }
 
@@ -681,8 +680,8 @@ impl Coordinator {
     async fn message_real_time_recency_timestamp(
         &mut self,
         conn_id: ConnectionId,
-        transient_revision: u64,
         real_time_recency_ts: mz_repr::Timestamp,
+        mut validity: PeekValidity,
     ) {
         let real_time_recency_context =
             match self.pending_real_time_recency_timestamp.remove(&conn_id) {
@@ -691,38 +690,35 @@ impl Coordinator {
                 None => return,
             };
 
-        // Re-validate that the catalog hasn't changed.
-        if transient_revision != self.catalog.transient_revision() {
-            // TODO(jkosh44) It would be preferable to re-validate the query instead of blindly failing.
-            let (tx, session) = real_time_recency_context.take_tx_and_session();
-            return tx.send(Err(AdapterError::Unstructured(anyhow!("Catalog contents have changed mid-query due to concurrent DDL, please re-try query"))), session);
+        if let Err(err) = validity.check(self.catalog()) {
+            let ctx = real_time_recency_context.take_context();
+            ctx.retire(Err(err));
+            return;
         }
 
         match real_time_recency_context {
             RealTimeRecencyContext::ExplainTimestamp {
-                tx,
-                session,
+                mut ctx,
                 format,
                 cluster_id,
                 optimized_plan,
                 id_bundle,
-            } => tx.send(
-                self.sequence_explain_timestamp_finish(
-                    &session,
+            } => {
+                let result = self.sequence_explain_timestamp_finish(
+                    ctx.session_mut(),
                     format,
                     cluster_id,
                     optimized_plan,
                     id_bundle,
                     Some(real_time_recency_ts),
-                ),
-                session,
-            ),
+                );
+                ctx.retire(result);
+            }
             RealTimeRecencyContext::Peek {
-                tx,
+                ctx,
                 finishing,
                 copy_to,
-                source,
-                mut session,
+                dataflow,
                 cluster_id,
                 when,
                 target_replica,
@@ -730,15 +726,17 @@ impl Coordinator {
                 index_id,
                 timeline_context,
                 source_ids,
-                id_bundle,
-                in_immediate_multi_stmt_txn,
+                in_immediate_multi_stmt_txn: _,
+                key,
+                typ,
             } => {
-                tx.send(
-                    self.sequence_peek_finish(
+                self.sequence_peek_stage(
+                    ctx,
+                    PeekStage::Finish(PeekStageFinish {
+                        validity,
                         finishing,
                         copy_to,
-                        source,
-                        &mut session,
+                        dataflow,
                         cluster_id,
                         when,
                         target_replica,
@@ -746,13 +744,12 @@ impl Coordinator {
                         index_id,
                         timeline_context,
                         source_ids,
-                        id_bundle,
-                        in_immediate_multi_stmt_txn,
-                        Some(real_time_recency_ts),
-                    )
-                    .await,
-                    session,
-                );
+                        real_time_recency_ts: Some(real_time_recency_ts),
+                        key,
+                        typ,
+                    }),
+                )
+                .await;
             }
         }
     }

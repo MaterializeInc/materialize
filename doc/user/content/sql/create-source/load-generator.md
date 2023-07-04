@@ -27,15 +27,17 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
-**COUNTER** | Use the [counter](#counter) load generator.
-**AUCTION** | Use the [auction](#auction) load generator.
-**TPCH**    | Use the [tpch](#tpch) load generator.
+**COUNTER**  | Use the [counter](#counter) load generator.
+**AUCTION**  | Use the [auction](#auction) load generator.
+**MARKETING**| Use the [marketing](#marketing) load generator.
+**TPCH**     | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **FOR TABLES (** _table_list_ **)** | Creates subsources for specific tables in the load generator.
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
 ### `WITH` options
 
@@ -109,12 +111,93 @@ The organizations, users, and accounts are fixed at the time the source
 is created. Each tick interval, either a new auction is started, or a new bid
 is placed in the currently ongoing auction.
 
+### Marketing
+
+The marketing load generator simulates a marketing organization that is using a machine learning model to send coupons to potential leads. The marketing source will be automatically demuxed
+into multiple subsources when the `CREATE SOURCE` command is executed. This will
+create the following subsources:
+
+  * `customers` describes the customers that the marketing team may target.
+
+    Field     | Type       | Description
+    ----------|------------|------------
+    `id`      | [`bigint`] | A unique identifier for the customer.
+    `email`   | [`text`]   | The customer's email.
+    `income`  | [`bigint`] | The customer's income in pennies.
+
+  * `impressions` describes online ads that have been seen by a customer.
+
+    Field             | Type                         | Description
+    ------------------|------------------------------|------------
+    `id`              | [`bigint`]                   | A unique identifier for the impression.
+    `customer_id`     | [`bigint`]                   | The identifier of the customer that saw the ad. References `customers.id`.
+    `impression_time` | [`timestamp with time zone`] | The time at which the ad was seen.
+
+  * `clicks` describes clicks of ads.
+
+    Field             | Type                         | Description
+    ------------------|------------------------------|------------
+    `impression_id`   | [`bigint`]                   | The identifier of the impression that was clicked. References `impressions.id`.
+    `click_time`      | [`timestamp with time zone`] | The time at which the impression was clicked.
+
+  * `leads` describes a potential lead for a purchase.
+
+    Field               | Type                         | Description
+    --------------------|------------------------------|------------
+    `id`                | [`bigint`]                   | A unique identifier for the lead.
+    `customer_id`       | [`bigint`]                   | The identifier of the customer we'd like to convert. References `customers.id`.
+    `created_at`        | [`timestamp with time zone`] | The time at which the lead was created.
+    `converted_at`      | [`timestamp with time zone`] | The time at which the lead was converted.
+    `conversion_amount` | [`bigint`]                   | The amount the lead converted for in pennies.
+
+  * `coupons` describes coupons given to leads.
+
+    Field               | Type                         | Description
+    --------------------|------------------------------|------------
+    `id`                | [`bigint`]                   | A unique identifier for the coupon.
+    `lead_id`           | [`bigint`]                   | The identifier of the lead we're attempting to convert. References `leads.id`.
+    `created_at`        | [`timestamp with time zone`] | The time at which the coupon was created.
+    `amount`            | [`bigint`]                   | The amount the coupon is for in pennies.
+
+  * `conversion_predictions` describes the predictions made by a highly sophisticated machine learning model.
+
+    Field               | Type                         | Description
+    --------------------|------------------------------|------------
+    `lead_id`           | [`bigint`]                   | The identifier of the lead we're attempting to convert. References `leads.id`.
+    `experiment_bucket`| [`text`]                     | Whether the lead is a control or experiment.
+    `created_at`        | [`timestamp with time zone`] | The time at which the prediction was made.
+    `score`             | [`numeric`]                  | The predicted likelihood the lead will convert.
+
 ### TPCH
 
 The TPCH load generator implements the [TPC-H benchmark specification](https://www.tpc.org/tpch/default5.asp).
 The TPCH source must be used with `FOR ALL TABLES`, which will create the standard TPCH relations.
 If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
 If not specified, the dataset will not change over time.
+
+### Monitoring source progress
+
+By default, load generator sources expose progress metadata as a subsource that
+you can use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
+
+The following metadata is available for each source as a progress subsource:
+
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset generated, which equates to the number of times the load generator has emitted data.
+
+And can be queried using:
+
+```sql
+SELECT "offset"
+FROM <src_name>_progress;
+```
+
+As long as the offset continues increasing, Materialize is generating data. For
+more details on monitoring source ingestion progress and debugging related
+issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Examples
 
@@ -161,14 +244,15 @@ To display the created subsources:
 SHOW SOURCES;
 ```
 ```nofmt
-     name      |      type      |  size
----------------+----------------+---------
- accounts      | subsource      |
- auction_house | load-generator | 3xsmall
- auctions      | subsource      |
- bids          | subsource      |
- organizations | subsource      |
- users         | subsource      |
+          name          |      type      |  size
+------------------------+----------------+---------
+ accounts               | subsource      |
+ auction_house          | load-generator | 3xsmall
+ auction_house_progress | progress       |
+ auctions               | subsource      |
+ bids                   | subsource      |
+ organizations          | subsource      |
+ users                  | subsource      |
 ```
 
 To examine the simulated bids:
@@ -182,6 +266,83 @@ SELECT * from bids;
  10 |  3844 |          1 |     59 | 2022-09-16 23:24:07.332+00
  11 |  1861 |          1 |     40 | 2022-09-16 23:24:08.332+00
  12 |  3338 |          1 |     97 | 2022-09-16 23:24:09.332+00
+```
+
+### Creating a marketing load generator
+
+To create a load generator source that simulates an online marketing campaign:
+
+```sql
+CREATE SOURCE marketing
+  FROM LOAD GENERATOR MARKETING
+  FOR ALL TABLES
+  WITH (SIZE = '3xsmall');
+```
+
+To display the created subsources:
+
+```sql
+SHOW SOURCES;
+```
+
+```nofmt
+          name          |      type      | size
+------------------------+----------------+------
+ clicks                 | subsource      |
+ conversion_predictions | subsource      |
+ coupons                | subsource      |
+ customers              | subsource      |
+ impressions            | subsource      |
+ leads                  | subsource      |
+ marketing              | load-generator | 3xsmall
+ marketing_progress     | progress       |
+```
+
+To find all impressions and clicks associated with a campaign over the last 30 days:
+
+```sql
+WITH
+    click_rollup AS
+    (
+        SELECT impression_id AS id, count(*) AS clicks
+        FROM clicks
+        WHERE click_time - INTERVAL '30' DAY <= mz_now()
+        GROUP BY impression_id
+    ),
+    impression_rollup AS
+    (
+        SELECT id, campaign_id, count(*) AS impressions
+        FROM impressions
+        WHERE impression_time - INTERVAL '30' DAY <= mz_now()
+        GROUP BY id, campaign_id
+    )
+SELECT campaign_id, sum(impressions) AS impressions, sum(clicks) AS clicks
+FROM impression_rollup LEFT JOIN click_rollup USING(id)
+GROUP BY campaign_id;
+```
+
+```nofmt
+ campaign_id | impressions | clicks
+-------------+-------------+--------
+           0 |         350 |     33
+           1 |         325 |     28
+           2 |         319 |     24
+           3 |         315 |     38
+           4 |         305 |     28
+           5 |         354 |     31
+           6 |         346 |     25
+           7 |         337 |     36
+           8 |         329 |     38
+           9 |         305 |     24
+          10 |         345 |     27
+          11 |         323 |     30
+          12 |         320 |     29
+          13 |         331 |     27
+          14 |         310 |     22
+          15 |         324 |     28
+          16 |         315 |     32
+          17 |         329 |     36
+          18 |         329 |     28
 ```
 
 ### Creating a TPCH load generator
@@ -201,17 +362,18 @@ To display the created subsources:
 SHOW SOURCES;
 ```
 ```nofmt
-   name   |      type      |  size
-----------+----------------+---------
- tpch     | load-generator | 3xsmall
- supplier | subsource      |
- region   | subsource      |
- partsupp | subsource      |
- part     | subsource      |
- orders   | subsource      |
- nation   | subsource      |
- lineitem | subsource      |
- customer | subsource      |
+      name     |      type      |  size
+---------------+----------------+---------
+ tpch          | load-generator | 3xsmall
+ tpch_progress | progress       |
+ supplier      | subsource      |
+ region        | subsource      |
+ partsupp      | subsource      |
+ part          | subsource      |
+ orders        | subsource      |
+ nation        | subsource      |
+ lineitem      | subsource      |
+ customer      | subsource      |
 ```
 
 To run the Pricing Summary Report Query (Q1), which reports the amount of
@@ -273,6 +435,7 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SOURCE`](../)
 
 [`bigint`]: /sql/types/bigint
+[`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
 [`timestamp with time zone`]: /sql/types/timestamp
 [feature request]: https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml

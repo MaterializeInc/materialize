@@ -14,9 +14,6 @@ operational after an upgrade.
 import random
 from typing import Dict, List, Tuple
 
-from semver import Version
-
-from materialize import util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Cockroach,
@@ -28,11 +25,13 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
+from materialize.util import MzVersion
+from materialize.version_list import VersionsFromDocs
 
-# All released Materialize versions, in order from most to least recent.
-all_versions = util.released_materialize_versions()
+version_list = VersionsFromDocs()
+all_versions = version_list.all_versions()
 
-mz_options: Dict[Version, str] = {}
+mz_options: Dict[MzVersion, str] = {}
 
 SERVICES = [
     TestCerts(),
@@ -73,25 +72,8 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Test upgrades from various versions."""
+    """Test upgrades from previous versions."""
 
-    parser.add_argument(
-        "--min-version",
-        metavar="VERSION",
-        type=Version.parse,
-        default=Version.parse("0.39.0"),
-        help="the minimum version to test from",
-    )
-    parser.add_argument(
-        "--most-recent",
-        metavar="N",
-        # Usually, the 2 most-recent versions will be:
-        # - the previous patch version of the current release
-        # - the last patch version of the previous release
-        default=2,
-        type=int,
-        help="limit testing to the N most recent versions",
-    )
     parser.add_argument(
         "--tests",
         choices=["all", "non-ssl", "ssl"],
@@ -103,15 +85,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    tested_versions = [v for v in all_versions if v >= args.min_version]
-    if args.most_recent is not None:
-        tested_versions = tested_versions[: args.most_recent]
-    tested_versions.reverse()
+    tested_versions = version_list.minor_versions()[-2:]
 
     if args.tests in ["all", "non-ssl"]:
         for version in tested_versions:
             priors = [v for v in all_versions if v <= version]
-            test_upgrade_from_version(c, f"v{version}", priors, filter=args.filter)
+            test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
 
         test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
 
@@ -121,7 +100,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             for version in tested_versions:
                 priors = [v for v in all_versions if v <= version]
                 test_upgrade_from_version(
-                    c, f"v{version}", priors, filter=args.filter, style="ssl-"
+                    c, f"{version}", priors, filter=args.filter, style="ssl-"
                 )
             # we don't test current_source -> current_source for `ssl-` tests
 
@@ -129,23 +108,25 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def test_upgrade_from_version(
     c: Composition,
     from_version: str,
-    priors: List[Version],
+    priors: List[MzVersion],
     filter: str,
     style: str = "",
 ) -> None:
-    print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
+    print(f"+++ Testing upgrade from Materialize {from_version} to current_source.")
 
     # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
     prior_patch_versions = []
     for prior in priors:
         for prior_patch_version in range(0, prior.patch):
             prior_patch_versions.append(
-                Version(major=prior.major, minor=prior.minor, patch=prior_patch_version)
+                MzVersion(
+                    major=prior.major, minor=prior.minor, patch=prior_patch_version
+                )
             )
 
     priors = priors + prior_patch_versions
     priors.sort()
-    priors = [f"v{prior}" for prior in priors]
+    priors = [f"{prior}" for prior in priors]
 
     if len(priors) == 0:
         priors = ["*"]
@@ -162,7 +143,7 @@ def test_upgrade_from_version(
             options=[
                 opt
                 for start_version, opt in mz_options.items()
-                if from_version[1:] >= start_version
+                if MzVersion.parse_mz(from_version) >= start_version
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
@@ -203,6 +184,7 @@ def test_upgrade_from_version(
             "testdrive",
             "--no-reset",
             f"--var=upgrade-from-version={from_version}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             temp_dir,
             seed,
             f"check-{style}from-{version_glob}-{filter}.td",

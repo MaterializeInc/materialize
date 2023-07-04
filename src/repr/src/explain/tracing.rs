@@ -11,12 +11,11 @@
 
 #![cfg(feature = "tracing_")]
 
-use std::fmt::Debug;
-use std::ops::Deref;
+use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
 use std::sync::Mutex;
 
-use tracing::{span, subscriber};
+use tracing::{span, subscriber, Level};
 use tracing_subscriber::{field, layer};
 
 /// A tracing layer used to accumulate a sequence of explainable plans.
@@ -45,8 +44,10 @@ pub struct TraceEntry<T> {
     /// Used to impose global sorting when merging multiple `TraceEntry`
     /// arrays in a single array.
     pub instant: std::time::Instant,
-    /// The time it took to run this optimization step.
-    pub duration: std::time::Duration,
+    /// The duration since the start of the enclosing span.
+    pub span_duration: std::time::Duration,
+    /// The duration since the start of the top-level span seen by the `PlanTrace`.
+    pub full_duration: std::time::Duration,
     /// Ancestor chain of span names (root is first, parent is last).
     pub path: String,
     /// The plan produced this step.
@@ -106,6 +107,55 @@ pub fn trace_plan<T: Clone + 'static>(plan: &T) {
             trace.push(plan)
         }
     });
+}
+
+/// Create a span identified by `segment` and trace `plan` in it.
+///
+/// This primitive is useful for instrumentic code, see this commit[^example]
+/// for an example.
+///
+/// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
+pub fn dbg_plan<S: Display, T: Clone + 'static>(segment: S, plan: &T) {
+    span!(Level::DEBUG, "segment", path.segment = segment.to_string()).in_scope(|| {
+        trace_plan(plan);
+    });
+}
+
+/// Create a span identified by `segment` and trace `misc` in it.
+///
+/// This primitive is useful for instrumentic code, see this commit[^example]
+/// for an example.
+///
+/// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
+pub fn dbg_misc<S: Display, T: Display>(segment: S, misc: T) {
+    span!(Level::DEBUG, "segment", path.segment = segment.to_string()).in_scope(|| {
+        trace_plan(&misc.to_string());
+    });
+}
+
+/// A helper struct for wrapping entries that represent the invocation context
+/// of a function or method call into an object that renders as their hash.
+///
+/// Useful when constructing path segments when instrumenting a function trace
+/// with additional debugging information.
+#[allow(missing_debug_implementations)]
+pub struct ContextHash(u64);
+
+impl ContextHash {
+    pub fn of<T: std::hash::Hash>(t: T) -> Self {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hasher;
+
+        let mut h = DefaultHasher::new();
+        t.hash(&mut h);
+        ContextHash(h.finish())
+    }
+}
+
+impl Display for ContextHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:x}", self.0 & 0xFFFFFFFu64) // show last 28 bits
+    }
 }
 
 /// A [`layer::Layer`] implementation for [`PlanTrace`].
@@ -185,18 +235,19 @@ impl<T: Clone + 'static> PlanTrace<T> {
 
     /// Push a trace entry for the given `plan` to the current trace.
     ///
-    /// This is a noop if (1) the call is within a context without an enclosing
-    /// span, or if (2) [`PlanTrace::find`] is set and the current path is not a
-    /// prefix of its value.
+    /// This is a noop if
+    /// 1. the call is within a context without an enclosing span, or if
+    /// 2. [`PlanTrace::find`] is set not equal to [`PlanTrace::current_path`].
     fn push(&self, plan: &T) {
-        let times = self.times.lock().expect("times shouldn't be poisoned");
-        if let Some(span_start) = times.last() {
-            if let Some(current_path) = self.current_path() {
+        if let Some(current_path) = self.current_path() {
+            let times = self.times.lock().expect("times shouldn't be poisoned");
+            if let (Some(full_start), Some(span_start)) = (times.first(), times.last()) {
                 let mut entries = self.entries.lock().expect("entries shouldn't be poisoned");
                 let time = std::time::Instant::now();
                 entries.push(TraceEntry {
                     instant: time,
-                    duration: time.duration_since(*span_start),
+                    span_duration: time.duration_since(*span_start),
+                    full_duration: time.duration_since(*full_start),
                     path: current_path,
                     plan: plan.clone(),
                 });
@@ -207,20 +258,19 @@ impl<T: Clone + 'static> PlanTrace<T> {
     /// Helper method: get a copy of the current path.
     ///
     /// If [`PlanTrace::find`] is set, this will also check the current path
-    /// against the `find` entry and return `None` if the former is not a prefix
-    /// of the latter.
+    /// against the `find` entry and return `None` if the two differ.
     fn current_path(&self) -> Option<String> {
         let path = self.path.lock().expect("path shouldn't be poisoned");
-        let path = path.deref();
+        let path = path.as_str();
         match self.find {
             Some(find) => {
-                if find.starts_with(path.as_str()) {
-                    Some(path.clone())
+                if find == path {
+                    Some(path.to_owned())
                 } else {
                     None
                 }
             }
-            None => Some(path.clone()),
+            None => Some(path.to_owned()),
         }
     }
 }
@@ -267,14 +317,12 @@ impl field::Visit for ExtractStr {
 
 #[cfg(test)]
 mod test {
-    use tracing::dispatcher;
-    use tracing::instrument;
+    use tracing::{dispatcher, instrument};
     use tracing_subscriber::prelude::*;
 
-    use super::trace_plan;
-    use super::PlanTrace;
+    use super::{trace_plan, PlanTrace};
 
-    #[test]
+    #[mz_ore::test]
     fn test_optimizer_trace() {
         let subscriber = tracing_subscriber::registry().with(Some(PlanTrace::<String>::new()));
         let dispatch = dispatcher::Dispatch::new(subscriber);

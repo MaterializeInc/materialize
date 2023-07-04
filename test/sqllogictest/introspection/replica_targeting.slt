@@ -75,18 +75,6 @@ SELECT * FROM mz_internal.mz_compute_exports
 statement error log source reads must target a replica
 SUBSCRIBE mz_internal.mz_compute_exports
 
-# Verify that the logic does not apply to persisted logs
-
-statement ok
-SELECT * FROM mz_internal.mz_compute_exports_1
-
-simple
-DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports_1;
-FETCH 0 s;
-----
-COMPLETE 0
-COMPLETE 0
-
 # Verify that untargeted introspection queries on unreplicated clusters are
 # allowed.
 

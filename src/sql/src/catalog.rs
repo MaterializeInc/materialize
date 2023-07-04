@@ -15,36 +15,41 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
+use mz_build_info::BuildInfo;
+use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_expr::MirScalarExpr;
+use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::str::StrExt;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::explain::ExprHumanizer;
+use mz_repr::role_id::RoleId;
+use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
+use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_storage_client::types::connections::Connection;
+use mz_storage_client::types::sources::SourceDesc;
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use mz_controller::clusters::{ClusterId, ReplicaId};
-use mz_expr::MirScalarExpr;
-use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
-use mz_sql_parser::ast::Expr;
-use mz_sql_parser::ast::UnresolvedObjectName;
-use mz_storage_client::types::connections::Connection;
-use mz_storage_client::types::sources::SourceDesc;
-
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
+    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
+use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::PlanError;
+use crate::plan::{PlanError, PlanNotice};
+use crate::session::vars::SystemVars;
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -64,16 +69,19 @@ use crate::plan::PlanError;
 ///
 ///   * Lookup operations, like [`SessionCatalog::get_item`]. These retrieve
 ///     metadata about a catalog entity based on a fully-specified name that is
-///     known to be valid (i.e., because the name was successfully resolved,
-///     or was constructed based on the output of a prior lookup operation).
-///     These functions panic if called with invalid input.
+///     known to be valid (i.e., because the name was successfully resolved, or
+///     was constructed based on the output of a prior lookup operation). These
+///     functions panic if called with invalid input.
+///
+///   * Session management, such as managing variables' states and adding
+///     notices to the session.
 ///
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
-    /// Returns the name of the user who is issuing the query.
-    fn active_user(&self) -> &str;
+    /// Returns the id of the role that is issuing the query.
+    fn active_role_id(&self) -> &RoleId;
 
     /// Returns the database to use if one is not explicitly specified.
     fn active_database_name(&self) -> Option<&str> {
@@ -106,6 +114,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Panics if `id` does not specify a valid database.
     fn get_database(&self, id: &DatabaseId) -> &dyn CatalogDatabase;
 
+    /// Gets all databases.
+    fn get_databases(&self) -> Vec<&dyn CatalogDatabase>;
+
     /// Resolves a partially-specified schema name.
     ///
     /// If the schema exists in the catalog, it returns a reference to the
@@ -135,11 +146,34 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
         schema_spec: &SchemaSpecifier,
     ) -> &dyn CatalogSchema;
 
+    /// Gets all schemas.
+    fn get_schemas(&self) -> Vec<&dyn CatalogSchema>;
+
     /// Returns true if `schema` is an internal system schema, false otherwise
     fn is_system_schema(&self, schema: &str) -> bool;
 
+    /// Returns true if `schema` is an internal system schema, false otherwise
+    fn is_system_schema_specifier(&self, schema: &SchemaSpecifier) -> bool;
+
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
+
+    /// Gets a role by its ID.
+    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole>;
+
+    /// Gets a role by its ID.
+    ///
+    /// Panics if `id` does not specify a valid role.
+    fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
+
+    /// Gets all roles.
+    fn get_roles(&self) -> Vec<&dyn CatalogRole>;
+
+    /// Gets the id of the `mz_system` role.
+    fn mz_system_role_id(&self) -> RoleId;
+
+    /// Collects all role IDs that `id` is transitively a member of.
+    fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId>;
 
     /// Resolves the named cluster.
     ///
@@ -148,6 +182,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
         &'a self,
         cluster_name: Option<&'b str>,
     ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
+
+    /// Resolves the named cluster replica.
+    fn resolve_cluster_replica<'a, 'b>(
+        &'a self,
+        cluster_replica_name: &'b QualifiedReplica,
+    ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -161,14 +201,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialObjectName)
-        -> Result<&dyn CatalogItem, CatalogError>;
+    fn resolve_item(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(
         &self,
-        item_name: &PartialObjectName,
+        item_name: &PartialItemName,
     ) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Gets an item by its ID.
@@ -179,19 +218,47 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Panics if `id` does not specify a valid item.
     fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
 
+    /// Gets all items.
+    fn get_items(&self) -> Vec<&dyn CatalogItem>;
+
     /// Reports whether the specified type exists in the catalog.
-    fn item_exists(&self, name: &QualifiedObjectName) -> bool;
+    fn item_exists(&self, name: &QualifiedItemName) -> bool;
 
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
 
+    /// Gets all clusters.
+    fn get_clusters(&self) -> Vec<&dyn CatalogCluster>;
+
+    /// Gets a cluster replica by ID.
+    fn get_cluster_replica(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> &dyn CatalogClusterReplica;
+
+    /// Gets all cluster replicas.
+    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+
+    /// Gets all system privileges.
+    fn get_system_privileges(&self) -> &PrivilegeMap;
+
+    /// Gets all default privileges.
+    fn get_default_privileges(
+        &self,
+    ) -> Vec<(&DefaultPrivilegeObject, Vec<&DefaultPrivilegeAclItem>)>;
+
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
-    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName;
+    fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName;
 
     /// Returns a fully qualified human readable name from fully qualified non-human readable name
-    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName;
+    fn resolve_full_name(&self, name: &QualifiedItemName) -> FullItemName;
+
+    /// Returns a fully qualified human readable schema name from fully qualified non-human
+    /// readable schema name
+    fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName;
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
@@ -203,6 +270,54 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
+
+    /// Returns system vars
+    fn system_vars(&self) -> &SystemVars;
+
+    /// Returns mutable system vars
+    ///
+    /// Clients should use this this method carefully, as changes to the backing
+    /// state here are not guarateed to be persisted. The motivating use case
+    /// for this method was ensuring that features are temporary turned on so
+    /// catalog rehydration does not break due to unsupported SQL syntax.
+    fn system_vars_mut(&mut self) -> &mut SystemVars;
+
+    /// Returns the [`RoleId`] of the owner of an object by its ID.
+    fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId>;
+
+    /// Returns the [`PrivilegeMap`] of the object.
+    fn get_privileges(&self, id: &SystemObjectId) -> Option<&PrivilegeMap>;
+
+    /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId>;
+
+    /// Returns all the IDs of all objects that depend on `id`, including `id` themselves.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than `id`. This is particularly userful for the order to drop
+    /// objects.
+    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
+
+    /// Returns all possible privileges associated with an object type.
+    fn all_object_privileges(&self, object_type: SystemObjectType) -> AclMode;
+
+    /// Returns the object type of `object_id`.
+    fn get_object_type(&self, object_id: &ObjectId) -> ObjectType;
+
+    /// Returns the system object type of `id`.
+    fn get_system_object_type(&self, id: &SystemObjectId) -> SystemObjectType;
+
+    /// Returns the minimal qualification required to unambiguously specify
+    /// `qualified_name`.
+    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName;
+
+    /// Adds a [`PlanNotice`] that will be displayed to the user if the plan
+    /// successfully executes.
+    fn add_notice(&self, notice: PlanNotice);
 }
 
 /// Configuration associated with a catalog.
@@ -221,10 +336,6 @@ pub struct CatalogConfig {
     pub environment_id: EnvironmentId,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
-    /// Whether the server is running in unsafe mode.
-    pub unsafe_mode: bool,
-    /// Whether persisted introspection sources are enabled.
-    pub persisted_introspection: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// Default timestamp interval.
@@ -255,6 +366,19 @@ pub trait CatalogDatabase {
 
     /// Returns whether the database contains schemas.
     fn has_schemas(&self) -> bool;
+
+    /// Returns the schemas of the database as a map from schema name to
+    /// schema ID.
+    fn schema_ids(&self) -> &BTreeMap<String, SchemaId>;
+
+    /// Returns the schemas of the database.
+    fn schemas(&self) -> Vec<&dyn CatalogSchema>;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the database.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A schema in a [`SessionCatalog`].
@@ -270,6 +394,80 @@ pub trait CatalogSchema {
 
     /// Lists the `CatalogItem`s for the schema.
     fn has_items(&self) -> bool;
+
+    /// Returns the items of the schema as a map from item name to
+    /// item ID.
+    fn item_ids(&self) -> &BTreeMap<String, GlobalId>;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the schema.
+    fn privileges(&self) -> &PrivilegeMap;
+}
+
+// TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
+//  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
+/// Attributes belonging to a [`CatalogRole`].
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
+pub struct RoleAttributes {
+    /// Indicates whether the role has inheritance of privileges.
+    pub inherit: bool,
+    // Force use of constructor.
+    _private: (),
+}
+
+impl RoleAttributes {
+    /// Creates a new [`RoleAttributes`] with default attributes.
+    pub fn new() -> RoleAttributes {
+        RoleAttributes {
+            inherit: true,
+            _private: (),
+        }
+    }
+
+    /// Adds all attributes.
+    pub fn with_all(mut self) -> RoleAttributes {
+        self.inherit = true;
+        self
+    }
+}
+
+impl From<PlannedRoleAttributes> for RoleAttributes {
+    fn from(PlannedRoleAttributes { inherit }: PlannedRoleAttributes) -> RoleAttributes {
+        let default_attributes = RoleAttributes::new();
+        RoleAttributes {
+            inherit: inherit.unwrap_or(default_attributes.inherit),
+            _private: (),
+        }
+    }
+}
+
+impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
+    fn from(
+        (role, PlannedRoleAttributes { inherit }): (&dyn CatalogRole, PlannedRoleAttributes),
+    ) -> RoleAttributes {
+        RoleAttributes {
+            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
+            _private: (),
+        }
+    }
+}
+
+impl RustType<proto::RoleAttributes> for RoleAttributes {
+    fn into_proto(&self) -> proto::RoleAttributes {
+        proto::RoleAttributes {
+            inherit: self.inherit,
+        }
+    }
+
+    fn from_proto(proto: proto::RoleAttributes) -> Result<Self, TryFromProtoError> {
+        let mut attributes = RoleAttributes::new();
+
+        attributes.inherit = proto.inherit;
+
+        Ok(attributes)
+    }
 }
 
 /// A role in a [`SessionCatalog`].
@@ -279,6 +477,15 @@ pub trait CatalogRole {
 
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
+
+    /// Indicates whether the role has inheritance of privileges.
+    fn is_inherit(&self) -> bool;
+
+    /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
+    /// membership.
+    ///
+    /// Key is the role that some role is a member of, value is the grantor role ID.
+    fn membership(&self) -> &BTreeMap<RoleId, RoleId>;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -298,7 +505,37 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
-    fn replicas(&self) -> &BTreeMap<String, ReplicaId>;
+    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId>;
+
+    /// Returns the replicas of the cluster.
+    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+
+    /// Returns the replica belonging to the cluster with replica ID `id`.
+    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the cluster.
+    fn privileges(&self) -> &PrivilegeMap;
+
+    /// Returns true if this cluster is a managed cluster.
+    fn is_managed(&self) -> bool;
+}
+
+/// A cluster replica in a [`SessionCatalog`]
+pub trait CatalogClusterReplica<'a> {
+    /// Returns the name of the cluster replica.
+    fn name(&self) -> &str;
+
+    /// Returns a stable ID for the cluster that the replica belongs to.
+    fn cluster_id(&self) -> ClusterId;
+
+    /// Returns a stable ID for the replica.
+    fn replica_id(&self) -> ReplicaId;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -307,7 +544,7 @@ pub trait CatalogCluster<'a> {
 /// catalog, and refers to the various entities that belong to a schema.
 pub trait CatalogItem {
     /// Returns the fully qualified name of the catalog item.
-    fn name(&self) -> &QualifiedObjectName;
+    fn name(&self) -> &QualifiedItemName;
 
     /// Returns a stable ID for the catalog item.
     fn id(&self) -> GlobalId;
@@ -319,7 +556,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, CatalogError>;
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///
@@ -353,7 +590,10 @@ pub trait CatalogItem {
     fn used_by(&self) -> &[GlobalId];
 
     /// If this catalog item is a source, it return the IDs of its subsources
-    fn subsources(&self) -> Vec<GlobalId>;
+    fn subsources(&self) -> BTreeSet<GlobalId>;
+
+    /// If this catalog item is a source, it return the IDs of its progress collection.
+    fn progress_id(&self) -> Option<GlobalId>;
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
@@ -366,6 +606,12 @@ pub trait CatalogItem {
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
     fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>>;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the item.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// The type of a [`CatalogItem`].
@@ -410,6 +656,59 @@ impl fmt::Display for CatalogItemType {
     }
 }
 
+impl From<CatalogItemType> for ObjectType {
+    fn from(value: CatalogItemType) -> Self {
+        match value {
+            CatalogItemType::Table => ObjectType::Table,
+            CatalogItemType::Source => ObjectType::Source,
+            CatalogItemType::Sink => ObjectType::Sink,
+            CatalogItemType::View => ObjectType::View,
+            CatalogItemType::MaterializedView => ObjectType::MaterializedView,
+            CatalogItemType::Index => ObjectType::Index,
+            CatalogItemType::Type => ObjectType::Type,
+            CatalogItemType::Func => ObjectType::Func,
+            CatalogItemType::Secret => ObjectType::Secret,
+            CatalogItemType::Connection => ObjectType::Connection,
+        }
+    }
+}
+
+impl RustType<proto::CatalogItemType> for CatalogItemType {
+    fn into_proto(&self) -> proto::CatalogItemType {
+        match self {
+            CatalogItemType::Table => proto::CatalogItemType::Table,
+            CatalogItemType::Source => proto::CatalogItemType::Source,
+            CatalogItemType::Sink => proto::CatalogItemType::Sink,
+            CatalogItemType::View => proto::CatalogItemType::View,
+            CatalogItemType::MaterializedView => proto::CatalogItemType::MaterializedView,
+            CatalogItemType::Index => proto::CatalogItemType::Index,
+            CatalogItemType::Type => proto::CatalogItemType::Type,
+            CatalogItemType::Func => proto::CatalogItemType::Func,
+            CatalogItemType::Secret => proto::CatalogItemType::Secret,
+            CatalogItemType::Connection => proto::CatalogItemType::Connection,
+        }
+    }
+
+    fn from_proto(proto: proto::CatalogItemType) -> Result<Self, TryFromProtoError> {
+        let item_type = match proto {
+            proto::CatalogItemType::Table => CatalogItemType::Table,
+            proto::CatalogItemType::Source => CatalogItemType::Source,
+            proto::CatalogItemType::Sink => CatalogItemType::Sink,
+            proto::CatalogItemType::View => CatalogItemType::View,
+            proto::CatalogItemType::MaterializedView => CatalogItemType::MaterializedView,
+            proto::CatalogItemType::Index => CatalogItemType::Index,
+            proto::CatalogItemType::Type => CatalogItemType::Type,
+            proto::CatalogItemType::Func => CatalogItemType::Func,
+            proto::CatalogItemType::Secret => CatalogItemType::Secret,
+            proto::CatalogItemType::Connection => CatalogItemType::Connection,
+            proto::CatalogItemType::Unknown => {
+                return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"))
+            }
+        };
+        Ok(item_type)
+    }
+}
+
 /// Details about a type in the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogTypeDetails<T: TypeReference> {
@@ -443,7 +742,7 @@ impl TypeReference for IdReference {
 
 /// A type stored in the catalog.
 ///
-/// The variants correspond one-to-one with [`ScalarType`], but with type
+/// The variants correspond one-to-one with [`mz_repr::ScalarType`], but with type
 /// modifiers removed and with embedded types replaced with references to other
 /// types in the catalog.
 #[allow(missing_docs)]
@@ -494,6 +793,7 @@ pub enum CatalogType<T: TypeReference> {
     Uuid,
     VarChar,
     Int2Vector,
+    MzAclItem,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -755,7 +1055,12 @@ pub enum CatalogError {
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
-    UnknownFunction(String),
+    UnknownFunction {
+        /// The identifier of the function we couldn't find
+        name: String,
+        /// A suggested alternative to the named function.
+        alternative: Option<String>,
+    },
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
@@ -780,7 +1085,7 @@ impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
-            Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
+            Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
@@ -811,167 +1116,22 @@ impl fmt::Display for CatalogError {
     }
 }
 
+impl CatalogError {
+    /// Returns any applicable hints for [`CatalogError`].
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            CatalogError::UnknownFunction { alternative, .. } => {
+                match alternative {
+                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
+                    Some(alt) => Some(format!("Try using {alt}")),
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Error for CatalogError {}
-
-/// A dummy [`SessionCatalog`] implementation.
-///
-/// This implementation is suitable for use in tests that plan queries which are
-/// not demanding of the catalog, as many methods are unimplemented.
-#[derive(Debug)]
-pub struct DummyCatalog;
-
-static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
-    start_time: DateTime::<Utc>::MIN_UTC,
-    start_instant: Instant::now(),
-    nonce: 0,
-    environment_id: EnvironmentId::for_tests(),
-    session_id: Uuid::from_u128(0),
-    unsafe_mode: true,
-    persisted_introspection: true,
-    build_info: &DUMMY_BUILD_INFO,
-    timestamp_interval: Duration::from_secs(1),
-    now: NOW_ZERO.clone(),
-});
-
-impl SessionCatalog for DummyCatalog {
-    fn active_user(&self) -> &str {
-        "dummy"
-    }
-
-    fn active_database(&self) -> Option<&DatabaseId> {
-        Some(&DatabaseId(0))
-    }
-
-    fn active_cluster(&self) -> &str {
-        "dummy"
-    }
-
-    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
-        &[]
-    }
-
-    fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
-        None
-    }
-
-    fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
-        unimplemented!()
-    }
-
-    fn get_database(&self, _: &DatabaseId) -> &dyn CatalogDatabase {
-        &DummyDatabase
-    }
-
-    fn resolve_schema(&self, _: Option<&str>, _: &str) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!()
-    }
-
-    fn resolve_schema_in_database(
-        &self,
-        _: &ResolvedDatabaseSpecifier,
-        _: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!()
-    }
-
-    fn get_schema(&self, _: &ResolvedDatabaseSpecifier, _: &SchemaSpecifier) -> &dyn CatalogSchema {
-        unimplemented!()
-    }
-
-    fn is_system_schema(&self, _: &str) -> bool {
-        false
-    }
-
-    fn resolve_role(&self, _: &str) -> Result<&dyn CatalogRole, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_item(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_function(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_cluster<'a, 'b>(
-        &'a self,
-        _: Option<&'b str>,
-    ) -> Result<&'a dyn CatalogCluster, CatalogError> {
-        unimplemented!();
-    }
-
-    fn get_item(&self, _: &GlobalId) -> &dyn CatalogItem {
-        unimplemented!();
-    }
-
-    fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
-        unimplemented!();
-    }
-
-    fn item_exists(&self, _: &QualifiedObjectName) -> bool {
-        false
-    }
-
-    fn get_cluster(&self, _: ClusterId) -> &dyn CatalogCluster {
-        unimplemented!();
-    }
-
-    fn resolve_full_name(&self, _: &QualifiedObjectName) -> FullObjectName {
-        unimplemented!()
-    }
-
-    fn config(&self) -> &CatalogConfig {
-        &DUMMY_CONFIG
-    }
-
-    fn now(&self) -> EpochMillis {
-        (self.config().now)()
-    }
-
-    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
-        name
-    }
-
-    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
-        unimplemented!()
-    }
-}
-
-impl ExprHumanizer for DummyCatalog {
-    fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id(id)
-    }
-
-    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id_unqualified(id)
-    }
-
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        DummyHumanizer.humanize_scalar_type(ty)
-    }
-}
-
-/// A dummy [`CatalogDatabase`] implementation.
-///
-/// This implementation is suitable for use in tests that plan queries which are
-/// not demanding of the catalog, as many methods are unimplemented.
-#[derive(Debug)]
-pub struct DummyDatabase;
-
-impl CatalogDatabase for DummyDatabase {
-    fn name(&self) -> &str {
-        "dummy"
-    }
-
-    fn id(&self) -> DatabaseId {
-        DatabaseId(0)
-    }
-
-    fn has_schemas(&self) -> bool {
-        true
-    }
-}
 
 /// Provides a method of generating a 3-layer catalog on the fly, and then
 /// resolving objects within it.
@@ -984,14 +1144,14 @@ impl<'a, T> ErsatzCatalog<'a, T> {
     /// describes.
     ///
     /// # Errors
-    /// - If `item` cannot be normalized to a [`PartialObjectName`]
-    /// - If the normalized `PartialObjectName` does not resolve to an item in
+    /// - If `item` cannot be normalized to a [`PartialItemName`]
+    /// - If the normalized `PartialItemName` does not resolve to an item in
     ///   `self.0`.
     pub fn resolve(
         &self,
-        item: UnresolvedObjectName,
-    ) -> Result<(UnresolvedObjectName, &'a T), PlanError> {
-        let name = normalize::unresolved_object_name(item)?;
+        item: UnresolvedItemName,
+    ) -> Result<(UnresolvedItemName, &'a T), PlanError> {
+        let name = normalize::unresolved_item_name(item)?;
 
         let schemas = match self.0.get(&name.item) {
             Some(schemas) => schemas,
@@ -1029,19 +1189,317 @@ impl<'a, T> ErsatzCatalog<'a, T> {
         };
 
         Ok((
-            UnresolvedObjectName::qualified(&[database, schema, &name.item]),
+            UnresolvedItemName::qualified(&[database, schema, &name.item]),
             desc,
         ))
     }
 }
 
+// Enum variant docs would be useless here.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+/// The types of objects stored in the catalog.
+pub enum ObjectType {
+    Table,
+    View,
+    MaterializedView,
+    Source,
+    Sink,
+    Index,
+    Type,
+    Role,
+    Cluster,
+    ClusterReplica,
+    Secret,
+    Connection,
+    Database,
+    Schema,
+    Func,
+}
+
+impl ObjectType {
+    /// Reports if the object type can be treated as a relation.
+    pub fn is_relation(&self) -> bool {
+        match self {
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source => true,
+            ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Func
+            | ObjectType::Database
+            | ObjectType::Schema
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Role => false,
+        }
+    }
+}
+
+impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
+    fn from(value: mz_sql_parser::ast::ObjectType) -> Self {
+        match value {
+            mz_sql_parser::ast::ObjectType::Table => ObjectType::Table,
+            mz_sql_parser::ast::ObjectType::View => ObjectType::View,
+            mz_sql_parser::ast::ObjectType::MaterializedView => ObjectType::MaterializedView,
+            mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
+            mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
+            mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
+            mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
+            mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
+            mz_sql_parser::ast::ObjectType::Role => ObjectType::Role,
+            mz_sql_parser::ast::ObjectType::Cluster => ObjectType::Cluster,
+            mz_sql_parser::ast::ObjectType::ClusterReplica => ObjectType::ClusterReplica,
+            mz_sql_parser::ast::ObjectType::Secret => ObjectType::Secret,
+            mz_sql_parser::ast::ObjectType::Connection => ObjectType::Connection,
+            mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
+            mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
+            mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
+        }
+    }
+}
+
+impl Display for ObjectType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ObjectType::Table => "TABLE",
+            ObjectType::View => "VIEW",
+            ObjectType::MaterializedView => "MATERIALIZED VIEW",
+            ObjectType::Source => "SOURCE",
+            ObjectType::Sink => "SINK",
+            ObjectType::Index => "INDEX",
+            ObjectType::Type => "TYPE",
+            ObjectType::Role => "ROLE",
+            ObjectType::Cluster => "CLUSTER",
+            ObjectType::ClusterReplica => "CLUSTER REPLICA",
+            ObjectType::Secret => "SECRET",
+            ObjectType::Connection => "CONNECTION",
+            ObjectType::Database => "DATABASE",
+            ObjectType::Schema => "SCHEMA",
+            ObjectType::Func => "FUNCTION",
+        })
+    }
+}
+
+impl RustType<proto::ObjectType> for ObjectType {
+    fn into_proto(&self) -> proto::ObjectType {
+        match self {
+            ObjectType::Table => proto::ObjectType::Table,
+            ObjectType::View => proto::ObjectType::View,
+            ObjectType::MaterializedView => proto::ObjectType::MaterializedView,
+            ObjectType::Source => proto::ObjectType::Source,
+            ObjectType::Sink => proto::ObjectType::Sink,
+            ObjectType::Index => proto::ObjectType::Index,
+            ObjectType::Type => proto::ObjectType::Type,
+            ObjectType::Role => proto::ObjectType::Role,
+            ObjectType::Cluster => proto::ObjectType::Cluster,
+            ObjectType::ClusterReplica => proto::ObjectType::ClusterReplica,
+            ObjectType::Secret => proto::ObjectType::Secret,
+            ObjectType::Connection => proto::ObjectType::Connection,
+            ObjectType::Database => proto::ObjectType::Database,
+            ObjectType::Schema => proto::ObjectType::Schema,
+            ObjectType::Func => proto::ObjectType::Func,
+        }
+    }
+
+    fn from_proto(proto: proto::ObjectType) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::ObjectType::Table => Ok(ObjectType::Table),
+            proto::ObjectType::View => Ok(ObjectType::View),
+            proto::ObjectType::MaterializedView => Ok(ObjectType::MaterializedView),
+            proto::ObjectType::Source => Ok(ObjectType::Source),
+            proto::ObjectType::Sink => Ok(ObjectType::Sink),
+            proto::ObjectType::Index => Ok(ObjectType::Index),
+            proto::ObjectType::Type => Ok(ObjectType::Type),
+            proto::ObjectType::Role => Ok(ObjectType::Role),
+            proto::ObjectType::Cluster => Ok(ObjectType::Cluster),
+            proto::ObjectType::ClusterReplica => Ok(ObjectType::ClusterReplica),
+            proto::ObjectType::Secret => Ok(ObjectType::Secret),
+            proto::ObjectType::Connection => Ok(ObjectType::Connection),
+            proto::ObjectType::Database => Ok(ObjectType::Database),
+            proto::ObjectType::Schema => Ok(ObjectType::Schema),
+            proto::ObjectType::Func => Ok(ObjectType::Func),
+            proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
+                "ObjectType::Unknown",
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+/// The types of objects in the system.
+pub enum SystemObjectType {
+    /// Catalog object type.
+    Object(ObjectType),
+    /// Entire system.
+    System,
+}
+
+impl SystemObjectType {
+    /// Reports if the object type can be treated as a relation.
+    pub fn is_relation(&self) -> bool {
+        match self {
+            SystemObjectType::Object(object_type) => object_type.is_relation(),
+            SystemObjectType::System => false,
+        }
+    }
+}
+
+impl Display for SystemObjectType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SystemObjectType::Object(object_type) => std::fmt::Display::fmt(&object_type, f),
+            SystemObjectType::System => f.write_str("SYSTEM"),
+        }
+    }
+}
+
+/// Enum used to format object names in error messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorMessageObjectDescription {
+    /// The name of a specific object.
+    Object {
+        /// Type of object.
+        object_type: ObjectType,
+        /// Name of object.
+        object_name: Option<String>,
+    },
+    /// The name of the entire system.
+    System,
+}
+
+impl ErrorMessageObjectDescription {
+    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectId`].
+    pub fn from_id(
+        object_id: &SystemObjectId,
+        catalog: &dyn SessionCatalog,
+    ) -> ErrorMessageObjectDescription {
+        match object_id {
+            SystemObjectId::Object(object_id) => {
+                let object_name = match object_id {
+                    ObjectId::Cluster(cluster_id) => {
+                        catalog.get_cluster(*cluster_id).name().to_string()
+                    }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => catalog
+                        .get_cluster_replica(*cluster_id, *replica_id)
+                        .name()
+                        .to_string(),
+                    ObjectId::Database(database_id) => {
+                        catalog.get_database(database_id).name().to_string()
+                    }
+                    ObjectId::Schema((database_spec, schema_spec)) => {
+                        let name = catalog.get_schema(database_spec, schema_spec).name();
+                        catalog.resolve_full_schema_name(name).to_string()
+                    }
+                    ObjectId::Role(role_id) => catalog.get_role(role_id).name().to_string(),
+                    ObjectId::Item(id) => {
+                        let name = catalog.get_item(id).name();
+                        catalog.resolve_full_name(name).to_string()
+                    }
+                };
+                ErrorMessageObjectDescription::Object {
+                    object_type: catalog.get_object_type(object_id),
+                    object_name: Some(object_name),
+                }
+            }
+            SystemObjectId::System => ErrorMessageObjectDescription::System,
+        }
+    }
+
+    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectType`].
+    pub fn from_object_type(object_type: SystemObjectType) -> ErrorMessageObjectDescription {
+        match object_type {
+            SystemObjectType::Object(object_type) => ErrorMessageObjectDescription::Object {
+                object_type,
+                object_name: None,
+            },
+            SystemObjectType::System => ErrorMessageObjectDescription::System,
+        }
+    }
+}
+
+impl Display for ErrorMessageObjectDescription {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorMessageObjectDescription::Object {
+                object_type,
+                object_name,
+            } => {
+                let object_name = object_name
+                    .as_ref()
+                    .map(|object_name| format!(" {}", object_name.quoted()))
+                    .unwrap_or_else(|| "".to_string());
+                write!(f, "{object_type}{object_name}")
+            }
+            ErrorMessageObjectDescription::System => f.write_str("SYSTEM"),
+        }
+    }
+}
+
+/// Specification for objects that will be affected by a default privilege.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DefaultPrivilegeObject {
+    /// The role id that created the object.
+    pub role_id: RoleId,
+    /// The database that the object is created in if Some, otherwise all databases.
+    pub database_id: Option<DatabaseId>,
+    /// The schema that the object is created in if Some, otherwise all databases.
+    pub schema_id: Option<SchemaId>,
+    /// The type of object.
+    pub object_type: ObjectType,
+}
+
+impl DefaultPrivilegeObject {
+    /// Creates a new [`DefaultPrivilegeObject`].
+    pub fn new(
+        role_id: RoleId,
+        database_id: Option<DatabaseId>,
+        schema_id: Option<SchemaId>,
+        object_type: ObjectType,
+    ) -> DefaultPrivilegeObject {
+        DefaultPrivilegeObject {
+            role_id,
+            database_id,
+            schema_id,
+            object_type,
+        }
+    }
+}
+
+/// Specification for the privileges that will be granted from default privileges.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DefaultPrivilegeAclItem {
+    /// The role that will receive the privileges.
+    pub grantee: RoleId,
+    /// The specific privileges granted.
+    pub acl_mode: AclMode,
+}
+
+impl DefaultPrivilegeAclItem {
+    /// Creates a new [`DefaultPrivilegeAclItem`].
+    pub fn new(grantee: RoleId, acl_mode: AclMode) -> DefaultPrivilegeAclItem {
+        DefaultPrivilegeAclItem { grantee, acl_mode }
+    }
+
+    /// Converts this [`DefaultPrivilegeAclItem`] into an [`MzAclItem`].
+    pub fn mz_acl_item(self, grantor: RoleId) -> MzAclItem {
+        MzAclItem {
+            grantee: self.grantee,
+            grantor,
+            acl_mode: self.acl_mode,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::catalog::{EnvironmentId, InvalidEnvironmentIdError};
+    use super::{CloudProvider, EnvironmentId, InvalidEnvironmentIdError};
 
-    use super::CloudProvider;
-
-    #[test]
+    #[mz_ore::test]
     fn test_environment_id() {
         for (input, expected) in [
             (

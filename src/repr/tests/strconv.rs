@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -76,13 +74,12 @@
 // END LINT CONFIG
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeField;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 
-#[test]
+#[mz_ore::test]
 fn test_parse_date() {
     run_test_parse_date("000203", NaiveDate::from_ymd_opt(2000, 2, 3).unwrap());
     run_test_parse_date("690203", NaiveDate::from_ymd_opt(2069, 2, 3).unwrap());
@@ -103,7 +100,7 @@ fn test_parse_date() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_date_errors() {
     run_test_parse_date_errors(
         "0000203",
@@ -165,7 +162,7 @@ fn test_parse_date_errors() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_time() {
     run_test_parse_time(
         "01:02:03.456",
@@ -189,7 +186,7 @@ fn test_parse_time() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_time_errors() {
     run_test_parse_time_errors(
         "26:01:02.345",
@@ -220,7 +217,7 @@ fn test_parse_time_errors() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_timestamp() {
     use mz_repr::adt::timestamp::CheckedTimestamp;
 
@@ -268,7 +265,7 @@ fn test_parse_timestamp() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_timestamp_errors() {
     run_test_parse_timestamp_errors(
         "2001-01",
@@ -312,7 +309,7 @@ fn test_parse_timestamp_errors() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_timestamptz() {
     use mz_repr::adt::timestamp::CheckedTimestamp;
 
@@ -361,7 +358,7 @@ fn test_parse_timestamptz() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_timestamptz_errors() {
     run_test_parse_timestamptz_errors(
         "1999-01-01 01:23:34.555 +25:45",
@@ -387,7 +384,7 @@ fn test_parse_timestamptz_errors() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_interval_monthlike() {
     run_test_parse_interval_monthlike(
         "2 year",
@@ -424,7 +421,7 @@ fn test_parse_interval_monthlike() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_interval_durationlike() {
     use DateTimeField::*;
 
@@ -484,7 +481,7 @@ fn test_parse_interval_durationlike() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parse_interval_full() {
     use DateTimeField::*;
 
@@ -558,7 +555,7 @@ fn test_parse_interval_full() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn parse_interval_error() {
     fn run_test_parse_interval_errors(s: &str, e: &str) {
         assert_eq!(
@@ -574,7 +571,7 @@ fn parse_interval_error() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn miri_test_format_list() {
     let list = vec![
         Some("a"),
@@ -600,7 +597,7 @@ fn miri_test_format_list() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn test_format_date() {
     run_test_format_date(NaiveDate::from_ymd_opt(20000, 2, 3).unwrap(), "20000-02-03");
     run_test_format_date(NaiveDate::from_ymd_opt(2000, 2, 3).unwrap(), "2000-02-03");
@@ -626,7 +623,7 @@ fn test_format_date() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_format_timestamp() {
     run_test_format_timestamp(
         NaiveDate::from_ymd_opt(20000, 2, 3)
@@ -755,7 +752,7 @@ fn test_format_timestamp() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_format_timestamptz() {
     run_test_format_timestamptz(
         datetime_utc(20000, 2, 3, 4, 5, 6, 0),

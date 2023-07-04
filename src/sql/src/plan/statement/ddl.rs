@@ -14,31 +14,28 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
+use std::iter;
 
-use aws_arn::ResourceName as AmazonResourceName;
-use globset::GlobBuilder;
 use itertools::Itertools;
-use prost::Message;
-use regex::Regex;
-use tracing::warn;
-
-use mz_controller::clusters::DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
+use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
-use mz_ore::cast::{self, TryCastFrom};
-use mz_ore::collections::CollectionExt;
+use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
-use mz_repr::strconv;
-use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::role_id::RoleId;
+use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredObjectName, SetVariableValue, SshConnectionOption, UnresolvedObjectName,
+    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
+    AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
+    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -54,67 +51,72 @@ use mz_storage_client::types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage_client::types::sources::{
-    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, LoadGenerator, LoadGeneratorSourceConnection,
-    PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails, S3SourceConnection, SourceConnection, SourceDesc,
-    SourceEnvelope, TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
+    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
+    ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
+    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
+use prost::Message;
+use regex::Regex;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
     AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
-    ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
+    ClusterOption, ClusterOptionName, ColumnOption, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
     CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
-    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker,
-    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
-    KafkaConfigOptionName, KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
-    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
-    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    TableConstraint, UnresolvedDatabaseName, Value, ViewDefinition,
+    CsrSeedProtobuf, CsvColumns, DbzMode, DropObjectsStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
+    KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
+    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
+    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
+    UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
+    ObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
-    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
+    Aug, DatabaseId, ObjectId, PartialItemName, QualifiedItemName, RawDatabaseSpecifier,
+    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::query::{ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
-    plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropClusterReplicasPlan,
-    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
+    plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
+    AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
+    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
     ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
     View,
 };
+use crate::session::vars;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -220,7 +222,9 @@ pub fn plan_create_table(
                 ColumnOption::Default(expr) => {
                     // Ensure expression can be planned and yields the correct
                     // type.
-                    let _ = query::plan_default_expr(scx, expr, &ty)?;
+                    let mut expr = expr.clone();
+                    transform_ast::transform(scx, &mut expr)?;
+                    let _ = query::plan_default_expr(scx, &expr, &ty)?;
                     default = expr.clone();
                 }
                 ColumnOption::Unique { is_primary } => {
@@ -238,55 +242,93 @@ pub fn plan_create_table(
         defaults.push(default);
     }
 
-    for constraint in constraints {
+    let mut seen_primary = false;
+    'c: for constraint in constraints {
         match constraint {
             TableConstraint::Unique {
                 name: _,
                 columns,
                 is_primary,
+                nulls_not_distinct,
             } => {
+                if seen_primary && *is_primary {
+                    sql_bail!(
+                        "multiple primary keys for table {} are not allowed",
+                        name.to_ast_string_stable()
+                    );
+                }
+                seen_primary = *is_primary || seen_primary;
+
                 let mut key = vec![];
                 for column in columns {
                     let column = normalize::column_name(column.clone());
                     match names.iter().position(|name| *name == column) {
                         None => sql_bail!("unknown column in constraint: {}", column),
                         Some(i) => {
-                            key.push(i);
+                            let nullable = &mut column_types[i].nullable;
                             if *is_primary {
-                                column_types[i].nullable = false;
+                                if *nulls_not_distinct {
+                                    sql_bail!(
+                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
+                                    );
+                                }
+
+                                *nullable = false;
+                            } else if !(*nulls_not_distinct || !*nullable) {
+                                // Non-primary key unique constraints are only keys if all of their
+                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
+                                break 'c;
                             }
+
+                            key.push(i);
                         }
                     }
                 }
-                keys.push(key);
+
+                if *is_primary {
+                    keys.insert(0, key);
+                } else {
+                    keys.push(key);
+                }
             }
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
-                // them in unsafe mode for sqllogictest's sake.
-                scx.require_unsafe_mode("CREATE TABLE with a foreign key")?
+                // them with feature flags for sqllogictest's sake.
+                scx.require_feature_flag(&vars::ENABLE_TABLE_FOREIGN_KEY)?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
-                // in unsafe mode for sqllogictest's sake.
-                scx.require_unsafe_mode("CREATE TABLE with a check constraint")?
+                // with feature flags for sqllogictest's sake.
+                scx.require_feature_flag(&vars::ENABLE_TABLE_CHECK_CONSTRAINT)?
             }
         }
     }
 
     if !keys.is_empty() {
-        // Unique constraints are not presently enforced. We allow them in
-        // unsafe mode for sqllogictest's sake.
-        scx.require_unsafe_mode("CREATE TABLE with a primary key or unique constraint")?;
+        // Unique constraints are not presently enforced. We allow them with feature flags for
+        // sqllogictest's sake.
+        scx.require_feature_flag(&vars::ENABLE_TABLE_KEYS)?
     }
 
     let typ = RelationType::new(column_types).with_keys(keys);
 
     let temporary = *temporary;
     let name = if temporary {
-        scx.allocate_temporary_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     } else {
-        scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
     let desc = RelationDesc::new(typ, names);
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
@@ -322,14 +364,15 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Size, String),
     (Timeline, String),
-    (TimestampInterval, Interval)
+    (TimestampInterval, Interval),
+    (Disk, bool)
 );
 
 generate_extracted_config!(
     PgConfigOption,
     (Details, String),
     (Publication, String),
-    (TextColumns, Vec::<UnresolvedObjectName>, Default(vec![]))
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
 pub fn plan_create_source(
@@ -351,23 +394,29 @@ pub fn plan_create_source(
         progress_subsource,
     } = &stmt;
 
-    // TODO: enable progress subsources.
-    if progress_subsource.is_some() {
-        sql_bail!("[internal error] should have errored in purification");
-    }
-
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    const SAFE_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+    let mut allowed_with_options = vec![CreateSourceOptionName::Size];
 
-    if with_options
-        .iter()
-        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    if scx
+        .require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)
+        .is_ok()
     {
-        scx.require_unsafe_mode(&format!(
-            "creating sources with WITH options other than {}",
-            comma_separated(SAFE_WITH_OPTIONS)
-        ))?;
+        allowed_with_options.push(CreateSourceOptionName::Disk);
+    }
+
+    if let Some(op) = with_options
+        .iter()
+        .find(|op| !allowed_with_options.contains(&op.name))
+    {
+        scx.require_feature_flag_w_dynamic_desc(
+            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
+            format!("CREATE SOURCE...WITH ({}..)", op.name.to_ast_string()),
+            format!(
+                "permitted options are {}",
+                comma_separated(&allowed_with_options)
+            ),
+        )?;
     }
 
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
@@ -394,17 +443,29 @@ pub fn plan_create_source(
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
             let mut kafka_connection = match connection_item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
+                _ => sql_bail!(
+                    "{} is not a kafka connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
             };
 
-            // Starting offsets are allowed out unsafe mode, as they are a simple,
+            // Starting offsets are allowed out with feature flags mode, as they are a simple,
             // useful way to specify where to start reading a topic.
-            if let Some(opt) = options.iter().find(|opt| {
-                opt.name != KafkaConfigOptionName::StartOffset
-                    && opt.name != KafkaConfigOptionName::StartTimestamp
-                    && opt.name != KafkaConfigOptionName::Topic
-            }) {
-                scx.require_unsafe_mode(&format!("KAFKA CONNECTION option {}", opt.name))?;
+            const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
+                KafkaConfigOptionName::StartOffset,
+                KafkaConfigOptionName::StartTimestamp,
+                KafkaConfigOptionName::Topic,
+            ];
+
+            if let Some(op) = options
+                .iter()
+                .find(|op| !ALLOWED_OPTIONS.contains(&op.name))
+            {
+                scx.require_feature_flag_w_dynamic_desc(
+                    &vars::ENABLE_KAFKA_CONFIG_DENYLIST_OPTIONS,
+                    format!("FROM KAFKA CONNECTION ({}...)", op.name.to_ast_string()),
+                    format!("permitted options are {}", comma_separated(ALLOWED_OPTIONS)),
+                )?;
             }
 
             kafka_util::validate_options_for_context(
@@ -510,91 +571,6 @@ pub fn plan_create_source(
 
             (connection, encoding, None)
         }
-        CreateSourceConnection::Kinesis {
-            connection: aws_connection,
-            arn,
-        } => {
-            scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
-            let arn: AmazonResourceName = arn
-                .parse()
-                .map_err(|e| sql_err!("Unable to parse provided ARN: {:#?}", e))?;
-            let stream_name = match arn.resource.strip_prefix("stream/") {
-                Some(path) => path.to_owned(),
-                _ => sql_bail!(
-                    "Unable to parse stream name from resource path: {}",
-                    arn.resource
-                ),
-            };
-
-            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match connection_item.connection()? {
-                Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
-            };
-
-            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
-            let connection = GenericSourceConnection::from(KinesisSourceConnection {
-                connection_id: connection_item.id(),
-                stream_name,
-                aws,
-            });
-            (connection, encoding, None)
-        }
-        CreateSourceConnection::S3 {
-            connection: aws_connection,
-            key_sources,
-            pattern,
-            compression,
-        } => {
-            scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
-
-            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match connection_item.connection()? {
-                Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
-            };
-
-            let mut converted_sources = Vec::new();
-            for ks in key_sources {
-                let dtks = match ks {
-                    mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_storage_client::types::sources::S3KeySource::Scan {
-                            bucket: bucket.clone(),
-                        }
-                    }
-                    mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_storage_client::types::sources::S3KeySource::SqsNotifications {
-                            queue: queue.clone(),
-                        }
-                    }
-                };
-                converted_sources.push(dtks);
-            }
-            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                sql_bail!("S3 sources do not support key decoding");
-            }
-            let connection = GenericSourceConnection::from(S3SourceConnection {
-                connection_id: connection_item.id(),
-                key_sources: converted_sources,
-                pattern: pattern
-                    .as_ref()
-                    .map(|p| {
-                        GlobBuilder::new(p)
-                            .literal_separator(true)
-                            .backslash_escape(true)
-                            .build()
-                    })
-                    .transpose()
-                    .map_err(|e| sql_err!("parsing glob: {e}"))?,
-                aws,
-                compression: match compression {
-                    Compression::Gzip => mz_storage_client::types::sources::Compression::Gzip,
-                    Compression::None => mz_storage_client::types::sources::Compression::None,
-                },
-            });
-            (connection, encoding, None)
-        }
         CreateSourceConnection::Postgres {
             connection,
             options,
@@ -602,7 +578,10 @@ pub fn plan_create_source(
             let connection_item = scx.get_item_by_resolved_name(connection)?;
             let connection = match connection_item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a postgres connection", connection_item.name()),
+                _ => sql_bail!(
+                    "{} is not a postgres connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
             };
             let PgConfigOptionExtracted {
                 details,
@@ -638,10 +617,7 @@ pub fn plan_create_source(
             for name in text_columns {
                 let (qual, col) = match name.0.split_last().expect("must have at least one element")
                 {
-                    (col, qual) => (
-                        UnresolvedObjectName(qual.to_vec()),
-                        col.as_str().to_string(),
-                    ),
+                    (col, qual) => (UnresolvedItemName(qual.to_vec()), col.as_str().to_string()),
                 };
 
                 let (_name, table_desc) = publication_catalog
@@ -697,6 +673,7 @@ pub fn plan_create_source(
                     },
                     allow_aggregates: false,
                     allow_subqueries: false,
+                    allow_parameters: false,
                     allow_windows: false,
                 };
 
@@ -756,23 +733,47 @@ pub fn plan_create_source(
                         column: i,
                     });
 
-                    let cast_expr = plan_cast(
-                        &cast_ecx,
-                        CastContext::Explicit,
-                        col_expr,
-                        &scalar_type,
-                    )?
-                    .lower_uncorrelated()
-                    .expect(
+                    let cast_expr =
+                        plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
+
+                    let cast = if column.nullable {
+                        cast_expr
+                    } else {
+                        // We must enforce nullability constraint on cast
+                        // because PG replication stream does not propagate
+                        // constraint changes and we want to error subsource if
+                        // e.g. the constraint is dropped and we don't notice
+                        // it.
+                        HirScalarExpr::CallVariadic {
+                            func: mz_expr::VariadicFunc::ErrorIfNull,
+                            exprs: vec![
+                                cast_expr,
+                                HirScalarExpr::literal(
+                                    mz_repr::Datum::from(
+                                        format!(
+                                            "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
+                                            table.namespace.clone(),
+                                            table.name.clone(),
+                                            column.name.clone())
+                                            .as_str(),
+                                    ),
+                                    ScalarType::String,
+                                ),
+                            ],
+                        }
+                    };
+
+                    let mir_cast = cast.lower_uncorrelated().expect(
                         "lower_uncorrelated should not fail given that there is no correlation \
                             in the input col_expr",
                     );
-                    column_casts.push(cast_expr);
+
+                    column_casts.push(mir_cast);
                 }
                 let r = table_casts.insert(i + 1, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
 
-                let name = FullObjectName {
+                let name = FullItemName {
                     database: RawDatabaseSpecifier::Name(connection.database.clone()),
                     schema: table.namespace.clone(),
                     item: table.name.clone(),
@@ -826,7 +827,7 @@ pub fn plan_create_source(
             (connection, encoding, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
-            scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
+            scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_FROM_TESTSCRIPT)?;
             let connection = GenericSourceConnection::from(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
@@ -840,13 +841,13 @@ pub fn plan_create_source(
         available_subsources,
         referenced_subsources,
     ) {
-        (Some(available_subsources), Some(ReferencedSubsources::Subset(subsources))) => {
+        (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
                 let name = subsource.reference.clone();
 
                 let target = match &subsource.subsource {
-                    Some(DeferredObjectName::Named(target)) => target.clone(),
+                    Some(DeferredItemName::Named(target)) => target.clone(),
                     _ => {
                         sql_bail!("[internal error] subsources must be named during purification")
                     }
@@ -860,7 +861,8 @@ pub fn plan_create_source(
             // Multi-output sources must have a table selection clause
             sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        (None, Some(_)) | (Some(_), Some(ReferencedSubsources::All)) => {
+        (None, Some(_))
+        | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
         (None, None) => (BTreeMap::new(), vec![]),
@@ -875,8 +877,8 @@ pub fn plan_create_source(
         };
 
         let target_id = match target {
-            ResolvedObjectName::Object { id, .. } => id,
-            ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+            ResolvedItemName::Item { id, .. } => id,
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                 sql_bail!("[internal error] invalid target id")
             }
         };
@@ -896,13 +898,34 @@ pub fn plan_create_source(
         // unused table casts from this connection; this represents the
         // authoritative statement about which publication tables should be
         // used within storage.
-        let used_pos: BTreeSet<_> = subsource_exports.values().collect();
+
+        // we want to temporarily test if any users are referring to the same table in their PG
+        // sources.
+        let mut used_pos: Vec<_> = subsource_exports.values().collect();
+        used_pos.sort();
+
+        if let Some(_) = used_pos.iter().duplicates().next() {
+            tracing::warn!("multiple references to same upstream table in PG source");
+        }
+
+        let used_pos: BTreeSet<_> = used_pos.into_iter().collect();
         conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
+
+    let CreateSourceOptionExtracted {
+        size,
+        timeline,
+        timestamp_interval,
+        ignore_keys,
+        disk,
+        seen: _,
+    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let (key_desc, value_desc) = encoding.desc()?;
 
     let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
+
+    let disk_default = scx.catalog.system_vars().upsert_source_disk_default();
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -920,9 +943,10 @@ pub fn plan_create_source(
             let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
             match mode {
-                DbzMode::Plain => {
-                    UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
-                }
+                DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
+                    style: UpsertStyle::Debezium { after_idx },
+                    disk: disk.unwrap_or(disk_default),
+                },
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
@@ -937,10 +961,13 @@ pub fn plan_create_source(
             if key_envelope == KeyEnvelope::None {
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
-            UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Default(key_envelope),
+                disk: disk.unwrap_or(disk_default),
+            }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
-            scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
@@ -950,18 +977,21 @@ pub fn plan_create_source(
         }
     };
 
+    if disk.is_some() {
+        match &envelope {
+            UnplannedSourceEnvelope::Upsert { .. } => {
+                scx.require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)?
+            }
+            _ => {
+                bail_unsupported!("ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE");
+            }
+        }
+    }
+
     let metadata_columns = external_connection.metadata_columns();
     let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    let CreateSourceOptionExtracted {
-        size,
-        timeline,
-        timestamp_interval,
-        ignore_keys,
-        seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     if ignore_keys.unwrap_or(false) {
         desc = desc.without_keys();
@@ -978,7 +1008,7 @@ pub fn plan_create_source(
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
         // Don't remove this without addressing
         // https://github.com/MaterializeInc/materialize/issues/15272.
-        scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
+        scx.require_feature_flag(&vars::ENABLE_PRIMARY_KEY_NOT_ENFORCED)?;
 
         let key_columns = columns
             .into_iter()
@@ -1028,15 +1058,43 @@ pub fn plan_create_source(
         timestamp_interval,
     };
 
+    let progress_subsource = match progress_subsource {
+        Some(name) => match name {
+            DeferredItemName::Named(name) => match name {
+                ResolvedItemName::Item { id, .. } => *id,
+                ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
+                    sql_bail!("[internal error] invalid target id")
+                }
+            },
+            DeferredItemName::Deferred(_) => {
+                sql_bail!("[internal error] progress subsource must be named during purification")
+            }
+        },
+        _ => sql_bail!("[internal error] progress subsource must be named during purification"),
+    };
+
     let if_not_exists = *if_not_exists;
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default
     // timeline for the source.
     let timeline = match timeline {
         None => match envelope {
-            SourceEnvelope::CdcV2 => Timeline::External(name.to_string()),
+            SourceEnvelope::CdcV2 => {
+                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
+            }
             _ => Timeline::EpochMilliseconds,
         },
         // TODO(benesch): if we stabilize this, can we find a better name than
@@ -1055,6 +1113,7 @@ pub fn plan_create_source(
             // Currently no source reads from another source
             source_imports: BTreeSet::new(),
             subsource_exports,
+            progress_subsource,
         }),
         desc,
     };
@@ -1142,27 +1201,53 @@ pub fn plan_create_subsource(
         column_types.push(ty.nullable(nullable));
     }
 
-    for constraint in constraints {
+    let mut seen_primary = false;
+    'c: for constraint in constraints {
         match constraint {
             TableConstraint::Unique {
                 name: _,
                 columns,
                 is_primary,
+                nulls_not_distinct,
             } => {
+                if seen_primary && *is_primary {
+                    sql_bail!(
+                        "multiple primary keys for source {} are not allowed",
+                        name.to_ast_string_stable()
+                    );
+                }
+                seen_primary = *is_primary || seen_primary;
+
                 let mut key = vec![];
                 for column in columns {
                     let column = normalize::column_name(column.clone());
                     match names.iter().position(|name| *name == column) {
                         None => sql_bail!("unknown column in constraint: {}", column),
                         Some(i) => {
-                            key.push(i);
+                            let nullable = &mut column_types[i].nullable;
                             if *is_primary {
-                                column_types[i].nullable = false;
+                                if *nulls_not_distinct {
+                                    sql_bail!(
+                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
+                                    );
+                                }
+                                *nullable = false;
+                            } else if !(*nulls_not_distinct || !*nullable) {
+                                // Non-primary key unique constraints are only keys if all of their
+                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
+                                break 'c;
                             }
+
+                            key.push(i);
                         }
                     }
                 }
-                keys.push(key);
+
+                if *is_primary {
+                    keys.insert(0, key);
+                } else {
+                    keys.push(key);
+                }
             }
             TableConstraint::ForeignKey { .. } => {
                 bail_unsupported!("CREATE SUBSOURCE with a foreign key")
@@ -1174,7 +1259,7 @@ pub fn plan_create_subsource(
     }
 
     let if_not_exists = *if_not_exists;
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -1214,7 +1299,7 @@ pub(crate) fn load_generator_ast_to_generator(
 ) -> Result<
     (
         LoadGenerator,
-        Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
+        Option<BTreeMap<FullItemName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
@@ -1231,6 +1316,7 @@ pub(crate) fn load_generator_ast_to_generator(
             }
             LoadGenerator::Counter { max_cardinality }
         }
+        mz_sql_parser::ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
         mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
@@ -1271,10 +1357,11 @@ pub(crate) fn load_generator_ast_to_generator(
 
     let mut available_subsources = BTreeMap::new();
     for (i, (name, desc)) in load_generator.views().iter().enumerate() {
-        let name = FullObjectName {
+        let name = FullItemName {
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
             schema: match load_generator {
                 LoadGenerator::Counter { .. } => "counter".into(),
+                LoadGenerator::Marketing => "marketing".into(),
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
@@ -1297,19 +1384,22 @@ pub(crate) fn load_generator_ast_to_generator(
     Ok((load_generator, available_subsources))
 }
 
-fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
-    let (before_idx, before_ty) = value_desc
-        .get_by_name(&"before".into())
-        .ok_or_else(|| sql_err!("'before' column missing from debezium input"))?;
+fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize), PlanError> {
+    let before = value_desc.get_by_name(&"before".into());
     let (after_idx, after_ty) = value_desc
         .get_by_name(&"after".into())
         .ok_or_else(|| sql_err!("'after' column missing from debezium input"))?;
-    if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
-        sql_bail!("'before' column must be of type record");
-    }
-    if before_ty != after_ty {
-        sql_bail!("'before' type differs from 'after' column");
-    }
+    let before_idx = if let Some((before_idx, before_ty)) = before {
+        if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
+            sql_bail!("'before' column must be of type record");
+        }
+        if before_ty != after_ty {
+            sql_bail!("'before' type differs from 'after' column");
+        }
+        Some(before_idx)
+    } else {
+        None
+    };
     Ok((before_idx, after_idx))
 }
 
@@ -1361,12 +1451,17 @@ fn source_sink_cluster_config(
         (None, None) => Ok(SourceSinkClusterConfig::Undefined),
         (Some(in_cluster), None) => {
             let cluster = scx.catalog.get_cluster(in_cluster.id);
-            if cluster.replicas().len() > 1 {
+            if cluster.replica_ids().len() > 1 {
                 sql_bail!("cannot create {ty} in cluster with more than one replica")
             }
             if !is_storage_cluster(scx, cluster) {
                 sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
             }
+
+            // We also don't allow more objects to be added to a cluster that is already
+            // linked to another object or managed.
+            ensure_cluster_is_not_linked(scx, cluster.id())?;
+
             Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
         }
         (None, Some(size)) => Ok(SourceSinkClusterConfig::Linked { size }),
@@ -1429,7 +1524,13 @@ fn get_encoding_inner(
                     let csr_connection = match item.connection()? {
                         Connection::Csr(connection) => connection.clone(),
                         _ => {
-                            sql_bail!("{} is not a schema registry connection", item.name())
+                            sql_bail!(
+                                "{} is not a schema registry connection",
+                                scx.catalog
+                                    .resolve_full_name(item.name())
+                                    .to_string()
+                                    .quoted()
+                            )
                         }
                     };
 
@@ -1484,7 +1585,13 @@ fn get_encoding_inner(
                     let _ = match item.connection()? {
                         Connection::Csr(connection) => connection,
                         _ => {
-                            sql_bail!("{} is not a schema registry connection", item.name())
+                            sql_bail!(
+                                "{} is not a schema registry connection",
+                                scx.catalog
+                                    .resolve_full_name(item.name())
+                                    .to_string()
+                                    .quoted()
+                            )
                         }
                     };
 
@@ -1541,7 +1648,7 @@ fn get_encoding_inner(
                         names: names.iter().cloned().map(|n| n.into_string()).collect(),
                     }
                 }
-                CsvColumns::Count(n) => ColumnSpec::Count(*n),
+                CsvColumns::Count(n) => ColumnSpec::Count(usize::cast_from(*n)),
             };
             DataEncodingInner::Csv(CsvEncoding {
                 columns,
@@ -1549,7 +1656,10 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json => bail_unsupported!("JSON sources"),
+        Format::Json => {
+            scx.require_feature_flag(&crate::session::vars::ENABLE_FORMAT_JSON)?;
+            DataEncodingInner::Json
+        }
         Format::Text => DataEncodingInner::Text,
     }))
 }
@@ -1599,7 +1709,7 @@ fn get_unnamed_key_envelope(key: &DataEncoding) -> Result<KeyEnvelope, PlanError
         DataEncodingInner::RowCodec(_) => {
             sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
         }
-        DataEncodingInner::Bytes | DataEncodingInner::Text => false,
+        DataEncodingInner::Bytes | DataEncodingInner::Json | DataEncodingInner::Text => false,
         DataEncodingInner::Avro(_)
         | DataEncodingInner::Csv(_)
         | DataEncodingInner::Protobuf(_)
@@ -1625,7 +1735,7 @@ pub fn plan_view(
     def: &mut ViewDefinition<Aug>,
     params: &Params,
     temporary: bool,
-) -> Result<(QualifiedObjectName, View), PlanError> {
+) -> Result<(QualifiedItemName, View), PlanError> {
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -1645,6 +1755,7 @@ pub fn plan_view(
         mut expr,
         mut desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
@@ -1653,12 +1764,16 @@ pub fn plan_view(
     let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
-        scx.allocate_temporary_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     } else {
-        scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
-    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, columns)?;
+    plan_utils::maybe_rename_columns(
+        format!("view {}", scx.catalog.resolve_full_name(&name)),
+        &mut desc,
+        columns,
+    )?;
     let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
@@ -1685,28 +1800,59 @@ pub fn plan_create_view(
         if_exists,
         definition,
     } = &mut stmt;
-    let partial_name = normalize::unresolved_object_name(definition.name.clone())?;
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
+
     let replace = if *if_exists == IfExistsBehavior::Replace {
-        if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
-            if view.expr.depends_on().contains(&item.id()) {
+        let if_exists = true;
+        let cascade = false;
+        if let Some(id) = plan_drop_item(
+            scx,
+            ObjectType::View,
+            if_exists,
+            definition.name.clone(),
+            cascade,
+        )? {
+            if view.expr.depends_on().contains(&id) {
+                let item = scx.catalog.get_item(&id);
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
-            let cascade = false;
-            plan_drop_item(scx, ObjectType::View, item, cascade)?
+            Some(id)
         } else {
             None
         }
     } else {
         None
     };
+    let drop_ids = replace
+        .map(|id| {
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (IfExistsBehavior::Error, Ok(item)) =
+        (*if_exists, scx.catalog.resolve_item(&partial_name))
+    {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
     Ok(Plan::CreateView(CreateViewPlan {
         name,
         view,
         replace,
+        drop_ids,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -1736,13 +1882,21 @@ pub fn plan_create_materialized_view(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
-    let partial_name = normalize::unresolved_object_name(stmt.name)?;
+    let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    if !scx
+        .catalog
+        .is_system_schema_specifier(&name.qualifiers.schema_spec)
+    {
+        ensure_cluster_is_not_linked(scx, cluster_id)?;
+    }
 
     let query::PlannedQuery {
         mut expr,
         mut desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
@@ -1750,7 +1904,7 @@ pub fn plan_create_materialized_view(
     let expr = expr.optimize_and_lower(&scx.into())?;
 
     plan_utils::maybe_rename_columns(
-        format!("materialized view {}", name),
+        format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
         &stmt.columns,
     )?;
@@ -1764,19 +1918,49 @@ pub fn plan_create_materialized_view(
     let mut if_not_exists = false;
     match stmt.if_exists {
         IfExistsBehavior::Replace => {
-            if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
-                if expr.depends_on().contains(&item.id()) {
+            let if_exists = true;
+            let cascade = false;
+            let replace_id = plan_drop_item(
+                scx,
+                ObjectType::MaterializedView,
+                if_exists,
+                partial_name.into(),
+                cascade,
+            )?;
+            if let Some(id) = replace_id {
+                if expr.depends_on().contains(&id) {
+                    let item = scx.catalog.get_item(&id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
-                let cascade = false;
-                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, cascade)?;
+                replace = Some(id);
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
         IfExistsBehavior::Error => (),
+    }
+    let drop_ids = replace
+        .map(|id| {
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (IfExistsBehavior::Error, Ok(item)) =
+        (stmt.if_exists, scx.catalog.resolve_item(&partial_name))
+    {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
     }
 
     Ok(Plan::CreateMaterializedView(CreateMaterializedViewPlan {
@@ -1788,6 +1972,7 @@ pub fn plan_create_materialized_view(
             cluster_id,
         },
         replace,
+        drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -1818,17 +2003,21 @@ pub fn plan_create_sink(
         with_options,
     } = stmt;
 
-    const SAFE_WITH_OPTIONS: &[CreateSinkOptionName] =
+    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] =
         &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
 
-    if with_options
+    if let Some(op) = with_options
         .iter()
-        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+        .find(|op| !ALLOWED_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode(&format!(
-            "creating sinks with WITH options other than {}",
-            comma_separated(SAFE_WITH_OPTIONS)
-        ))?;
+        scx.require_feature_flag_w_dynamic_desc(
+            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
+            format!("CREATE SINK...WITH ({}..)", op.name.to_ast_string()),
+            format!(
+                "permitted options are {}",
+                comma_separated(ALLOWED_WITH_OPTIONS)
+            ),
+        )?;
     }
 
     let envelope = match envelope {
@@ -1838,7 +2027,18 @@ pub fn plan_create_sink(
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
     let from = scx.get_item_by_resolved_name(&from)?;
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
@@ -1864,7 +2064,7 @@ pub fn plan_create_sink(
                             .map(|(idx, _type)| idx)
                             .ok_or_else(|| sql_err!("No such column: {}", col))?;
                         if desc.get_unambiguous_name(name_idx).is_none() {
-                            anyhow::bail!("Ambiguous column: {}", col);
+                            sql_err!("Ambiguous column: {}", col);
                         }
                         Ok(name_idx)
                     })
@@ -1873,15 +2073,16 @@ pub fn plan_create_sink(
                     desc.typ().keys.iter().any(|key_columns| {
                         key_columns.iter().all(|column| indices.contains(column))
                     });
-                if key.not_enforced && envelope == SinkEnvelope::Upsert {
-                    // TODO: We should report a warning notice back to the user via the pgwire
-                    // protocol. See https://github.com/MaterializeInc/materialize/issues/9333.
-                    warn!(
-                        "Verification of upsert key disabled for sink '{}' via 'NOT ENFORCED'. This is potentially dangerous and can lead to crashing materialize when the specified key is not in fact a unique key of the sinked view.",
-                        name
-                    );
-                } else if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                    return Err(invalid_upsert_key_err(&desc, &key_columns));
+
+                if !is_valid_key && envelope == SinkEnvelope::Upsert {
+                    if key.not_enforced {
+                        scx.catalog.add_notice(PlanNotice::KeyNotEnforced {
+                            key: key_columns.clone(),
+                            name: name.item.clone(),
+                        })
+                    } else {
+                        return Err(invalid_upsert_key_err(&desc, &key_columns));
+                    }
                 }
                 Some(indices)
             } else {
@@ -2003,7 +2204,7 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     mz_sql_parser::ast::KafkaConnection {
         connection,
-        options: with_options,
+        options,
     }: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
@@ -2015,24 +2216,30 @@ fn kafka_sink_builder(
     // Get Kafka connection
     let mut connection = match item.connection()? {
         Connection::Kafka(connection) => connection.clone(),
-        _ => sql_bail!("{} is not a kafka connection", item.name()),
+        _ => sql_bail!(
+            "{} is not a kafka connection",
+            scx.catalog.resolve_full_name(item.name())
+        ),
     };
 
-    if with_options
+    // Starting offsets are allowed with feature flags mode, as they are a simple,
+    // useful way to specify where to start reading a topic.
+    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
+
+    if let Some(op) = options
         .iter()
-        .any(|mz_sql_parser::ast::KafkaConfigOption { name, .. }| {
-            !matches!(name, KafkaConfigOptionName::Topic)
-        })
+        .find(|op| !ALLOWED_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode("KAFKA CONNECTION options besides TOPIC")?;
+        scx.require_feature_flag_w_dynamic_desc(
+            &vars::ENABLE_KAFKA_CONFIG_DENYLIST_OPTIONS,
+            format!("FROM KAFKA CONNECTION ({}...)", op.name.to_ast_string()),
+            format!("permitted options are {}", comma_separated(ALLOWED_OPTIONS)),
+        )?;
     }
 
-    kafka_util::validate_options_for_context(
-        &with_options,
-        kafka_util::KafkaOptionCheckContext::Sink,
-    )?;
+    kafka_util::validate_options_for_context(&options, kafka_util::KafkaOptionCheckContext::Sink)?;
 
-    let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+    let extracted_options: KafkaConfigOptionExtracted = options.try_into()?;
 
     for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
         connection.options.insert(k, v);
@@ -2078,7 +2285,13 @@ fn kafka_sink_builder(
             let csr_connection = match item.connection()? {
                 Connection::Csr(connection) => connection.clone(),
                 _ => {
-                    sql_bail!("{} is not a schema registry connection", item.name())
+                    sql_bail!(
+                        "{} is not a schema registry connection",
+                        scx.catalog
+                            .resolve_full_name(item.name())
+                            .to_string()
+                            .quoted()
+                    )
                 }
             };
             let CsrConfigOptionExtracted {
@@ -2226,12 +2439,12 @@ pub fn plan_create_index(
     let keys = query::plan_index_exprs(scx, &on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
-        QualifiedObjectName {
+        QualifiedItemName {
             qualifiers: on.name().qualifiers.clone(),
             item: normalize::ident(name.clone()),
         }
     } else {
-        let mut idx_name = QualifiedObjectName {
+        let mut idx_name = QualifiedItemName {
             qualifiers: on.name().qualifiers.clone(),
             item: on.name().item.clone(),
         };
@@ -2263,11 +2476,27 @@ pub fn plan_create_index(
         }
     };
 
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&index_name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (*if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
     let options = plan_index_options(scx, with_options.clone())?;
     let cluster_id = match in_cluster {
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
+    if !scx
+        .catalog
+        .is_system_schema_specifier(&index_name.qualifiers.schema_spec)
+    {
+        ensure_cluster_is_not_linked(scx, cluster_id)?;
+    }
     *in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,
@@ -2277,7 +2506,7 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
-    if let ResolvedObjectName::Object { print_id, .. } = &mut stmt.on_name {
+    if let ResolvedItemName::Item { print_id, .. } = &mut stmt.on_name {
         *print_id = false;
     }
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
@@ -2338,7 +2567,7 @@ pub fn plan_create_type(
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
                 as_type,
                 key,
-                data_type.to_ast_string(),
+                data_type.human_readable_name(),
             ),
         };
 
@@ -2396,9 +2625,16 @@ pub fn plan_create_type(
         }
     };
 
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
-    if scx.item_exists(&name) {
-        sql_bail!("catalog item '{}' already exists", name);
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
     }
 
     Ok(Plan::CreateType(CreateTypePlan {
@@ -2415,6 +2651,60 @@ generate_extracted_config!(
     (ValueType, ResolvedDataType)
 );
 
+#[derive(Debug)]
+pub struct PlannedRoleAttributes {
+    pub inherit: Option<bool>,
+}
+
+fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
+    let mut planned_attributes = PlannedRoleAttributes { inherit: None };
+
+    for option in options {
+        match option {
+            RoleAttribute::Login | RoleAttribute::NoLogin => {
+                bail_never_supported!("LOGIN attribute", "sql/create-role/#details");
+            }
+            RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
+                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details");
+            }
+            RoleAttribute::Inherit | RoleAttribute::NoInherit
+                if planned_attributes.inherit.is_some() =>
+            {
+                sql_bail!("conflicting or redundant options");
+            }
+            RoleAttribute::CreateCluster | RoleAttribute::NoCreateCluster => {
+                bail_never_supported!(
+                    "CREATECLUSTER attribute",
+                    "sql/create-role/#details",
+                    "Use system privileges instead."
+                );
+            }
+            RoleAttribute::CreateDB | RoleAttribute::NoCreateDB => {
+                bail_never_supported!(
+                    "CREATEDB attribute",
+                    "sql/create-role/#details",
+                    "Use system privileges instead."
+                );
+            }
+            RoleAttribute::CreateRole | RoleAttribute::NoCreateRole => {
+                bail_never_supported!(
+                    "CREATEROLE attribute",
+                    "sql/create-role/#details",
+                    "Use system privileges instead."
+                );
+            }
+
+            RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
+            RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
+        }
+    }
+    if planned_attributes.inherit == Some(false) {
+        bail_unsupported!("non inherit roles");
+    }
+
+    Ok(planned_attributes)
+}
+
 pub fn describe_create_role(
     _: &StatementContext,
     _: CreateRoleStatement,
@@ -2424,39 +2714,12 @@ pub fn describe_create_role(
 
 pub fn plan_create_role(
     _: &StatementContext,
-    CreateRoleStatement {
-        name,
-        is_user,
-        options,
-    }: CreateRoleStatement,
+    CreateRoleStatement { name, options }: CreateRoleStatement,
 ) -> Result<Plan, PlanError> {
-    let mut login = None;
-    let mut super_user = None;
-    for option in options {
-        match option {
-            CreateRoleOption::Login | CreateRoleOption::NoLogin if login.is_some() => {
-                sql_bail!("conflicting or redundant options");
-            }
-            CreateRoleOption::SuperUser | CreateRoleOption::NoSuperUser if super_user.is_some() => {
-                sql_bail!("conflicting or redundant options");
-            }
-            CreateRoleOption::Login => login = Some(true),
-            CreateRoleOption::NoLogin => login = Some(false),
-            CreateRoleOption::SuperUser => super_user = Some(true),
-            CreateRoleOption::NoSuperUser => super_user = Some(false),
-        }
-    }
-    if is_user && login.is_none() {
-        login = Some(true);
-    }
-    if login != Some(true) {
-        bail_unsupported!("non-login users");
-    }
-    if super_user != Some(true) {
-        bail_unsupported!("non-superusers");
-    }
+    let attributes = plan_role_attributes(options)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
+        attributes: attributes.into(),
     }))
 }
 
@@ -2467,28 +2730,95 @@ pub fn describe_create_cluster(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(ClusterOption, (Replicas, Vec<ReplicaDefinition<Aug>>));
+generate_extracted_config!(
+    ClusterOption,
+    (AvailabilityZones, Vec<String>),
+    (IdleArrangementMergeEffort, u32),
+    (IntrospectionDebugging, bool),
+    (IntrospectionInterval, OptionalInterval),
+    (Managed, bool),
+    (Replicas, Vec<ReplicaDefinition<Aug>>),
+    (ReplicationFactor, u32),
+    (Size, String)
+);
 
 pub fn plan_create_cluster(
     scx: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let ClusterOptionExtracted { replicas, .. }: ClusterOptionExtracted = options.try_into()?;
-
-    let replica_defs = match replicas {
-        Some(replica_defs) => replica_defs,
-        None => sql_bail!("REPLICAS option is required"),
-    };
-
-    let mut replicas = vec![];
-    for ReplicaDefinition { name, options } in replica_defs {
-        replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
-    }
-
-    Ok(Plan::CreateCluster(CreateClusterPlan {
-        name: normalize::ident(name),
+    let ClusterOptionExtracted {
+        availability_zones,
+        idle_arrangement_merge_effort,
+        introspection_debugging,
+        introspection_interval,
+        managed,
         replicas,
-    }))
+        replication_factor,
+        seen: _,
+        size,
+    }: ClusterOptionExtracted = options.try_into()?;
+
+    let managed = managed.unwrap_or_else(|| replicas.is_none());
+
+    if managed {
+        scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
+
+        if replicas.is_some() {
+            sql_bail!("REPLICAS not supported for managed clusters");
+        }
+        let Some(size) = size else {
+            sql_bail!("SIZE must be specified for managed clusters");
+        };
+
+        let compute = plan_compute_replica_config(
+            introspection_interval,
+            introspection_debugging.unwrap_or(false),
+            idle_arrangement_merge_effort,
+        )?;
+
+        let replication_factor = replication_factor.unwrap_or(1);
+        let availability_zones = availability_zones.unwrap_or_default();
+        Ok(Plan::CreateCluster(CreateClusterPlan {
+            name: normalize::ident(name),
+            variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
+                replication_factor,
+                size,
+                availability_zones,
+                compute,
+            }),
+        }))
+    } else {
+        let Some(replica_defs) = replicas else {
+            sql_bail!("REPLICAS must be specified for unmanaged clusters");
+        };
+        if availability_zones.is_some() {
+            sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
+        }
+        if replication_factor.is_some() {
+            sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
+        }
+        if idle_arrangement_merge_effort.is_some() {
+            sql_bail!("IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters");
+        }
+        if introspection_debugging.is_some() {
+            sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
+        }
+        if introspection_interval.is_some() {
+            sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
+        }
+        if size.is_some() {
+            sql_bail!("SIZE not supported for unmanaged clusters");
+        }
+        let mut replicas = vec![];
+        for ReplicaDefinition { name, options } in replica_defs {
+            replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
+        }
+
+        Ok(Plan::CreateCluster(CreateClusterPlan {
+            name: normalize::ident(name),
+            variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
+        }))
+    }
 }
 
 const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
@@ -2529,23 +2859,11 @@ fn plan_replica_config(
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
-    let introspection_interval = introspection_interval
-        .map(|OptionalInterval(i)| i)
-        .unwrap_or(Some(DEFAULT_REPLICA_INTROSPECTION_INTERVAL));
-    let introspection = match introspection_interval {
-        Some(interval) => Some(ComputeReplicaIntrospectionConfig {
-            interval: interval.duration()?,
-            debugging: introspection_debugging,
-        }),
-        None if introspection_debugging => {
-            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
-        }
-        None => None,
-    };
-    let compute = ComputeReplicaConfig {
-        introspection,
+    let compute = plan_compute_replica_config(
+        introspection_interval,
+        introspection_debugging,
         idle_arrangement_merge_effort,
-    };
+    )?;
 
     match (
         size,
@@ -2579,7 +2897,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_unsafe_mode("unmanaged cluster replicas")?;
+            scx.require_feature_flag(&vars::ENABLE_UNMANAGED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
@@ -2631,6 +2949,31 @@ fn plan_replica_config(
     }
 }
 
+fn plan_compute_replica_config(
+    introspection_interval: Option<OptionalInterval>,
+    introspection_debugging: bool,
+    idle_arrangement_merge_effort: Option<u32>,
+) -> Result<ComputeReplicaConfig, PlanError> {
+    let introspection_interval = introspection_interval
+        .map(|OptionalInterval(i)| i)
+        .unwrap_or(Some(DEFAULT_REPLICA_INTROSPECTION_INTERVAL));
+    let introspection = match introspection_interval {
+        Some(interval) => Some(ComputeReplicaIntrospectionConfig {
+            interval: interval.duration()?,
+            debugging: introspection_debugging,
+        }),
+        None if introspection_debugging => {
+            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
+        }
+        None => None,
+    };
+    let compute = ComputeReplicaConfig {
+        introspection,
+        idle_arrangement_merge_effort,
+    };
+    Ok(compute)
+}
+
 pub fn describe_create_cluster_replica(
     _: &StatementContext,
     _: CreateClusterReplicaStatement<Aug>,
@@ -2645,13 +2988,17 @@ pub fn plan_create_cluster_replica(
         of_cluster,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
+    let cluster = scx
+        .catalog
+        .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
-        && cluster.replicas().len() > 0
+        && cluster.replica_ids().len() > 0
     {
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
+    ensure_cluster_is_not_managed(scx, cluster.id())?;
     Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
@@ -2676,8 +3023,11 @@ pub fn plan_create_secret(
         value,
     } = &stmt;
 
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?;
-    let create_sql = normalize::create_statement(scx, Statement::CreateSecret(stmt.clone()))?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?;
+    let mut create_sql_statement = stmt.clone();
+    create_sql_statement.value = Expr::Value(Value::String("********".to_string()));
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateSecret(create_sql_statement))?;
     let secret_as = query::plan_secret_as(scx, value.clone())?;
 
     let secret = Secret {
@@ -2685,12 +3035,9 @@ pub fn plan_create_secret(
         secret_as,
     };
 
-    let full_name = scx.catalog.resolve_full_name(&name);
-
     Ok(Plan::CreateSecret(CreateSecretPlan {
         name,
         secret,
-        full_name,
         if_not_exists: *if_not_exists,
     }))
 }
@@ -2750,7 +3097,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     )?;
 
                     let id = match &aws_privatelink.connection {
-                        ResolvedObjectName::Object { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka PrivateLink connection was not resolved"
                         ),
@@ -2763,7 +3110,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                                     sql_bail!("AWS PrivateLink availability zone {} does not match any of the \
                                       availability zones on the AWS PrivateLink connection {}",
                                       az.quoted(),
-                                      entry.name().to_string().quoted())
+                                        scx.catalog.resolve_full_name(entry.name()).to_string().quoted())
                                 }
                             }
                             Tunnel::AwsPrivatelink(AwsPrivatelink {
@@ -2779,7 +3126,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
                 KafkaBrokerTunnel::SshTunnel(ssh) => {
                     let id = match &ssh {
-                        ResolvedObjectName::Object { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka SSH tunnel connection was not resolved"
                         ),
@@ -3077,10 +3424,10 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
                 session_token: options.token,
             },
             endpoint: match options.endpoint {
-                // TODO(benesch): this should not treat an empty endpoint as
-                // equivalent to a `NULL` endpoint, but making that change now
-                // would break testdrive. AWS connections are all behind unsafe
-                // mode right now, so no particular urgency to correct this.
+                // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
+                // endpoint, but making that change now would break testdrive. AWS connections are
+                // all behind feature flags mode right now, so no particular urgency to correct
+                // this.
                 Some(endpoint) if !endpoint.is_empty() => Some(endpoint),
                 _ => None,
             },
@@ -3111,6 +3458,8 @@ impl TryFrom<AwsPrivatelinkConnectionOptionExtracted> for AwsPrivatelinkConnecti
     }
 }
 
+generate_extracted_config!(CreateConnectionOption, (Validate, bool));
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -3120,27 +3469,28 @@ pub fn plan_create_connection(
         name,
         connection,
         if_not_exists,
+        with_options,
     } = stmt;
     let connection = match connection {
-        CreateConnection::Kafka { with_options } => {
-            let c = KafkaConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Kafka { options } => {
+            let c = KafkaConnectionOptionExtracted::try_from(options)?;
             Connection::Kafka(c.to_connection(scx)?)
         }
-        CreateConnection::Csr { with_options } => {
-            let c = CsrConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Csr { options } => {
+            let c = CsrConnectionOptionExtracted::try_from(options)?;
             Connection::Csr(c.to_connection(scx)?)
         }
-        CreateConnection::Postgres { with_options } => {
-            let c = PostgresConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Postgres { options } => {
+            let c = PostgresConnectionOptionExtracted::try_from(options)?;
             Connection::Postgres(c.to_connection(scx)?)
         }
-        CreateConnection::Aws { with_options } => {
-            let c = AwsConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Aws { options } => {
+            let c = AwsConnectionOptionExtracted::try_from(options)?;
             let connection = AwsConfig::try_from(c)?;
             Connection::Aws(connection)
         }
-        CreateConnection::AwsPrivatelink { with_options } => {
-            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::AwsPrivatelink { options } => {
+            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(options)?;
             let connection = AwsPrivatelinkConnection::try_from(c)?;
             if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
                 for connection_az in &connection.availability_zones {
@@ -3154,13 +3504,38 @@ pub fn plan_create_connection(
             }
             Connection::AwsPrivatelink(connection)
         }
-        CreateConnection::Ssh { with_options } => {
-            let c = SshConnectionOptionExtracted::try_from(with_options)?;
+        CreateConnection::Ssh { options } => {
+            let c = SshConnectionOptionExtracted::try_from(options)?;
             let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+
+    let options = CreateConnectionOptionExtracted::try_from(with_options)?;
+    if options.validate.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
+    }
+    let validate = match options.validate {
+        Some(val) => val,
+        None => {
+            scx.catalog
+                .system_vars()
+                .enable_default_connection_validation()
+                && connection.validate_by_default()
+        }
+    };
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
     let plan = CreateConnectionPlan {
         name,
         if_not_exists,
@@ -3168,28 +3543,20 @@ pub fn plan_create_connection(
             create_sql,
             connection,
         },
+        validate,
     };
     Ok(Plan::CreateConnection(plan))
 }
 
-pub fn describe_drop_database(
-    _: &StatementContext,
-    _: DropDatabaseStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_database(
+fn plan_drop_database(
     scx: &StatementContext,
-    DropDatabaseStatement {
-        name,
-        restrict,
-        if_exists,
-    }: DropDatabaseStatement,
-) -> Result<Plan, PlanError> {
-    let id = match scx.resolve_database(&name) {
-        Ok(database) => {
-            if restrict && database.has_schemas() {
+    if_exists: bool,
+    name: &UnresolvedDatabaseName,
+    cascade: bool,
+) -> Result<Option<DatabaseId>, PlanError> {
+    Ok(match resolve_database(scx, name, if_exists)? {
+        Some(database) => {
+            if !cascade && database.has_schemas() {
                 sql_bail!(
                     "database '{}' cannot be dropped with RESTRICT while it contains schemas",
                     name,
@@ -3197,11 +3564,8 @@ pub fn plan_drop_database(
             }
             Some(database.id())
         }
-        // TODO(benesch/jkosh44): generate a notice indicating that the database does not exist.
-        Err(_) if if_exists => None,
-        Err(e) => return Err(e),
-    };
-    Ok(Plan::DropDatabase(DropDatabasePlan { id }))
+        None => None,
+    })
 }
 
 pub fn describe_drop_objects(
@@ -3212,174 +3576,136 @@ pub fn describe_drop_objects(
 }
 
 pub fn plan_drop_objects(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     DropObjectsStatement {
         object_type,
+        if_exists,
         names,
         cascade,
-        if_exists,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    let mut items = vec![];
+    assert_ne!(
+        object_type,
+        mz_sql_parser::ast::ObjectType::Func,
+        "rejected in parser"
+    );
+    let object_type = object_type.into();
+
+    let mut referenced_ids = Vec::new();
     for name in names {
-        let name = normalize::unresolved_object_name(name)?;
-        match scx.catalog.resolve_item(&name) {
-            Ok(item) => items.push(item),
-            Err(_) if if_exists => {
-                // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
+        let id = match &name {
+            UnresolvedObjectName::Cluster(name) => {
+                plan_drop_cluster(scx, if_exists, name, cascade)?.map(ObjectId::Cluster)
             }
-            Err(e) => return Err(e.into()),
+            UnresolvedObjectName::ClusterReplica(name) => {
+                plan_drop_cluster_replica(scx, if_exists, name)?.map(ObjectId::ClusterReplica)
+            }
+            UnresolvedObjectName::Database(name) => {
+                plan_drop_database(scx, if_exists, name, cascade)?.map(ObjectId::Database)
+            }
+            UnresolvedObjectName::Schema(name) => {
+                plan_drop_schema(scx, if_exists, name, cascade)?.map(ObjectId::Schema)
+            }
+            UnresolvedObjectName::Role(name) => {
+                plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
+            }
+            UnresolvedObjectName::Item(name) => {
+                plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
+                    .map(ObjectId::Item)
+            }
+        };
+        match id {
+            Some(id) => referenced_ids.push(id),
+            None => scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            }),
         }
     }
+    let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
-    match object_type {
-        ObjectType::Source
-        | ObjectType::Table
-        | ObjectType::View
-        | ObjectType::MaterializedView
-        | ObjectType::Index
-        | ObjectType::Sink
-        | ObjectType::Type
-        | ObjectType::Secret
-        | ObjectType::Connection => plan_drop_items(scx, object_type, &items, cascade),
-        ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
-            unreachable!("handled through their respective plan_drop functions")
-        }
-        ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
-    }
+    Ok(Plan::DropObjects(DropObjectsPlan {
+        referenced_ids,
+        drop_ids,
+        object_type,
+    }))
 }
 
-pub fn describe_drop_schema(
-    _: &StatementContext,
-    _: DropSchemaStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_schema(
+fn plan_drop_schema(
     scx: &StatementContext,
-    DropSchemaStatement {
-        name,
-        cascade,
-        if_exists,
-    }: DropSchemaStatement,
-) -> Result<Plan, PlanError> {
-    match scx.resolve_schema(name) {
-        Ok(schema) => {
-            let database_id = match schema.database() {
-                ResolvedDatabaseSpecifier::Ambient => sql_bail!(
-                    "cannot drop schema {} because it is required by the database system",
-                    schema.name().schema
-                ),
-                ResolvedDatabaseSpecifier::Id(id) => id,
-            };
+    if_exists: bool,
+    name: &UnresolvedSchemaName,
+    cascade: bool,
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
+    Ok(match resolve_schema(scx, name.clone(), if_exists)? {
+        Some((database_spec, schema_spec)) => {
+            if let ResolvedDatabaseSpecifier::Ambient = database_spec {
+                sql_bail!(
+                    "cannot drop schema {name} because it is required by the database system",
+                );
+            }
+            if let SchemaSpecifier::Temporary = schema_spec {
+                sql_bail!("cannot drop schema {name} because it is a temporary schema",)
+            }
+            let schema = scx.get_schema(&database_spec, &schema_spec);
             if !cascade && schema.has_items() {
-                let full_schema_name = FullSchemaName {
-                    database: match schema.name().database {
-                        ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
-                        ResolvedDatabaseSpecifier::Id(id) => {
-                            RawDatabaseSpecifier::Name(scx.get_database(&id).name().to_string())
-                        }
-                    },
-                    schema: schema.name().schema.clone(),
-                };
+                let full_schema_name = scx.catalog.resolve_full_schema_name(schema.name());
                 sql_bail!(
                     "schema '{}' cannot be dropped without CASCADE while it contains objects",
                     full_schema_name
                 );
             }
-            let schema_id = match schema.id() {
-                // This branch should be unreachable because the temporary schema is in the ambient
-                // database, but this is just to protect against the case that ever changes.
-                SchemaSpecifier::Temporary => sql_bail!(
-                    "cannot drop schema {} because it is a temporary schema",
-                    schema.name().schema,
-                ),
-                SchemaSpecifier::Id(id) => id,
-            };
-            Ok(Plan::DropSchema(DropSchemaPlan {
-                id: Some((database_id.clone(), schema_id.clone())),
-            }))
+            Some((database_spec, schema_spec))
         }
-        Err(_) if if_exists => {
-            // TODO(benesch/jkosh44): generate a notice indicating that the
-            // schema does not exist.
-            Ok(Plan::DropSchema(DropSchemaPlan { id: None }))
-        }
-        Err(e) => Err(e),
-    }
+        None => None,
+    })
 }
 
-pub fn describe_drop_role(
-    _: &StatementContext,
-    _: DropRolesStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_role(
+fn plan_drop_role(
     scx: &StatementContext,
-    DropRolesStatement { if_exists, names }: DropRolesStatement,
-) -> Result<Plan, PlanError> {
-    let mut out = vec![];
-    for name in names {
-        let name = if name.0.len() == 1 {
-            normalize::ident(name.0.into_element())
-        } else {
-            sql_bail!("invalid role name {}", name.to_string().quoted())
-        };
-        if name == scx.catalog.active_user() {
-            sql_bail!("current user cannot be dropped");
-        }
-        match scx.catalog.resolve_role(&name) {
-            Ok(_) => out.push(name),
-            Err(_) if if_exists => {
-                // TODO(benesch): generate a notice indicating that the
-                // role does not exist.
+    if_exists: bool,
+    name: &Ident,
+) -> Result<Option<RoleId>, PlanError> {
+    match scx.catalog.resolve_role(name.as_str()) {
+        Ok(role) => {
+            let id = role.id();
+            if &id == scx.catalog.active_role_id() {
+                sql_bail!("current role cannot be dropped");
             }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(Plan::DropRoles(DropRolesPlan { names: out }))
-}
-
-pub fn describe_drop_cluster(
-    _: &StatementContext,
-    _: DropClustersStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_cluster(
-    scx: &StatementContext,
-    DropClustersStatement {
-        if_exists,
-        names,
-        cascade,
-    }: DropClustersStatement,
-) -> Result<Plan, PlanError> {
-    let mut ids = vec![];
-    for name in names {
-        let name = if name.0.len() == 1 {
-            name.0.into_element()
-        } else {
-            sql_bail!("invalid cluster name {}", name.to_string().quoted())
-        };
-        match scx.catalog.resolve_cluster(Some(name.as_str())) {
-            Ok(cluster) => {
-                if !cascade && !cluster.bound_objects().is_empty() {
-                    sql_bail!("cannot drop cluster with active objects");
+            for role in scx.catalog.get_roles() {
+                for (member_id, grantor_id) in role.membership() {
+                    if &id == grantor_id {
+                        let member_role = scx.catalog.get_role(member_id);
+                        sql_bail!(
+                            "cannot drop role {}: still depended up by membership of role {} in role {}",
+                            name.as_str(), role.name(), member_role.name()
+                        );
+                    }
                 }
-                ids.push(cluster.id());
             }
-            Err(_) if if_exists => {
-                // TODO(benesch): generate a notice indicating that the
-                // cluster does not exist.
-            }
-            Err(e) => return Err(e.into()),
+            Ok(Some(role.id()))
         }
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e.into()),
     }
-    Ok(Plan::DropClusters(DropClustersPlan { ids }))
+}
+
+fn plan_drop_cluster(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: &Ident,
+    cascade: bool,
+) -> Result<Option<ClusterId>, PlanError> {
+    Ok(match resolve_cluster(scx, name, if_exists)? {
+        Some(cluster) => {
+            if !cascade && !cluster.bound_objects().is_empty() {
+                sql_bail!("cannot drop cluster with active objects");
+            }
+            ensure_cluster_is_not_linked(scx, cluster.id())?;
+            Some(cluster.id())
+        }
+        None => None,
+    })
 }
 
 fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
@@ -3391,148 +3717,154 @@ fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> b
     })
 }
 
-pub fn describe_drop_cluster_replica(
-    _: &StatementContext,
-    _: DropClusterReplicasStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_cluster_replica(
+fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
-) -> Result<Plan, PlanError> {
-    let mut ids = vec![];
-    for QualifiedReplica { cluster, replica } in names {
-        let cluster = match scx.catalog.resolve_cluster(Some(cluster.as_str())) {
-            Ok(cluster) => cluster,
-            Err(_) if if_exists => continue,
-            Err(e) => return Err(e.into()),
-        };
-        let replica_name = replica.into_string();
-        // Check to see if name exists
-        if let Some(replica_id) = cluster.replicas().get(&replica_name) {
-            ids.push((cluster.id(), *replica_id));
-        } else {
-            // If "IF EXISTS" supplied, names allowed to be missing,
-            // otherwise error.
-            if !if_exists {
-                // TODO(benesch): generate a notice indicating that the
-                // replica does not exist.
-                sql_bail!(
-                    "CLUSTER {} has no CLUSTER REPLICA named {}",
-                    cluster.name(),
-                    replica_name.quoted(),
-                )
-            }
-        }
+    if_exists: bool,
+    name: &QualifiedReplica,
+) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
+    let cluster = resolve_cluster_replica(scx, name, if_exists)?;
+    if let Some((cluster, _)) = &cluster {
+        ensure_cluster_is_not_linked(scx, cluster.id())?;
+        ensure_cluster_is_not_managed(scx, cluster.id())?;
     }
-
-    Ok(Plan::DropClusterReplicas(DropClusterReplicasPlan { ids }))
+    Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
-pub fn plan_drop_items(
+fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
-    items: &[&dyn CatalogItem],
-    cascade: bool,
-) -> Result<Plan, PlanError> {
-    let mut ids = vec![];
-    for item in items {
-        ids.extend(plan_drop_item(scx, object_type, *item, cascade)?);
-    }
-    Ok(Plan::DropItems(DropItemsPlan {
-        items: ids,
-        ty: object_type,
-    }))
-}
-
-pub fn plan_drop_item(
-    scx: &StatementContext,
-    object_type: ObjectType,
-    catalog_entry: &dyn CatalogItem,
+    if_exists: bool,
+    name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
-    if catalog_entry.id().is_system() {
-        sql_bail!(
-            "cannot drop item {} because it is required by the database system",
-            scx.catalog.resolve_full_name(catalog_entry.name()),
-        );
-    }
-    let item_type = catalog_entry.item_type();
+    plan_drop_item_inner(scx, object_type, if_exists, name, cascade, false)
+}
 
-    // Return a more helpful error on `DROP VIEW <materialized-view>`.
-    if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
-        let name = scx
-            .catalog
-            .resolve_full_name(catalog_entry.name())
-            .to_string();
-        return Err(PlanError::DropViewOnMaterializedView(name));
-    } else if object_type != item_type {
-        sql_bail!(
-            "\"{}\" is a {} not a {}",
-            scx.catalog.resolve_full_name(catalog_entry.name()),
-            catalog_entry.item_type(),
-            format!("{object_type}").to_lowercase(),
-        );
-    }
+/// Like [`plan_drop_item`] but specialized for the case of dropping subsources
+/// in response to `ALTER SOURCE...DROP SUBSOURCE...`
+fn plan_drop_subsource(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: UnresolvedItemName,
+    cascade: bool,
+) -> Result<Option<GlobalId>, PlanError> {
+    plan_drop_item_inner(scx, ObjectType::Source, if_exists, name, cascade, true)
+}
 
-    // We currently prohibit dropping subsources entirely and instead rely on
-    // dropping their primary sources.
-    if item_type == CatalogItemType::Source {
-        if let Some(source_id) = catalog_entry
-            .used_by()
-            .iter()
-            .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source)
-        {
-            return Err(PlanError::DropSubsource {
-                subsource: scx
+fn plan_drop_item_inner(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedItemName,
+    cascade: bool,
+    allow_dropping_subsources: bool,
+) -> Result<Option<GlobalId>, PlanError> {
+    Ok(match resolve_item(scx, name, if_exists)? {
+        Some(catalog_item) => {
+            if catalog_item.id().is_system() {
+                sql_bail!(
+                    "cannot drop {} {} because it is required by the database system",
+                    catalog_item.item_type(),
+                    scx.catalog.minimal_qualification(catalog_item.name()),
+                );
+            }
+            let item_type = catalog_item.item_type();
+
+            // Return a more helpful error on `DROP VIEW <materialized-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
+                let name = scx
                     .catalog
-                    .resolve_full_name(catalog_entry.name())
-                    .to_string(),
-                source: scx
-                    .catalog
-                    .resolve_full_name(scx.catalog.get_item(source_id).name())
-                    .to_string(),
-            });
-        }
-    }
+                    .resolve_full_name(catalog_item.name())
+                    .to_string();
+                return Err(PlanError::DropViewOnMaterializedView(name));
+            } else if object_type != item_type {
+                sql_bail!(
+                    "\"{}\" is a {} not a {}",
+                    scx.catalog.resolve_full_name(catalog_item.name()),
+                    catalog_item.item_type(),
+                    format!("{object_type}").to_lowercase(),
+                );
+            }
 
-    if !cascade {
-        let entry_id = catalog_entry.id();
-        // When this item gets dropped it will also drop its subsources, so we need to check the
-        // users of those
-        let mut dropped_items = catalog_entry
-            .subsources()
-            .iter()
-            .map(|id| scx.catalog.get_item(id))
-            .collect_vec();
-        dropped_items.push(catalog_entry);
+            // Check if object is subsource if drop command doesn't allow dropping them, e.g. ALTER
+            // SOURCE can drop subsources, but DROP SOURCE cannot.
+            let primary_source = match item_type {
+                CatalogItemType::Source => catalog_item
+                    .used_by()
+                    .iter()
+                    .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source),
+                _ => None,
+            };
 
-        for entry in dropped_items {
-            for id in entry.used_by() {
-                // The catalog_entry we're trying to drop will appear in the used_by list of its
-                // subsources so we need to exclude it from cascade checking since it will be
-                // dropped
-                if id == &entry_id {
-                    continue;
+            if let Some(source_id) = primary_source {
+                // Progress collections can never get dropped independently.
+                if Some(catalog_item.id()) == scx.catalog.get_item(source_id).progress_id() {
+                    return Err(PlanError::DropProgressCollection {
+                        progress_collection: scx
+                            .catalog
+                            .minimal_qualification(catalog_item.name())
+                            .to_string(),
+                        source: scx
+                            .catalog
+                            .minimal_qualification(scx.catalog.get_item(source_id).name())
+                            .to_string(),
+                    });
                 }
-
-                let dep = scx.catalog.get_item(id);
-                if dependency_prevents_drop(object_type, dep) {
-                    // TODO: Add a hint to add cascade.
-                    sql_bail!(
-                        "cannot drop {}: still depended upon by catalog item '{}'",
-                        scx.catalog.resolve_full_name(catalog_entry.name()),
-                        scx.catalog.resolve_full_name(dep.name())
-                    );
+                if !allow_dropping_subsources {
+                    return Err(PlanError::DropSubsource {
+                        subsource: scx
+                            .catalog
+                            .minimal_qualification(catalog_item.name())
+                            .to_string(),
+                        source: scx
+                            .catalog
+                            .minimal_qualification(scx.catalog.get_item(source_id).name())
+                            .to_string(),
+                    });
                 }
             }
-            // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-            //  relies on entry. Unfortunately, we don't have that information readily available.
+
+            if !cascade {
+                let entry_id = catalog_item.id();
+                // When this item gets dropped it will also drop its subsources, so we need to check the
+                // users of those
+                let mut dropped_items = catalog_item
+                    .subsources()
+                    .iter()
+                    .map(|id| scx.catalog.get_item(id))
+                    .collect_vec();
+                dropped_items.push(catalog_item);
+
+                for entry in dropped_items {
+                    for id in entry.used_by() {
+                        // The catalog_entry we're trying to drop will appear in the used_by list of
+                        // its subsources so we need to exclude it from cascade checking since it
+                        // will be dropped. Similarly, if we're dropping a subsource, the primary
+                        // source will show up in its dependents but should not prevent the drop.
+                        if id == &entry_id || Some(id) == primary_source {
+                            continue;
+                        }
+
+                        let dep = scx.catalog.get_item(id);
+                        if dependency_prevents_drop(object_type, dep) {
+                            // TODO: Add a hint to add cascade.
+                            sql_bail!(
+                                "cannot drop {} {}: still depended upon by {} {}",
+                                catalog_item.item_type(),
+                                scx.catalog.minimal_qualification(catalog_item.name()),
+                                dep.item_type(),
+                                scx.catalog.minimal_qualification(dep.name())
+                            );
+                        }
+                    }
+                    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+                    //  relies on entry. Unfortunately, we don't have that information readily available.
+                }
+            }
+            Some(catalog_item.id())
         }
-    }
-    Ok(Some(catalog_entry.id()))
+        None => None,
+    })
 }
 
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
@@ -3561,6 +3893,213 @@ pub fn describe_alter_index_options(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_drop_owned(
+    _: &StatementContext,
+    _: DropOwnedStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_drop_owned(
+    scx: &StatementContext,
+    DropOwnedStatement {
+        role_names,
+        cascade,
+    }: DropOwnedStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let role_ids: BTreeSet<_> = role_names.into_iter().map(|role| role.id).collect();
+    let mut drop_ids = Vec::new();
+    let mut privilege_revokes = Vec::new();
+    let mut default_privilege_revokes = Vec::new();
+
+    fn update_privilege_revokes(
+        object_id: SystemObjectId,
+        privileges: &PrivilegeMap,
+        role_ids: &BTreeSet<RoleId>,
+        privilege_revokes: &mut Vec<(SystemObjectId, MzAclItem)>,
+    ) {
+        privilege_revokes.extend(iter::zip(
+            iter::repeat(object_id),
+            privileges
+                .all_values()
+                .filter(|privilege| role_ids.contains(&privilege.grantee))
+                .cloned(),
+        ));
+    }
+
+    // Replicas
+    for replica in scx.catalog.get_cluster_replicas() {
+        if role_ids.contains(&replica.owner_id()) {
+            drop_ids.push((replica.cluster_id(), replica.replica_id()).into());
+        }
+    }
+
+    // Clusters
+    for cluster in scx.catalog.get_clusters() {
+        if role_ids.contains(&cluster.owner_id()) {
+            if !cascade && !cluster.bound_objects().is_empty() {
+                sql_bail!(
+                    "cannot drop cluster {} without CASCADE while it contains active objects",
+                    cluster.name().quoted()
+                );
+            }
+            drop_ids.push(cluster.id().into());
+        }
+        update_privilege_revokes(
+            SystemObjectId::Object(cluster.id().into()),
+            cluster.privileges(),
+            &role_ids,
+            &mut privilege_revokes,
+        );
+    }
+
+    // Items
+    for item in scx.catalog.get_items() {
+        if role_ids.contains(&item.owner_id()) {
+            if !cascade {
+                // When this item gets dropped it will also drop its subsources, so we need to
+                // check the users of those.
+                for sub_item in item
+                    .subsources()
+                    .iter()
+                    .map(|id| scx.catalog.get_item(id))
+                    .chain(iter::once(item))
+                {
+                    let non_owned_dependencies: Vec<_> = sub_item
+                        .used_by()
+                        .into_iter()
+                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
+                        .filter(|item| !role_ids.contains(&item.owner_id()))
+                        .collect();
+                    if !non_owned_dependencies.is_empty() {
+                        let names: Vec<_> = non_owned_dependencies
+                            .into_iter()
+                            .map(|item| scx.catalog.resolve_full_name(item.name()))
+                            .map(|name| name.to_string().quoted().to_string())
+                            .collect();
+                        sql_bail!(
+                            "cannot drop {} without CASCADE: still depended upon by non-owned catalog items {}",
+                            scx.catalog.resolve_full_name(item.name()).to_string().quoted(),
+                            names.join(", ")
+                        );
+                    }
+                }
+            }
+            drop_ids.push(item.id().into());
+        }
+        update_privilege_revokes(
+            SystemObjectId::Object(item.id().into()),
+            item.privileges(),
+            &role_ids,
+            &mut privilege_revokes,
+        );
+    }
+
+    // Schemas
+    for schema in scx.catalog.get_schemas() {
+        if !schema.id().is_temporary() {
+            if role_ids.contains(&schema.owner_id()) {
+                if !cascade {
+                    let non_owned_dependencies: Vec<_> = schema
+                        .item_ids()
+                        .values()
+                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
+                        .filter(|item| !role_ids.contains(&item.owner_id()))
+                        .collect();
+                    if !non_owned_dependencies.is_empty() {
+                        let full_schema_name = scx.catalog.resolve_full_schema_name(schema.name());
+                        sql_bail!(
+                            "schema {} cannot be dropped without CASCADE while it contains non-owned objects",
+                            full_schema_name.to_string().quoted()
+                        );
+                    }
+                }
+                drop_ids.push((*schema.database(), *schema.id()).into())
+            }
+            update_privilege_revokes(
+                SystemObjectId::Object((*schema.database(), *schema.id()).into()),
+                schema.privileges(),
+                &role_ids,
+                &mut privilege_revokes,
+            );
+        }
+    }
+
+    // Databases
+    for database in scx.catalog.get_databases() {
+        if role_ids.contains(&database.owner_id()) {
+            if !cascade {
+                let non_owned_schemas: Vec<_> = database
+                    .schemas()
+                    .into_iter()
+                    .filter(|schema| !role_ids.contains(&schema.owner_id()))
+                    .collect();
+                if !non_owned_schemas.is_empty() {
+                    sql_bail!(
+                        "database {} cannot be dropped without CASCADE while it contains non-owned schemas",
+                        database.name().quoted(),
+                    );
+                }
+            }
+            drop_ids.push(database.id().into());
+        }
+        update_privilege_revokes(
+            SystemObjectId::Object(database.id().into()),
+            database.privileges(),
+            &role_ids,
+            &mut privilege_revokes,
+        );
+    }
+
+    // System
+    update_privilege_revokes(
+        SystemObjectId::System,
+        scx.catalog.get_system_privileges(),
+        &role_ids,
+        &mut privilege_revokes,
+    );
+
+    for (default_privilege_object, default_privilege_acl_items) in
+        scx.catalog.get_default_privileges()
+    {
+        for default_privilege_acl_item in default_privilege_acl_items {
+            if role_ids.contains(&default_privilege_object.role_id)
+                || role_ids.contains(&default_privilege_acl_item.grantee)
+            {
+                default_privilege_revokes.push((
+                    default_privilege_object.clone(),
+                    default_privilege_acl_item.clone(),
+                ));
+            }
+        }
+    }
+
+    let drop_ids = scx.catalog.object_dependents(&drop_ids);
+
+    let system_ids: Vec<_> = drop_ids.iter().filter(|id| id.is_system()).collect();
+    if !system_ids.is_empty() {
+        let mut owners = system_ids
+            .into_iter()
+            .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
+        sql_bail!(
+            "cannot drop objects owned by role {} because they are required by the database system",
+            owners.join(", "),
+        );
+    }
+
+    Ok(Plan::DropOwned(DropOwnedPlan {
+        role_ids: role_ids.into_iter().collect(),
+        drop_ids,
+        privilege_revokes,
+        default_privilege_revokes,
+    }))
+}
+
 generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
 
 fn plan_index_options(
@@ -3569,7 +4108,7 @@ fn plan_index_options(
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
     if !with_opts.is_empty() {
         // Index options are not durable.
-        scx.require_unsafe_mode("INDEX OPTIONS")?;
+        scx.require_feature_flag(&vars::ENABLE_INDEX_OPTIONS)?;
     }
 
     let IndexOptionExtracted {
@@ -3580,7 +4119,7 @@ fn plan_index_options(
     let mut out = Vec::with_capacity(1);
 
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
-        scx.require_unsafe_mode("LOGICAL COMPACTION WINDOW")?;
+        scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
             lcw.map(|interval| interval.duration()).transpose()?,
         ))
@@ -3590,19 +4129,22 @@ fn plan_index_options(
 }
 
 pub fn plan_alter_index_options(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     AlterIndexStatement {
         index_name,
         if_exists,
         action: actions,
     }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let index_name = normalize::unresolved_object_name(index_name)?;
+    let index_name = normalize::unresolved_item_name(index_name)?;
     let entry = match scx.catalog.resolve_item(&index_name) {
         Ok(index) => index,
         Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating this index does not
-            // exist.
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: index_name.to_string(),
+                object_type: ObjectType::Index,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Index,
             }));
@@ -3634,6 +4176,152 @@ pub fn plan_alter_index_options(
     }
 }
 
+pub fn describe_alter_cluster_set_options(
+    _: &StatementContext,
+    _: AlterClusterStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_cluster(
+    scx: &mut StatementContext,
+    AlterClusterStatement {
+        name,
+        action,
+        if_exists,
+    }: AlterClusterStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
+
+    let cluster = match resolve_cluster(scx, &name, if_exists)? {
+        Some(entry) => entry,
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type: ObjectType::Cluster,
+            });
+
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Cluster,
+            }));
+        }
+    };
+
+    // Prevent changes to linked clusters.
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
+
+    let mut options: PlanClusterOption = Default::default();
+
+    match action {
+        AlterClusterAction::SetOptions(set_options) => {
+            let ClusterOptionExtracted {
+                availability_zones,
+                idle_arrangement_merge_effort,
+                introspection_debugging,
+                introspection_interval,
+                managed,
+                replicas: replica_defs,
+                replication_factor,
+                seen: _,
+                size,
+            }: ClusterOptionExtracted = set_options.try_into()?;
+
+            match managed.unwrap_or_else(|| cluster.is_managed()) {
+                true => {
+                    if replica_defs.is_some() {
+                        sql_bail!("REPLICAS not supported for managed clusters");
+                    }
+                    if let Some(replication_factor) = replication_factor {
+                        if is_storage_cluster(scx, cluster)
+                            && !cluster.bound_objects().is_empty()
+                            && replication_factor > 1
+                        {
+                            sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
+                        }
+                    }
+                }
+                false => {
+                    if availability_zones.is_some() {
+                        sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
+                    }
+                    if replication_factor.is_some() {
+                        sql_bail!("REPLICATION FACTOR not supported for unmanaged clusters");
+                    }
+                    if idle_arrangement_merge_effort.is_some() {
+                        sql_bail!(
+                            "IDLE ARRANGEMENT MERGE EFFORT not supported for unmanaged clusters"
+                        );
+                    }
+                    if introspection_debugging.is_some() {
+                        sql_bail!("INTROSPECTION DEBUGGING not supported for unmanaged clusters");
+                    }
+                    if introspection_interval.is_some() {
+                        sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
+                    }
+                    if size.is_some() {
+                        sql_bail!("SIZE not supported for unmanaged clusters");
+                    }
+                }
+            }
+
+            let mut replicas = vec![];
+            for ReplicaDefinition { name, options } in
+                replica_defs.into_iter().flat_map(Vec::into_iter)
+            {
+                replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
+            }
+
+            if let Some(managed) = managed {
+                options.managed = AlterOptionParameter::Set(managed);
+            }
+            if let Some(replication_factor) = replication_factor {
+                options.replication_factor = AlterOptionParameter::Set(replication_factor);
+            }
+            if let Some(size) = size {
+                options.size = AlterOptionParameter::Set(size);
+            }
+            if let Some(availability_zones) = availability_zones {
+                options.availability_zones = AlterOptionParameter::Set(availability_zones);
+            }
+            if let Some(idle_arrangement_merge_effort) = idle_arrangement_merge_effort {
+                options.idle_arrangement_merge_effort =
+                    AlterOptionParameter::Set(idle_arrangement_merge_effort);
+            }
+            if let Some(introspection_debugging) = introspection_debugging {
+                options.introspection_debugging =
+                    AlterOptionParameter::Set(introspection_debugging);
+            }
+            if let Some(introspection_interval) = introspection_interval {
+                options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
+            }
+            if !replicas.is_empty() {
+                options.replicas = AlterOptionParameter::Set(replicas);
+            }
+        }
+        AlterClusterAction::ResetOptions(reset_options) => {
+            use AlterOptionParameter::Reset;
+            use ClusterOptionName::*;
+            for option in reset_options {
+                match option {
+                    AvailabilityZones => options.availability_zones = Reset,
+                    IntrospectionInterval => options.introspection_interval = Reset,
+                    IntrospectionDebugging => options.introspection_debugging = Reset,
+                    IdleArrangementMergeEffort => options.idle_arrangement_merge_effort = Reset,
+                    Managed => options.managed = Reset,
+                    Replicas => options.replicas = Reset,
+                    ReplicationFactor => options.replication_factor = Reset,
+                    Size => options.size = Reset,
+                }
+            }
+        }
+    }
+    Ok(Plan::AlterCluster(AlterClusterPlan {
+        id: cluster.id(),
+        name: cluster.name().to_string(),
+        options,
+    }))
+}
+
 pub fn describe_alter_object_rename(
     _: &StatementContext,
     _: AlterObjectRenameStatement,
@@ -3642,7 +4330,7 @@ pub fn describe_alter_object_rename(
 }
 
 pub fn plan_alter_object_rename(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     AlterObjectRenameStatement {
         name,
         object_type,
@@ -3650,9 +4338,40 @@ pub fn plan_alter_object_rename(
         if_exists,
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, PlanError> {
-    let name = normalize::unresolved_object_name(name)?;
-    match scx.catalog.resolve_item(&name) {
-        Ok(entry) => {
+    let object_type = object_type.into();
+    match (object_type, name) {
+        (
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::Source
+            | ObjectType::Index
+            | ObjectType::Sink
+            | ObjectType::Secret
+            | ObjectType::Connection,
+            UnresolvedObjectName::Item(name),
+        ) => plan_alter_item_rename(scx, object_type, name, to_item_name, if_exists),
+        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
+            plan_alter_cluster_rename(scx, object_type, name, to_item_name, if_exists)
+        }
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
+            plan_alter_cluster_replica_rename(scx, object_type, name, to_item_name, if_exists)
+        }
+        (object_type, name) => {
+            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+        }
+    }
+}
+
+pub fn plan_alter_item_rename(
+    scx: &mut StatementContext,
+    object_type: ObjectType,
+    name: UnresolvedItemName,
+    to_item_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    match resolve_item(scx, name.clone(), if_exists)? {
+        Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
 
@@ -3669,7 +4388,7 @@ pub fn plan_alter_object_rename(
                     format!("{object_type}").to_lowercase()
                 )
             }
-            let proposed_name = QualifiedObjectName {
+            let proposed_name = QualifiedItemName {
                 qualifiers: entry.name().qualifiers.clone(),
                 item: to_item_name.clone().into_string(),
             };
@@ -3683,12 +4402,71 @@ pub fn plan_alter_object_rename(
                 object_type,
             }))
         }
-        Err(_) if if_exists => {
-            // TODO(benesch/jkosh44): generate a notice indicating this
-            // item does not exist.
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
             Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
         }
-        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn plan_alter_cluster_rename(
+    scx: &mut StatementContext,
+    object_type: ObjectType,
+    name: Ident,
+    to_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster(scx, &name, if_exists)? {
+        Some(entry) => Ok(Plan::AlterClusterRename(AlterClusterRenamePlan {
+            id: entry.id(),
+            name: entry.name().to_string(),
+            to_name: ident(to_name),
+        })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
+    }
+}
+
+pub fn plan_alter_cluster_replica_rename(
+    scx: &mut StatementContext,
+    object_type: ObjectType,
+    name: QualifiedReplica,
+    to_item_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster_replica(scx, &name, if_exists)? {
+        Some((cluster, replica)) => {
+            ensure_cluster_is_not_managed(scx, cluster.id())?;
+            Ok(Plan::AlterClusterReplicaRename(
+                AlterClusterReplicaRenamePlan {
+                    cluster_id: cluster.id(),
+                    replica_id: replica,
+                    name: QualifiedReplica {
+                        cluster: cluster.name().into(),
+                        replica: name.replica,
+                    },
+                    to_name: normalize::ident(to_item_name),
+                },
+            ))
+        }
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
     }
 }
 
@@ -3700,7 +4478,7 @@ pub fn describe_alter_secret_options(
 }
 
 pub fn plan_alter_secret(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterSecretStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let AlterSecretStatement {
@@ -3708,12 +4486,15 @@ pub fn plan_alter_secret(
         if_exists,
         value,
     } = stmt;
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(secret) => secret,
         Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating this secret does not
-            // exist.
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_string(),
+                object_type: ObjectType::Secret,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Secret,
             }));
@@ -3741,7 +4522,7 @@ pub fn describe_alter_sink(
 }
 
 pub fn plan_alter_sink(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let AlterSinkStatement {
@@ -3750,10 +4531,15 @@ pub fn plan_alter_sink(
         action,
     } = stmt;
 
-    let sink_name = normalize::unresolved_object_name(sink_name)?;
+    let sink_name = normalize::unresolved_item_name(sink_name)?;
     let entry = match scx.catalog.resolve_item(&sink_name) {
         Ok(sink) => sink,
         Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: sink_name.to_string(),
+                object_type: ObjectType::Sink,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Sink,
             }));
@@ -3818,7 +4604,7 @@ pub fn describe_alter_connection(
 }
 
 pub fn plan_alter_source(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let AlterSourceStatement {
@@ -3826,10 +4612,15 @@ pub fn plan_alter_source(
         if_exists,
         action,
     } = stmt;
-    let source_name = normalize::unresolved_object_name(source_name)?;
+    let source_name = normalize::unresolved_item_name(source_name)?;
     let entry = match scx.catalog.resolve_item(&source_name) {
         Ok(source) => source,
         Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: source_name.to_string(),
+                object_type: ObjectType::Source,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Source,
             }));
@@ -3846,28 +4637,26 @@ pub fn plan_alter_source(
     let id = entry.id();
 
     let mut size = AlterOptionParameter::Unchanged;
-    match action {
+    let action = match action {
         AlterSourceAction::SetOptions(options) => {
             let CreateSourceOptionExtracted {
-                seen: _,
+                seen,
                 size: size_opt,
-                timeline: timeline_opt,
-                timestamp_interval: timestamp_interval_opt,
-                ignore_keys: ignore_keys_opt,
+                ..
             } = CreateSourceOptionExtracted::try_from(options)?;
+
+            if let Some(option) = seen
+                .iter()
+                .find(|o| !matches!(o, CreateSourceOptionName::Size))
+            {
+                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
+            }
 
             if let Some(value) = size_opt {
                 size = AlterOptionParameter::Set(value);
             }
-            if let Some(_) = timeline_opt {
-                sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
-            }
-            if let Some(_) = timestamp_interval_opt {
-                sql_bail!("Cannot modify the TIMESTAMP INTERVAL of a SOURCE.");
-            }
-            if let Some(_) = ignore_keys_opt {
-                sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
-            }
+
+            crate::plan::AlterSourceAction::Resize(size)
         }
         AlterSourceAction::ResetOptions(reset) => {
             for name in reset {
@@ -3875,21 +4664,64 @@ pub fn plan_alter_source(
                     CreateSourceOptionName::Size => {
                         size = AlterOptionParameter::Reset;
                     }
-                    CreateSourceOptionName::Timeline => {
-                        sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
-                    }
-                    CreateSourceOptionName::TimestampInterval => {
-                        sql_bail!("Cannot modify the TIMESTAMP INTERVAL of a SOURCE.");
-                    }
-                    CreateSourceOptionName::IgnoreKeys => {
-                        sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
+                    o => {
+                        sql_bail!("Cannot modify the {} of a SOURCE.", o.to_ast_string());
                     }
                 }
+            }
+
+            crate::plan::AlterSourceAction::Resize(size)
+        }
+        AlterSourceAction::DropSubsources {
+            if_exists,
+            names,
+            cascade,
+        } => {
+            let mut to_drop = BTreeSet::new();
+            let subsources = entry.subsources();
+            for name in names {
+                match plan_drop_subsource(scx, if_exists, name.clone(), cascade)? {
+                    Some(dropped_id) => {
+                        if !subsources.contains(&dropped_id) {
+                            let dropped_entry = scx.catalog.get_item(&dropped_id);
+                            return Err(PlanError::DropNonSubsource {
+                                non_subsource: scx
+                                    .catalog
+                                    .minimal_qualification(dropped_entry.name())
+                                    .to_string(),
+                                source: scx.catalog.minimal_qualification(entry.name()).to_string(),
+                            });
+                        }
+
+                        to_drop.insert(dropped_id);
+                    }
+                    None => {
+                        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                            name: name.to_string(),
+                            object_type: ObjectType::Source,
+                        });
+                    }
+                }
+            }
+
+            // Cannot drop last non-progress subsource
+            if subsources.len().saturating_sub(to_drop.len()) <= 1 {
+                return Err(PlanError::DropLastSubsource {
+                    source: scx.catalog.minimal_qualification(entry.name()).to_string(),
+                });
+            }
+
+            if to_drop.is_empty() {
+                return Ok(Plan::AlterNoop(AlterNoopPlan {
+                    object_type: ObjectType::Source,
+                }));
+            } else {
+                crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
             }
         }
     };
 
-    Ok(Plan::AlterSource(AlterSourcePlan { id, size }))
+    Ok(Plan::AlterSource(AlterSourcePlan { id, action }))
 }
 
 pub fn describe_alter_system_set(
@@ -3901,14 +4733,13 @@ pub fn describe_alter_system_set(
 
 pub fn plan_alter_system_set(
     _: &StatementContext,
-    AlterSystemSetStatement { name, value }: AlterSystemSetStatement,
+    AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
     let name = name.to_string();
-    if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
-    {
-        sql_bail!("Unable to set system configuration '{}' to NULL", name)
-    }
-    Ok(Plan::AlterSystemSet(AlterSystemSetPlan { name, value }))
+    Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
+        name,
+        value: scl::plan_set_variable_to(to)?,
+    }))
 }
 
 pub fn describe_alter_system_reset(
@@ -3941,14 +4772,19 @@ pub fn plan_alter_system_reset_all(
 }
 
 pub fn plan_alter_connection(
-    scx: &StatementContext,
+    scx: &mut StatementContext,
     stmt: AlterConnectionStatement,
 ) -> Result<Plan, PlanError> {
     let AlterConnectionStatement { name, if_exists } = stmt;
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(connection) => connection,
         Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_string(),
+                object_type: ObjectType::Connection,
+            });
+
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Connection,
             }));
@@ -3964,4 +4800,129 @@ pub fn plan_alter_connection(
 
     let id = entry.id();
     Ok(Plan::RotateKeys(RotateKeysPlan { id }))
+}
+
+pub fn describe_alter_role(
+    _: &StatementContext,
+    _: AlterRoleStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_role(
+    _: &StatementContext,
+    AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let attributes = plan_role_attributes(options)?;
+
+    Ok(Plan::AlterRole(AlterRolePlan {
+        id: name.id,
+        name: name.name,
+        attributes,
+    }))
+}
+
+pub(crate) fn resolve_cluster<'a>(
+    scx: &'a StatementContext,
+    name: &'a Ident,
+    if_exists: bool,
+) -> Result<Option<&'a dyn CatalogCluster<'a>>, PlanError> {
+    match scx.resolve_cluster(Some(name)) {
+        Ok(cluster) => Ok(Some(cluster)),
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn resolve_cluster_replica<'a>(
+    scx: &'a StatementContext,
+    name: &QualifiedReplica,
+    if_exists: bool,
+) -> Result<Option<(&'a dyn CatalogCluster<'a>, ReplicaId)>, PlanError> {
+    match scx.resolve_cluster(Some(&name.cluster)) {
+        Ok(cluster) => match cluster.replica_ids().get(name.replica.as_str()) {
+            Some(replica_id) => Ok(Some((cluster, *replica_id))),
+            None if if_exists => Ok(None),
+            None => Err(sql_err!(
+                "CLUSTER {} has no CLUSTER REPLICA named {}",
+                cluster.name(),
+                name.replica.as_str().quoted(),
+            )),
+        },
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn resolve_database<'a>(
+    scx: &'a StatementContext,
+    name: &'a UnresolvedDatabaseName,
+    if_exists: bool,
+) -> Result<Option<&'a dyn CatalogDatabase>, PlanError> {
+    match scx.resolve_database(name) {
+        Ok(database) => Ok(Some(database)),
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn resolve_schema<'a>(
+    scx: &'a StatementContext,
+    name: UnresolvedSchemaName,
+    if_exists: bool,
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
+    match scx.resolve_schema(name) {
+        Ok(schema) => Ok(Some((schema.database().clone(), schema.id().clone()))),
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn resolve_item<'a>(
+    scx: &'a StatementContext,
+    name: UnresolvedItemName,
+    if_exists: bool,
+) -> Result<Option<&'a dyn CatalogItem>, PlanError> {
+    let name = normalize::unresolved_item_name(name)?;
+    match scx.catalog.resolve_item(&name) {
+        Ok(item) => Ok(Some(item)),
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Returns an error if the given cluster is a linked cluster
+fn ensure_cluster_is_not_linked(
+    scx: &StatementContext,
+    cluster_id: ClusterId,
+) -> Result<(), PlanError> {
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    if let Some(linked_id) = cluster.linked_object_id() {
+        let cluster_name = scx.catalog.get_cluster(cluster_id).name().to_string();
+        let linked_object_name = scx
+            .catalog
+            .resolve_full_name(scx.catalog.get_item(&linked_id).name())
+            .to_string();
+        Err(PlanError::ModifyLinkedCluster {
+            cluster_name,
+            linked_object_name,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Returns an error if the given cluster is a managed cluster
+pub(crate) fn ensure_cluster_is_not_managed(
+    scx: &StatementContext,
+    cluster_id: ClusterId,
+) -> Result<(), PlanError> {
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    if cluster.is_managed() {
+        Err(PlanError::ManagedCluster {
+            cluster_name: cluster.name().to_string(),
+        })
+    } else {
+        Ok(())
+    }
 }

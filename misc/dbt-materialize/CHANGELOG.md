@@ -1,5 +1,11 @@
 # dbt-materialize Changelog
 
+## 1.4.1 - 2023-04-28
+
+* Let Materialize automatically run introspection queries in the
+  `mz_introspection` cluster via the new `auto_route_introspection_queries`
+  session variable, instead of hardcoding the cluster on connection.
+
 ## 1.4.0 - 2023-02-03
 
 * Upgrade to `dbt-postgres` v1.4.0.
@@ -55,8 +61,8 @@
 
 ## 1.2.0 - 2022-08-31
 
-* Enable additional configuration for indexes created on view,
-  materializedview, or source materializations. Fix to use Materialize's
+* Enable additional configuration for indexes created on `view`,
+  `materializedview`, or `source` materializations. Fix to use Materialize's
   internal naming convention when creating indexes without providing
   explicit names.
 
@@ -92,7 +98,7 @@
   ```
 
   * A new `cluster` option for indexes on view, materializedview, or source
-    materializations. If 'cluster' is not supplied, indexes will be created
+    materializations. If `cluster` is not supplied, indexes will be created
     in the cluster used to create the materialization.
 
   ```sql

@@ -11,14 +11,15 @@ use std::error::Error;
 use std::fmt;
 use std::mem::size_of;
 
-use once_cell::sync::Lazy;
-
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::numeric::{
     InvalidNumericMaxScaleError, NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION,
 };
 use mz_repr::adt::varchar::{InvalidVarCharMaxLengthError, VarCharMaxLength};
+use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::ScalarType;
+use once_cell::sync::Lazy;
 
 use crate::oid;
 
@@ -145,11 +146,13 @@ pub enum Type {
     Int2Vector,
     /// A Materialize timestamp.
     MzTimestamp,
-    /// A range of values of the inner type
+    /// A range of values of the inner type.
     Range {
-        /// The domain type
+        /// The domain type.
         element_type: Box<Type>,
     },
+    /// A list of privileges granted to a role.
+    MzAclItem,
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -355,7 +358,7 @@ pub static LIST: Lazy<postgres_types::Type> = Lazy::new(|| {
         // https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
         oid::TYPE_LIST_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -366,7 +369,7 @@ pub static MAP: Lazy<postgres_types::Type> = Lazy::new(|| {
         // OID chosen to follow our "LIST" type.
         oid::TYPE_MAP_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -376,7 +379,7 @@ pub static ANYCOMPATIBLELIST: Lazy<postgres_types::Type> = Lazy::new(|| {
         "anycompatiblelist".to_owned(),
         oid::TYPE_ANYCOMPATIBLELIST_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -386,7 +389,7 @@ pub static ANYCOMPATIBLEMAP: Lazy<postgres_types::Type> = Lazy::new(|| {
         "anycompatiblemap".to_owned(),
         oid::TYPE_ANYCOMPATIBLEMAP_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -396,7 +399,7 @@ pub static UINT2: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint2".to_owned(),
         oid::TYPE_UINT2_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -406,7 +409,7 @@ pub static UINT4: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint4".to_owned(),
         oid::TYPE_UINT4_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -416,7 +419,7 @@ pub static UINT8: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint8".to_owned(),
         oid::TYPE_UINT8_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -426,7 +429,7 @@ pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint2_array".to_owned(),
         oid::TYPE_UINT2_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -436,7 +439,7 @@ pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint4_array".to_owned(),
         oid::TYPE_UINT4_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -446,7 +449,7 @@ pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint8_array".to_owned(),
         oid::TYPE_UINT8_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -456,7 +459,7 @@ pub static MZ_TIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
         "mz_timestamp".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -466,7 +469,27 @@ pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "mz_timestamp_array".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
+    )
+});
+
+/// An anonymous [`Type::MzAclItem`], akin to [`postgres_types::Type::TEXT`].
+pub static MZ_ACL_ITEM: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
+        "mz_aclitem".to_owned(),
+        oid::TYPE_MZ_ACL_ITEM_OID,
+        postgres_types::Kind::Pseudo,
+        MZ_CATALOG_SCHEMA.to_owned(),
+    )
+});
+
+/// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
+pub static MZ_ACL_ITEM_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
+        "mz_aclitem_array".to_owned(),
+        oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,
+        postgres_types::Kind::Pseudo,
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -677,12 +700,14 @@ impl Type {
                 Type::MzTimestamp => &MZ_TIMESTAMP_ARRAY,
                 Type::Range { element_type } => match **element_type {
                     Type::Int4 => &postgres_types::Type::INT4_RANGE_ARRAY,
+                    Type::Int8 => &postgres_types::Type::INT8_RANGE_ARRAY,
                     Type::Numeric { .. } => &postgres_types::Type::NUM_RANGE_ARRAY,
                     Type::Timestamp { .. } => &postgres_types::Type::TS_RANGE_ARRAY,
                     Type::TimestampTz { .. } => &postgres_types::Type::TSTZ_RANGE_ARRAY,
                     Type::Date => &postgres_types::Type::DATE_RANGE_ARRAY,
                     _ => unreachable!(),
                 },
+                Type::MzAclItem => &MZ_ACL_ITEM_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -726,6 +751,7 @@ impl Type {
                 Type::Date => &postgres_types::Type::DATE_RANGE,
                 t => unreachable!("{t:?} is not a range element type"),
             },
+            Type::MzAclItem => &MZ_ACL_ITEM,
         }
     }
 
@@ -845,7 +871,8 @@ impl Type {
             | Type::Uuid
             | Type::MzTimestamp
             | Type::VarChar { max_length: None }
-            | Type::Range { .. } => None,
+            | Type::Range { .. }
+            | Type::MzAclItem => None,
         }
     }
 
@@ -892,6 +919,7 @@ impl Type {
                 .try_into()
                 .expect("must fit"),
             Type::Range { .. } => -1,
+            Type::MzAclItem => MzAclItem::binary_size().try_into().expect("must fit"),
         }
     }
 
@@ -1013,6 +1041,7 @@ impl TryFrom<&Type> for ScalarType {
             Type::Range { element_type } => Ok(ScalarType::Range {
                 element_type: Box::new(TryFrom::try_from(&**element_type)?),
             }),
+            Type::MzAclItem => Ok(ScalarType::MzAclItem),
         }
     }
 }
@@ -1164,6 +1193,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Range { element_type } => Type::Range {
                 element_type: Box::new(From::from(&**element_type)),
             },
+            ScalarType::MzAclItem => Type::MzAclItem,
         }
     }
 }

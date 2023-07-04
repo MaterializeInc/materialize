@@ -36,49 +36,57 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use serde::{Deserialize, Serialize};
-
 use mz_controller::clusters::{ClusterId, ReplicaId};
-use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage_client::types::instances::StorageInstanceId;
+
+use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
+use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
-    SetVariableValue, Statement, StatementKind, TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
+    StatementKind, TransactionAccessMode,
 };
-use crate::catalog::{CatalogType, IdReference};
+use crate::catalog::{
+    CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
+    RoleAttributes,
+};
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
+pub(crate) mod notice;
 pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
+pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
-pub use self::expr::{
-    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
-};
+use crate::plan::with_options::OptionalInterval;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-use mz_sql_parser::ast::TransactionIsolationLevel;
+pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use notice::PlanNotice;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
+pub use side_effecting_func::SideEffectingFunc;
+pub use statement::ddl::PlannedRoleAttributes;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
@@ -92,6 +100,7 @@ pub enum Plan {
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
     CreateSource(CreateSourcePlan),
+    CreateSources(Vec<CreateSourcePlans>),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -101,37 +110,40 @@ pub enum Plan {
     CreateType(CreateTypePlan),
     DiscardTemp,
     DiscardAll,
-    DropDatabase(DropDatabasePlan),
-    DropSchema(DropSchemaPlan),
-    DropRoles(DropRolesPlan),
-    DropClusters(DropClustersPlan),
-    DropClusterReplicas(DropClusterReplicasPlan),
-    DropItems(DropItemsPlan),
+    DropObjects(DropObjectsPlan),
+    DropOwned(DropOwnedPlan),
     EmptyQuery,
     ShowAllVariables,
+    ShowCreate(ShowCreatePlan),
     ShowVariable(ShowVariablePlan),
+    InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
+    SetTransaction(SetTransactionPlan),
     StartTransaction(StartTransactionPlan),
-    CommitTransaction,
-    AbortTransaction,
-    Peek(PeekPlan),
+    CommitTransaction(CommitTransactionPlan),
+    AbortTransaction(AbortTransactionPlan),
+    Select(SelectPlan),
     Subscribe(SubscribePlan),
-    SendRows(SendRowsPlan),
     CopyFrom(CopyFromPlan),
+    CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
-    SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
+    AlterCluster(AlterClusterPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
+    AlterClusterRename(AlterClusterRenamePlan),
+    AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
     AlterSystemResetAll(AlterSystemResetAllPlan),
+    AlterRole(AlterRolePlan),
+    AlterOwner(AlterOwnerPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -141,6 +153,14 @@ pub enum Plan {
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
     RotateKeys(RotateKeysPlan),
+    GrantRole(GrantRolePlan),
+    RevokeRole(RevokeRolePlan),
+    GrantPrivileges(GrantPrivilegesPlan),
+    RevokePrivileges(RevokePrivilegesPlan),
+    AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
+    ReassignOwned(ReassignOwnedPlan),
+    SideEffectingFunc(SideEffectingFunc),
+    ValidateConnection(ValidateConnectionPlan),
 }
 
 impl Plan {
@@ -148,15 +168,25 @@ impl Plan {
     /// [`PlanKind`].
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
+            StatementKind::AlterCluster => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
+            }
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
+            StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
                 PlanKind::AlterIndexSetOptions,
                 PlanKind::AlterNoop,
             ],
             StatementKind::AlterObjectRename => {
-                vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
+                vec![
+                    PlanKind::AlterClusterRename,
+                    PlanKind::AlterClusterReplicaRename,
+                    PlanKind::AlterItemRename,
+                    PlanKind::AlterNoop,
+                ]
             }
+            StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
             StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
@@ -167,14 +197,10 @@ impl Plan {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
             }
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
+            StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![
-                PlanKind::CopyFrom,
-                PlanKind::Peek,
-                PlanKind::SendDiffs,
-                PlanKind::Subscribe,
-            ],
+            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -195,32 +221,161 @@ impl Plan {
             StatementKind::Declare => vec![PlanKind::Declare],
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
             StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
-            StatementKind::DropClusters => vec![PlanKind::DropClusters],
-            StatementKind::DropClusterReplicas => vec![PlanKind::DropClusterReplicas],
-            StatementKind::DropDatabase => vec![PlanKind::DropDatabase],
-            StatementKind::DropObjects => vec![PlanKind::DropItems],
-            StatementKind::DropRoles => vec![PlanKind::DropRoles],
-            StatementKind::DropSchema => vec![PlanKind::DropSchema],
+            StatementKind::DropObjects => vec![PlanKind::DropObjects],
+            StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
+            StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
+            StatementKind::GrantRole => vec![PlanKind::GrantRole],
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
+            StatementKind::ReassignOwned => vec![PlanKind::ReassignOwned],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
+            StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
+            StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
-            StatementKind::Select => vec![PlanKind::Peek],
-            StatementKind::SetTransaction => vec![],
+            StatementKind::Select => vec![PlanKind::Select, PlanKind::SideEffectingFunc],
+            StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
-                PlanKind::Peek,
-                PlanKind::SendRows,
+                PlanKind::Select,
                 PlanKind::ShowVariable,
+                PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
+                PlanKind::InspectShard,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
-            StatementKind::Update => vec![PlanKind::ReadThenWrite, PlanKind::SendRows],
+            StatementKind::Update => vec![PlanKind::ReadThenWrite],
+            StatementKind::ValidateConnection => vec![PlanKind::ValidateConnection],
+        }
+    }
+
+    /// Returns a human readable name of the plan. Meant for use in messages sent back to a user.
+    pub fn name(&self) -> &str {
+        match self {
+            Plan::CreateConnection(_) => "create connection",
+            Plan::CreateDatabase(_) => "create database",
+            Plan::CreateSchema(_) => "create schema",
+            Plan::CreateRole(_) => "create role",
+            Plan::CreateCluster(_) => "create cluster",
+            Plan::CreateClusterReplica(_) => "create cluster replica",
+            Plan::CreateSource(_) => "create source",
+            Plan::CreateSources(_) => "create source",
+            Plan::CreateSecret(_) => "create secret",
+            Plan::CreateSink(_) => "create sink",
+            Plan::CreateTable(_) => "create table",
+            Plan::CreateView(_) => "create view",
+            Plan::CreateMaterializedView(_) => "create materialized view",
+            Plan::CreateIndex(_) => "create index",
+            Plan::CreateType(_) => "create type",
+            Plan::DiscardTemp => "discard temp",
+            Plan::DiscardAll => "discard all",
+            Plan::DropObjects(plan) => match plan.object_type {
+                ObjectType::Table => "drop table",
+                ObjectType::View => "drop view",
+                ObjectType::MaterializedView => "drop materialized view",
+                ObjectType::Source => "drop source",
+                ObjectType::Sink => "drop sink",
+                ObjectType::Index => "drop index",
+                ObjectType::Type => "drop type",
+                ObjectType::Role => "drop roles",
+                ObjectType::Cluster => "drop clusters",
+                ObjectType::ClusterReplica => "drop cluster replicas",
+                ObjectType::Secret => "drop secret",
+                ObjectType::Connection => "drop connection",
+                ObjectType::Database => "drop database",
+                ObjectType::Schema => "drop schema",
+                ObjectType::Func => "drop function",
+            },
+            Plan::DropOwned(_) => "drop owned",
+            Plan::EmptyQuery => "do nothing",
+            Plan::ShowAllVariables => "show all variables",
+            Plan::ShowCreate(_) => "show create",
+            Plan::ShowVariable(_) => "show variable",
+            Plan::InspectShard(_) => "inspect shard",
+            Plan::SetVariable(_) => "set variable",
+            Plan::ResetVariable(_) => "reset variable",
+            Plan::SetTransaction(_) => "set transaction",
+            Plan::StartTransaction(_) => "start transaction",
+            Plan::CommitTransaction(_) => "commit",
+            Plan::AbortTransaction(_) => "abort",
+            Plan::Select(_) => "select",
+            Plan::Subscribe(_) => "subscribe",
+            Plan::CopyRows(_) => "copy rows",
+            Plan::CopyFrom(_) => "copy from",
+            Plan::Explain(_) => "explain",
+            Plan::Insert(_) => "insert",
+            Plan::AlterNoop(plan) => match plan.object_type {
+                ObjectType::Table => "alter table",
+                ObjectType::View => "alter view",
+                ObjectType::MaterializedView => "alter materialized view",
+                ObjectType::Source => "alter source",
+                ObjectType::Sink => "alter sink",
+                ObjectType::Index => "alter index",
+                ObjectType::Type => "alter type",
+                ObjectType::Role => "alter role",
+                ObjectType::Cluster => "alter cluster",
+                ObjectType::ClusterReplica => "alter cluster replica",
+                ObjectType::Secret => "alter secret",
+                ObjectType::Connection => "alter connection",
+                ObjectType::Database => "alter database",
+                ObjectType::Schema => "alter schema",
+                ObjectType::Func => "alter function",
+            },
+            Plan::AlterCluster(_) => "alter cluster",
+            Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
+            Plan::AlterIndexSetOptions(_) => "alter index",
+            Plan::AlterIndexResetOptions(_) => "alter index",
+            Plan::AlterSink(_) => "alter sink",
+            Plan::AlterSource(_) => "alter source",
+            Plan::AlterItemRename(_) => "rename item",
+            Plan::AlterSecret(_) => "alter secret",
+            Plan::AlterSystemSet(_) => "alter system",
+            Plan::AlterSystemReset(_) => "alter system",
+            Plan::AlterSystemResetAll(_) => "alter system",
+            Plan::AlterRole(_) => "alter role",
+            Plan::AlterOwner(plan) => match plan.object_type {
+                ObjectType::Table => "alter table owner",
+                ObjectType::View => "alter view owner",
+                ObjectType::MaterializedView => "alter materialized view owner",
+                ObjectType::Source => "alter source owner",
+                ObjectType::Sink => "alter sink owner",
+                ObjectType::Index => "alter index owner",
+                ObjectType::Type => "alter type owner",
+                ObjectType::Role => "alter role owner",
+                ObjectType::Cluster => "alter cluster owner",
+                ObjectType::ClusterReplica => "alter cluster replica owner",
+                ObjectType::Secret => "alter secret owner",
+                ObjectType::Connection => "alter connection owner",
+                ObjectType::Database => "alter database owner",
+                ObjectType::Schema => "alter schema owner",
+                ObjectType::Func => "alter function owner",
+            },
+            Plan::Declare(_) => "declare",
+            Plan::Fetch(_) => "fetch",
+            Plan::Close(_) => "close",
+            Plan::ReadThenWrite(plan) => match plan.kind {
+                MutationKind::Insert => "insert into select",
+                MutationKind::Update => "update",
+                MutationKind::Delete => "delete",
+            },
+            Plan::Prepare(_) => "prepare",
+            Plan::Execute(_) => "execute",
+            Plan::Deallocate(_) => "deallocate",
+            Plan::Raise(_) => "raise",
+            Plan::RotateKeys(_) => "rotate keys",
+            Plan::GrantRole(_) => "grant role",
+            Plan::RevokeRole(_) => "revoke role",
+            Plan::GrantPrivileges(_) => "grant privilege",
+            Plan::RevokePrivileges(_) => "revoke privilege",
+            Plan::AlterDefaultPrivileges(_) => "alter default privileges",
+            Plan::ReassignOwned(_) => "reassign owned",
+            Plan::SideEffectingFunc(_) => "side effecting func",
+            Plan::ValidateConnection(_) => "validate connection",
         }
     }
 }
@@ -229,6 +384,32 @@ impl Plan {
 pub struct StartTransactionPlan {
     pub access: Option<TransactionAccessMode>,
     pub isolation_level: Option<TransactionIsolationLevel>,
+}
+
+#[derive(Debug)]
+pub enum TransactionType {
+    Explicit,
+    Implicit,
+}
+
+impl TransactionType {
+    pub fn is_explicit(&self) -> bool {
+        matches!(self, TransactionType::Explicit)
+    }
+
+    pub fn is_implicit(&self) -> bool {
+        matches!(self, TransactionType::Implicit)
+    }
+}
+
+#[derive(Debug)]
+pub struct CommitTransactionPlan {
+    pub transaction_type: TransactionType,
+}
+
+#[derive(Debug)]
+pub struct AbortTransactionPlan {
+    pub transaction_type: TransactionType,
 }
 
 #[derive(Debug)]
@@ -247,12 +428,32 @@ pub struct CreateSchemaPlan {
 #[derive(Debug)]
 pub struct CreateRolePlan {
     pub name: String,
+    pub attributes: RoleAttributes,
 }
 
 #[derive(Debug)]
 pub struct CreateClusterPlan {
     pub name: String,
+    pub variant: CreateClusterVariant,
+}
+
+#[derive(Debug)]
+pub enum CreateClusterVariant {
+    Managed(CreateClusterManagedPlan),
+    Unmanaged(CreateClusterUnmanagedPlan),
+}
+
+#[derive(Debug)]
+pub struct CreateClusterUnmanagedPlan {
     pub replicas: Vec<(String, ReplicaConfig)>,
+}
+
+#[derive(Debug)]
+pub struct CreateClusterManagedPlan {
+    pub replication_factor: u32,
+    pub size: String,
+    pub availability_zones: Vec<String>,
+    pub compute: ComputeReplicaConfig,
 }
 
 #[derive(Debug)]
@@ -296,11 +497,28 @@ pub enum ReplicaConfig {
 
 #[derive(Debug)]
 pub struct CreateSourcePlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
     pub cluster_config: SourceSinkClusterConfig,
+}
+
+#[derive(Debug)]
+pub struct CreateSourcePlans {
+    pub source_id: GlobalId,
+    pub plan: CreateSourcePlan,
+    pub depends_on: Vec<GlobalId>,
+}
+
+impl From<(GlobalId, CreateSourcePlan, Vec<GlobalId>)> for CreateSourcePlans {
+    fn from(plan: (GlobalId, CreateSourcePlan, Vec<GlobalId>)) -> Self {
+        CreateSourcePlans {
+            source_id: plan.0,
+            plan: plan.1,
+            depends_on: plan.2,
+        }
+    }
 }
 
 /// Specifies the cluster for a source or a sink.
@@ -309,7 +527,7 @@ pub enum SourceSinkClusterConfig {
     /// Use an existing cluster.
     Existing {
         /// The ID of the cluster to use.
-        id: StorageInstanceId,
+        id: ClusterId,
     },
     /// Create a new linked storage cluster of the specified size.
     ///
@@ -329,24 +547,42 @@ pub enum SourceSinkClusterConfig {
     Undefined,
 }
 
+impl SourceSinkClusterConfig {
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
+    /// one doesn't exist, then a new cluster will be created.
+    pub fn cluster_id(&self) -> Option<&ClusterId> {
+        match self {
+            SourceSinkClusterConfig::Existing { id } => Some(id),
+            SourceSinkClusterConfig::Linked { .. } | SourceSinkClusterConfig::Undefined => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CreateConnectionPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub if_not_exists: bool,
     pub connection: Connection,
+    pub validate: bool,
+}
+
+#[derive(Debug)]
+pub struct ValidateConnectionPlan {
+    pub id: GlobalId,
+    /// The connection to validate.
+    pub connection: mz_storage_client::types::connections::Connection,
 }
 
 #[derive(Debug)]
 pub struct CreateSecretPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub secret: Secret,
-    pub full_name: FullObjectName,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateSinkPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
@@ -355,17 +591,19 @@ pub struct CreateSinkPlan {
 
 #[derive(Debug)]
 pub struct CreateTablePlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub table: Table,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateViewPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -374,10 +612,12 @@ pub struct CreateViewPlan {
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -386,7 +626,7 @@ pub struct CreateMaterializedViewPlan {
 
 #[derive(Debug)]
 pub struct CreateIndexPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub index: Index,
     pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
@@ -394,39 +634,31 @@ pub struct CreateIndexPlan {
 
 #[derive(Debug)]
 pub struct CreateTypePlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub typ: Type,
 }
 
 #[derive(Debug)]
-pub struct DropDatabasePlan {
-    pub id: Option<DatabaseId>,
+pub struct DropObjectsPlan {
+    /// The IDs of only the objects directly referenced in the `DROP` statement.
+    pub referenced_ids: Vec<ObjectId>,
+    /// All object IDs to drop. Includes `referenced_ids` and all descendants.
+    pub drop_ids: Vec<ObjectId>,
+    /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
+    /// objects of different types due to CASCADE.
+    pub object_type: ObjectType,
 }
 
 #[derive(Debug)]
-pub struct DropSchemaPlan {
-    pub id: Option<(DatabaseId, SchemaId)>,
-}
-
-#[derive(Debug)]
-pub struct DropRolesPlan {
-    pub names: Vec<String>,
-}
-
-#[derive(Debug)]
-pub struct DropClustersPlan {
-    pub ids: Vec<ClusterId>,
-}
-
-#[derive(Debug)]
-pub struct DropClusterReplicasPlan {
-    pub ids: Vec<(ClusterId, ReplicaId)>,
-}
-
-#[derive(Debug)]
-pub struct DropItemsPlan {
-    pub items: Vec<GlobalId>,
-    pub ty: ObjectType,
+pub struct DropOwnedPlan {
+    /// The role IDs that own the objects.
+    pub role_ids: Vec<RoleId>,
+    /// All object IDs to drop.
+    pub drop_ids: Vec<ObjectId>,
+    /// The privileges to revoke.
+    pub privilege_revokes: Vec<(SystemObjectId, MzAclItem)>,
+    /// The default privileges to revoke.
+    pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
 }
 
 #[derive(Debug)]
@@ -435,10 +667,21 @@ pub struct ShowVariablePlan {
 }
 
 #[derive(Debug)]
+pub struct InspectShardPlan {
+    pub id: GlobalId,
+}
+
+#[derive(Debug)]
 pub struct SetVariablePlan {
     pub name: String,
-    pub value: SetVariableValue,
+    pub value: VariableValue,
     pub local: bool,
+}
+
+#[derive(Debug)]
+pub enum VariableValue {
+    Default,
+    Values(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -447,11 +690,34 @@ pub struct ResetVariablePlan {
 }
 
 #[derive(Debug)]
-pub struct PeekPlan {
+pub struct SetTransactionPlan {
+    pub local: bool,
+    pub modes: Vec<TransactionMode>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectPlan {
     pub source: MirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
+}
+
+#[derive(Debug)]
+pub enum SubscribeOutput {
+    Diffs,
+    WithinTimestampOrderBy {
+        /// We pretend that mz_diff is prepended to the normal columns, making it index 0
+        order_by: Vec<ColumnOrder>,
+    },
+    EnvelopeUpsert {
+        /// Order by with just keys
+        order_by_keys: Vec<ColumnOrder>,
+    },
+    EnvelopeDebezium {
+        /// Order by with just keys
+        order_by_keys: Vec<ColumnOrder>,
+    },
 }
 
 #[derive(Debug)]
@@ -462,6 +728,7 @@ pub struct SubscribePlan {
     pub up_to: Option<MirScalarExpr>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
+    pub output: SubscribeOutput,
 }
 
 #[derive(Debug)]
@@ -473,9 +740,19 @@ pub enum SubscribeFrom {
     },
 }
 
+impl SubscribeFrom {
+    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
+        match self {
+            SubscribeFrom::Id(id) => BTreeSet::from([*id]),
+            SubscribeFrom::Query { expr, .. } => expr.depends_on(),
+        }
+    }
+}
+
 #[derive(Debug)]
-pub struct SendRowsPlan {
-    pub rows: Vec<Row>,
+pub struct ShowCreatePlan {
+    pub id: GlobalId,
+    pub row: Row,
 }
 
 #[derive(Debug)]
@@ -486,12 +763,20 @@ pub struct CopyFromPlan {
 }
 
 #[derive(Debug)]
+pub struct CopyRowsPlan {
+    pub id: GlobalId,
+    pub columns: Vec<usize>,
+    pub rows: Vec<Row>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ExplainPlan {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
+    pub no_errors: bool,
     pub explainee: mz_repr::explain::Explainee,
 }
 
@@ -501,6 +786,7 @@ pub struct SendDiffsPlan {
     pub updates: Vec<(Row, Diff)>,
     pub kind: MutationKind,
     pub returning: Vec<(Row, NonZeroUsize)>,
+    pub max_result_size: u32,
 }
 
 #[derive(Debug)]
@@ -540,8 +826,8 @@ pub struct AlterIndexResetOptionsPlan {
 
 #[derive(Debug, Clone)]
 
-pub enum AlterOptionParameter {
-    Set(String),
+pub enum AlterOptionParameter<T = String> {
+    Set(T),
     Reset,
     Unchanged,
 }
@@ -553,15 +839,43 @@ pub struct AlterSinkPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterSourceAction {
+    Resize(AlterOptionParameter),
+    DropSubsourceExports { to_drop: BTreeSet<GlobalId> },
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub size: AlterOptionParameter,
+    pub action: AlterSourceAction,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterPlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub options: PlanClusterOption,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterRenamePlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub to_name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterReplicaRenamePlan {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub name: QualifiedReplica,
+    pub to_name: String,
 }
 
 #[derive(Debug)]
 pub struct AlterItemRenamePlan {
     pub id: GlobalId,
-    pub current_full_name: FullObjectName,
+    pub current_full_name: FullItemName,
     pub to_name: String,
     pub object_type: ObjectType,
 }
@@ -575,7 +889,7 @@ pub struct AlterSecretPlan {
 #[derive(Debug)]
 pub struct AlterSystemSetPlan {
     pub name: String,
-    pub value: SetVariableValue,
+    pub value: VariableValue,
 }
 
 #[derive(Debug)]
@@ -585,6 +899,20 @@ pub struct AlterSystemResetPlan {
 
 #[derive(Debug)]
 pub struct AlterSystemResetAllPlan {}
+
+#[derive(Debug)]
+pub struct AlterRolePlan {
+    pub id: RoleId,
+    pub name: String,
+    pub attributes: PlannedRoleAttributes,
+}
+
+#[derive(Debug)]
+pub struct AlterOwnerPlan {
+    pub id: ObjectId,
+    pub object_type: ObjectType,
+    pub new_owner: RoleId,
+}
 
 #[derive(Debug)]
 pub struct RotateKeysPlan {
@@ -632,6 +960,71 @@ pub struct RaisePlan {
     pub severity: NoticeSeverity,
 }
 
+#[derive(Debug)]
+pub struct GrantRolePlan {
+    /// The roles that are gaining members.
+    pub role_ids: Vec<RoleId>,
+    /// The roles that will be added to `role_id`.
+    pub member_ids: Vec<RoleId>,
+    /// The role that granted the membership.
+    pub grantor_id: RoleId,
+}
+
+#[derive(Debug)]
+pub struct RevokeRolePlan {
+    /// The roles that are losing members.
+    pub role_ids: Vec<RoleId>,
+    /// The roles that will be removed from `role_id`.
+    pub member_ids: Vec<RoleId>,
+    /// The role that revoked the membership.
+    pub grantor_id: RoleId,
+}
+
+#[derive(Debug)]
+pub struct UpdatePrivilege {
+    /// The privileges being granted/revoked on an object.
+    pub acl_mode: AclMode,
+    /// The ID of the object receiving privileges.
+    pub target_id: SystemObjectId,
+    /// The role that is granting the privileges.
+    pub grantor: RoleId,
+}
+
+#[derive(Debug)]
+pub struct GrantPrivilegesPlan {
+    /// Description of each privilege being granted.
+    pub update_privileges: Vec<UpdatePrivilege>,
+    /// The roles that will granted the privileges.
+    pub grantees: Vec<RoleId>,
+}
+
+#[derive(Debug)]
+pub struct RevokePrivilegesPlan {
+    /// Description of each privilege being revoked.
+    pub update_privileges: Vec<UpdatePrivilege>,
+    /// The roles that will have privileges revoked.
+    pub revokees: Vec<RoleId>,
+}
+#[derive(Debug)]
+pub struct AlterDefaultPrivilegesPlan {
+    /// Description of objects that match this default privilege.
+    pub privilege_objects: Vec<DefaultPrivilegeObject>,
+    /// The privilege to be granted/revoked from the matching objects.
+    pub privilege_acl_items: Vec<DefaultPrivilegeAclItem>,
+    /// Whether this is a grant or revoke.
+    pub is_grant: bool,
+}
+
+#[derive(Debug)]
+pub struct ReassignOwnedPlan {
+    /// The roles whose owned objects are being reassigned.
+    pub old_roles: Vec<RoleId>,
+    /// The new owner of the objects.
+    pub new_role: RoleId,
+    /// All object IDs to reassign.
+    pub reassign_ids: Vec<ObjectId>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
@@ -662,6 +1055,7 @@ pub struct Ingestion {
     pub desc: SourceDesc,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
+    pub progress_subsource: GlobalId,
 }
 
 #[derive(Clone, Debug)]
@@ -715,7 +1109,7 @@ pub struct Type {
 }
 
 /// Specifies when a `Peek` or `Subscribe` should occur.
-#[derive(Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
@@ -751,8 +1145,8 @@ impl QueryWhen {
     /// Returns whether the candidate can be advanced to the upper.
     pub fn can_advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the upper.
@@ -767,8 +1161,8 @@ impl QueryWhen {
     /// Returns whether the candidate can be advanced to the timeline's timestamp.
     pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the timeline's timestamp.
@@ -778,6 +1172,13 @@ impl QueryWhen {
             QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
                 false
             }
+        }
+    }
+    /// Returns whether the selected timestamp should be tracked within the current transaction.
+    pub fn is_transactional(&self) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
 }
@@ -808,6 +1209,33 @@ pub enum IndexOption {
     /// Configures the logical compaction window for an index. `None` disables
     /// logical compaction entirely.
     LogicalCompactionWindow(Option<Duration>),
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanClusterOption {
+    pub availability_zones: AlterOptionParameter<Vec<String>>,
+    pub idle_arrangement_merge_effort: AlterOptionParameter<u32>,
+    pub introspection_debugging: AlterOptionParameter<bool>,
+    pub introspection_interval: AlterOptionParameter<OptionalInterval>,
+    pub managed: AlterOptionParameter<bool>,
+    pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
+    pub replication_factor: AlterOptionParameter<u32>,
+    pub size: AlterOptionParameter,
+}
+
+impl Default for PlanClusterOption {
+    fn default() -> Self {
+        Self {
+            availability_zones: AlterOptionParameter::Unchanged,
+            idle_arrangement_merge_effort: AlterOptionParameter::Unchanged,
+            introspection_debugging: AlterOptionParameter::Unchanged,
+            introspection_interval: AlterOptionParameter::Unchanged,
+            managed: AlterOptionParameter::Unchanged,
+            replicas: AlterOptionParameter::Unchanged,
+            replication_factor: AlterOptionParameter::Unchanged,
+            size: AlterOptionParameter::Unchanged,
+        }
+    }
 }
 
 /// A vector of values to which parameter references should be bound.

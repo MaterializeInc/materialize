@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -78,10 +76,10 @@
 use std::str::FromStr;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-
+use mz_adapter::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use mz_adapter::catalog::{Catalog, Op};
-use mz_ore::{now::SYSTEM_TIME, task::spawn};
-
+use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task::spawn;
 use tokio::runtime::Runtime;
 
 fn bench_transact(c: &mut Criterion) {
@@ -124,6 +122,7 @@ fn bench_transact(c: &mut Criterion) {
                     name: id.to_string(),
                     oid: id,
                     public_schema_oid: id,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                 }];
                 catalog
                     .transact(mz_repr::Timestamp::MIN, None, ops, |_| Ok(()))

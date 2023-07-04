@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM cockroachdb/cockroach:v22.2.3 AS crdb
+FROM cockroachdb/cockroach:v23.1.1 AS crdb
 
 MZFROM ubuntu-base
 

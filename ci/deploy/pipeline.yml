@@ -19,17 +19,6 @@ steps:
       manual:
         permit_on_passed: true
 
-  - command: bin/ci-builder run nightly ci/deploy/website.sh
-    branches: main
-    timeout_in_minutes: 30
-    agents:
-      queue: builder-linux-x86_64
-    concurrency: 1
-    concurrency_group: deploy/website
-    retry:
-      manual:
-        permit_on_passed: true
-
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
     timeout_in_minutes: 30
     agents:

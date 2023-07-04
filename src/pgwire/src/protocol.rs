@@ -7,39 +7,37 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
-use std::iter;
-use std::mem;
+use std::sync::{Arc, Mutex};
+use std::{cmp, iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
+use mz_adapter::session::{
+    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
+};
+use mz_adapter::{
+    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
+};
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_ore::cast::CastFrom;
+use mz_ore::netio::AsyncReady;
+use mz_ore::str::StrExt;
+use mz_pgcopy::CopyFormatParams;
+use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
+use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
-
-use mz_adapter::catalog::INTERNAL_USER_NAMES;
-use mz_adapter::session::User;
-use mz_adapter::session::{
-    EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
-    RowBatchStream, TransactionStatus,
-};
-use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::FronteggAuthentication;
-use mz_ore::cast::CastFrom;
-use mz_ore::netio::AsyncReady;
-use mz_ore::str::StrExt;
-use mz_pgcopy::CopyFormatParams;
-use mz_repr::GlobalId;
-use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
-use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
-use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -70,9 +68,9 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 /// Parameters for the [`run`] function.
 pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
-    pub tls_mode: TlsMode,
+    pub tls_mode: Option<TlsMode>,
     /// A client for the adapter.
-    pub adapter_client: mz_adapter::ConnClient,
+    pub adapter_client: mz_adapter::Client,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The protocol version that the client provided in the startup message.
@@ -84,6 +82,8 @@ pub struct RunParams<'a, A> {
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
+    /// Global connection limit and count
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 /// Runs a pgwire connection to completion.
@@ -105,6 +105,7 @@ pub async fn run<'a, A>(
         mut params,
         frontegg,
         internal,
+        active_connection_count,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -131,7 +132,7 @@ where
         }
     } else {
         // The external server cannot be used to connect to any system users.
-        if mz_adapter::catalog::is_reserved_name(user.as_str()) {
+        if mz_adapter::catalog::is_reserved_role_name(user.as_str()) {
             let msg = format!("unauthorized login to user '{user}'");
             return conn
                 .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
@@ -144,10 +145,12 @@ where
     // The match here explicitly spells out all cases to be resilient to
     // future changes to TlsMode.
     match (tls_mode, conn.inner()) {
-        (TlsMode::Disable, Conn::Unencrypted(_)) => (),
-        (TlsMode::Disable, Conn::Ssl(_)) => unreachable!(),
-        (TlsMode::Enable, Conn::Ssl(_)) => (),
-        (TlsMode::Enable, Conn::Unencrypted(_)) => {
+        (None, Conn::Unencrypted(_)) => (),
+        (None, Conn::Ssl(_)) => unreachable!(),
+        (Some(TlsMode::Allow), Conn::Unencrypted(_)) => (),
+        (Some(TlsMode::Allow), Conn::Ssl(_)) => (),
+        (Some(TlsMode::Require), Conn::Ssl(_)) => (),
+        (Some(TlsMode::Require), Conn::Unencrypted(_)) => {
             return conn
                 .send(ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
@@ -157,7 +160,7 @@ where
         }
     }
 
-    let (external_metadata, is_expired) = if let Some(frontegg) = frontegg {
+    let (mut session, is_expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -175,17 +178,38 @@ where
         match frontegg
             .exchange_password_for_token(&password)
             .await
-            .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
-        {
-            Ok((claims, is_expired)) => {
-                let external_metadata = Some(ExternalUserMetadata {
-                    user_id: claims.best_user_id(),
-                    group_id: claims.tenant_id,
-                });
-                (external_metadata, is_expired.left_future())
-            }
+            .and_then(|response| {
+                let response = frontegg.validate_api_token_response(response, Some(&user))?;
+
+                // Create a session based on the validated claims.
+                //
+                // In particular, it's important that the username come from the
+                // claims, as Frontegg may return an email address with
+                // different casing than the user supplied via the pgwire
+                // username field. We want to use the Frontegg casing as
+                // canonical.
+                let mut session = adapter_client.new_session(
+                    conn.conn_id().clone(),
+                    User {
+                        name: response.claims.email.clone(),
+                        external_metadata: Some(ExternalUserMetadata::from(&response.claims)),
+                    },
+                );
+
+                // Arrange to continuously refresh and revalidate the access
+                // token, updating the session as necessary.
+                let external_metadata_tx = session.retain_external_metadata_transmitter();
+                let is_expired =
+                    frontegg.continuously_revalidate_api_token_response(response, move |claims| {
+                        // Ignore error if client has hung up.
+                        let _ = external_metadata_tx.send(ExternalUserMetadata::from(claims));
+                    });
+
+                Ok((session, is_expired))
+            }) {
+            Ok((session, is_expired)) => (session, is_expired.left_future()),
             Err(e) => {
-                warn!("PGwire connection failed authentication: {}", e);
+                warn!("pgwire connection failed authentication: {}", e);
                 return conn
                     .send(ErrorResponse::fatal(
                         SqlState::INVALID_PASSWORD,
@@ -195,26 +219,68 @@ where
             }
         }
     } else {
+        let session = adapter_client.new_session(
+            conn.conn_id().clone(),
+            User {
+                name: user.clone(),
+                external_metadata: None,
+            },
+        );
         // No frontegg check, so is_expired never resolves.
-        (None, pending().right_future())
+        let is_expired = pending().right_future();
+        (session, is_expired)
     };
 
-    // Construct session.
-    let mut session = adapter_client.new_session(User {
-        name: user,
-        external_metadata,
-    });
     for (name, value) in params {
-        let local = false;
-        let _ = session.vars_mut().set(&name, &value, local);
+        let settings = match name.as_str() {
+            "options" => match parse_options(&value) {
+                Ok(opts) => opts,
+                Err(()) => {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name,
+                        reason: "could not parse".into(),
+                    });
+                    continue;
+                }
+            },
+            _ => vec![(name, value)],
+        };
+        for (key, val) in settings {
+            const LOCAL: bool = false;
+            // TODO: Issuing an error here is better than what we did before
+            // (silently ignore errors on set), but erroring the connection
+            // might be the better behavior. We maybe need to support more
+            // options sent by psql and drivers before we can safely do this.
+            if let Err(err) = session
+                .vars_mut()
+                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            {
+                session.add_notice(AdapterNotice::BadStartupSetting {
+                    name: key,
+                    reason: err.to_string(),
+                });
+            }
+        }
     }
+    session
+        .vars_mut()
+        .end_transaction(EndTransactionAction::Commit);
+
+    let _guard = match DropConnection::new_connection(session.user(), active_connection_count) {
+        Ok(drop_connection) => drop_connection,
+        Err(e) => {
+            return conn
+                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e.into()))
+                .await
+        }
+    };
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in session.vars().notify_set() {
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
     }
     buf.push(BackendMessage::BackendKeyData {
-        conn_id: session.conn_id(),
+        conn_id: session.conn_id().unhandled(),
         secret_key: session.secret_key(),
     });
     // Immediately respond with connection success without waiting on the
@@ -230,8 +296,7 @@ where
     conn.flush().await?;
 
     // Register session with adapter.
-    let (adapter_client, startup) = match adapter_client.startup(session, frontegg.is_some()).await
-    {
+    let (adapter_client, startup) = match adapter_client.startup(session).await {
         Ok(startup) => startup,
         Err(e) => {
             return conn
@@ -264,6 +329,87 @@ where
             conn.flush().await
         }
     }
+}
+
+/// Returns (name, value) session settings pairs from an options value.
+///
+/// From Postgres, see pg_split_opts in postinit.c and process_postgres_switches
+/// in postgres.c.
+fn parse_options(value: &str) -> Result<Vec<(String, String)>, ()> {
+    let opts = split_options(value);
+    let mut pairs = Vec::with_capacity(opts.len());
+    let mut seen_prefix = false;
+    for opt in opts {
+        if !seen_prefix {
+            if opt == "-c" {
+                seen_prefix = true;
+            } else {
+                let (key, val) = parse_option(&opt)?;
+                pairs.push((key.to_owned(), val.to_owned()));
+            }
+        } else {
+            let (key, val) = opt.split_once('=').ok_or(())?;
+            pairs.push((key.to_owned(), val.to_owned()));
+            seen_prefix = false;
+        }
+    }
+    Ok(pairs)
+}
+
+/// Returns the parsed key and value from option of the form `--key=value`, `-c
+/// key=value`, or `-ckey=value`. Keys replace `-` with `_`. Returns an error if
+/// there was some other prefix.
+fn parse_option(option: &str) -> Result<(&str, &str), ()> {
+    let (key, value) = option.split_once('=').ok_or(())?;
+    for prefix in &["-c", "--"] {
+        if let Some(key) = key.strip_prefix(prefix) {
+            return Ok((key, value));
+        }
+    }
+    Err(())
+}
+
+/// Splits value by any number of spaces except those preceeded by `\`.
+fn split_options(value: &str) -> Vec<String> {
+    let mut strs = Vec::new();
+    // Need to build a string because of the escaping, so we can't simply
+    // subslice into value, and this isn't called enough to need to make it
+    // smart so it only builds a string if needed.
+    let mut current = String::new();
+    let mut was_slash = false;
+    for c in value.chars() {
+        was_slash = match c {
+            ' ' => {
+                if was_slash {
+                    current.push(' ');
+                } else if !current.is_empty() {
+                    // To ignore multiple spaces in a row, only push if current
+                    // is not empty.
+                    strs.push(std::mem::take(&mut current));
+                }
+                false
+            }
+            '\\' => {
+                if was_slash {
+                    // Two slashes in a row will add a slash and not escape the
+                    // next char.
+                    current.push('\\');
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => {
+                current.push(c);
+                false
+            }
+        };
+    }
+    // A `\` at the end will be ignored.
+    if !current.is_empty() {
+        strs.push(current);
+    }
+    strs
 }
 
 #[derive(Debug)]
@@ -467,7 +613,11 @@ where
             }
         }
 
-        let result = match self.adapter_client.execute(EMPTY_PORTAL.to_string()).await {
+        let result = match self
+            .adapter_client
+            .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed())
+            .await
+        {
             Ok(response) => {
                 self.send_pending_notices().await?;
                 self.send_execute_response(
@@ -494,11 +644,23 @@ where
         result
     }
 
-    async fn start_transaction(&mut self, stmts: Option<usize>) {
+    fn start_transaction(&mut self, stmts: Option<usize>) {
         // start_transaction can't error (but assert that just in case it changes in
         // the future.
-        let res = self.adapter_client.start_transaction(stmts).await;
+        let res = self.adapter_client.start_transaction(stmts);
         assert!(res.is_ok());
+    }
+
+    fn parse_sql(&self, sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
+        match self.adapter_client.parse(sql) {
+            Ok(result) => result.map_err(|e| {
+                // Convert our 0-based byte position to pgwire's 1-based character
+                // position.
+                let pos = sql[..e.error.pos].chars().count() + 1;
+                ErrorResponse::error(SqlState::SYNTAX_ERROR, e.error.message).with_position(pos)
+            }),
+            Err(msg) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, msg)),
+        }
     }
 
     // See "Multiple Statements in a Simple Query" which documents how implicit
@@ -506,7 +668,7 @@ where
     // From https://www.postgresql.org/docs/current/protocol-flow.html
     async fn query(&mut self, sql: String) -> Result<State, io::Error> {
         // Parse first before doing any transaction checking.
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 self.error(err).await?;
@@ -531,7 +693,7 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.start_transaction(Some(num_stmts)).await;
+            self.start_transaction(Some(num_stmts));
 
             match self.one_query(stmt).await? {
                 State::Ready => (),
@@ -561,7 +723,7 @@ where
         param_oids: Vec<u32>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let mut param_types = vec![];
         for oid in param_oids {
@@ -589,7 +751,7 @@ where
             }
         }
 
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 return self.error(err).await;
@@ -609,7 +771,7 @@ where
         }
         match self
             .adapter_client
-            .describe(name, maybe_stmt, param_types)
+            .prepare(name, maybe_stmt, param_types)
             .await
         {
             Ok(()) => {
@@ -654,7 +816,7 @@ where
         result_formats: Vec<mz_pgrepr::Format>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let aborted_txn = self.is_aborted_txn();
         let stmt = match self
@@ -691,7 +853,7 @@ where
                     .await
             }
         };
-        if aborted_txn && !is_txn_exit_stmt(stmt.sql()) {
+        if aborted_txn && !is_txn_exit_stmt(stmt.stmt()) {
             return self.aborted_txn_error().await;
         }
         let buf = RowArena::new();
@@ -755,7 +917,7 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
-        let stmt = stmt.sql().cloned();
+        let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
@@ -815,9 +977,13 @@ where
                     // in bind. We don't do it in bind because I'm not sure what purpose it would
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
-                    self.start_transaction(Some(1)).await;
+                    self.start_transaction(Some(1));
 
-                    match self.adapter_client.execute(portal_name.clone()).await {
+                    match self
+                        .adapter_client
+                        .execute(portal_name.clone(), self.conn.wait_closed())
+                        .await
+                    {
                         Ok(response) => {
                             self.send_pending_notices().await?;
                             self.send_execute_response(
@@ -879,7 +1045,7 @@ where
 
     async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
@@ -908,7 +1074,7 @@ where
 
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let session = self.adapter_client.session();
         let row_desc = session
@@ -1252,14 +1418,38 @@ where
                 id,
                 columns,
                 params,
+                ctx_extra,
             } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.copy_from(id, columns, params, row_desc).await
+                self.copy_from(id, columns, params, row_desc, ctx_extra)
+                    .await
+            }
+            ExecuteResponse::TransactionCommitted { params }
+            | ExecuteResponse::TransactionRolledBack { params } => {
+                let notify_set: mz_ore::collections::HashSet<String> = self
+                    .adapter_client
+                    .session()
+                    .vars()
+                    .notify_set()
+                    .map(|v| v.name().to_string())
+                    .collect();
+
+                // Only report on parameters that are in the notify set.
+                for (name, value) in params
+                    .into_iter()
+                    .filter(|(name, _v)| notify_set.contains(*name))
+                {
+                    let msg = BackendMessage::ParameterStatus(name, value);
+                    self.send(msg).await?;
+                }
+                command_complete!()
             }
 
-            ExecuteResponse::AlteredIndexLogicalCompaction
+            ExecuteResponse::AlteredDefaultPrivileges
+            | ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
+            | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::CreatedCluster { .. }
             | ExecuteResponse::CreatedClusterReplica { .. }
@@ -1281,27 +1471,19 @@ where
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
-            | ExecuteResponse::DroppedCluster
-            | ExecuteResponse::DroppedClusterReplica
-            | ExecuteResponse::DroppedConnection
-            | ExecuteResponse::DroppedDatabase
-            | ExecuteResponse::DroppedIndex
-            | ExecuteResponse::DroppedMaterializedView
-            | ExecuteResponse::DroppedRole
-            | ExecuteResponse::DroppedSchema
-            | ExecuteResponse::DroppedSecret
-            | ExecuteResponse::DroppedSink
-            | ExecuteResponse::DroppedSource
-            | ExecuteResponse::DroppedTable
-            | ExecuteResponse::DroppedType
-            | ExecuteResponse::DroppedView
+            | ExecuteResponse::DroppedObject(_)
+            | ExecuteResponse::DroppedOwned
+            | ExecuteResponse::GrantedPrivilege
+            | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
+            | ExecuteResponse::ReassignOwned
+            | ExecuteResponse::RevokedPrivilege
+            | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
-            | ExecuteResponse::TransactionCommitted
-            | ExecuteResponse::TransactionRolledBack
-            | ExecuteResponse::Updated(..) => {
+            | ExecuteResponse::Updated(..)
+            | ExecuteResponse::ValidatedConnection => {
                 command_complete!()
             }
         };
@@ -1610,6 +1792,7 @@ where
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
+        ctx_extra: ExecuteContextExtra,
     ) -> Result<State, io::Error> {
         let typ = row_desc.typ();
         let column_formats = vec![mz_pgrepr::Format::Text; typ.column_types.len()];
@@ -1673,7 +1856,11 @@ where
 
             let count = rows.len();
 
-            if let Err(e) = self.adapter_client.insert_rows(id, columns, rows).await {
+            if let Err(e) = self
+                .adapter_client
+                .insert_rows(id, columns, rows, ctx_extra)
+                .await
+            {
                 return self
                     .error(ErrorResponse::from_adapter_error(Severity::Error, e))
                     .await;
@@ -1775,18 +1962,6 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[mz_pgrepr::Format]) -> Ba
     }
 }
 
-fn parse_sql(sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
-    match mz_sql::parse::parse_with_limit(sql) {
-        Ok(result) => result.map_err(|e| {
-            // Convert our 0-based byte position to pgwire's 1-based character
-            // position.
-            let pos = sql[..e.pos].chars().count() + 1;
-            ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
-        }),
-        Err(e) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, e)),
-    }
-}
-
 type GetResponse = fn(
     max_rows: ExecuteCount,
     total_sent_rows: usize,
@@ -1850,4 +2025,184 @@ enum FetchResult {
     Canceled,
     Error(String),
     Notice(AdapterNotice),
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_parse_options() {
+        struct TestCase {
+            input: &'static str,
+            expect: Result<Vec<(&'static str, &'static str)>, ()>,
+        }
+        let tests = vec![
+            TestCase {
+                input: "",
+                expect: Ok(vec![]),
+            },
+            TestCase {
+                input: "--key",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--key=val",
+                expect: Ok(vec![("key", "val")]),
+            },
+            TestCase {
+                input: r#"--key=val -ckey2=val2 -c key3=val3 -c key4=val4 -ckey5=val5"#,
+                expect: Ok(vec![
+                    ("key", "val"),
+                    ("key2", "val2"),
+                    ("key3", "val3"),
+                    ("key4", "val4"),
+                    ("key5", "val5"),
+                ]),
+            },
+            TestCase {
+                input: r#"-c\ key=val"#,
+                expect: Ok(vec![(" key", "val")]),
+            },
+            TestCase {
+                input: "--key=val -ckey2 val2",
+                expect: Err(()),
+            },
+            // Unclear what this should do.
+            TestCase {
+                input: "--key=",
+                expect: Ok(vec![("key", "")]),
+            },
+        ];
+        for test in tests {
+            let got = parse_options(test.input);
+            let expect = test.expect.map(|r| {
+                r.into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect()
+            });
+            assert_eq!(got, expect, "input: {}", test.input);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_option() {
+        struct TestCase {
+            input: &'static str,
+            expect: Result<(&'static str, &'static str), ()>,
+        }
+        let tests = vec![
+            TestCase {
+                input: "",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--c",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "a=b",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--a=b",
+                expect: Ok(("a", "b")),
+            },
+            TestCase {
+                input: "--ca=b",
+                expect: Ok(("ca", "b")),
+            },
+            TestCase {
+                input: "-ca=b",
+                expect: Ok(("a", "b")),
+            },
+            // Unclear what this should error, but at least test it.
+            TestCase {
+                input: "--=",
+                expect: Ok(("", "")),
+            },
+        ];
+        for test in tests {
+            let got = parse_option(test.input);
+            assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_split_options() {
+        struct TestCase {
+            input: &'static str,
+            expect: Vec<&'static str>,
+        }
+        let tests = vec![
+            TestCase {
+                input: "",
+                expect: vec![],
+            },
+            TestCase {
+                input: "  ",
+                expect: vec![],
+            },
+            TestCase {
+                input: " a ",
+                expect: vec!["a"],
+            },
+            TestCase {
+                input: "  ab     cd   ",
+                expect: vec!["ab", "cd"],
+            },
+            TestCase {
+                input: r#"  ab\     cd   "#,
+                expect: vec!["ab ", "cd"],
+            },
+            TestCase {
+                input: r#"  ab\\     cd   "#,
+                expect: vec![r#"ab\"#, "cd"],
+            },
+            TestCase {
+                input: r#"  ab\\\     cd   "#,
+                expect: vec![r#"ab\ "#, "cd"],
+            },
+            TestCase {
+                input: r#"  ab\\\ cd   "#,
+                expect: vec![r#"ab\ cd"#],
+            },
+            TestCase {
+                input: r#"  ab\\\cd   "#,
+                expect: vec![r#"ab\cd"#],
+            },
+            TestCase {
+                input: r#"a\"#,
+                expect: vec!["a"],
+            },
+            TestCase {
+                input: r#"a\ "#,
+                expect: vec!["a "],
+            },
+            TestCase {
+                input: r#"\"#,
+                expect: vec![],
+            },
+            TestCase {
+                input: r#"\ "#,
+                expect: vec![r#" "#],
+            },
+            TestCase {
+                input: r#" \ "#,
+                expect: vec![r#" "#],
+            },
+            TestCase {
+                input: r#"\  "#,
+                expect: vec![r#" "#],
+            },
+        ];
+        for test in tests {
+            let got = split_options(test.input);
+            assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
 }

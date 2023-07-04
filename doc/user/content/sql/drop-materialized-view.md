@@ -48,3 +48,4 @@ upon by catalog item 'materialize.public.wb_custom_art'
 - [`CREATE MATERIALIZED VIEW`](../create-materialized-view)
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)
 - [`SHOW CREATE MATERIALIZED VIEW`](../show-create-materialized-view)
+- [DROP OWNED](../drop-owned)

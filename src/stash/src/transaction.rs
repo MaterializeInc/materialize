@@ -7,26 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{
-    cmp,
-    collections::{btree_map::Entry, BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
-};
+use std::cmp;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use futures::{
     future::{self, try_join, try_join3, try_join_all, BoxFuture},
     TryFutureExt,
 };
-use mz_ore::collections::CollectionExt;
-use serde_json::Value;
-use timely::{progress::Antichain, PartialOrder};
+use mz_ore::{cast::CastFrom, collections::CollectionExt};
+use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tokio_postgres::{types::ToSql, Client};
 
+use crate::postgres::{ConsolidateRequest, CountedStatements};
 use crate::{
-    consolidate_updates_kv, postgres::CountedStatements, AntichainFormatter, AppendBatch, Data,
-    Diff, Id, InternalStashError, Stash, StashCollection, StashError, Timestamp,
+    AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection,
+    StashError, Timestamp,
 };
+
+// The limit AFTER which to split an update batch (that is, we will ship an update that
+// exceeds this number, but then start another batch).
+//
+// Cockroach's default limit for sql.conn.max_read_buffer_message_size is 16MiB
+// (https://github.com/cockroachdb/cockroach/blob/7e4e0b195cd61da6cd7a719a5b9aa2e84f68d475/pkg/sql/pgwire/pgwirebase/encoding.go#L50).
+// Use a number well under that but still big ish that most things won't ever need to
+// batch. Because we are only estimating the value size and ignoring various other
+// things that contribute to the total pgwire message size, having a 14MiB headspace
+// seems safe here.
+pub const INSERT_BATCH_SPLIT_SIZE: usize = 2 * 1024 * 1024;
+
+/// [`tokio_postgres`] has a maximum number of arguments it supports when executing a query. This
+/// is the limit at which to split a batch to make sure we don't try to include too many elements
+/// in any one update.
+pub const MAX_INSERT_ARGUMENTS: u16 = u16::MAX / 4;
 
 impl Stash {
     pub async fn with_transaction<F, T>(&mut self, f: F) -> Result<T, StashError>
@@ -70,7 +86,7 @@ pub struct Transaction<'a> {
     client: &'a Client,
     // The set of consolidations that need to be performed if the transaction
     // succeeds.
-    consolidations: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
+    consolidations: mpsc::UnboundedSender<ConsolidateRequest>,
     // Savepoint state to enforce the invariant that only one SAVEPOINT is
     // active at once.
     savepoint: Arc<Mutex<bool>>,
@@ -180,21 +196,48 @@ impl<'a> Transaction<'a> {
         Ok(StashCollection::new(collection_id))
     }
 
-    /// Returns the names of all collections.
+    /// Returns the ids and names of all collections.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn collections(&self) -> Result<BTreeSet<String>, StashError> {
+    pub async fn collections(&self) -> Result<BTreeMap<Id, String>, StashError> {
         let rows = self
             .client
-            .query("SELECT name FROM collections", &[])
+            .query("SELECT name, collection_id FROM collections", &[])
             .await?;
-        let names = rows.into_iter().map(|row| row.get(0));
-        Ok(BTreeSet::from_iter(names))
+        let names = rows
+            .into_iter()
+            .map(|row| (row.get("collection_id"), row.get("name")));
+        Ok(BTreeMap::from_iter(names))
+    }
+
+    /// Returns the raw sealed rows as serialized protobuf, not consolidated.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub async fn peek_raw(
+        &self,
+        id: Id,
+    ) -> Result<impl Iterator<Item = ((Vec<u8>, Vec<u8>), Diff)>, StashError> {
+        let peek_timestamp = self.peek_timestamp_id(id).await?;
+        Ok(self
+            .iter_raw(id)
+            .await?
+            .filter_map(move |((k, v), time, diff)| {
+                if time.less_equal(&peek_timestamp) {
+                    Some(((k, v), diff))
+                } else {
+                    None
+                }
+            }))
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn consolidate(&self, id: Id) -> Result<(), StashError> {
         let since = self.since(id).await?;
-        self.consolidations.send((id, since)).unwrap();
+        self.consolidations
+            .send(ConsolidateRequest {
+                id,
+                since,
+                done: None,
+            })
+            .unwrap();
         Ok(())
     }
 
@@ -260,7 +303,30 @@ impl<'a> Transaction<'a> {
         K: Data,
         V: Data,
     {
-        let since = match self.since(collection.id).await?.into_option() {
+        let mut rows = self.iter_raw(collection.id).await?.collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut rows);
+
+        // Deserialize the rows into the actual keys and values.
+        let rows = rows
+            .into_iter()
+            .map(|((key, val), ts, diff)| {
+                let key = K::decode(key.as_slice()).expect("serialization to roundtrip");
+                let val = V::decode(val.as_slice()).expect("serialization to roundtrip");
+
+                ((key, val), ts, diff)
+            })
+            .collect();
+
+        Ok(rows)
+    }
+
+    /// Iterates over a collection, returning the raw data on disk, unconsolidated.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn iter_raw(
+        &self,
+        id: Id,
+    ) -> Result<impl Iterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>, StashError> {
+        let since = match self.since(id).await?.into_option() {
             Some(since) => since,
             None => {
                 return Err(StashError::from(
@@ -270,18 +336,16 @@ impl<'a> Transaction<'a> {
         };
         let rows = self
             .client
-            .query(self.stmts.iter(), &[&collection.id])
+            .query(self.stmts.iter(), &[&id])
             .await?
             .into_iter()
-            .map(|row| {
-                let key: Value = row.try_get("key")?;
-                let value: Value = row.try_get("value")?;
-                let time = row.try_get("time")?;
-                let diff: Diff = row.try_get("diff")?;
-                Ok::<_, StashError>(((key, value), cmp::max(time, since), diff))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let rows = consolidate_updates_kv(rows).collect();
+            .map(move |row| {
+                let key = row.get("key");
+                let value = row.get("value");
+                let time = row.get("time");
+                let diff: Diff = row.get("diff");
+                ((key, value), cmp::max(time, since), diff)
+            });
         Ok(rows)
     }
 
@@ -296,8 +360,7 @@ impl<'a> Transaction<'a> {
         K: Data,
         V: Data,
     {
-        let key = serde_json::to_vec(key).expect("must serialize");
-        let key: Value = serde_json::from_slice(&key)?;
+        let key = key.encode_to_vec();
         let (since, rows) = future::try_join(
             self.since(collection.id),
             self.client
@@ -316,8 +379,8 @@ impl<'a> Transaction<'a> {
         let mut rows = rows
             .into_iter()
             .map(|row| {
-                let value: Value = row.try_get("value")?;
-                let value: V = serde_json::from_value(value)?;
+                let value: Vec<u8> = row.try_get("value")?;
+                let value = V::decode(value.as_slice())?;
                 let time = row.try_get("time")?;
                 let diff = row.try_get("diff")?;
                 Ok::<_, StashError>((value, cmp::max(time, since), diff))
@@ -329,20 +392,13 @@ impl<'a> Transaction<'a> {
 
     /// Returns the most recent timestamp at which sealed entries can be read.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn peek_timestamp<K, V>(
-        &self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Timestamp, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let (since, upper) = try_join(self.since(collection.id), self.upper(collection.id)).await?;
+    pub async fn peek_timestamp_id(&self, id: Id) -> Result<Timestamp, StashError> {
+        let (since, upper) = try_join(self.since(id), self.upper(id)).await?;
         if PartialOrder::less_equal(&upper, &since) {
             return Err(StashError {
                 inner: InternalStashError::PeekSinceUpper(format!(
                     "collection {} since {} is not less than upper {}",
-                    collection.id,
+                    id,
                     AntichainFormatter(&since),
                     AntichainFormatter(&upper)
                 )),
@@ -355,6 +411,19 @@ impl<'a> Transaction<'a> {
             },
             None => Ok(Timestamp::MAX),
         }
+    }
+
+    /// Returns the most recent timestamp at which sealed entries can be read.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn peek_timestamp<K, V>(
+        &self,
+        collection: StashCollection<K, V>,
+    ) -> Result<Timestamp, StashError>
+    where
+        K: Data,
+        V: Data,
+    {
+        self.peek_timestamp_id(collection.id).await
     }
 
     /// Returns the current value of sealed entries.
@@ -401,7 +470,7 @@ impl<'a> Transaction<'a> {
         collection: StashCollection<K, V>,
     ) -> Result<BTreeMap<K, V>, StashError>
     where
-        K: Data + std::hash::Hash,
+        K: Data,
         V: Data,
     {
         let rows = self.peek(collection).await?;
@@ -512,7 +581,11 @@ impl<'a> Transaction<'a> {
                                     },
                                 )
                                 .await?;
-                            Ok::<_, StashError>((collection_id, self.since(collection_id).await?))
+                            Ok::<_, StashError>(ConsolidateRequest {
+                                id: collection_id,
+                                since: self.since(collection_id).await?,
+                                done: None,
+                            })
                         },
                     );
                     try_join_all(futures).await
@@ -528,14 +601,28 @@ impl<'a> Transaction<'a> {
 
     /// Like update, but starts a savepoint.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn update_savepoint(
+    pub async fn update_savepoint<K, V>(
         &self,
         collection_id: Id,
-        entries: &[((Value, Value), Timestamp, Diff)],
+        entries: &[((K, V), Timestamp, Diff)],
         upper: Option<Antichain<Timestamp>>,
-    ) -> Result<(), StashError> {
-        self.in_savepoint(|| Box::pin(async { self.update(collection_id, entries, upper).await }))
-            .await
+    ) -> Result<(), StashError>
+    where
+        K: Data,
+        V: Data,
+    {
+        let entries: Vec<_> = entries
+            .into_iter()
+            .map(|((key, val), time, diff)| {
+                let key = key.encode_to_vec();
+                let val = val.encode_to_vec();
+                ((key, val), *time, *diff)
+            })
+            .collect();
+        self.in_savepoint(|| {
+            Box::pin(async { self.update(collection_id, &entries[..], upper).await })
+        })
+        .await
     }
 
     /// Directly add k, v, ts, diff tuples to a collection.`upper` can be `Some`
@@ -549,7 +636,7 @@ impl<'a> Transaction<'a> {
     pub async fn update(
         &self,
         collection_id: Id,
-        entries: &[((Value, Value), Timestamp, Diff)],
+        entries: &[((Vec<u8>, Vec<u8>), Timestamp, Diff)],
         upper: Option<Antichain<Timestamp>>,
     ) -> Result<(), StashError> {
         {
@@ -581,17 +668,38 @@ impl<'a> Transaction<'a> {
             Ok(upper)
         };
 
-        let mut args: Vec<&'_ (dyn ToSql + Sync)> = Vec::with_capacity(1 + entries.len() * 4);
-        // All rows use the collection id, so hard code it as the first.
-        args.push(&collection_id);
-        for ((key, value), time, diff) in entries {
-            args.push(key);
-            args.push(value);
-            args.push(time);
-            args.push(diff);
-        }
-        let stmt = self.stmts.update(self.client, entries.len()).await?;
-        let insert_fut = self.client.execute(&stmt, &args).map_err(|err| err.into());
+        let insert_fut = async {
+            let mut entries = entries.iter();
+            loop {
+                let mut args: Vec<&'_ (dyn ToSql + Sync)> = Vec::new();
+                // All rows use the collection id, so hard code it as the first.
+                args.push(&collection_id);
+                let mut batch_size = 0;
+                let mut estimated_json_size = 0;
+                // Accumulate into a batch until the size limit is exceeded or there are no more
+                // entries.
+                while let Some(((key, value), time, diff)) = entries.next() {
+                    estimated_json_size += key.len();
+                    estimated_json_size += value.len();
+                    args.push(key);
+                    args.push(value);
+                    args.push(time);
+                    args.push(diff);
+                    batch_size += 1;
+                    if estimated_json_size > INSERT_BATCH_SPLIT_SIZE {
+                        break;
+                    }
+                    if args.len() > CastFrom::cast_from(MAX_INSERT_ARGUMENTS) {
+                        break;
+                    }
+                }
+                if batch_size == 0 {
+                    return Ok(());
+                }
+                let stmt = self.stmts.update(self.client, batch_size).await?;
+                self.client.execute(&stmt, &args).await?;
+            }
+        };
         try_join(upper_fut, insert_fut).await?;
         Ok(())
     }

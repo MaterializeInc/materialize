@@ -9,7 +9,7 @@ such as TPC-H.
 The `--help` option can be used to show supported options:
 
 ```
-./mzcompose run feature-benchmark --help
+bin/mzcompose --find feature-benchmark run default --help
 ```
 
 To run the default benchmark scenarios:
@@ -47,6 +47,26 @@ To use a specific SIZE for sources, sinks and dataflows:
 ```
 ./mzcompose run default --this-size 2 --other-size 4 ...
 ```
+
+To benchmark specific product features:
+
+```
+./mzcompose run default --this-params="enable_upsert_source_disk=false;upsert_source_disk_default=false" --other-params="..."
+```
+
+Make sure to describe the desired state of any relevant flags exhaustively in order to avoid the unwanted
+interference of any defaults that may be in effect and that can change over time from release to release.
+
+## Running manually in Buildkite
+
+Go to the [Buildkite Nightly Job](https://buildkite.com/materialize/nightlies), click the down arrow button
+at the top right and select `New Build`. Put the **full SHA** of your commit in `Commit` and the name
+of your branch in `Branch` including the Github username you forked with, e.g. `username:branch`.
+Click `Create Build` and wait for the build start, at which point you will
+have the opportunity to select `feature-benchmark` from the list.
+
+If you want to run a specific senario only, click `Options` and put `MZCOMPOSE_SCENARIO=...` in the text box.
+For example, to run all scenarios that are subclasses of `Kafka`, use `MZCOMPOSE_SCENARIO=Kafka`.
 
 # Output
 
@@ -133,6 +153,12 @@ the retry attempts.
 
 Reported performance improvements are not retried to establish reprodicibility, so should be considered flukes if seen in the CI
 output until reliably reproduced locally.
+
+# Measuring memory consumption
+
+If started with `--measure-memory`, the feature benchmark will measure memory consumption and report any regressions.
+
+`docker stats` is used to measure the memory consumption of the entire Materialize container, which includes CRDB.
 
 # Troubleshooting
 
@@ -237,7 +263,7 @@ Available `Action`s:
 * `Lambda(lambda e: e.RestartMz())` - restarts the Mz service
 
 
-## Running the same scenario with multiple times within the same run
+## Running the same scenario multiple times within the same run
 
 It is possible to use the python `parameterized` module to cause the same scenario to be executed multiple times. For example, with different scale factors:
 
@@ -271,7 +297,7 @@ cycles with the benchmark running.
 
 # Bisection
 
-It is possible to use `git bisect` to determine the specific revision when a performance regression occurred
+It is possible to use `git bisect` to determine the specific revision when a performance regression occurred.
 
 ## Running
 
@@ -287,7 +313,7 @@ git bisect run /path/to/bisect.sh
 The `bisect.sh` can be something along the following lines:
 
 ```
-#!/bin/bash
+#!/usr/bin/env bash
 THIS_SHA=$(git rev-parse HEAD)
 GOOD_MZ_VERSION="vX.Y.Z"
 

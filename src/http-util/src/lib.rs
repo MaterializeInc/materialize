@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -79,16 +77,17 @@
 
 use askama::Template;
 use axum::http::status::StatusCode;
+use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse};
-use axum::Json;
-use axum::TypedHeader;
+use axum::{Json, TypedHeader};
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing_subscriber::filter::Targets;
+use tower_http::cors::AllowOrigin;
+use tracing_subscriber::EnvFilter;
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -188,10 +187,10 @@ pub struct DynamicFilterTarget {
 #[allow(clippy::unused_async)]
 pub async fn handle_reload_tracing_filter(
     handle: &TracingHandle,
-    reload: fn(&TracingHandle, Targets) -> Result<(), anyhow::Error>,
+    reload: fn(&TracingHandle, EnvFilter) -> Result<(), anyhow::Error>,
     Json(cfg): Json<DynamicFilterTarget>,
 ) -> impl IntoResponse {
-    match cfg.targets.parse::<Targets>() {
+    match cfg.targets.parse::<EnvFilter>() {
         Ok(targets) => match reload(handle, targets) {
             Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
             Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
@@ -209,4 +208,158 @@ pub async fn handle_tracing() -> impl IntoResponse {
             "current_level_filter": tracing::level_filters::LevelFilter::current().to_string()
         })),
     )
+}
+
+/// Construct a CORS policy to allow origins to query us via HTTP. If any bare
+/// '*' is passed, this allows any origin; otherwise, allows a list of origins,
+/// which can include wildcard subdomains. If the allowed origin starts with a
+/// '*', allow anything from that glob. Otherwise check for an exact match.
+pub fn build_cors_allowed_origin<'a, I>(allowed: I) -> AllowOrigin
+where
+    I: IntoIterator<Item = &'a HeaderValue>,
+{
+    let allowed = allowed.into_iter().cloned().collect::<Vec<HeaderValue>>();
+    if allowed.iter().any(|o| o.as_bytes() == b"*") {
+        AllowOrigin::any()
+    } else {
+        AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
+            for val in &allowed {
+                if (val.as_bytes().starts_with(b"*.")
+                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
+                    || origin == val
+                {
+                    return true;
+                }
+            }
+            false
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN};
+    use http::{HeaderValue, Method, Request, Response};
+    use hyper::Body;
+    use tower::{Service, ServiceBuilder, ServiceExt};
+    use tower_http::cors::CorsLayer;
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_cors() {
+        async fn test_request(cors: &CorsLayer, origin: &HeaderValue) -> Option<HeaderValue> {
+            let mut service = ServiceBuilder::new()
+                .layer(cors)
+                .service_fn(|_| async { Ok::<_, anyhow::Error>(Response::new(Body::empty())) });
+            let request = Request::builder()
+                .header(ORIGIN, origin)
+                .body(Body::empty())
+                .unwrap();
+            let response = service.ready().await.unwrap().call(request).await.unwrap();
+            response.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).cloned()
+        }
+
+        #[derive(Default)]
+        struct TestCase {
+            /// The allowed origins to provide as input.
+            allowed_origins: Vec<HeaderValue>,
+            /// Request origins that are expected to be mirrored back in the
+            /// response.
+            mirrored_origins: Vec<HeaderValue>,
+            /// Request origins that are expected to be allowed via a `*`
+            /// response.
+            wildcard_origins: Vec<HeaderValue>,
+            /// Request origins that are expected to be rejected.
+            invalid_origins: Vec<HeaderValue>,
+        }
+
+        let test_cases = [
+            TestCase {
+                allowed_origins: vec![HeaderValue::from_static("https://example.org")],
+                mirrored_origins: vec![HeaderValue::from_static("https://example.org")],
+                invalid_origins: vec![HeaderValue::from_static("https://wrong.com")],
+                wildcard_origins: vec![],
+            },
+            TestCase {
+                allowed_origins: vec![HeaderValue::from_static("*.example.org")],
+                mirrored_origins: vec![
+                    HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://bar.example.org"),
+                    HeaderValue::from_static("https://baz.bar.foo.example.org"),
+                ],
+                wildcard_origins: vec![],
+                invalid_origins: vec![
+                    HeaderValue::from_static("https://example.org"),
+                    HeaderValue::from_static("https://wrong.com"),
+                ],
+            },
+            TestCase {
+                allowed_origins: vec![
+                    HeaderValue::from_static("*.example.org"),
+                    HeaderValue::from_static("https://other.com"),
+                ],
+                mirrored_origins: vec![
+                    HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://bar.example.org"),
+                    HeaderValue::from_static("https://baz.bar.foo.example.org"),
+                    HeaderValue::from_static("https://other.com"),
+                ],
+                wildcard_origins: vec![],
+                invalid_origins: vec![HeaderValue::from_static("https://example.org")],
+            },
+            TestCase {
+                allowed_origins: vec![HeaderValue::from_static("*")],
+                mirrored_origins: vec![],
+                wildcard_origins: vec![
+                    HeaderValue::from_static("literally"),
+                    HeaderValue::from_static("https://anything.com"),
+                ],
+                invalid_origins: vec![],
+            },
+            TestCase {
+                allowed_origins: vec![
+                    HeaderValue::from_static("*"),
+                    HeaderValue::from_static("https://iwillbeignored.com"),
+                ],
+                mirrored_origins: vec![],
+                wildcard_origins: vec![
+                    HeaderValue::from_static("literally"),
+                    HeaderValue::from_static("https://anything.com"),
+                ],
+                invalid_origins: vec![],
+            },
+        ];
+
+        for test_case in test_cases {
+            let allowed_origins = &test_case.allowed_origins;
+            let cors = CorsLayer::new()
+                .allow_methods([Method::GET])
+                .allow_origin(super::build_cors_allowed_origin(allowed_origins));
+            for valid in &test_case.mirrored_origins {
+                let header = test_request(&cors, valid).await;
+                assert_eq!(
+                    header.as_ref(),
+                    Some(valid),
+                    "origin {valid:?} unexpectedly not mirrored\n\
+                     allowed_origins={allowed_origins:?}",
+                );
+            }
+            for valid in &test_case.wildcard_origins {
+                let header = test_request(&cors, valid).await;
+                assert_eq!(
+                    header.as_ref(),
+                    Some(&HeaderValue::from_static("*")),
+                    "origin {valid:?} unexpectedly not allowed\n\
+                     allowed_origins={allowed_origins:?}",
+                );
+            }
+            for invalid in &test_case.invalid_origins {
+                let header = test_request(&cors, invalid).await;
+                assert_eq!(
+                    header, None,
+                    "origin {invalid:?} unexpectedly not allowed\n\
+                     allowed_origins={allowed_origins:?}",
+                );
+            }
+        }
+    }
 }

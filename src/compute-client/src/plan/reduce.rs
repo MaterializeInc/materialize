@@ -62,19 +62,15 @@
 
 use std::collections::BTreeMap;
 
+use mz_expr::{permutation_for_arrangement, AggregateExpr, AggregateFunc, MirScalarExpr};
+use mz_ore::soft_assert_or_log;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::permutation_for_arrangement;
-use mz_expr::AggregateExpr;
-use mz_expr::AggregateFunc;
-use mz_expr::MirScalarExpr;
-use mz_ore::soft_assert_or_log;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-
-use super::AvailableCollections;
+use crate::plan::{bucketing_of_expected_group_size, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -127,6 +123,19 @@ impl RustType<ProtoReductionType> for ReductionType {
     }
 }
 
+impl TryFrom<&ReducePlan> for ReductionType {
+    type Error = ();
+
+    fn try_from(plan: &ReducePlan) -> Result<Self, Self::Error> {
+        match plan {
+            ReducePlan::Hierarchical(_) => Ok(ReductionType::Hierarchical),
+            ReducePlan::Accumulable(_) => Ok(ReductionType::Accumulable),
+            ReducePlan::Basic(_) => Ok(ReductionType::Basic),
+            _ => Err(()),
+        }
+    }
+}
+
 /// A `ReducePlan` provides a concise description for how we will
 /// execute a given reduce expression.
 ///
@@ -144,9 +153,6 @@ pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
     Distinct,
-    /// Plan for not computing any aggregations, just determining the set of distinct keys. A
-    /// specialization of [ReducePlan::Distinct] maintaining rows not in the output.
-    DistinctNegated,
     /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),
     /// Plan for computing only hierarchical aggregations.
@@ -160,15 +166,15 @@ pub enum ReducePlan {
 }
 
 proptest::prop_compose! {
-    /// `expected_group_size` is a usize, but instead of a uniform distribution,
+    /// `expected_group_size` is a u64, but instead of a uniform distribution,
     /// we want a logarithmic distribution so that we have an even distribution
     /// in the number of layers of buckets that a hierarchical plan would have.
     fn any_group_size()
-        (bits in 0..usize::BITS)
-        (integer in (((1_usize) << bits) - 1)
-            ..(if bits == (usize::BITS - 1){ usize::MAX }
-                else { (1_usize) << (bits + 1) - 1 }))
-    -> usize {
+        (bits in 0..u64::BITS)
+        (integer in (((1_u64) << bits) - 1)
+            ..(if bits == (u64::BITS - 1){ u64::MAX }
+                else { (1_u64) << (bits + 1) - 1 }))
+    -> u64 {
         integer
     }
 }
@@ -210,7 +216,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
         ProtoReducePlan {
             kind: Some(match self {
                 ReducePlan::Distinct => Distinct(()),
-                ReducePlan::DistinctNegated => DistinctNegated(()),
                 ReducePlan::Accumulable(plan) => Accumulable(plan.into_proto()),
                 ReducePlan::Hierarchical(plan) => Hierarchical(plan.into_proto()),
                 ReducePlan::Basic(plan) => Basic(plan.into_proto()),
@@ -226,7 +231,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoReducePlan::kind"))?;
         Ok(match kind {
             Distinct(()) => ReducePlan::Distinct,
-            DistinctNegated(()) => ReducePlan::DistinctNegated,
             Accumulable(plan) => ReducePlan::Accumulable(plan.into_rust()?),
             Hierarchical(plan) => ReducePlan::Hierarchical(plan.into_rust()?),
             Basic(plan) => ReducePlan::Basic(plan.into_rust()?),
@@ -308,6 +312,24 @@ pub enum HierarchicalPlan {
     Bucketed(BucketedPlan),
 }
 
+impl HierarchicalPlan {
+    /// Upgrades from a bucketed plan to a monotonic plan, if necessary,
+    /// and sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        match self {
+            HierarchicalPlan::Bucketed(bucketed) => {
+                // TODO: ideally we would not have the `clone()` but ownership
+                // seems fraught here as we are behind a `&mut self` reference.
+                *self =
+                    HierarchicalPlan::Monotonic(bucketed.clone().into_monotonic(must_consolidate));
+            }
+            HierarchicalPlan::Monotonic(monotonic) => {
+                monotonic.must_consolidate = must_consolidate;
+            }
+        }
+    }
+}
+
 impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
     fn into_proto(&self) -> ProtoHierarchicalPlan {
         use proto_hierarchical_plan::Kind;
@@ -346,6 +368,10 @@ pub struct MonotonicPlan {
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
     /// the input to extract the relevant datums.
     pub skips: Vec<usize>,
+    /// True if the input is logically but not physically monotonic,
+    /// and the operator must first consolidate the inputs to remove
+    /// potential negations.
+    pub must_consolidate: bool,
 }
 
 impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
@@ -353,6 +379,7 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
         ProtoMonotonicPlan {
             aggr_funcs: self.aggr_funcs.into_proto(),
             skips: self.skips.into_proto(),
+            must_consolidate: self.must_consolidate.into_proto(),
         }
     }
 
@@ -360,6 +387,7 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
         Ok(Self {
             aggr_funcs: proto.aggr_funcs.into_rust()?,
             skips: proto.skips.into_rust()?,
+            must_consolidate: proto.must_consolidate.into_rust()?,
         })
     }
 }
@@ -385,6 +413,18 @@ pub struct BucketedPlan {
     /// be decreasing, and ideally, a power of two so that we can easily
     /// distribute values to buckets with `value.hashed() % buckets[layer]`.
     pub buckets: Vec<u64>,
+}
+
+impl BucketedPlan {
+    /// Convert to a monotonic plan, indicate whether the operator must apply
+    /// consolidation to its input.
+    fn into_monotonic(self, must_consolidate: bool) -> MonotonicPlan {
+        MonotonicPlan {
+            aggr_funcs: self.aggr_funcs,
+            skips: self.skips,
+            must_consolidate,
+        }
+    }
 }
 
 impl RustType<ProtoBucketedPlan> for BucketedPlan {
@@ -505,6 +545,16 @@ pub struct CollationPlan {
     pub aggregate_types: Vec<ReductionType>,
 }
 
+impl CollationPlan {
+    /// Upgrades the hierarchical component of the collation plan to monotonic, if necessary,
+    /// and sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        self.hierarchical
+            .as_mut()
+            .map(|plan| plan.as_monotonic(must_consolidate));
+    }
+}
+
 impl RustType<ProtoCollationPlan> for CollationPlan {
     fn into_proto(&self) -> ProtoCollationPlan {
         ProtoCollationPlan {
@@ -533,7 +583,7 @@ impl ReducePlan {
     pub fn create_from(
         aggregates: Vec<AggregateExpr>,
         monotonic: bool,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> Self {
         // If we don't have any aggregations we are just computing a distinct.
         if aggregates.is_empty() {
@@ -596,7 +646,7 @@ impl ReducePlan {
                     assert!(collation.basic.is_none());
                     collation.basic = Some(e);
                 }
-                ReducePlan::Distinct | ReducePlan::DistinctNegated | ReducePlan::Collation(_) => {
+                ReducePlan::Distinct | ReducePlan::Collation(_) => {
                     panic!("Inner reduce plan was unsupported type!")
                 }
             }
@@ -614,7 +664,7 @@ impl ReducePlan {
         typ: ReductionType,
         aggregates_list: Vec<(usize, AggregateExpr)>,
         monotonic: bool,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> Self {
         assert!(
             aggregates_list.len() > 0,
@@ -664,29 +714,14 @@ impl ReducePlan {
                 // to do to get the desired indexes.
                 let skips = convert_indexes_to_skips(indexes);
                 if monotonic {
-                    let monotonic = MonotonicPlan { aggr_funcs, skips };
+                    let monotonic = MonotonicPlan {
+                        aggr_funcs,
+                        skips,
+                        must_consolidate: false,
+                    };
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
                 } else {
-                    let mut buckets = vec![];
-                    let mut current = 16;
-
-                    // Plan for 4B records in the expected case if the user
-                    // didn't specify a group size.
-                    let limit = expected_group_size.unwrap_or(4_000_000_000);
-
-                    // Distribute buckets in powers of 16, so that we can strike
-                    // a balance between how many inputs each layer gets from
-                    // the preceding layer, while also limiting the number of
-                    // layers.
-                    while current < limit {
-                        // TODO(benesch): fix this dangerous use of `as`.
-                        #[allow(clippy::as_conversions)]
-                        buckets.push(current as u64);
-                        current = current.saturating_mul(16);
-                    }
-                    // We need to store the bucket numbers in decreasing order.
-                    buckets.reverse();
-
+                    let buckets = bucketing_of_expected_group_size(expected_group_size);
                     let bucketed = BucketedPlan {
                         aggr_funcs,
                         skips,
@@ -715,16 +750,11 @@ impl ReducePlan {
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
     pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
-        match self {
-            ReducePlan::DistinctNegated => AvailableCollections::new_raw(),
-            _ => {
-                let key = (0..key_arity)
-                    .map(mz_expr::MirScalarExpr::Column)
-                    .collect::<Vec<_>>();
-                let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-                AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
-            }
-        }
+        let key = (0..key_arity)
+            .map(mz_expr::MirScalarExpr::Column)
+            .collect::<Vec<_>>();
+        let (permutation, thinning) = permutation_for_arrangement(&key, arity);
+        AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
     }
 }
 
@@ -800,7 +830,13 @@ impl KeyValPlan {
 ///
 /// This function requires that all of the elements in `indexes` are strictly
 /// increasing.
-/// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
+///
+/// # Examples
+///
+/// ```
+/// use mz_compute_client::plan::reduce::convert_indexes_to_skips;
+/// assert_eq!(convert_indexes_to_skips(vec![3, 6, 10, 15]), [3, 2, 3, 4])
+/// ```
 pub fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
     for i in 1..indexes.len() {
         soft_assert_or_log!(
@@ -884,6 +920,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::ListConcat { .. }
         | AggregateFunc::StringAgg { .. }
         | AggregateFunc::RowNumber { .. }
+        | AggregateFunc::Rank { .. }
         | AggregateFunc::DenseRank { .. }
         | AggregateFunc::LagLead { .. }
         | AggregateFunc::FirstValue { .. }
@@ -893,14 +930,16 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     // This test causes stack overflows if not run with --release,
     // ignore by default.
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);
             assert!(actual.is_ok());

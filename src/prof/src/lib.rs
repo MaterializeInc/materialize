@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -75,7 +73,10 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::{collections::BTreeMap, ffi::c_void, sync::atomic::AtomicBool, time::Instant};
+use std::collections::BTreeMap;
+use std::ffi::c_void;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 pub mod http;
 #[cfg(feature = "jemalloc")]

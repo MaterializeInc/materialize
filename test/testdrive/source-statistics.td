@@ -62,14 +62,24 @@ goofus,gallant
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
+# Adding a select here so that the ingests after this
+# triggers lookup from the upsert state
+> SELECT key, f1, f2 FROM upsert
+key           f1      f2
+------------------------
+fish          fish    1000
+birdmore      geese   56
+mammalmore    moose   2
+
 # Also test a source with multiple sub-sources.
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
 
-# MIN is a sneaky way to `AND` booleans :)
-> SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
+> SELECT s.name,
+  bool_and(u.snapshot_committed),
+  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
@@ -82,7 +92,9 @@ metrics_test_source true 2 2 2 true
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
 # jitter on when metrics are produced for each sub-source.
-> SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0
+> SELECT s.name,
+  bool_and(u.snapshot_committed),
+  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
@@ -102,41 +114,58 @@ users          true      false   true  true  false
 # Note that we always count 9 messages received, but can see as low as 3 updates.
 # This is because there are 3 active keys, as all the messages could be received in 1 second.
 # There could also be up to 11 updates, as updates cause inserts and deletes
-# (5 initial inserts, 2 deletes, and 2 updates).
+# (5 initial inserts, 2 deletes, and 2 updates). In total 3 records should be present in upsert state.
 # We can't control this, so have to accept the range.
 > SELECT
     s.name,
-    MIN(u.snapshot_committed),
+    bool_and(u.snapshot_committed),
     SUM(u.messages_received),
     SUM(u.updates_staged) BETWEEN 3 AND 11,
     SUM(u.updates_committed) BETWEEN 3 AND 11,
-    SUM(u.bytes_received) > 0
+    SUM(u.bytes_received) > 0,
+    SUM(u.envelope_state_bytes) > 0,
+    SUM(u.envelope_state_count)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true
+upsert true 9 true true true true 3
 
 # While we can't control how batching works above, we can ensure that this new, later update
-# causes 1 more messages to received, but 2 updates (1 insert and 1 delete). We use
-# `set-from-sql` to assert this.
+# causes 1 more messages to be received, which is 1 update, a delete.
+# We use `set-from-sql` to assert this. We will also use this to validate that the
+# `envelope_state_bytes` value goes down because of the delete.
 $ set-from-sql var=updates-committed
 SELECT
-    (SUM(u.updates_committed) + 2)::text
+    (SUM(u.updates_committed) + 1)::text
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('upsert')
+
+$ set-from-sql var=state-bytes
+SELECT
+    (SUM(u.envelope_state_bytes))::text
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
-{"key": "mammalmore"} {"f1":"moose2", "f2": 2}
+{"key": "mammalmore"}
 
-> SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
+> SELECT s.name,
+    bool_and(u.snapshot_committed),
+    SUM(u.messages_received),
+    SUM(u.updates_staged),
+    SUM(u.updates_committed),
+    SUM(u.bytes_received) > 0,
+    SUM(u.envelope_state_bytes) < ${state-bytes},
+    SUM(u.envelope_state_count)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 10 "${updates-committed}" "${updates-committed}" true
+upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
 
 > DROP SOURCE upsert

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -77,30 +75,44 @@
 
 //! Integration tests for Materialize server.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::time::Duration;
+use std::net::Ipv4Addr;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use futures::FutureExt;
 use http::StatusCode;
 use itertools::Itertools;
+use mz_environmentd::http::{
+    BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
+};
+use mz_environmentd::WebSocketResponse;
+use mz_ore::cast::CastLossy;
+use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_pgrepr::UInt8;
+use mz_sql::session::user::SYSTEM_USER;
 use reqwest::blocking::Client;
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
+use tempfile::TempDir;
+use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
-use mz_environmentd::WebSocketResponse;
-use mz_ore::retry::Retry;
-use mz_pgrepr::UInt8;
-
 use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
-#[test]
+#[mz_ore::test]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
     let config = util::Config::default()
@@ -174,13 +186,13 @@ fn test_persistence() {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        vec!["u1", "u2", "u3", "u4", "u5", "u6"]
+        vec!["u1", "u2", "u3", "u4", "u5", "u6", "u7"]
     );
 }
 
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
 // unsafe mode.
-#[test]
+#[mz_ore::test]
 fn test_source_sink_size_required() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -189,7 +201,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     // Sources work with an explicit size.
@@ -201,7 +213,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("ALTER SOURCE lg RESET (SIZE)");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     client
@@ -215,7 +227,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     // Sinks work with an explicit size.
@@ -225,12 +237,13 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 }
 
 // Test the POST and WS server endpoints.
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
     // text or binary websocket messages that are the input. Output is
@@ -249,18 +262,28 @@ fn test_http_sql() {
 
     datadriven::walk("tests/testdata/http", |f| {
         let server = util::start_server(util::Config::default()).unwrap();
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
+        let ws_url = server.ws_addr();
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",
             server.inner.http_local_addr()
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        let ws_init = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+
+        // Verify ws_init contains roughly what we expect. This varies (rng secret and version
+        // numbers), so easier to test here instead of in the ws file.
+        assert!(
+            ws_init
+                .iter()
+                .filter(|m| matches!(m, WebSocketResponse::ParameterStatus(_)))
+                .count()
+                > 1
+        );
+        assert!(matches!(
+            ws_init.last(),
+            Some(WebSocketResponse::BackendKeyData(_))
+        ));
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
@@ -319,7 +342,8 @@ fn test_http_sql() {
 }
 
 // Test that the server properly handles cancellation requests.
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_running_query() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -360,11 +384,10 @@ fn test_cancel_long_running_query() {
         .expect("simple query succeeds after cancellation");
 }
 
-// Test that dataflow uninstalls cancelled peeks.
-#[test]
-fn test_cancel_dataflow_removal() {
+fn test_cancellation_cancels_dataflows(query: &str) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -405,7 +428,7 @@ fn test_cancel_dataflow_removal() {
         cancel_token.cancel_query(postgres::NoTls).unwrap();
     });
 
-    match client1.simple_query("SELECT * FROM t AS OF 9223372036854775807") {
+    match client1.simple_query(query) {
         Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
         Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
         Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
@@ -430,7 +453,127 @@ fn test_cancel_dataflow_removal() {
         .unwrap();
 }
 
-#[test]
+// Test that dataflow uninstalls cancelled peeks.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_dataflow_removal() {
+    test_cancellation_cancels_dataflows("SELECT * FROM t AS OF 9223372036854775807");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_long_select() {
+    test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_insert_select() {
+    test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+}
+
+fn test_closing_connection_cancels_dataflows(query: String) {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
+
+    let mut cmd = Command::new("psql");
+    let cmd = cmd
+        .args([
+            // Ignore .psqlrc so that local execution of testdrive isn't
+            // affected by it.
+            "--no-psqlrc",
+            &format!(
+                "postgres://{}:{}/materialize",
+                Ipv4Addr::LOCALHOST,
+                server.inner.sql_local_addr().port()
+            ),
+        ])
+        .stdin(Stdio::piped());
+    tracing::info!("spawning: {cmd:#?}");
+    let mut child = cmd.spawn().expect("failed to spawn psql");
+    let mut stdin = child.stdin.take().expect("failed to open stdin");
+    thread::spawn(move || {
+        use std::io::Write;
+        stdin
+            .write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes())
+            .unwrap();
+        stdin.write_all(query.as_bytes()).unwrap();
+    });
+
+    let spawned_psql = Instant::now();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Wait until we see the expected dataflow.
+    Retry::default()
+        .retry(|_state| {
+            if spawned_psql.elapsed() > Duration::from_secs(30) {
+                panic!("waited too long for psql to send the query");
+            }
+            let count: i64 = client
+                .query_one(
+                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    &[],
+                )
+                .map_err(|_| ())
+                .unwrap()
+                .get(0);
+            if count == 0 {
+                Err(())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
+    let started = Instant::now();
+    if let Some(wait_status) = child.try_wait().expect("wait shouldn't error") {
+        panic!("child should still be running, it exitted with {wait_status}");
+    }
+    child.kill().expect("killing psql child");
+
+    // Expect the dataflows to shut down.
+    Retry::default()
+        .retry(|_state| {
+            if started.elapsed() > Duration::from_secs(30) {
+                // this has to be less than statement timeout
+                panic!("waited too long for dataflow cancellation");
+            }
+            let count: i64 = client
+                .query_one(
+                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    &[],
+                )
+                .map_err(|_| ())
+                .unwrap()
+                .get(0);
+            if count == 0 {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .unwrap();
+    info!(
+        "Took {:#?} until dataflows were cancelled",
+        started.elapsed()
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_closing_connection_for_long_select() {
+    test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_closing_connection_for_insert_select() {
+    test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
+}
+
+#[mz_ore::test]
 fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
     /// timestamp at which the collection occurred. The timestamp of the last
@@ -495,8 +638,6 @@ fn test_storage_usage_collection_interval() {
         row.get::<_, UInt8>("size").0
     }
 
-    mz_ore::test::init_logging();
-
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
     let server = util::start_server(config).unwrap();
@@ -553,7 +694,7 @@ fn test_storage_usage_collection_interval() {
     assert_eq!(after_drop_storage_usage, 0);
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_updates_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(3);
@@ -602,7 +743,8 @@ fn test_storage_usage_updates_between_restarts() {
     }
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18896
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(10);
@@ -611,42 +753,56 @@ fn test_storage_usage_doesnt_update_between_restarts() {
         .data_directory(data_dir.path());
 
     // Wait for initial storage usage collection.
-    let initial_timestamp: f64 = {
+    let initial_timestamp = {
         let server = util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
-            client
+                client
                     .query_one(
-                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;",
+                        "SELECT DISTINCT(EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8) FROM mz_catalog.mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string()).unwrap()
                     .try_get::<_, f64>(0)
                     .map_err(|e| e.to_string())
-        }).unwrap()
+            }).unwrap()
     };
 
     // Another storage usage collection should not be scheduled immediately.
     {
         // Give plenty of time so we don't accidentally do another collection if this test is slow.
-        let storage_usage_collection_interval = Duration::from_secs(60 * 10);
-        let config =
-            config.with_storage_usage_collection_interval(storage_usage_collection_interval);
+        let config = config.with_storage_usage_collection_interval(Duration::from_secs(60 * 1000));
         let server = util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        let updated_timestamp = client
-            .query_one(
-                "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;",
+        let collection_timestamps = client
+            .query(
+                "SELECT DISTINCT(EXTRACT(EPOCH FROM collection_timestamp)::float8) as epoch FROM mz_catalog.mz_storage_usage ORDER BY epoch DESC LIMIT 2;",
                 &[],
-            ).unwrap().get::<_, f64>(0);
+            ).unwrap();
+        match collection_timestamps.len() {
+            0 => panic!("storage usage disappeared"),
+            1 => assert_eq!(initial_timestamp, collection_timestamps[0].get::<_, f64>(0)),
+            // It's possible that after collecting the first usage timestamp but before shutting the
+            // server down, we collect another usage timestamp.
+            2 => {
+                let most_recent_timestamp = collection_timestamps[0].get::<_, f64>(0);
+                let second_most_recent_timestamp = collection_timestamps[1].get::<_, f64>(0);
 
-        assert_eq!(initial_timestamp, updated_timestamp);
+                let actual_collection_interval =
+                    most_recent_timestamp - second_most_recent_timestamp;
+                let expected_collection_interval: f64 =
+                    f64::cast_lossy(storage_usage_collection_interval.as_secs());
+
+                assert!(actual_collection_interval >= expected_collection_interval);
+            }
+            _ => unreachable!("query is limited to 2"),
+        }
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(5));
@@ -669,7 +825,98 @@ fn test_storage_usage_collection_interval_timestamps() {
     }).unwrap();
 }
 
-#[test]
+#[mz_ore::test]
+fn test_old_storage_usage_records_are_reaped_on_restart() {
+    let now = Arc::new(Mutex::new(0));
+    let now_fn = {
+        let timestamp = Arc::clone(&now);
+        NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
+    };
+    let data_dir = tempfile::tempdir().unwrap();
+    let collection_interval = Duration::from_secs(1);
+    let retention_period = Duration::from_millis(1100);
+    let config = util::Config::default()
+        .with_now(now_fn)
+        .with_storage_usage_collection_interval(collection_interval)
+        .with_storage_usage_retention_period(retention_period)
+        .data_directory(data_dir.path());
+
+    let initial_timestamp = {
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        // Create a table with no data, which should have some overhead and therefore some storage usage
+        client
+            .batch_execute("CREATE TABLE usage_test (a int)")
+            .unwrap();
+
+        *now.lock().expect("lock poisoned") +=
+            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
+
+        // Wait for initial storage usage collection, to be sure records are present.
+        let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+            client
+                    .query_one(
+                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        &[],
+                    )
+                    .map_err(|e| e.to_string()).unwrap()
+                    .try_get::<_, i32>(0)
+                    .map_err(|e| e.to_string())
+        }).expect("Could not fetch initial timestamp");
+
+        let initial_server_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%initial_timestamp, %initial_server_usage_records);
+        assert!(
+            initial_server_usage_records >= 1,
+            "No initial server usage records!"
+        );
+
+        initial_timestamp
+    };
+
+    // Push time forward, start a new server, and assert that the previous storage records have been reaped
+    *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
+        .expect("negative timestamps are impossible")
+        + u64::try_from(retention_period.as_millis()).expect("known to fit")
+        + 1;
+
+    {
+        let server = util::start_server(config).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        *now.lock().expect("lock poisoned") +=
+            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
+
+        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+            client
+                .query_one(
+                    "SELECT EXTRACT(EPOCH FROM MIN(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                    &[],
+                )
+                .map_err(|e| e.to_string()).unwrap()
+                .try_get::<_, i32>(0)
+                .map_err(|e| e.to_string())
+        }).expect("Could not fetch initial timestamp");
+
+        info!(%subsequent_initial_timestamp);
+        assert!(
+            subsequent_initial_timestamp > initial_timestamp,
+            "Records were not reaped!"
+        );
+    };
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
@@ -700,7 +947,8 @@ fn test_default_cluster_sizes() {
     assert_eq!(builtin_size, "2");
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -736,13 +984,9 @@ fn test_max_request_size() {
     {
         let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
+        let ws_url = server.ws_addr();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -757,7 +1001,8 @@ fn test_max_request_size() {
     }
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
     let statement_size = statement.bytes().count();
@@ -807,13 +1052,9 @@ fn test_max_statement_batch_size() {
 
     // ws
     {
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
+        let ws_url = server.ws_addr();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.write_message(Message::Text(json.to_string())).unwrap();
@@ -823,17 +1064,577 @@ fn test_max_statement_batch_size() {
         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
         match msg {
             WebSocketResponse::Error(err) => assert!(
-                err.contains("statement batch size cannot exceed"),
+                err.message.contains("statement batch size cannot exceed"),
                 "error should indicate that the statement was too large: {}",
-                err
+                err.message,
             ),
-            msg @ WebSocketResponse::ReadyForQuery(_)
-            | msg @ WebSocketResponse::Notice(_)
-            | msg @ WebSocketResponse::Rows(_)
-            | msg @ WebSocketResponse::Row(_)
-            | msg @ WebSocketResponse::CommandComplete(_) => {
+            msg => {
                 panic!("response should be error: {msg:?}")
             }
         }
     }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_mz_system_user_admin() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+    let mut client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    assert_eq!(
+        "on".to_string(),
+        client
+            .query_one("SHOW is_superuser;", &[])
+            .unwrap()
+            .get::<_, String>(0)
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_passes_options() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // Create our WebSocket.
+    let ws_url = server.ws_addr();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    let options = BTreeMap::from([(
+        "application_name".to_string(),
+        "billion_dollar_idea".to_string(),
+    )]);
+    util::auth_with_ws(&mut ws, options).unwrap();
+
+    // Query to make sure we get back the correct session var, which should be
+    // set from the options map we passed with the auth.
+    let json = "{\"query\":\"SHOW application_name;\"}";
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let starting = read_msg();
+    let col_name = read_msg();
+    let row_val = read_msg();
+
+    if !matches!(starting, WebSocketResponse::CommandStarting(_)) {
+        panic!("wrong message!, {starting:?}");
+    };
+
+    if let WebSocketResponse::Rows(rows) = col_name {
+        assert_eq!(rows, ["application_name"]);
+    } else {
+        panic!("wrong message!, {col_name:?}");
+    };
+
+    if let WebSocketResponse::Row(row) = row_val {
+        let expected = serde_json::Value::String("billion_dollar_idea".to_string());
+        assert_eq!(row, [expected]);
+    } else {
+        panic!("wrong message!, {row_val:?}");
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_notifies_for_bad_options() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // Create our WebSocket.
+    let ws_url = server.ws_addr();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    let options = BTreeMap::from([("bad_var_name".to_string(), "i_do_not_exist".to_string())]);
+    util::auth_with_ws(&mut ws, options).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let notice = read_msg();
+
+    // After startup, we should get a notice that our var name was not set.
+    if let WebSocketResponse::Notice(notice) = notice {
+        let msg = notice.message();
+        assert!(msg.starts_with("startup setting bad_var_name not set"));
+    } else {
+        panic!("wrong message!, {notice:?}");
+    };
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponse<R> {
+    results: Vec<R>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpRows {
+    rows: Vec<Vec<serde_json::Value>>,
+    col_names: Vec<String>,
+    notices: Vec<Notice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Notice {
+    message: String,
+    #[serde(rename = "severity")]
+    _severity: String,
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_http_options_param() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    #[derive(Debug, Serialize)]
+    struct Params {
+        options: String,
+    }
+
+    let make_request = |params| {
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql?{}",
+            server.inner.http_local_addr(),
+            params
+        ))
+        .unwrap();
+
+        let json = r#"{ "query": "SHOW application_name;" }"#;
+        let json: serde_json::Value = serde_json::from_str(json).unwrap();
+        Client::new().post(http_url).json(&json).send().unwrap()
+    };
+
+    //
+    // Happy path, valid and correctly formatted options dictionary.
+    //
+    let options = BTreeMap::from([("application_name", "yet_another_client")]);
+    let options = serde_json::to_string(&options).unwrap();
+    let params = serde_urlencoded::to_string(Params { options }).unwrap();
+
+    let resp = make_request(params);
+    assert!(resp.status().is_success());
+
+    let mut result: HttpResponse<HttpRows> = resp.json().unwrap();
+    assert_eq!(result.results.len(), 1);
+
+    let mut rows = result.results.pop().unwrap();
+    assert!(rows.notices.is_empty());
+
+    let row = rows.rows.pop().unwrap().pop().unwrap();
+    let col = rows.col_names.pop().unwrap();
+
+    assert_eq!(col, "application_name");
+    assert_eq!(row, "yet_another_client");
+
+    //
+    // Malformed options dictionary.
+    //
+    let params = "options=not_a_urlencoded_json_object".to_string();
+    let resp = make_request(params);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    //
+    // Correctly formed options dictionary, but invalid param.
+    //
+    let options = BTreeMap::from([("not_a_session_var", "hmmmm")]);
+    let options = serde_json::to_string(&options).unwrap();
+    let params = serde_urlencoded::to_string(Params { options }).unwrap();
+
+    let resp = make_request(params);
+    assert!(resp.status().is_success());
+
+    let result: HttpResponse<HttpRows> = resp.json().unwrap();
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].notices.len(), 1);
+
+    let notice = &result.results[0].notices[0];
+    assert!(notice
+        .message
+        .contains(r#"startup setting not_a_session_var not set"#));
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_max_connections_on_all_interfaces() {
+    let query = "SELECT 1";
+    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 1")
+        .unwrap();
+
+    let client = server.connect(postgres::NoTls).unwrap();
+
+    let ws_url = server.ws_addr();
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let json = format!("{{\"query\":\"{query}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    {
+        // while postgres client is connected, http connections error out
+        let res = Client::new()
+            .post(http_url.clone())
+            .json(&json)
+            .send()
+            .unwrap();
+        let status = res.status();
+        let text = res.text().expect("no body?");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+    }
+
+    {
+        // while postgres client is connected, websockets can't auth
+        let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
+        let err = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
+        assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
+    }
+
+    tracing::info!("closing postgres client");
+    client.close().unwrap();
+    tracing::info!("closed postgres client");
+
+    tracing::info!("waiting for postgres client to close so that the query goes through");
+    Retry::default().max_tries(10).retry(|_state| {
+            let res = Client::new().post(http_url.clone()).json(&json).send().unwrap();
+            let status = res.status();
+            if status == StatusCode::INTERNAL_SERVER_ERROR {
+                assert_eq!(res.text().expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+                return Err(());
+            }
+            assert_eq!(status, StatusCode::OK);
+            let result: HttpResponse<HttpRows> = res.json().unwrap();
+            assert_eq!(result.results.len(), 1);
+            assert_eq!(result.results[0].rows, vec![vec![1]]);
+            Ok(())
+        }).unwrap();
+
+    tracing::info!("http query succeeded");
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let json = format!("{{\"query\":\"{query}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
+
+    // The specific error isn't forwarded to the client, the connection is just closed.
+    match ws.read_message() {
+        Ok(Message::Text(msg)) => {
+            assert_eq!(
+                msg,
+                r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#
+            );
+            assert_eq!(
+                ws.read_message().unwrap(),
+                Message::Text("{\"type\":\"Rows\",\"payload\":[\"?column?\"]}".to_string())
+            );
+            assert_eq!(
+                ws.read_message().unwrap(),
+                Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
+            );
+            tracing::info!("data: {:?}", ws.read_message().unwrap());
+        }
+        Ok(msg) => panic!("unexpected msg: {msg:?}"),
+        Err(e) => panic!("{e}"),
+    }
+
+    // While the websocket connection is still open, http requests fail
+    let res = Client::new().post(http_url).json(&json).send().unwrap();
+    tracing::info!("res: {:#?}", res);
+    let status = res.status();
+    let text = res.text().expect("no body?");
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_concurrent_id_reuse() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    server.runtime.block_on(async {
+        {
+            let (client, conn) = server.connect_async(postgres::NoTls).await.unwrap();
+            task::spawn(|| "conn await", async {
+                conn.await.unwrap();
+            });
+            client
+                .batch_execute("CREATE TABLE t (a INT);")
+                .await
+                .unwrap();
+        }
+
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
+        let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
+
+        let insert_json = "{\"queries\":[{\"query\":\"INSERT INTO t VALUES (1);\",\"params\":[]}]}";
+        let insert_json: serde_json::Value = serde_json::from_str(insert_json).unwrap();
+
+        // The goal here is to start some connection `B`, after another connection `A` has
+        // terminated, but while connection `A` still has some asynchronous work in flight. Then
+        // connection `A` will terminate it's session after connection `B` has started it's own
+        // session. If they use the same connection ID, then `A` will accidentally tear down `B`'s
+        // state and `B` will panic at any point it tries to access it's state. If they don't use
+        // the same connection ID, then everything will be fine.
+        fail::cfg("async_prepare", "return(true)").unwrap();
+        for i in 0..100 {
+            let http_url = http_url.clone();
+            if i % 2 == 0 {
+                let fut = reqwest::Client::new()
+                    .post(http_url)
+                    .json(&select_json)
+                    .send();
+                let time = tokio::time::sleep(Duration::from_millis(500));
+                futures::select! {
+                    _ = fut.fuse() => {},
+                    _ = time.fuse() => {},
+                }
+            } else {
+                reqwest::Client::new()
+                    .post(http_url)
+                    .json(&insert_json)
+                    .send()
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("SELECT 1").unwrap();
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_leader_promotion() {
+    let tmpdir = TempDir::new().unwrap();
+    let config = util::Config::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path());
+    {
+        // start with a stash with no deploy generation to match current production
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+    }
+    {
+        // propose a deploy generation for the first time
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+
+        // make sure asking about the leader and promoting don't panic
+        let res = Client::new()
+            .get(
+                Url::parse(&format!(
+                    "http://{}/api/leader/status",
+                    server.inner.internal_http_local_addr()
+                ))
+                .unwrap(),
+            )
+            .send()
+            .unwrap();
+        tracing::info!("response: {res:?}");
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "{:?}",
+            res.json::<serde_json::Value>()
+        );
+
+        let res = Client::new()
+            .post(
+                Url::parse(&format!(
+                    "http://{}/api/leader/promote",
+                    server.inner.internal_http_local_addr()
+                ))
+                .unwrap(),
+            )
+            .send()
+            .unwrap();
+        tracing::info!("response: {res:?}");
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "{:?}",
+            res.json::<serde_json::Value>()
+        );
+    }
+    let config = config.with_deploy_generation(Some(2));
+    {
+        // start with different deploy generation, we need acknowledgement before starting sql port
+        let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
+        let config = config
+            .with_deploy_generation(Some(3))
+            .with_waiting_on_leader_promotion(Some(internal_http_addr_tx));
+        thread::scope(|s| {
+            let server_handle = s.spawn(|| util::start_server(config).unwrap());
+
+            let internal_http_addr = internal_http_addr_rx.blocking_recv().unwrap();
+            let status_http_url =
+                Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
+
+            Retry::default()
+                .max_tries(10)
+                .retry(|_state| {
+                    let res = Client::new().get(status_http_url.clone()).send().unwrap();
+                    assert_eq!(res.status(), StatusCode::OK);
+                    let response: LeaderStatusResponse = res.json().unwrap();
+                    assert_ne!(response.status, LeaderStatus::IsLeader);
+                    if response.status == LeaderStatus::ReadyToPromote {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                })
+                .unwrap();
+
+            let promote_http_url =
+                Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
+
+            let res = Client::new().post(promote_http_url.clone()).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: BecomeLeaderResponse = res.json().unwrap();
+            assert_eq!(
+                response,
+                BecomeLeaderResponse {
+                    result: BecomeLeaderResult::Success
+                }
+            );
+
+            let server = server_handle.join().unwrap();
+            let mut client = server.connect(postgres::NoTls).unwrap();
+            client.simple_query("SELECT 1").unwrap();
+
+            // check that we're the leader and promotion doesn't do anything
+            let res = Client::new().get(status_http_url).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: LeaderStatusResponse = res.json().unwrap();
+            assert_eq!(response.status, LeaderStatus::IsLeader);
+
+            let res = Client::new().post(promote_http_url).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: BecomeLeaderResponse = res.json().unwrap();
+            assert_eq!(
+                response,
+                BecomeLeaderResponse {
+                    result: BecomeLeaderResult::Success
+                }
+            );
+        });
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_leader_promotion_always_using_deploy_generation() {
+    let tmpdir = TempDir::new().unwrap();
+    let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
+    let config = util::Config::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path())
+        .with_deploy_generation(Some(2));
+    {
+        // propose a deploy generation for the first time
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+    }
+    {
+        // keep it the same, no need to promote the leader
+        let server = util::start_server(
+            config.with_waiting_on_leader_promotion(Some(internal_http_addr_tx)),
+        )
+        .unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
+
+        let internal_http_addr = internal_http_addr_rx
+            .blocking_recv()
+            .expect("should be populated");
+
+        // check that we're the leader and promotion doesn't do anything
+        let status_http_url =
+            Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
+        let res = Client::new().get(status_http_url).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: LeaderStatusResponse = res.json().unwrap();
+        assert_eq!(response.status, LeaderStatus::IsLeader);
+
+        let promote_http_url =
+            Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
+        let res = Client::new().post(promote_http_url).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: BecomeLeaderResponse = res.json().unwrap();
+        assert_eq!(
+            response,
+            BecomeLeaderResponse {
+                result: BecomeLeaderResult::Success
+            }
+        );
+    }
+}
+
+// Test that websockets observe cancellation.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_ws() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (i INT);").unwrap();
+
+    // Start a thread to perform the cancel while the SUBSCRIBE is running in this thread.
+    let handle = thread::spawn(move || {
+        // Wait for the subscription to start.
+        let conn_id = Retry::default()
+            .retry(|_| {
+                let conn_id: String = client
+                    .query_one(
+                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        &[],
+                    )?
+                    .get(0);
+                Ok::<_, postgres::Error>(conn_id)
+            })
+            .unwrap();
+
+        client
+            .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+            .unwrap();
+    });
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
+
+    loop {
+        let msg = ws.read_message().unwrap();
+        if let Ok(msg) = msg.into_text() {
+            if msg.contains("query canceled") {
+                break;
+            }
+        }
+    }
+    handle.join().unwrap();
 }

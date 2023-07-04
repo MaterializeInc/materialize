@@ -11,7 +11,7 @@ menu:
 
 ## Conceptual framework
 
-Where [clusters](/overview/key-concepts#clusters) represent the logical set of
+Where [clusters](/get-started/key-concepts#clusters) represent the logical set of
 dataflows you want to maintain, cluster replicas are their physical
 counterparts. Cluster replicas are where Materialize actually creates and
 maintains dataflows.
@@ -47,12 +47,24 @@ _replica_name_ | A name for this replica.
 
 {{% replica-options %}}
 
+{{< note >}}
+If you do not specify an availability zone, Materialize will automatically
+assign the availability zone with the least existing replicas for the
+associated cluster to increase the cluster's tolerance to availability zone
+failure.
+
+To check the availability zone associated with each replica in a cluster, use
+the [`mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
+system table.
+{{< /note >}}
+
 ## Details
 
 ### Sizes
 
 Valid `size` options are:
 
+- `3xsmall`
 - `2xsmall`
 - `xsmall`
 - `small`

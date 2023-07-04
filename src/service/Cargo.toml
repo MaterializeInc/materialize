@@ -9,9 +9,9 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
-async-trait = "0.1.59"
-clap = { version = "3.2.20", features = ["env", "derive"] }
-crossbeam-channel = "0.5.6"
+async-trait = "0.1.68"
+clap = { version = "3.2.24", features = ["env", "derive"] }
+crossbeam-channel = "0.5.8"
 futures = "0.3.25"
 http = "0.2.8"
 itertools = "0.10.5"
@@ -26,7 +26,7 @@ os_info = "3.5.1"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 semver = "1.0.16"
 sysinfo = "0.27.2"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = "1.24.2"
 tokio-stream = "0.1.11"
 tonic = "0.8.2"

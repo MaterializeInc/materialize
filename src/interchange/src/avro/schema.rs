@@ -38,22 +38,20 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::ops::Deref;
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use mz_ore::collections::CollectionExt;
-use tracing::warn;
-
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use tracing::warn;
 
-use super::is_null;
+use crate::avro::is_null;
 
 pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
     let schema = serde_json::from_str(schema)?;
@@ -291,16 +289,16 @@ fn validate_schema_2(
     })
 }
 
-pub struct ConfluentAvroResolver<C> {
+pub struct ConfluentAvroResolver {
     reader_schema: Schema,
-    writer_schemas: Option<SchemaCache<C>>,
+    writer_schemas: Option<SchemaCache>,
     confluent_wire_format: bool,
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
+impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
-        ccsr_client: Option<C>,
+        ccsr_client: Option<mz_ccsr::Client>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
@@ -351,7 +349,7 @@ impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
     }
 }
 
-impl<C> fmt::Debug for ConfluentAvroResolver<C> {
+impl fmt::Debug for ConfluentAvroResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ConfluentAvroResolver")
             .field("reader_schema", &self.reader_schema)
@@ -368,13 +366,13 @@ impl<C> fmt::Debug for ConfluentAvroResolver<C> {
 }
 
 #[derive(Debug)]
-struct SchemaCache<C> {
+struct SchemaCache {
     cache: BTreeMap<i32, Result<Schema, AvroError>>,
-    ccsr_client: C,
+    ccsr_client: mz_ccsr::Client,
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> SchemaCache<C> {
-    fn new(ccsr_client: C) -> Result<SchemaCache<C>, anyhow::Error> {
+impl SchemaCache {
+    fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: BTreeMap::new(),
             ccsr_client,

@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_format_json = true
+
 # The expected number of rows in system tables depends on the number of replicas
 $ skip-if
 SELECT ${arg.replicas} > 1;
@@ -73,32 +76,41 @@ mz_system               r1      1
 materialize_public_lg1  linked  1
 materialize_public_lg2  linked  2
 
-# Test that changing a source size results in the cluster being dropped and
-# recreated.
-> ALTER SOURCE lg2 SET (SIZE = '4')
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
-materialize_public_lg2  linked  4
-
 # Test altering the size of a source.
 > ALTER SOURCE lg2 SET (SIZE = '4')
+> SELECT size FROM (SHOW SOURCES) WHERE name = 'lg2'
+4
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  4
 > ALTER SOURCE lg2 RESET (SIZE)
+> SELECT size FROM (SHOW SOURCES) WHERE name = 'lg2'
+\${arg.default-storage-size}
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  ${arg.default-storage-size}
 
+# Create a connection for use in sinks.
+> CREATE CONNECTION kafka_conn
+  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+
 # Test that linked clusters cannot be dropped, nor can their replicas be
-# dropped, nor can new replicas be created, nor can they run queries.
+# dropped, nor can new replicas be created, nor can they run queries,
+# nor can new sources be scheduled on them.
 ! DROP CLUSTER materialize_public_lg2 CASCADE
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! DROP CLUSTER REPLICA materialize_public_lg2.linked
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE CLUSTER REPLICA materialize_public_lg2.new SIZE 'small'
 contains:cannot create more than one replica of a cluster containing sources or sinks
-! CREATE MATERIALIZED VIEW v IN CLUSTER materialize_public_lg2 AS SELECT 1
+! CREATE MATERIALIZED VIEW w IN CLUSTER materialize_public_lg2 AS SELECT 1
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE INDEX IN CLUSTER materialize_public_lg2 ON v (a)
 contains:cannot modify linked cluster "materialize_public_lg2"
+! CREATE SOURCE lg_bad IN CLUSTER "materialize_public_lg1" FROM LOAD GENERATOR COUNTER
+contains:cannot modify linked cluster "materialize_public_lg1"
+! CREATE SINK snk_bad IN CLUSTER "materialize_public_lg1" FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-bad-${testdrive.seed}')
+  FORMAT JSON ENVELOPE DEBEZIUM
+contains:cannot modify linked cluster "materialize_public_lg1"
 > SET cluster = materialize_public_lg2
 ! SELECT 1
 contains:cannot execute queries on cluster containing sources or sinks
@@ -120,10 +132,6 @@ mz_system
 default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
-
-# Create a connection for use in sinks.
-> CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 # Test that creating a sink without an explicit size creates a linked cluster
 # with the default size. (Unsafe mode only.)
@@ -178,17 +186,15 @@ mz_system                r1      1
 materialize_public_snk1  linked  1
 materialize_public_snk2  linked  2
 
-# Test that changing a sink size results in the cluster being dropped and
-# recreated.
-> ALTER SINK snk2 SET (SIZE = '4')
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
-materialize_public_snk2  linked  4
-
 # Test altering the size of a sink.
 > ALTER SINK snk2 SET (SIZE = '4')
+> SELECT size FROM (SHOW SINKS) WHERE name = 'snk2'
+4
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
 materialize_public_snk2  linked  4
 > ALTER SINK snk2 RESET (SIZE)
+> SELECT size FROM (SHOW SINKS) WHERE name = 'snk2'
+\${arg.default-storage-size}
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
 materialize_public_snk2  linked  ${arg.default-storage-size}
 

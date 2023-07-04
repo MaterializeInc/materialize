@@ -51,8 +51,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -112,8 +110,7 @@
 /// It also requires that the `mz-avro` crate be linked under its default name.
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::parse_macro_input;
-use syn::ItemStruct;
+use syn::{parse_macro_input, ItemStruct};
 
 #[proc_macro_derive(AvroDecodable, attributes(decoder_factory, state_type, state_expr))]
 pub fn derive_decodeable(item: TokenStream) -> TokenStream {

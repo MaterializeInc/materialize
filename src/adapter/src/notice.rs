@@ -10,13 +10,15 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-
 use mz_controller::clusters::ClusterStatus;
+use mz_orchestrator::{NotReadyReason, ServiceStatus};
 use mz_ore::str::StrExt;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
-
-use crate::session::vars::IsolationLevel;
+use mz_sql::catalog::ErrorMessageObjectDescription;
+use mz_sql::plan::PlanNotice;
+use mz_sql::session::vars::IsolationLevel;
 
 /// Notices that can occur in the adapter layer.
 ///
@@ -42,6 +44,9 @@ pub enum AdapterNotice {
     },
     ClusterDoesNotExist {
         name: String,
+    },
+    NoResolvableSearchPathSchema {
+        search_path: Vec<String>,
     },
     ExistingTransactionInProgress,
     ExplicitTransactionControlInImplicitTransaction,
@@ -75,12 +80,41 @@ pub enum AdapterNotice {
     DroppedSubscribe {
         dropped_name: String,
     },
+    BadStartupSetting {
+        name: String,
+        reason: String,
+    },
+    RbacSystemDisabled,
+    RbacUserDisabled,
+    RoleMembershipAlreadyExists {
+        role_name: String,
+        member_name: String,
+    },
+    RoleMembershipDoesNotExists {
+        role_name: String,
+        member_name: String,
+    },
+    AutoRunOnIntrospectionCluster,
+    AlterIndexOwner {
+        name: String,
+    },
+    CannotRevoke {
+        object_description: ErrorMessageObjectDescription,
+    },
+    NonApplicablePrivilegeTypes {
+        non_applicable_privileges: AclMode,
+        object_description: ErrorMessageObjectDescription,
+    },
+    PlanNotice(PlanNotice),
 }
 
 impl AdapterNotice {
     /// Reports additional details about the notice, if any are available.
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            AdapterNotice::PlanNotice(notice) => notice.detail(),
+            _ => None,
+        }
     }
 
     /// Reports a hint for the user about how the notice could be addressed.
@@ -88,9 +122,19 @@ impl AdapterNotice {
         match self {
             AdapterNotice::DatabaseDoesNotExist { name: _ } => Some("Create the database with CREATE DATABASE or pick an extant database with SET DATABASE = name. List available databases with SHOW DATABASES.".into()),
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
+            AdapterNotice::NoResolvableSearchPathSchema { search_path: _ } => Some("Create a schema with CREATE SCHEMA or pick an extant schema with SET SCHEMA = name. List available schemas with SHOW SCHEMAS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
-            AdapterNotice::ClusterReplicaStatusChanged { status, .. } if *status == ClusterStatus::NotReady => Some("The cluster replica may be restarting or going offline.".into()),
+            AdapterNotice::ClusterReplicaStatusChanged { status, .. } => {
+                match status {
+                    ServiceStatus::NotReady(None) => Some("The cluster replica may be restarting or going offline.".into()),
+                    ServiceStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("The cluster replica may have run out of memory and been killed.".into()),
+                    ServiceStatus::Ready => None,
+                }
+            },
+            AdapterNotice::RbacSystemDisabled => Some("To enable RBAC please reach out to support with a request to turn RBAC on.".into()),
+            AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
+            AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
             _ => None
         }
     }
@@ -116,6 +160,13 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::ClusterDoesNotExist { name } => {
                 write!(f, "cluster {} does not exist", name.quoted())
+            }
+            AdapterNotice::NoResolvableSearchPathSchema { search_path } => {
+                write!(
+                    f,
+                    "no schema on the search path exists: {}",
+                    search_path.join(", ")
+                )
             }
             AdapterNotice::ExistingTransactionInProgress => {
                 write!(f, "there is already a transaction in progress")
@@ -172,6 +223,65 @@ impl fmt::Display for AdapterNotice {
                 "subscribe has been terminated because underlying relation {dropped_name} was dropped"
                 )
             }
+            AdapterNotice::BadStartupSetting { name, reason } => {
+                write!(f, "startup setting {name} not set: {reason}")
+            }
+            AdapterNotice::RbacSystemDisabled => {
+                write!(
+                    f,
+                    "RBAC is disabled so no role attributes or object ownership will be considered \
+                    when executing statements"
+                )
+            }
+            AdapterNotice::RbacUserDisabled => {
+                write!(
+                    f,
+                    "RBAC is disabled so no role attributes or object ownership will be considered \
+                    when executing statements"
+                )
+            }
+            AdapterNotice::RoleMembershipAlreadyExists {
+                role_name,
+                member_name,
+            } => write!(
+                f,
+                "role \"{member_name}\" is already a member of role \"{role_name}\""
+            ),
+            AdapterNotice::RoleMembershipDoesNotExists {
+                role_name,
+                member_name,
+            } => write!(
+                f,
+                "role \"{member_name}\" is not a member of role \"{role_name}\""
+            ),
+            AdapterNotice::AutoRunOnIntrospectionCluster => write!(
+                f,
+                "query was automatically run on the \"mz_introspection\" cluster"
+            ),
+            AdapterNotice::AlterIndexOwner { name } => {
+                write!(f, "cannot change owner of {}", name.quoted())
+            }
+            AdapterNotice::CannotRevoke { object_description } => {
+                write!(f, "no privileges could be revoked for {object_description}")
+            }
+            AdapterNotice::NonApplicablePrivilegeTypes {
+                non_applicable_privileges,
+                object_description,
+            } => {
+                write!(
+                    f,
+                    "non-applicable privilege types {} for {}",
+                    non_applicable_privileges.to_error_string(),
+                    object_description,
+                )
+            }
+            AdapterNotice::PlanNotice(plan) => plan.fmt(f),
         }
+    }
+}
+
+impl From<PlanNotice> for AdapterNotice {
+    fn from(notice: PlanNotice) -> AdapterNotice {
+        AdapterNotice::PlanNotice(notice)
     }
 }

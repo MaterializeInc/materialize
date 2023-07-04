@@ -11,15 +11,15 @@ use std::mem;
 use std::str::FromStr;
 
 use derivative::Derivative;
+use mz_lowertest::MzReflect;
+use mz_ore::fmt::FormatBuffer;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{Arbitrary, Strategy};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::like_pattern::proto_matcher_impl::ProtoSubpatternVec;
 use crate::scalar::EvalError;
-use mz_lowertest::MzReflect;
-use mz_ore::fmt::FormatBuffer;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proto_matcher_impl::ProtoSubpatternVec;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 
@@ -353,7 +353,7 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
             match found {
                 None => return false,
                 Some(offset) => {
-                    let end = offset + subpattern.suffix.len();
+                    let mut end = offset + subpattern.suffix.len();
                     if is_match_subpatterns(subpatterns, &text[end..]) {
                         return true;
                     }
@@ -361,7 +361,14 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
                     if offset == 0 {
                         return false;
                     }
-                    found = text[..(end - 1)].rfind(&subpattern.suffix);
+                    // Find the previous valid char byte.
+                    loop {
+                        end -= 1;
+                        if text.is_char_boundary(end) {
+                            break;
+                        }
+                    }
+                    found = text[..end].rfind(&subpattern.suffix);
                 }
             }
         }
@@ -449,7 +456,7 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_pattern() {
         struct TestCase<'a> {
             pattern: &'a str,
@@ -517,7 +524,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_escape_too_long() {
         match EscapeBehavior::from_str("foo") {
             Err(EvalError::LikeEscapeTooLong) => {}
@@ -527,7 +534,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_like() {
         struct Input<'a> {
             haystack: &'a str,

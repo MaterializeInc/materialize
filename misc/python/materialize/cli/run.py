@@ -14,18 +14,31 @@ import os
 import shutil
 import signal
 import sys
+import tempfile
 import uuid
 from urllib.parse import urlparse
 
 import psutil
 
-from materialize import ROOT, spawn, ui
+from materialize import ROOT, rustc_flags, spawn, ui
 from materialize.ui import UIError
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["clusterd"]
 
-DEFAULT_POSTGRES = f"postgres://root@localhost:26257/materialize"
+DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
+
+# sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
+MACOS_ENTITLEMENTS_DATA = """
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+    <dict>
+        <key>com.apple.security.get-task-allow</key>
+        <true/>
+    </dict>
+</plist>
+"""
 
 
 def main() -> int:
@@ -96,6 +109,17 @@ def main() -> int:
         help="Only build, don't run",
         action="store_true",
     )
+    parser.add_argument(
+        "--disable-mac-codesigning",
+        help="Disables the limited codesigning we do on macOS to support Instruments",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--coverage",
+        help="Build with coverage",
+        default=False,
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -113,6 +137,15 @@ def main() -> int:
             path = ROOT / "target" / "release" / args.program
         else:
             path = ROOT / "target" / "debug" / args.program
+
+        if args.disable_mac_codesigning:
+            if sys.platform != "darwin":
+                print("Ignoring --disable-mac-codesigning since we're not on macOS")
+            else:
+                print("Disabled macOS Codesigning")
+        elif sys.platform == "darwin":
+            _macos_codesign(path)
+
         command = [str(path)]
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
@@ -153,16 +186,17 @@ def main() -> int:
                 # Setting the listen addresses below to 0.0.0.0 is required
                 # to allow Prometheus running in Docker (misc/prometheus)
                 # access these services to scrape metrics.
-                f"--internal-http-listen-addr=0.0.0.0:6878",
-                f"--orchestrator=process",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={mzdata}/secrets",
-                f"--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
+                "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
                 f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
+                "--bootstrap-role=materialize",
                 *args.args,
             ]
         elif args.program == "sqllogictest":
@@ -235,6 +269,10 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     if args.tokio_console:
         features += ["tokio-console"]
         env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
+    if args.coverage:
+        env["RUSTFLAGS"] = (
+            env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
+        )
     if args.features:
         features.extend(args.features.split(","))
     if features:
@@ -243,6 +281,22 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
         command += ["--bin", program]
     completed_proc = spawn.runv(command, env=env)
     return completed_proc.returncode
+
+
+def _macos_codesign(path: str) -> None:
+    env = dict(os.environ)
+    command = ["codesign"]
+    command.extend(["-s", "-", "-f", "--entitlements"])
+
+    # write our entitlements file to a temp path
+    temp = tempfile.NamedTemporaryFile()
+    temp.write(bytes(MACOS_ENTITLEMENTS_DATA, "utf-8"))
+    temp.flush()
+
+    command.append(temp.name)
+    command.append(path)
+
+    spawn.runv(command, env=env)
 
 
 def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:

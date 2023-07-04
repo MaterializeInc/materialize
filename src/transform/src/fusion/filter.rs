@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Fuses multiple `Filter` operators into one; deduplicates predicates.
+//! Fuses multiple `Filter` operators into one and canonicalizes predicates.
 //!
 //! If the `Filter` operator is empty, removes it.
 //!
@@ -36,6 +36,7 @@
 //! use mz_transform::{Transform, TransformArgs};
 //! Filter.transform(&mut expr, TransformArgs {
 //!   indexes: &mz_transform::EmptyIndexOracle,
+//!   global_id: None,
 //! });
 //!
 //! let correct = input.filter(vec![predicate0]);
@@ -43,9 +44,10 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformArgs;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]

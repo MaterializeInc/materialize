@@ -7,7 +7,9 @@ menu:
 
 ---
 
-`DROP CONNECTION` removes a connection from Materialize. If there are sources depending on the connection, you must explicitly drop them first, or use the `CASCADE` option.
+`DROP CONNECTION` removes a connection from Materialize. If there are sources
+depending on the connection, you must explicitly drop them first, or use the
+`CASCADE` option.
 
 ## Syntax
 
@@ -58,3 +60,4 @@ DROP CONNECTION kafka_connection CASCADE;
 ## Related pages
 
 - [`SHOW CONNECTIONS`](../show-connections)
+- [DROP OWNED](../drop-owned)

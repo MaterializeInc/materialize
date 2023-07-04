@@ -10,14 +10,13 @@
 //! Types and traits related to the *decoding* of data for sources.
 
 use anyhow::Context;
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_interchange::{avro, protobuf};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::types::connections::CsrConnection;
 
@@ -137,6 +136,7 @@ pub enum DataEncodingInner {
     Csv(CsvEncoding),
     Regex(RegexEncoding),
     Bytes,
+    Json,
     Text,
     RowCodec(RelationDesc),
 }
@@ -153,6 +153,7 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
                 DataEncodingInner::Bytes => Kind::Bytes(()),
                 DataEncodingInner::Text => Kind::Text(()),
                 DataEncodingInner::RowCodec(e) => Kind::RowCodec(e.into_proto()),
+                DataEncodingInner::Json => Kind::Json(()),
             }),
         }
     }
@@ -170,6 +171,7 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
             Kind::Bytes(()) => DataEncodingInner::Bytes,
             Kind::Text(()) => DataEncodingInner::Text,
             Kind::RowCodec(e) => DataEncodingInner::RowCodec(e.into_rust()?),
+            Kind::Json(()) => DataEncodingInner::Json,
         })
     }
 }
@@ -224,6 +226,9 @@ impl DataEncoding {
             DataEncodingInner::Bytes => {
                 RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
             }
+            DataEncodingInner::Json => {
+                RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
+            }
             DataEncodingInner::Avro(AvroEncoding { schema, .. }) => {
                 let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
                 avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
@@ -255,11 +260,9 @@ impl DataEncoding {
                     desc.with_column(name, ty)
                 }),
             DataEncodingInner::Csv(CsvEncoding { columns, .. }) => match columns {
-                ColumnSpec::Count(n) => {
-                    (1..=*n).into_iter().fold(RelationDesc::empty(), |desc, i| {
-                        desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
-                    })
-                }
+                ColumnSpec::Count(n) => (1..=*n).fold(RelationDesc::empty(), |desc, i| {
+                    desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
+                }),
                 ColumnSpec::Header { names } => names
                     .iter()
                     .map(|s| &**s)
@@ -286,6 +289,7 @@ impl DataEncoding {
     pub fn op_name(&self) -> &'static str {
         match &self.inner {
             DataEncodingInner::Bytes => "Bytes",
+            DataEncodingInner::Json => "Json",
             DataEncodingInner::Avro(_) => "Avro",
             DataEncodingInner::Protobuf(_) => "Protobuf",
             DataEncodingInner::Regex { .. } => "Regex",

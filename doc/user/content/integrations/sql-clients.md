@@ -8,11 +8,14 @@ aliases:
 menu:
   main:
     parent: "integrations"
-    weight: 5
+    weight: 10
     name: "SQL clients"
 ---
 
-Materialize is **wire-compatible** with PostgreSQL, which means it integrates with most SQL clients that support PostgreSQL (see [Tools and Integrations](/integrations/#sql-clients)). In this guide, we’ll cover how to connect to your Materialize region using common SQL clients.
+Materialize is **wire-compatible** with PostgreSQL, which means it integrates
+with many SQL clients that support PostgreSQL (see [Tools and Integrations](/integrations/#sql-clients)).
+In this guide, we’ll cover how to connect to your Materialize region using
+common SQL clients.
 
 ## `psql`
 

@@ -33,7 +33,7 @@ impl Coordinator {
         instance: ComputeInstanceId,
     ) -> ComputeInstanceIndexOracle<mz_repr::Timestamp> {
         ComputeInstanceIndexOracle {
-            catalog: self.catalog.state(),
+            catalog: self.catalog().state(),
             compute: self
                 .controller
                 .compute

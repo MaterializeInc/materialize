@@ -1,0 +1,274 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# Verify initial roles.
+query TTB
+SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%'
+----
+s1 mz_system true
+s2 mz_introspection true
+
+query TB
+SELECT name, inherit FROM mz_roles WHERE id LIKE 'u%'
+----
+materialize  true
+
+# Give materialize the CREATEROLE attribute.
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO materialize
+----
+COMPLETE 0
+
+statement error non inherit roles not yet supported
+CREATE ROLE foo NOINHERIT
+
+statement error LOGIN attribute is not supported, for more information consult the documentation at
+CREATE ROLE foo LOGIN
+
+statement error SUPERUSER attribute is not supported, for more information consult the documentation at
+CREATE ROLE foo SUPERUSER
+
+statement error conflicting or redundant options
+CREATE ROLE foo INHERIT INHERIT
+
+statement error CREATEDB attribute is not supported
+CREATE ROLE foo CREATEDB
+
+statement error CREATEROLE attribute is not supported
+CREATE ROLE foo CREATEROLE
+
+statement error CREATECLUSTER attribute is not supported
+CREATE ROLE foo CREATECLUSTER
+
+# Create role and verify its existence.
+statement ok
+CREATE ROLE rj
+
+statement error CREATE USER is not supported, for more information consult the documentation at
+CREATE USER fms
+
+query TB
+SELECT name, inherit FROM mz_roles
+----
+rj  true
+mz_system  true
+materialize  true
+mz_introspection  true
+
+# Dropping multiple roles should not have any effect if one of the role names
+# is bad...
+statement error unknown role 'bad'
+DROP ROLE rj, bad
+
+query T
+SELECT name FROM mz_roles
+----
+rj
+mz_system
+materialize
+mz_introspection
+
+# ...unless IF EXISTS is specified.
+statement ok
+DROP ROLE IF EXISTS rj, bad
+
+query T
+SELECT name FROM mz_roles
+----
+mz_system
+materialize
+mz_introspection
+
+# Verify that the single name version of DROP ROLE works too.
+statement ok
+CREATE ROLE nlb
+
+query T
+SELECT name FROM mz_roles
+----
+nlb
+mz_system
+materialize
+mz_introspection
+
+statement ok
+DROP ROLE nlb
+
+query T
+SELECT name FROM mz_roles
+----
+mz_system
+materialize
+mz_introspection
+
+statement ok
+DROP ROLE IF EXISTS nlb
+
+# No dropping the current role.
+statement error current role cannot be dropped
+DROP ROLE materialize
+
+# No creating roles that already exist.
+statement error role 'materialize' already exists
+CREATE ROLE materialize
+
+# No creating roles that look like system roles.
+statement error role name "mz_system" is reserved
+CREATE ROLE mz_system
+
+statement error role name "mz_foo" is reserved
+CREATE ROLE mz_foo
+
+# Create role
+statement ok
+CREATE ROLE foo
+
+query TB
+SELECT name, inherit FROM mz_roles WHERE name = 'foo'
+----
+foo true
+
+statement error non inherit roles not yet supported
+ALTER ROLE foo NOINHERIT
+
+statement error role name "mz_system" is reserved
+ALTER ROLE mz_system INHERIT
+
+statement error conflicting or redundant options
+ALTER ROLE foo INHERIT INHERIT
+
+statement error CREATEDB attribute is not supported
+ALTER ROLE foo CREATEDB
+
+statement error CREATEROLE attribute is not supported
+ALTER ROLE foo CREATEROLE
+
+statement error CREATECLUSTER attribute is not supported
+ALTER ROLE foo CREATECLUSTER
+
+# Prevent creating, dropping, and altering PUBLIC role
+
+statement error role name "public" is reserved
+CREATE ROLE puBLic
+
+statement error role name "public" is reserved
+DROP ROLE PUBLIC
+
+statement error role name "public" is reserved
+ALTER ROLE public INHERIT
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+CREATE ROLE bad
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+GRANT foo TO foo
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+REVOKE foo FROM foo
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+DROP ROLE bad
+
+statement ok
+ROLLBACK
+
+query T
+SELECT pg_get_userbyid((SELECT oid FROM mz_roles WHERE name = 'materialize'))
+----
+materialize
+
+query T
+SELECT pg_get_userbyid((SELECT oid FROM mz_roles WHERE name = 'foo'))
+----
+foo
+
+query T
+SELECT pg_get_userbyid(NULL)
+----
+NULL
+
+query T
+SELECT pg_get_userbyid(4294967295);
+----
+ unknown (OID=4294967295)
+
+# Test concurrently dropped role
+
+simple conn=foo,user=foo
+SELECT current_user();
+----
+foo
+COMPLETE 1
+
+statement ok
+DROP ROLE foo
+
+simple conn=foo,user=foo
+SELECT current_user();
+----
+db error: ERROR: role u4 was concurrently dropped
+DETAIL: Please disconnect and re-connect with a valid role.
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER mz_system CASCADE;
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER mz_introspection CASCADE;
+----
+db error: ERROR: system cluster 'mz_introspection' cannot be modified
+
+simple conn=mz_system,user=mz_system
+SET CLUSTER TO mz_introspection
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+----
+db error: ERROR: system cluster 'mz_introspection' cannot be modified
+
+simple conn=mz_system,user=mz_system
+SET CLUSTER TO mz_system
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
+
+statement error role name "external_foo" is reserved
+CREATE ROLE external_foo

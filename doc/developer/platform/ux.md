@@ -887,8 +887,8 @@ Materialize maintains four correctness guarantees.
    This includes partial orders.*  In practice this means Materialize assigns
    new timestamps to events in sources.  This assignment of new timestamps is called
    reclocking. Once reclocking occurs, it defines a permanent order of events within
-   Materialize. For sources without transactional semantics (basic Kafka streams)
-   Maerialize reclocks the events to reflect the order in which the source emits
+   Materialize. For sources without transactional semantics (basic Kafka streams),
+   Materialize reclocks the events to reflect the order in which the source emits
    each event. For sources that do have transactional semantics (Postgres, Debezium)
    Materialize reclocks events to respect the transactional boundaries.  For partially
    ordered events x and y:

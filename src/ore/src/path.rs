@@ -93,7 +93,7 @@ mod tests {
 
     use super::PathExt;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_clean() {
         // These test cases are imported from the Go standard library.
         for (input, output) in &[

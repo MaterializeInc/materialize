@@ -9,22 +9,30 @@
 
 //! Implementations around supporting the SUBSCRIBE protocol with the dataflow layer
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::iter;
 
-use tokio::sync::mpsc;
-
+use itertools::Itertools;
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_controller::clusters::ClusterId;
+use mz_expr::compare_columns;
+use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_sql::plan::SubscribeOutput;
+use mz_sql::session::user::User;
+use timely::progress::Antichain;
+use tokio::sync::mpsc;
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 
 /// A description of an active subscribe from coord's perspective
+#[derive(Debug)]
 pub struct ActiveSubscribe {
-    /// The type of the session that created the subscribe.
-    pub session_type: &'static str,
+    /// The user of the session that created the subscribe.
+    pub user: User,
     /// The connection id of the session that created the subscribe.
     pub conn_id: ConnectionId,
     /// Channel to send responses to the client.
@@ -33,15 +41,60 @@ pub struct ActiveSubscribe {
     pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
+    /// As of of subscribe
+    pub as_of: Timestamp,
     /// Number of columns in the output.
     pub arity: usize,
     /// The cluster that the subscribe is running on.
     pub cluster_id: ClusterId,
     /// All `GlobalId`s that the subscribe depend on.
     pub depends_on: BTreeSet<GlobalId>,
+    /// The time when the subscribe was started.
+    pub start_time: EpochMillis,
+    /// Whether we are already in the process of dropping the resources related to this subscribe.
+    pub dropping: bool,
+    /// How to modify output
+    pub output: SubscribeOutput,
 }
 
 impl ActiveSubscribe {
+    pub(crate) fn initialize(&self) {
+        // Always emit progress message indicating snapshot timestamp.
+        self.send_progress_message(&Antichain::from_elem(self.as_of));
+    }
+
+    fn send_progress_message(&self, upper: &Antichain<Timestamp>) {
+        if !self.emit_progress {
+            return;
+        }
+        if let Some(upper) = upper.as_option() {
+            let mut row_buf = Row::default();
+            let mut packer = row_buf.packer();
+            packer.push(Datum::from(numeric::Numeric::from(*upper)));
+            packer.push(Datum::True);
+
+            // Fill in the mz_diff or mz_state column
+            packer.push(Datum::Null);
+
+            // Fill all table columns with NULL.
+            for _ in 0..self.arity {
+                packer.push(Datum::Null);
+            }
+
+            if let SubscribeOutput::EnvelopeDebezium { order_by_keys } = &self.output {
+                for _ in 0..(self.arity - order_by_keys.len()) {
+                    packer.push(Datum::Null);
+                }
+            }
+
+            let result = self.channel.send(PeekResponseUnary::Rows(vec![row_buf]));
+            if result.is_err() {
+                // TODO(benesch): we should actually drop the sink if the
+                // receiver has gone away. E.g. form a DROP SINK command?
+            }
+        }
+    }
+
     /// Process a subscribe response
     ///
     /// Returns `true` if the sink should be removed.
@@ -57,12 +110,163 @@ impl ActiveSubscribe {
                     Ok(mut rows) => {
                         // Sort results by time. We use stable sort here because it will produce deterministic
                         // results since the cursor will always produce rows in the same order.
-                        // TODO: Is sorting necessary?
-                        rows.sort_by_key(|(time, _, _)| *time);
+                        // Compute doesn't guarantee that the results are sorted (#18936)
+                        match &self.output {
+                            SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+                                let mut left_datum_vec = mz_repr::DatumVec::new();
+                                let mut right_datum_vec = mz_repr::DatumVec::new();
+                                rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
+                                    left_time.cmp(right_time).then_with(|| {
+                                        let mut left_datums = left_datum_vec.borrow();
+                                        left_datums.extend(&[Datum::Int64(*left_diff)]);
+                                        left_datums.extend(left_row.iter());
+                                        let mut right_datums = right_datum_vec.borrow();
+                                        right_datums.extend(&[Datum::Int64(*right_diff)]);
+                                        right_datums.extend(right_row.iter());
+                                        compare_columns(order_by, &left_datums, &right_datums, || {
+                                            left_row.cmp(right_row).then(left_diff.cmp(right_diff))
+                                        })
+                                    })
+                                });
+                            }
+                            SubscribeOutput::EnvelopeUpsert { order_by_keys }
+                            | SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
+                                let debezium =
+                                    matches!(self.output, SubscribeOutput::EnvelopeDebezium { .. });
+                                let mut left_datum_vec = mz_repr::DatumVec::new();
+                                let mut right_datum_vec = mz_repr::DatumVec::new();
+                                rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
+                                    left_time.cmp(right_time).then_with(|| {
+                                        let left_datums = left_datum_vec.borrow_with(left_row);
+                                        let right_datums = right_datum_vec.borrow_with(right_row);
+                                        compare_columns(order_by_keys, &left_datums, &right_datums, || left_diff.cmp(right_diff))
+                                    })
+                                });
+
+                                let mut new_rows = Vec::new();
+                                let mut it = rows.iter();
+                                let mut datum_vec = mz_repr::DatumVec::new();
+                                let mut old_datum_vec = mz_repr::DatumVec::new();
+                                while let Some(start) = it.next() {
+                                    let group = iter::once(start)
+                                        .chain(it.take_while_ref(|row| {
+                                            let left_datums = left_datum_vec.borrow_with(&start.1);
+                                            let right_datums = right_datum_vec.borrow_with(&row.1);
+                                            start.0 == row.0
+                                                && compare_columns(
+                                                    order_by_keys,
+                                                    &left_datums,
+                                                    &right_datums,
+                                                    || Ordering::Equal,
+                                                ) == Ordering::Equal
+                                        }))
+                                        .collect_vec();
+
+                                    // Four cases:
+                                    // [(key, value, +1)] => ("insert", key, NULL, value)
+                                    // [(key, v1, -1), (key, v2, +1)] => ("upsert", key, v1, v2)
+                                    // [(key, value, -1)] => ("delete", key, value, NULL)
+                                    // everything else => ("key_violation", key, NULL, NULL)
+                                    let value_columns = self.arity - order_by_keys.len();
+                                    let mut packer = row_buf.packer();
+                                    new_rows.push(match &group[..] {
+                                        [(_, row, 1)] => {
+                                            packer.push(if debezium {
+                                                Datum::String("insert")
+                                            } else {
+                                                Datum::String("upsert")
+                                            });
+                                            let datums = datum_vec.borrow_with(row);
+                                            for column_order in order_by_keys {
+                                                packer.push(datums[column_order.column]);
+                                            }
+                                            if debezium {
+                                                for _ in 0..value_columns {
+                                                    packer.push(Datum::Null);
+                                                }
+                                            }
+                                            for idx in 0..self.arity {
+                                                if !order_by_keys.iter().any(|co| co.column == idx)
+                                                {
+                                                    packer.push(datums[idx]);
+                                                }
+                                            }
+                                            (start.0, row_buf.clone(), 0)
+                                        }
+                                        [(_, _, -1)] => {
+                                            packer.push(Datum::String("delete"));
+                                            let datums = datum_vec.borrow_with(&start.1);
+                                            for column_order in order_by_keys {
+                                                packer.push(datums[column_order.column]);
+                                            }
+                                            if debezium {
+                                                for idx in 0..self.arity {
+                                                    if !order_by_keys
+                                                        .iter()
+                                                        .any(|co| co.column == idx)
+                                                    {
+                                                        packer.push(datums[idx]);
+                                                    }
+                                                }
+                                            }
+                                            for _ in 0..self.arity - order_by_keys.len() {
+                                                packer.push(Datum::Null);
+                                            }
+                                            (start.0, row_buf.clone(), 0)
+                                        }
+                                        [(_, old_row, -1), (_, row, 1)] => {
+                                            packer.push(Datum::String("upsert"));
+                                            let datums = datum_vec.borrow_with(row);
+                                            let old_datums = old_datum_vec.borrow_with(old_row);
+
+                                            for column_order in order_by_keys {
+                                                packer.push(datums[column_order.column]);
+                                            }
+                                            if debezium {
+                                                for idx in 0..self.arity {
+                                                    if !order_by_keys
+                                                        .iter()
+                                                        .any(|co| co.column == idx)
+                                                    {
+                                                        packer.push(old_datums[idx]);
+                                                    }
+                                                }
+                                            }
+                                            for idx in 0..self.arity {
+                                                if !order_by_keys.iter().any(|co| co.column == idx)
+                                                {
+                                                    packer.push(datums[idx]);
+                                                }
+                                            }
+                                            (start.0, row_buf.clone(), 0)
+                                        }
+                                        _ => {
+                                            packer.push(Datum::String("key_violation"));
+                                            let datums = datum_vec.borrow_with(&start.1);
+                                            for column_order in order_by_keys {
+                                                packer.push(datums[column_order.column]);
+                                            }
+                                            if debezium {
+                                                for _ in 0..(self.arity - order_by_keys.len()) {
+                                                    packer.push(Datum::Null);
+                                                }
+                                            }
+                                            for _ in 0..(self.arity - order_by_keys.len()) {
+                                                packer.push(Datum::Null);
+                                            }
+                                            (start.0, row_buf.clone(), 0)
+                                        }
+                                    });
+                                }
+                                rows = new_rows;
+                            }
+                            SubscribeOutput::Diffs => rows.sort_by_key(|(time, _, _)| *time),
+                        }
 
                         let rows = rows
                             .into_iter()
                             .map(|(time, row, diff)| {
+                                assert!(self.as_of <= time);
                                 let mut packer = row_buf.packer();
                                 // TODO: Change to MzTimestamp.
                                 packer.push(Datum::from(numeric::Numeric::from(time)));
@@ -75,7 +279,14 @@ impl ActiveSubscribe {
                                     packer.push(Datum::False);
                                 }
 
-                                packer.push(Datum::Int64(diff));
+                                match &self.output {
+                                    SubscribeOutput::EnvelopeUpsert { .. }
+                                    | SubscribeOutput::EnvelopeDebezium { .. } => {}
+                                    SubscribeOutput::Diffs
+                                    | SubscribeOutput::WithinTimestampOrderBy { .. } => {
+                                        packer.push(Datum::Int64(diff));
+                                    }
+                                }
 
                                 packer.extend_by_row(&row);
 
@@ -98,25 +309,11 @@ impl ActiveSubscribe {
                         }
                     }
                 }
-                if self.emit_progress && !upper.is_empty() {
-                    assert_eq!(
-                        upper.len(),
-                        1,
-                        "SUBSCRIBE only supports single-dimensional timestamps"
-                    );
-                    let mut packer = row_buf.packer();
-                    packer.push(Datum::from(numeric::Numeric::from(upper[0])));
-                    packer.push(Datum::True);
-                    // Fill in the diff column and all table columns with NULL.
-                    for _ in 0..(self.arity + 1) {
-                        packer.push(Datum::Null);
-                    }
-
-                    let result = self.channel.send(PeekResponseUnary::Rows(vec![row_buf]));
-                    if result.is_err() {
-                        // TODO(benesch): we should actually drop the sink if the
-                        // receiver has gone away. E.g. form a DROP SINK command?
-                    }
+                // Emit progress message if requested. Don't emit progress for the first batch if the upper
+                // is exactly `as_of` (we're guaranteed it is not less than `as_of`, but it might be exactly
+                // `as_of`) as we've already emitted that progress message in `initialize`.
+                if !upper.less_equal(&self.as_of) {
+                    self.send_progress_message(&upper);
                 }
                 upper.is_empty()
             }

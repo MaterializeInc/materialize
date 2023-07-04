@@ -7,28 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::env;
-use std::fs;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{env, fs};
 
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
-use aws_sdk_kinesis::Client as KinesisClient;
-use aws_sdk_s3::Client as S3Client;
-use aws_sdk_sqs::Client as SqsClient;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_postgres_util::make_tls;
 use mz_stash::StashFactory;
 use once_cell::sync::Lazy;
 use rand::Rng;
@@ -37,31 +37,27 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
-use mz_ore::display::DisplayExt;
-use mz_ore::retry::Retry;
-use mz_ore::task;
-use mz_postgres_util::make_tls;
-
 use crate::error::PosError;
-use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};
+use crate::parser::{
+    validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint,
+};
 use crate::util;
 use crate::util::postgres::postgres_client;
 
 mod file;
 mod http;
 mod kafka;
-mod kinesis;
 mod mysql;
 mod postgres;
 mod protobuf;
 mod psql;
-mod s3;
 mod schema_registry;
 mod set;
 mod skip_if;
 mod sleep;
 mod sql;
 mod sql_server;
+mod version_check;
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -82,6 +78,8 @@ pub struct Config {
     /// If unspecified, testdrive creates a temporary directory with a random
     /// name.
     pub temp_dir: Option<String>,
+    /// Source string to print out on errors.
+    pub source: Option<String>,
     /// The default timeout for cancellable operations.
     pub default_timeout: Duration,
     /// The default number of tries for retriable operations.
@@ -182,12 +180,6 @@ pub struct State {
     // === AWS state. ===
     aws_account: String,
     aws_config: SdkConfig,
-    kinesis_client: KinesisClient,
-    kinesis_stream_names: Vec<String>,
-    s3_client: S3Client,
-    s3_buckets_created: BTreeSet<String>,
-    sqs_client: SqsClient,
-    sqs_queues_created: BTreeSet<String>,
 
     // === Database driver state. ===
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
@@ -313,21 +305,20 @@ impl State {
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
-        for row in self
-            .pgclient
+        for row in inner_client
             .query("SHOW DATABASES", &[])
             .await
             .context("resetting materialize state: SHOW DATABASES")?
         {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
-            sql::print_query(&query);
-            self.pgclient.batch_execute(&query).await.context(format!(
+            sql::print_query(&query, None);
+            inner_client.batch_execute(&query).await.context(format!(
                 "resetting materialize state: DROP DATABASE {}",
                 db_name,
             ))?;
         }
-        self.pgclient
+        inner_client
             .batch_execute("CREATE DATABASE materialize")
             .await
             .context("resetting materialize state: CREATE DATABASE materialize")?;
@@ -335,20 +326,54 @@ impl State {
         // Attempt to remove all users but the current user. Old versions of
         // Materialize did not support roles, so this degrades gracefully if
         // mz_roles does not exist.
-        if let Ok(rows) = self.pgclient.query("SELECT name FROM mz_roles", &[]).await {
+        if let Ok(rows) = inner_client.query("SELECT name FROM mz_roles", &[]).await {
             for row in rows {
                 let role_name: String = row.get(0);
                 if role_name == self.materialize_user || role_name.starts_with("mz_") {
                     continue;
                 }
                 let query = format!("DROP ROLE {}", role_name);
-                sql::print_query(&query);
-                self.pgclient.batch_execute(&query).await.context(format!(
+                sql::print_query(&query, None);
+                inner_client.batch_execute(&query).await.context(format!(
                     "resetting materialize state: DROP ROLE {}",
                     role_name,
                 ))?;
             }
         }
+
+        // Alter materialize user with all system privileges.
+        inner_client
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                self.materialize_user
+            ))
+            .await?;
+
+        // Grant initial privileges.
+        inner_client
+            .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
+            .await?;
+        inner_client
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                self.materialize_user
+            ))
+            .await?;
+        inner_client
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                self.materialize_user
+            ))
+            .await?;
+        inner_client
+            .batch_execute("GRANT USAGE ON CLUSTER default TO PUBLIC")
+            .await?;
+        inner_client
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON CLUSTER default TO {}",
+                self.materialize_user
+            ))
+            .await?;
 
         Ok(())
     }
@@ -436,123 +461,12 @@ impl State {
             bail!(
                 "deleting Kafka topics: {} errors: {}",
                 errors.len(),
-                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
+                errors
+                    .into_iter()
+                    .map(|e| e.to_string_with_causes())
+                    .join("\n")
             );
         }
-    }
-
-    /// Delete the Kinesis streams created for this run of testdrive.
-    pub async fn reset_kinesis(&mut self) -> Result<(), anyhow::Error> {
-        if self.kinesis_stream_names.is_empty() {
-            return Ok(());
-        }
-
-        let mut errors: Vec<anyhow::Error> = Vec::new();
-
-        for stream_name in &self.kinesis_stream_names {
-            if let Err(e) = self
-                .kinesis_client
-                .delete_stream()
-                .enforce_consumer_deletion(true)
-                .stream_name(stream_name)
-                .send()
-                .await
-                .context(format!("deleting Kinesis stream: {}", stream_name))
-            {
-                errors.push(e);
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            bail!(
-                "deleting Kinesis streams: {} errors: {}",
-                errors.len(),
-                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
-            );
-        }
-    }
-
-    /// Delete S3 buckets that were created in this run
-    pub async fn reset_s3(&mut self) -> Result<(), anyhow::Error> {
-        let mut errors: Vec<anyhow::Error> = Vec::new();
-        for bucket in &self.s3_buckets_created {
-            if let Err(e) = self.delete_bucket_objects(bucket.clone()).await {
-                errors.push(e);
-            }
-
-            if let Err(e) = self.s3_client.delete_bucket().bucket(bucket).send().await {
-                errors.push(e.into());
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            bail!(
-                "deleting S3 buckets: {} errors: {}",
-                errors.len(),
-                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
-            );
-        }
-    }
-
-    async fn delete_bucket_objects(&self, bucket: String) -> Result<(), anyhow::Error> {
-        Retry::default()
-            .max_duration(self.default_timeout)
-            .retry_async_canceling(|_| async {
-                // loop until error or response has no continuation token
-                let mut continuation_token = None;
-                loop {
-                    let response = self
-                        .s3_client
-                        .list_objects_v2()
-                        .bucket(&bucket)
-                        .set_continuation_token(continuation_token)
-                        .send()
-                        .await
-                        .with_context(|| format!("listing objects for bucket {}", bucket))?;
-
-                    if let Some(objects) = response.contents {
-                        for obj in objects {
-                            self.s3_client
-                                .delete_object()
-                                .bucket(&bucket)
-                                .key(obj.key.as_ref().unwrap())
-                                .send()
-                                .await
-                                .with_context(|| {
-                                    format!("deleting object {}/{}", bucket, obj.key.unwrap())
-                                })?;
-                        }
-                    }
-
-                    if response.next_continuation_token.is_none() {
-                        return Ok(());
-                    }
-                    continuation_token = response.next_continuation_token;
-                }
-            })
-            .await
-    }
-
-    pub async fn reset_sqs(&self) -> Result<(), anyhow::Error> {
-        Retry::default()
-            .max_duration(self.default_timeout)
-            .retry_async_canceling(|_| async {
-                for queue_url in &self.sqs_queues_created {
-                    self.sqs_client
-                        .delete_queue()
-                        .queue_url(queue_url)
-                        .send()
-                        .await
-                        .with_context(|| format!("Deleting sqs queue: {}", queue_url))?;
-                }
-
-                Ok(())
-            })
-            .await
     }
 }
 
@@ -569,11 +483,26 @@ pub(crate) trait Run {
 #[async_trait]
 impl Run for PosCommand {
     async fn run(self, state: &mut State) -> Result<ControlFlow, PosError> {
+        macro_rules! handle_version {
+            ($version_constraint:expr) => {
+                match $version_constraint {
+                    Some(VersionConstraint { min, max }) => {
+                        match version_check::run_version_check(min, max, state).await {
+                            Ok(true) => return Ok(ControlFlow::Continue),
+                            Ok(false) => {}
+                            Err(err) => return Err(PosError::new(err, self.pos)),
+                        }
+                    }
+                    None => {}
+                }
+            };
+        }
+
         let wrap_err = |e| PosError::new(e, self.pos);
         //         Substitute variables at startup except for the command-specific ones
         // Those will be substituted at runtime
         let ignore_prefix = match &self.command {
-            Command::Builtin(builtin) => Some(builtin.name.clone()),
+            Command::Builtin(builtin, _) => Some(builtin.name.clone()),
             _ => None,
         };
         let subst = |msg: &str, vars: &BTreeMap<String, String>| {
@@ -584,7 +513,8 @@ impl Run for PosCommand {
         };
 
         let r = match self.command {
-            Command::Builtin(mut builtin) => {
+            Command::Builtin(mut builtin, version_constraint) => {
+                handle_version!(version_constraint);
                 for val in builtin.args.values_mut() {
                     *val = subst(val, &state.cmd_vars)?;
                 }
@@ -597,13 +527,10 @@ impl Run for PosCommand {
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
+                    "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
-                    "kinesis-create-stream" => kinesis::run_create_stream(builtin, state).await,
-                    "kinesis-update-shards" => kinesis::run_update_shards(builtin, state).await,
-                    "kinesis-ingest" => kinesis::run_ingest(builtin, state).await,
-                    "kinesis-verify" => kinesis::run_verify(builtin, state).await,
                     "mysql-connect" => mysql::run_connect(builtin, state).await,
                     "mysql-execute" => mysql::run_execute(builtin, state).await,
                     "postgres-connect" => postgres::run_connect(builtin, state).await,
@@ -620,10 +547,6 @@ impl Run for PosCommand {
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
                     "random-sleep" => sleep::run_random_sleep(builtin),
-                    "s3-create-bucket" => s3::run_create_bucket(builtin, state).await,
-                    "s3-put-object" => s3::run_put_object(builtin, state).await,
-                    "s3-delete-objects" => s3::run_delete_object(builtin, state).await,
-                    "s3-add-notifications" => s3::run_add_notifications(builtin, state).await,
                     "set-regex" => set::run_regex_set(builtin, state),
                     "unset-regex" => set::run_regex_unset(builtin, state),
                     "set-sql-timeout" => set::run_sql_timeout(builtin, state),
@@ -647,7 +570,8 @@ impl Run for PosCommand {
                     }
                 }
             }
-            Command::Sql(mut sql) => {
+            Command::Sql(mut sql, version_constraint) => {
+                handle_version!(version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
@@ -658,7 +582,8 @@ impl Run for PosCommand {
                 }
                 sql::run_sql(sql, state).await
             }
-            Command::FailSql(mut sql) => {
+            Command::FailSql(mut sql, version_constraint) => {
+                handle_version!(version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 sql.expected_error = match &sql.expected_error {
                     SqlExpectedError::Contains(s) => {
@@ -775,12 +700,11 @@ pub async fn create_state(
                 .context("setting session parameter")?;
         }
 
-        // Old versions of Materialize did not support `current_user`, so we
-        // fail gracefully.
-        let materialize_user = match pgclient.query_one("SELECT current_user", &[]).await {
-            Ok(row) => row.get(0),
-            Err(_) => "<unknown user>".to_owned(),
-        };
+        let materialize_user = config
+            .materialize_pgconfig
+            .get_user()
+            .expect("testdrive URL must contain user")
+            .to_string();
 
         let materialize_sql_addr = format!(
             "{}:{}",
@@ -870,10 +794,6 @@ pub async fn create_state(
         )
     };
 
-    let kinesis_client = aws_sdk_kinesis::Client::new(&config.aws_config);
-    let s3_client = mz_aws_s3_util::new_client(&config.aws_config);
-    let sqs_client = aws_sdk_sqs::Client::new(&config.aws_config);
-
     let mut state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
@@ -912,12 +832,6 @@ pub async fn create_state(
         // === AWS state. ===
         aws_account: config.aws_account.clone(),
         aws_config: config.aws_config.clone(),
-        kinesis_client,
-        kinesis_stream_names: Vec::new(),
-        s3_client,
-        s3_buckets_created: BTreeSet::new(),
-        sqs_client,
-        sqs_queues_created: BTreeSet::new(),
 
         // === Database driver state. ===
         mysql_clients: BTreeMap::new(),

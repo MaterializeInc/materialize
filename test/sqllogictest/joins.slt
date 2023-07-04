@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_mz_join_core = true;
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE l (la int, lb text)
 
@@ -115,7 +120,7 @@ Explained Query:
     Project (#0, #2, #4) // { arity: 3 }
       Join on=(#1 = (#0 + 1) AND #3 = (#0 + #1)) type=differential // { arity: 5 }
         implementation
-          %1:l1[#0] » %0:l0[(#0 + 1)]KA » %2:l1[#0]KA
+          %0:l0[(#0 + 1)]K » %1:l1[#0]K » %2:l1[#0]K
         ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 2 }
@@ -158,7 +163,7 @@ Explained Query:
     Project (#0, #1) // { arity: 2 }
       Join on=(#0 = #2) type=differential // { arity: 3 }
         implementation
-          %0:l[#0] » %1[#0]UKA
+          %1[#0]UKA » %0:l[#0]K
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get materialize.public.l // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -186,7 +191,7 @@ Explained Query:
     cte l1 =
       CrossJoin type=differential // { arity: 2 }
         implementation
-          %1:l0[×] » %0[×]A
+          %0[×] » %1:l0[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Distinct group_by=[#0] // { arity: 1 }
             Get l0 // { arity: 1 }
@@ -324,7 +329,7 @@ Explained Query:
             Project (#0, #1) // { arity: 2 }
               Join on=(#0 = #2) type=differential // { arity: 3 }
                 implementation
-                  %0:l[#0] » %1[#0]UKA
+                  %1[#0]UKA » %0:l[#0]K
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Get materialize.public.l // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -339,7 +344,7 @@ Explained Query:
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
-            %1:r[#0] » %0:l[#0]KA
+            %0:l[#0]K » %1:r[#0]K
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
@@ -366,7 +371,7 @@ Explained Query:
               Project (#0, #1) // { arity: 2 }
                 Join on=(#0 = #2) type=differential // { arity: 3 }
                   implementation
-                    %0:r[#0] » %1[#0]UKA
+                    %1[#0]UKA » %0:r[#0]K
                   ArrangeBy keys=[[#0]] // { arity: 2 }
                     Get materialize.public.r // { arity: 2 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -381,7 +386,7 @@ Explained Query:
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
-            %1:r[#0] » %0:l[#0]KA
+            %0:l[#0]K » %1:r[#0]K
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
@@ -408,7 +413,7 @@ Explained Query:
               Project (#0, #1) // { arity: 2 }
                 Join on=(#0 = #2) type=differential // { arity: 3 }
                   implementation
-                    %0:r[#0] » %1:l1[#0]UKA
+                    %1:l1[#0]UKA » %0:r[#0]K
                   ArrangeBy keys=[[#0]] // { arity: 2 }
                     Get materialize.public.r // { arity: 2 }
                   Get l1 // { arity: 1 }
@@ -419,7 +424,7 @@ Explained Query:
             Project (#0, #1) // { arity: 2 }
               Join on=(#0 = #2) type=differential // { arity: 3 }
                 implementation
-                  %0:l[#0] » %1:l1[#0]UKA
+                  %1:l1[#0]UKA » %0:l[#0]K
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Get materialize.public.l // { arity: 2 }
                 Get l1 // { arity: 1 }
@@ -436,7 +441,7 @@ Explained Query:
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
-            %1:r[#0] » %0:l[#0]KA
+            %0:l[#0]K » %1:r[#0]K
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               Get materialize.public.l // { arity: 2 }
@@ -463,7 +468,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = m
 Explained Query:
   Join on=((#0 % 2) = (#2 % 2)) type=differential // { arity: 4 }
     implementation
-      %1:r[(#0 % 2)] » %0:l[(#0 % 2)]KA
+      %0:l[(#0 % 2)]K » %1:r[(#0 % 2)]K
     ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
       Filter (#0) IS NOT NULL // { arity: 2 }
         Get materialize.public.l // { arity: 2 }
@@ -521,7 +526,7 @@ Explained Query:
     Project (#0, #1) // { arity: 2 }
       Join on=(#0 = #2) type=differential // { arity: 3 }
         implementation
-          %1[#0] » %0:t4362[#0]KA
+          %0:t4362[#0]K » %1[#0]K
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get materialize.public.t4362 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -592,7 +597,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(#0 = #2) type=differential // { arity: 4 }
       implementation
-        %1:r3[#0] » %0:l3[#0]KA
+        %0:l3[#0]K » %1:r3[#0]K
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Filter (#0) IS NOT NULL // { arity: 2 }
           Get materialize.public.l3 // { arity: 2 }
@@ -620,7 +625,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(#0 = #2) type=differential // { arity: 4 }
       implementation
-        %1:r3[#0] » %0:l3[#0]KA
+        %0:l3[#0]K » %1:r3[#0]K
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.l3 // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -642,7 +647,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(#0 = #2) type=differential // { arity: 4 }
       implementation
-        %1:r3[#0] » %0:l3[#0]KA
+        %0:l3[#0]K » %1:r3[#0]K
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Get materialize.public.l3 // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -724,6 +729,101 @@ statement ok
 INSERT INTO t4 VALUES
     (4, 3),
     (9, 10);
+
+# Test join using aliases
+# Adapted from: https://github.com/postgres/postgres/blob/master/src/test/regress/sql/join.sql
+
+query T
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f2 = 1;
+----
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f1 = 3;
+----
+f1  f2  f2
+3   4   4
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x;
+----
+f1  f2  f2
+3   4   4
+
+query II colnames
+SELECT * FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query II colnames
+SELECT * FROM (SELECT x.f2 AS f3 FROM t1 JOIN t2 USING (f2) AS x) t5 JOIN t3 USING (f3) AS x;
+----
+f3  f1
+4   3
+
+query error table name "x" specified more than once
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS x;
+
+query IIII colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS y;
+----
+f1  f2  f2  f3
+3   4   4   4
+
+query error column "t1.f1" does not exist
+SELECT * FROM (t1 JOIN t2 USING (f1)) AS x WHERE t1.f1 = 1;
+
+query error column "x.f5" does not exist
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE x.f5 = 'one';
+
+query error column "x.f4" does not exist
+SELECT * FROM (t3 JOIN t4 USING (f3) AS x) AS xx WHERE x.f4 = 1;
+
+query error table name "a1" specified more than once
+SELECT * FROM t1 a1 JOIN t2 a2 USING (f1) AS a1
+
+query I colnames
+SELECT x.* FROM t3 JOIN t4 USING (f3) AS x WHERE t3.f3 = 4;
+----
+f3
+4
+
+query II colnames
+SELECT x.* FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query T colnames
+SELECT ROW(x.*) FROM t1 JOIN t2 USING (f1) AS x;
+----
+row
+("(3)")
+
+statement ok
+CREATE VIEW v1 AS SELECT x.* FROM t1 JOIN t2 USING (f1) AS x WHERE x.f1 = 3;
+
+query T colnames
+SELECT * FROM v1;
+----
+f1
+3
+
+# Ensure the output from `SHOW CREATE VIEW` contains a correctly-formed `AS` part
+
+mode standard
+
+query TT
+SHOW CREATE VIEW v1;
+----
+materialize.public.v1
+CREATE VIEW "materialize"."public"."v1" AS SELECT "x".* FROM "materialize"."public"."t1" JOIN "materialize"."public"."t2" USING ("f1") AS "x" WHERE "x"."f1" = 3
+
+mode cockroach
+
+statement ok
+DROP VIEW v1;
+
 
 # Left
 
@@ -1000,3 +1100,136 @@ query II colnames
 SELECT * FROM l NATURAL JOIN l AS a LIMIT 0
 ----
 la  lb
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/17897
+# This query fails if JoinImplementation is not in the same fixpoint loop with LiteralLifting.
+
+statement ok
+CREATE TABLE IF NOT EXISTS a (a boolean, b boolean);
+
+statement ok
+CREATE VIEW IF NOT EXISTS b AS SELECT 2 + 2;
+
+statement ok
+CREATE TABLE IF NOT EXISTS c (data jsonb);
+
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+SELECT (SELECT NULL FROM a) AS c1, ref_0."?column?" AS c4 FROM b AS ref_0
+WHERE EXISTS (SELECT FROM c AS ref_7 WHERE EXISTS (SELECT ref_0."?column?" AS c2)) OR ref_0."?column?" IS NOT NULL;
+----
+Explained Query:
+  Return // { arity: 2 }
+    Map (4) // { arity: 2 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %0[×] » %1[×]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Union // { arity: 0 }
+            Get l0 // { arity: 0 }
+            Negate // { arity: 0 }
+              Get l0 // { arity: 0 }
+            Constant // { arity: 0 }
+              - ()
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l1 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Distinct // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l1 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+  With
+    cte l1 =
+      Union // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Map (null) // { arity: 3 }
+            Get materialize.public.a // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get materialize.public.a // { arity: 2 }
+    cte l0 =
+      Distinct // { arity: 0 }
+        Project () // { arity: 0 }
+          Get materialize.public.c // { arity: 1 }
+
+EOF
+
+# Verify that the fueling logic of the linear join implementation is correct
+# by running a large cross-join that exhausts the avaible fuel (currently
+# 1 million output records) at least once.
+
+statement ok
+CREATE TABLE fuel_test_1 (a int)
+
+statement ok
+CREATE TABLE fuel_test_2 (b int)
+
+statement ok
+INSERT INTO fuel_test_1 SELECT generate_series(1, 2000)
+
+statement ok
+INSERT INTO fuel_test_2 SELECT generate_series(2001, 4000)
+
+query T multiline
+EXPLAIN SELECT sum(a + b) FROM fuel_test_1, fuel_test_2
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 + #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get materialize.public.fuel_test_1
+          ArrangeBy keys=[[]]
+            Get materialize.public.fuel_test_2
+
+EOF
+
+query I
+SELECT sum(a + b) FROM fuel_test_1, fuel_test_2
+----
+16004000000
+
+# Test the code path for producing errors from joins.
+statement ok
+CREATE TABLE error_test (a int)
+
+statement ok
+INSERT INTO error_test VALUES (0)
+
+query error division by zero
+SELECT t1.a / t2.a FROM error_test t1, error_test t2
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/20060
+query
+select
+  from
+    (select
+          ref_4."schema_id" as c0
+        from
+          mz_catalog.mz_default_privileges as ref_4
+        where current_schemas(
+            CAST((select max(atthasdef) from pg_attribute)
+               as bool)) = mz_internal.mz_normalize_object_name(
+            CAST(ref_4."schema_id" as text))
+               ) as subq_7
+  where (select "child_id" from mz_internal.mz_view_foreign_keys limit 1)
+       = subq_7."c0";
+----

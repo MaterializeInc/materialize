@@ -24,27 +24,29 @@
 
 use std::hash::Hash;
 
+use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
+use mz_pgrepr::oid;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::namespaces::{
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA,
+};
+use mz_repr::role_id::RoleId;
+use mz_repr::{RelationDesc, RelationType, ScalarType};
+use mz_sql::catalog::{
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, ObjectType, RoleAttributes,
+    TypeReference,
+};
+use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
-use mz_pgrepr::oid;
-use mz_repr::{RelationDesc, RelationType, ScalarType};
-use mz_sql::catalog::{
-    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
-};
-use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
+use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
+use crate::rbac;
 
-use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
-
-pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
-pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
-pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
-pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
-pub const INFORMATION_SCHEMA: &str = "information_schema";
-
-pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_", "external_"]);
 
 #[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
@@ -109,7 +111,7 @@ pub struct BuiltinTable {
     pub desc: RelationDesc,
     /// Whether the table's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 #[derive(Clone, Debug, Hash, Serialize)]
@@ -120,7 +122,7 @@ pub struct BuiltinSource {
     pub data_source: Option<IntrospectionType>,
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 #[derive(Hash, Debug)]
@@ -150,6 +152,7 @@ pub struct BuiltinIndex {
     pub name: &'static str,
     pub schema: &'static str,
     pub sql: &'static str,
+    pub is_retained_metrics_object: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -158,6 +161,7 @@ pub struct BuiltinRole {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+    pub attributes: RoleAttributes,
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +170,7 @@ pub struct BuiltinCluster {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+    pub privileges: Vec<MzAclItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -1132,116 +1137,186 @@ pub const TYPE_NUM_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
-pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_operators",
+pub const TYPE_TS_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "tsrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_TIMESTAMP.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TS_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_tsrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSRANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_TS_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TSTZ_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "tstzrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSTZRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_TIMESTAMPTZ.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TSTZ_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_tstzrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSTZRANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_TSTZ_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_MZ_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
+    name: "mz_aclitem",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_MZ_ACL_ITEM_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::MzAclItem,
+        array_id: None,
+    },
+};
+
+pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_mz_aclitem",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_MZ_ACL_ITEM.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const MZ_DATAFLOW_OPERATORS_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Operates),
 };
 
-pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_addresses",
+pub const MZ_DATAFLOW_ADDRESSES_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_addresses_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
 };
 
-pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_channels",
+pub const MZ_DATAFLOW_CHANNELS_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_channels_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Channels),
 };
 
-pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_elapsed_internal",
+pub const MZ_SCHEDULING_ELAPSED_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_elapsed_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
 };
 
-pub const MZ_RAW_COMPUTE_OPERATOR_DURATIONS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_raw_compute_operator_durations_internal",
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_compute_operator_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
 };
 
-pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_parks_internal",
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_parks_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
 
-pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_batches_internal",
+pub const MZ_ARRANGEMENT_BATCHES_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_batches_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
 };
 
-pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_sharing_internal",
+pub const MZ_ARRANGEMENT_SHARING_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_sharing_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
 };
 
-pub const MZ_COMPUTE_EXPORTS: BuiltinLog = BuiltinLog {
-    name: "mz_compute_exports",
+pub const MZ_COMPUTE_EXPORTS_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_compute_exports_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
 };
 
-pub const MZ_WORKER_COMPUTE_DEPENDENCIES: BuiltinLog = BuiltinLog {
-    name: "mz_worker_compute_dependencies",
+pub const MZ_COMPUTE_DEPENDENCIES_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_compute_dependencies_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowDependency),
 };
 
-pub const MZ_WORKER_COMPUTE_FRONTIERS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_compute_frontiers",
+pub const MZ_COMPUTE_FRONTIERS_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
 };
 
-pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_compute_import_frontiers",
+pub const MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_compute_import_frontiers_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
 };
 
-pub const MZ_RAW_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
-    name: "mz_raw_worker_compute_delays",
+pub const MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_compute_delays_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
 
-pub const MZ_ACTIVE_PEEKS: BuiltinLog = BuiltinLog {
-    name: "mz_active_peeks",
+pub const MZ_ACTIVE_PEEKS_PER_WORKER: BuiltinLog = BuiltinLog {
+    name: "mz_active_peeks_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
 
-pub const MZ_RAW_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
-    name: "mz_raw_peek_durations",
+pub const MZ_PEEK_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_peek_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
-pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_message_counts_received_internal",
+pub const MZ_MESSAGE_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
 };
 
-pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_message_counts_sent_internal",
+pub const MZ_MESSAGE_COUNTS_SENT_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts_sent_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
 };
 
-pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_operator_reachability_internal",
+pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_operator_reachability_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
 };
 
-pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_records_internal",
+pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_records_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
 };
@@ -1253,7 +1328,7 @@ pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("column", ScalarType::UInt64.nullable(false))
         .with_column("key_group", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
     BuiltinTable {
@@ -1266,7 +1341,7 @@ pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
             .with_column("parent_column", ScalarType::UInt64.nullable(false))
             .with_column("key_group", ScalarType::UInt64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        is_retained_metrics_relation: false,
+        is_retained_metrics_object: false,
     }
 });
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1276,7 +1351,7 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
         .with_key(vec![0]),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_connections",
@@ -1288,7 +1363,16 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
         .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
+});
+pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_kafka_sources",
+    // `mz_internal` for now, while we work out the desc.
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("group_id_base", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
 });
 pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_postgres_sources",
@@ -1296,7 +1380,7 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("replication_slot", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_object_dependencies",
@@ -1304,26 +1388,36 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("referenced_object_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("database_id", ScalarType::UInt64.nullable(true))
-        .with_column("name", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("database_id", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_columns",
@@ -1335,8 +1429,9 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("nullable", ScalarType::Bool.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("default", ScalarType::String.nullable(true))
-        .with_column("type_oid", ScalarType::Oid.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("type_oid", ScalarType::Oid.nullable(false))
+        .with_column("type_mod", ScalarType::Int32.nullable(false)),
+    is_retained_metrics_object: false,
 });
 pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_indexes",
@@ -1346,8 +1441,9 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("on_id", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
@@ -1358,7 +1454,7 @@ pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("on_position", ScalarType::UInt64.nullable(true))
         .with_column("on_expression", ScalarType::String.nullable(true))
         .with_column("nullable", ScalarType::Bool.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_tables",
@@ -1366,9 +1462,14 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_connections",
@@ -1376,10 +1477,15 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_ssh_tunnel_connections",
@@ -1388,7 +1494,7 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("public_key_1", ScalarType::String.nullable(false))
         .with_column("public_key_2", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
@@ -1396,14 +1502,19 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
-        .with_column("cluster_id", ScalarType::String.nullable(true)),
-    is_retained_metrics_relation: true,
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: true,
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -1411,14 +1522,15 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
-        .with_column("cluster_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: true,
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: true,
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
@@ -1426,10 +1538,15 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("definition", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("definition", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_materialized_views",
@@ -1437,11 +1554,16 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("definition", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("definition", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
@@ -1449,10 +1571,15 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("category", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("category", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_array_types",
@@ -1460,13 +1587,13 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_list_types",
@@ -1474,7 +1601,7 @@ pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_map_types",
@@ -1483,7 +1610,7 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("key_id", ScalarType::String.nullable(false))
         .with_column("value_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_roles",
@@ -1491,14 +1618,24 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("inherit", ScalarType::Bool.nullable(false)),
+    is_retained_metrics_object: false,
+});
+pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_role_members",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("member", ScalarType::String.nullable(false))
+        .with_column("grantor", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_functions",
@@ -1506,7 +1643,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column(
             "argument_type_ids",
@@ -1517,8 +1654,31 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::String.nullable(true),
         )
         .with_column("return_type_id", ScalarType::String.nullable(true))
-        .with_column("returns_set", ScalarType::Bool.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("returns_set", ScalarType::Bool.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_operators",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(
+            "argument_type_ids",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("return_type_id", ScalarType::String.nullable(true)),
+    is_retained_metrics_object: false,
+});
+pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_aggregates",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("agg_kind", ScalarType::String.nullable(false))
+        .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1526,8 +1686,16 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        )
+        .with_column("managed", ScalarType::Bool.nullable(false))
+        .with_column("size", ScalarType::String.nullable(true))
+        .with_column("replication_factor", ScalarType::UInt32.nullable(true)),
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1536,7 +1704,7 @@ pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("object_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1544,31 +1712,39 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
+    is_retained_metrics_object: false,
 });
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("availability_zone", ScalarType::String.nullable(true)),
-    is_retained_metrics_relation: true,
+        .with_column("availability_zone", ScalarType::String.nullable(true))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
+        .with_column("reason", ScalarType::String.nullable(true))
         .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1579,17 +1755,22 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("processes", ScalarType::UInt64.nullable(false))
         .with_column("workers", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_relation: true,
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(false))
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "credits_per_hour",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        ),
+    is_retained_metrics_object: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1602,7 +1783,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("details", ScalarType::Jsonb.nullable(false))
         .with_column("user", ScalarType::String.nullable(true))
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -1610,7 +1791,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SourceStatusHistory),
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
@@ -1634,7 +1815,7 @@ FROM mz_sources
 LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
 WHERE
     -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.id NOT LIKE 's%' and mz_sources.type != 'subsource'",
+    mz_sources.id NOT LIKE 's%'",
 };
 
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -1642,7 +1823,7 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SinkStatusHistory),
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
@@ -1680,14 +1861,14 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
             "collection_timestamp",
             ScalarType::TimestampTz.nullable(false),
         ),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_egress_ips",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1696,7 +1877,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| Bui
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("principal", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1705,21 +1886,71 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     // the corresponding Storage tables.
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
-    is_retained_metrics_relation: true,
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
+    is_retained_metrics_object: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("export_id", ScalarType::String.nullable(false))
         .with_column("time", ScalarType::MzTimestamp.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_subscriptions",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("session_id", ScalarType::UInt32.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("created_at", ScalarType::TimestampTz.nullable(false))
+        .with_column(
+            "referenced_object_ids",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
+        ),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_sessions",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::UInt32.nullable(false))
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("connected_at", ScalarType::TimestampTz.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_default_privileges",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("database_id", ScalarType::String.nullable(true))
+        .with_column("schema_id", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("grantee", ScalarType::String.nullable(false))
+        .with_column("privileges", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_system_privileges",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
+    is_retained_metrics_object: false,
 });
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
@@ -1735,8 +1966,10 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("messages_received", ScalarType::UInt64.nullable(false))
         .with_column("updates_staged", ScalarType::UInt64.nullable(false))
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_relation: true,
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+        .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
+        .with_column("envelope_state_count", ScalarType::UInt64.nullable(false)),
+    is_retained_metrics_object: false,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_statistics",
@@ -1749,7 +1982,7 @@ pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_relation: true,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -1759,7 +1992,7 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("shard_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_relation: false,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -1779,69 +2012,150 @@ GROUP BY object_id, collection_timestamp",
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type) AS
-      SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
-UNION ALL SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
-UNION ALL SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized-view' FROM mz_catalog.mz_materialized_views",
+    sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type, owner_id, privileges) AS
+      SELECT id, oid, schema_id, name, 'table', owner_id, privileges FROM mz_catalog.mz_tables
+UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, privileges FROM mz_catalog.mz_sources
+UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, privileges FROM mz_catalog.mz_views
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, privileges FROM mz_catalog.mz_materialized_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     name: "mz_objects",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type) AS
-    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    sql:
+        "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type, owner_id, privileges) AS
+    SELECT id, oid, schema_id, name, type, owner_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
-    SELECT id, oid, schema_id, name, 'sink' FROM mz_catalog.mz_sinks
+    SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_sinks
 UNION ALL
-    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index'
+    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, NULL::mz_aclitem[]
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 UNION ALL
-    SELECT id, oid, schema_id, name, 'connection' FROM mz_catalog.mz_connections
+    SELECT id, oid, schema_id, name, 'connection', owner_id, privileges FROM mz_catalog.mz_connections
 UNION ALL
-    SELECT id, oid, schema_id, name, 'type' FROM mz_catalog.mz_types
+    SELECT id, oid, schema_id, name, 'type', owner_id, privileges FROM mz_catalog.mz_types
 UNION ALL
-    SELECT id, oid, schema_id, name, 'function' FROM mz_catalog.mz_functions
+    SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret' FROM mz_catalog.mz_secrets",
+    SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
+};
+
+pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_dataflows_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflows_per_worker AS SELECT
+    addrs.address[1] AS id,
+    ops.worker_id,
+    ops.name
+FROM
+    mz_internal.mz_dataflow_addresses_per_worker addrs,
+    mz_internal.mz_dataflow_operators_per_worker ops
+WHERE
+    addrs.id = ops.id AND
+    addrs.worker_id = ops.worker_id AND
+    mz_catalog.list_length(addrs.address) = 1",
 };
 
 pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_dataflows AS SELECT
-    mz_dataflow_addresses.id,
-    mz_dataflow_addresses.worker_id,
-    mz_dataflow_addresses.address[1] AS local_id,
-    mz_dataflow_operators.name
+    sql: "CREATE VIEW mz_internal.mz_dataflows AS
+SELECT id, name
+FROM mz_internal.mz_dataflows_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_DATAFLOW_ADDRESSES: BuiltinView = BuiltinView {
+    name: "mz_dataflow_addresses",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_addresses AS
+SELECT id, address
+FROM mz_internal.mz_dataflow_addresses_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_DATAFLOW_CHANNELS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_channels",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_channels AS
+SELECT id, from_index, from_port, to_index, to_port
+FROM mz_internal.mz_dataflow_channels_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_DATAFLOW_OPERATORS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operators",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operators AS
+SELECT id, name
+FROM mz_internal.mz_dataflow_operators_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_dataflows_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_dataflows_per_worker AS SELECT
+    ops.id,
+    ops.name,
+    ops.worker_id,
+    dfs.id as dataflow_id,
+    dfs.name as dataflow_name
 FROM
-    mz_internal.mz_dataflow_addresses,
-    mz_internal.mz_dataflow_operators
+    mz_internal.mz_dataflow_operators_per_worker ops,
+    mz_internal.mz_dataflow_addresses_per_worker addrs,
+    mz_internal.mz_dataflows_per_worker dfs
 WHERE
-    mz_dataflow_addresses.id = mz_dataflow_operators.id AND
-    mz_dataflow_addresses.worker_id = mz_dataflow_operators.worker_id AND
-    mz_catalog.list_length(mz_dataflow_addresses.address) = 1",
+    ops.id = addrs.id AND
+    ops.worker_id = addrs.worker_id AND
+    dfs.id = addrs.address[1] AND
+    dfs.worker_id = addrs.worker_id",
 };
 
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_dataflows AS SELECT
-    mz_dataflow_operators.id,
-    mz_dataflow_operators.name,
-    mz_dataflow_operators.worker_id,
-    mz_dataflows.id as dataflow_id,
-    mz_dataflows.name as dataflow_name
-FROM
-    mz_internal.mz_dataflow_operators,
-    mz_internal.mz_dataflow_addresses,
-    mz_internal.mz_dataflows
-WHERE
-    mz_dataflow_operators.id = mz_dataflow_addresses.id AND
-    mz_dataflow_operators.worker_id = mz_dataflow_addresses.worker_id AND
-    mz_dataflows.local_id = mz_dataflow_addresses.address[1] AND
-    mz_dataflows.worker_id = mz_dataflow_addresses.worker_id",
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_dataflows AS
+SELECT id, name, dataflow_id, dataflow_name
+FROM mz_internal.mz_dataflow_operator_dataflows_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES: BuiltinView = BuiltinView {
+    name: "mz_object_transitive_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_object_transitive_dependencies AS
+WITH MUTUALLY RECURSIVE
+  base(id text, referenced_object_id text) AS (
+    SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies
+  ),
+  reach(id text, referenced_object_id text) AS (
+    SELECT id, referenced_object_id FROM base
+    UNION ALL -- (TODO use UNION once #19817 is fixed)
+    SELECT id, referenced_object_id FROM reach
+    UNION
+    SELECT r1.id, r2.referenced_object_id FROM reach r1 JOIN reach r2 ON r1.referenced_object_id = r2.id
+  )
+SELECT id, referenced_object_id FROM reach;",
+};
+
+pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
+    name: "mz_compute_exports",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_exports AS
+SELECT export_id, dataflow_id
+FROM mz_internal.mz_compute_exports_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_COMPUTE_DEPENDENCIES: BuiltinView = BuiltinView {
+    name: "mz_compute_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_dependencies AS
+SELECT export_id, import_id
+FROM mz_internal.mz_compute_dependencies_per_worker
+WHERE worker_id = 0",
 };
 
 pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
@@ -1849,8 +2163,56 @@ pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_compute_frontiers AS SELECT
     export_id, pg_catalog.min(time) AS time
-FROM mz_internal.mz_worker_compute_frontiers
+FROM mz_internal.mz_compute_frontiers_per_worker
 GROUP BY export_id",
+};
+
+pub const MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_dataflow_channel_operators_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_channel_operators_per_worker AS
+WITH
+channel_addresses(id, worker_id, address, from_index, to_index) AS (
+     SELECT id, worker_id, address, from_index, to_index
+     FROM mz_internal.mz_dataflow_channels_per_worker mdc
+     INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda
+     USING (id, worker_id)
+),
+channel_operator_addresses(id, worker_id, from_address, to_address) AS (
+     SELECT id, worker_id,
+            address || from_index AS from_address,
+            address || to_index AS to_address
+     FROM channel_addresses
+),
+operator_addresses(id, worker_id, address) AS (
+     SELECT id, worker_id, address
+     FROM mz_internal.mz_dataflow_addresses_per_worker mda
+     INNER JOIN mz_internal.mz_dataflow_operators_per_worker mdo
+     USING (id, worker_id)
+)
+SELECT coa.id,
+       coa.worker_id,
+       from_ops.id AS from_operator_id,
+       coa.from_address AS from_operator_address,
+       to_ops.id AS to_operator_id,
+       coa.to_address AS to_operator_address
+FROM channel_operator_addresses coa
+     LEFT OUTER JOIN operator_addresses from_ops
+          ON coa.from_address = from_ops.address AND
+             coa.worker_id = from_ops.worker_id
+     LEFT OUTER JOIN operator_addresses to_ops
+          ON coa.to_address = to_ops.address AND
+             coa.worker_id = to_ops.worker_id
+",
+};
+
+pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_channel_operators",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_channel_operators AS
+SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
+FROM mz_internal.mz_dataflow_channel_operators_per_worker
+WHERE worker_id = 0",
 };
 
 pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
@@ -1858,70 +2220,83 @@ pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_compute_import_frontiers AS SELECT
     export_id, import_id, pg_catalog.min(time) AS time
-FROM mz_internal.mz_worker_compute_import_frontiers
+FROM mz_internal.mz_compute_import_frontiers_per_worker
 GROUP BY export_id, import_id",
 };
 
-pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
-    name: "mz_records_per_dataflow_operator",
+pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_records_per_dataflow_operator_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_operator AS
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_operator_per_worker AS
 WITH records_cte AS (
     SELECT
         operator_id,
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_internal.mz_arrangement_records_internal
+        mz_internal.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
 )
 SELECT
-    mz_dataflow_operator_dataflows.id,
-    mz_dataflow_operator_dataflows.name,
-    mz_dataflow_operator_dataflows.worker_id,
-    mz_dataflow_operator_dataflows.dataflow_id,
+    dod.id,
+    dod.name,
+    dod.worker_id,
+    dod.dataflow_id,
     records_cte.records
 FROM
     records_cte,
-    mz_internal.mz_dataflow_operator_dataflows
+    mz_internal.mz_dataflow_operator_dataflows_per_worker dod
 WHERE
-    mz_dataflow_operator_dataflows.id = records_cte.operator_id AND
-    mz_dataflow_operator_dataflows.worker_id = records_cte.worker_id",
+    dod.id = records_cte.operator_id AND
+    dod.worker_id = records_cte.worker_id",
+};
+
+pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
+    name: "mz_records_per_dataflow_operator",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_operator AS
+SELECT
+    id,
+    name,
+    dataflow_id,
+    pg_catalog.sum(records) AS records
+FROM mz_internal.mz_records_per_dataflow_operator_per_worker
+GROUP BY id, name, dataflow_id",
+};
+
+pub const MZ_RECORDS_PER_DATAFLOW_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_records_per_dataflow_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_per_worker AS SELECT
+    rdo.dataflow_id as id,
+    dfs.name,
+    rdo.worker_id,
+    pg_catalog.SUM(rdo.records) as records
+FROM
+    mz_internal.mz_records_per_dataflow_operator_per_worker rdo,
+    mz_internal.mz_dataflows_per_worker dfs
+WHERE
+    rdo.dataflow_id = dfs.id AND
+    rdo.worker_id = dfs.worker_id
+GROUP BY
+    rdo.dataflow_id,
+    dfs.name,
+    rdo.worker_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS SELECT
-    mz_records_per_dataflow_operator.dataflow_id as id,
-    mz_dataflows.name,
-    mz_records_per_dataflow_operator.worker_id,
-    pg_catalog.SUM(mz_records_per_dataflow_operator.records) as records
+    id,
+    name,
+    pg_catalog.SUM(records) as records
 FROM
-    mz_internal.mz_records_per_dataflow_operator,
-    mz_internal.mz_dataflows
-WHERE
-    mz_records_per_dataflow_operator.dataflow_id = mz_dataflows.id AND
-    mz_records_per_dataflow_operator.worker_id = mz_dataflows.worker_id
+    mz_internal.mz_records_per_dataflow_per_worker
 GROUP BY
-    mz_records_per_dataflow_operator.dataflow_id,
-    mz_dataflows.name,
-    mz_records_per_dataflow_operator.worker_id",
-};
-
-pub const MZ_RECORDS_PER_DATAFLOW_GLOBAL: BuiltinView = BuiltinView {
-    name: "mz_records_per_dataflow_global",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_global AS SELECT
-    mz_records_per_dataflow.id,
-    mz_records_per_dataflow.name,
-    pg_catalog.SUM(mz_records_per_dataflow.records) as records
-FROM
-    mz_internal.mz_records_per_dataflow
-GROUP BY
-    mz_records_per_dataflow.id,
-    mz_records_per_dataflow.name",
+    id,
+    name",
 };
 
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
@@ -1930,10 +2305,11 @@ pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_namespace AS SELECT
 s.oid AS oid,
 s.name AS nspname,
-NULL::pg_catalog.oid AS nspowner,
+role_owner.oid AS nspowner,
 NULL::pg_catalog.text[] AS nspacl
 FROM mz_catalog.mz_schemas s
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = s.owner_id
 WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
@@ -1946,7 +2322,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_schemas.oid AS relnamespace,
     -- MZ doesn't support typed tables so reloftype is filled with 0
     0::pg_catalog.oid AS reloftype,
-    NULL::pg_catalog.oid AS relowner,
+    role_owner.oid AS relowner,
     0::pg_catalog.oid AS relam,
     -- MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
     0::pg_catalog.oid AS reltablespace,
@@ -1983,14 +2359,15 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     NULL::pg_catalog.text[] as reloptions
 FROM (
     -- pg_class catalogs relations and indexes
-    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    SELECT id, oid, schema_id, name, type, owner_id FROM mz_catalog.mz_relations
     UNION ALL
-        SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index' AS type
+        SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index' AS type, mz_indexes.owner_id
         FROM mz_catalog.mz_indexes
         JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 ) AS class_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
@@ -1998,14 +2375,15 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_database AS SELECT
-    oid,
-    name as datname,
-    NULL::pg_catalog.oid AS datdba,
+    d.oid as oid,
+    d.name as datname,
+    role_owner.oid as datdba,
     6 as encoding,
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
-FROM mz_catalog.mz_databases d",
+FROM mz_catalog.mz_databases d
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = d.owner_id",
 };
 
 pub const PG_INDEX: BuiltinView = BuiltinView {
@@ -2014,9 +2392,11 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_index AS SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
-    false::pg_catalog.bool AS indisprimary,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
     false::pg_catalog.bool AS indisunique,
+    false::pg_catalog.bool AS indisprimary,
+    -- MZ doesn't support unique indexes so indimmediate is filled with false
+    false::pg_catalog.bool AS indimmediate,
     -- MZ doesn't support CLUSTER so indisclustered is filled with false
     false::pg_catalog.bool AS indisclustered,
     -- MZ never creates invalid indexes so indisvalid is filled with true
@@ -2061,6 +2441,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
+    role_owner.oid AS typowner,
     NULL::pg_catalog.int2 AS typlen,
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
@@ -2127,6 +2508,7 @@ FROM
         )
             AS t ON mz_types.id = t.id
     LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id
     WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
@@ -2139,7 +2521,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
     position::int8::int2 as attnum,
-    -1::pg_catalog.int4 as atttypmod,
+    mz_columns.type_mod as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
@@ -2172,12 +2554,41 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     mz_functions.oid,
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
-    NULL::pg_catalog.oid AS proowner,
-    NULL::pg_catalog.text AS proargdefaults
+    role_owner.oid AS proowner,
+    NULL::pg_catalog.text AS proargdefaults,
+    ret_type.oid AS prorettype
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+JOIN mz_catalog.mz_types AS ret_type ON mz_functions.return_type_id = ret_type.id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_functions.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
+};
+
+pub const PG_OPERATOR: BuiltinView = BuiltinView {
+    name: "pg_operator",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_operator AS SELECT
+    mz_operators.oid,
+    mz_operators.name AS oprname,
+    ret_type.oid AS oprresult,
+    left_type.oid as oprleft,
+    right_type.oid as oprright
+FROM mz_catalog.mz_operators
+JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id
+JOIN mz_catalog.mz_types AS left_type ON mz_operators.argument_type_ids[1] = left_type.id
+JOIN mz_catalog.mz_types AS right_type ON mz_operators.argument_type_ids[2] = right_type.id
+WHERE array_length(mz_operators.argument_type_ids, 1) = 2
+UNION SELECT
+    mz_operators.oid,
+    mz_operators.name AS oprname,
+    ret_type.oid AS oprresult,
+    0 as oprleft,
+    right_type.oid as oprright
+FROM mz_catalog.mz_operators
+JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id
+JOIN mz_catalog.mz_types AS right_type ON mz_operators.argument_type_ids[1] = right_type.id
+WHERE array_length(mz_operators.argument_type_ids, 1) = 1",
 };
 
 pub const PG_RANGE: BuiltinView = BuiltinView {
@@ -2225,76 +2636,139 @@ FROM (VALUES
 ) AS _ (name, setting)",
 };
 
-pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
-    name: "mz_scheduling_elapsed",
+pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
+    name: "pg_auth_members",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT
+    role.oid AS roleid,
+    member.oid AS member,
+    grantor.oid AS grantor,
+    -- Materialize hasn't implemented admin_option.
+    false as admin_option
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+JOIN mz_roles grantor ON membership.grantor = grantor.id",
+};
+
+pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_peek_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_scheduling_elapsed AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_peek_durations_histogram_per_worker AS SELECT
+    worker_id, duration_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_peek_durations_histogram_raw
+GROUP BY
+    worker_id, duration_ns",
+};
+
+pub const MZ_PEEK_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_peek_durations_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_peek_durations_histogram AS
+SELECT
+    duration_ns,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_peek_durations_histogram_per_worker
+GROUP BY duration_ns",
+};
+
+pub const MZ_SCHEDULING_ELAPSED_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_scheduling_elapsed_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_scheduling_elapsed_per_worker AS SELECT
     id, worker_id, pg_catalog.count(*) AS elapsed_ns
 FROM
-    mz_internal.mz_scheduling_elapsed_internal
+    mz_internal.mz_scheduling_elapsed_raw
 GROUP BY
     id, worker_id",
 };
 
-pub const MZ_RAW_COMPUTE_OPERATOR_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_raw_compute_operator_durations",
+pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
+    name: "mz_scheduling_elapsed",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_raw_compute_operator_durations AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_scheduling_elapsed AS
+SELECT
+    id,
+    pg_catalog.sum(elapsed_ns) AS elapsed_ns
+FROM mz_internal.mz_scheduling_elapsed_per_worker
+GROUP BY id",
+};
+
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_compute_operator_durations_histogram_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_operator_durations_histogram_per_worker AS SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_raw_compute_operator_durations_internal
+    mz_internal.mz_compute_operator_durations_histogram_raw
 GROUP BY
     id, worker_id, duration_ns",
 };
 
-pub const MZ_COMPUTE_OPERATOR_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_compute_operator_durations",
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_compute_operator_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_compute_operator_durations AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_compute_operator_durations_histogram AS
+SELECT
     id,
-    worker_id,
-    duration_ns/1000 * '1 microsecond'::interval AS duration,
-    count
-FROM mz_internal.mz_raw_compute_operator_durations",
+    duration_ns,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_compute_operator_durations_histogram_per_worker
+GROUP BY id, duration_ns",
 };
 
-pub const MZ_WORKER_COMPUTE_DELAYS: BuiltinView = BuiltinView {
-    name: "mz_worker_compute_delays",
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_scheduling_parks_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_worker_compute_delays AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_scheduling_parks_histogram_per_worker AS SELECT
+    worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_scheduling_parks_histogram_raw
+GROUP BY
+    worker_id, slept_for_ns, requested_ns",
+};
+
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_scheduling_parks_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_scheduling_parks_histogram AS
+SELECT
+    slept_for_ns,
+    requested_ns,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_scheduling_parks_histogram_per_worker
+GROUP BY slept_for_ns, requested_ns",
+};
+
+pub const MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_compute_delays_histogram_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_delays_histogram_per_worker AS SELECT
+    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_compute_delays_histogram_raw
+GROUP BY
+    export_id, import_id, worker_id, delay_ns",
+};
+
+pub const MZ_COMPUTE_DELAYS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_compute_delays_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_delays_histogram AS
+SELECT
     export_id,
     import_id,
-    worker_id,
-    delay_ns/1000 * '1 microsecond'::interval AS delay,
-    count
-FROM mz_internal.mz_raw_worker_compute_delays",
+    delay_ns,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_compute_delays_histogram_per_worker
+GROUP BY export_id, import_id, delay_ns",
 };
 
-pub const MZ_PEEK_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_peek_durations",
+pub const MZ_MESSAGE_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_message_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_peek_durations AS SELECT
-    worker_id,
-    duration_ns/1000 * '1 microsecond'::interval AS duration,
-    count
-FROM mz_internal.mz_raw_peek_durations",
-};
-
-pub const MZ_SCHEDULING_PARKS: BuiltinView = BuiltinView {
-    name: "mz_scheduling_parks",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_scheduling_parks AS SELECT
-    worker_id, slept_for, requested, pg_catalog.count(*) AS count
-FROM
-    mz_internal.mz_scheduling_parks_internal
-GROUP BY
-    worker_id, slept_for, requested",
-};
-
-pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
-    name: "mz_message_counts",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_message_counts AS
+    sql: "CREATE VIEW mz_internal.mz_message_counts_per_worker AS
 WITH sent_cte AS (
     SELECT
         channel_id,
@@ -2302,7 +2776,7 @@ WITH sent_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS sent
     FROM
-        mz_internal.mz_message_counts_sent_internal
+        mz_internal.mz_message_counts_sent_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 ),
@@ -2313,7 +2787,7 @@ received_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS received
     FROM
-        mz_internal.mz_message_counts_received_internal
+        mz_internal.mz_message_counts_received_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 )
@@ -2326,10 +2800,31 @@ SELECT
 FROM sent_cte JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)",
 };
 
-pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
-    name: "mz_dataflow_operator_reachability",
+pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
+    name: "mz_message_counts",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_reachability AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_message_counts AS
+SELECT
+    channel_id,
+    pg_catalog.sum(sent) AS sent,
+    pg_catalog.sum(received) AS received
+FROM mz_internal.mz_message_counts_per_worker
+GROUP BY channel_id",
+};
+
+pub const MZ_ACTIVE_PEEKS: BuiltinView = BuiltinView {
+    name: "mz_active_peeks",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_active_peeks AS
+SELECT id, index_id, time
+FROM mz_internal.mz_active_peeks_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_reachability_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_reachability_per_worker AS SELECT
     address,
     port,
     worker_id,
@@ -2337,21 +2832,35 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
     time,
     pg_catalog.count(*) as count
 FROM
-    mz_internal.mz_dataflow_operator_reachability_internal
+    mz_internal.mz_dataflow_operator_reachability_raw
 GROUP BY address, port, worker_id, update_type, time",
 };
 
-pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
-    name: "mz_arrangement_sizes",
+pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_reachability",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_arrangement_sizes AS
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_reachability AS
+SELECT
+    address,
+    port,
+    update_type,
+    time,
+    pg_catalog.sum(count) as count
+FROM mz_internal.mz_dataflow_operator_reachability_per_worker
+GROUP BY address, port, update_type, time",
+};
+
+pub const MZ_ARRANGEMENT_SIZES_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_arrangement_sizes_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_arrangement_sizes_per_worker AS
 WITH batches_cte AS (
     SELECT
         operator_id,
         worker_id,
         pg_catalog.count(*) AS batches
     FROM
-        mz_internal.mz_arrangement_batches_internal
+        mz_internal.mz_arrangement_batches_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -2361,7 +2870,7 @@ records_cte AS (
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_internal.mz_arrangement_records_internal
+        mz_internal.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
 )
@@ -2373,16 +2882,37 @@ SELECT
 FROM batches_cte JOIN records_cte USING (operator_id, worker_id)",
 };
 
-pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
-    name: "mz_arrangement_sharing",
+pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
+    name: "mz_arrangement_sizes",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_arrangement_sharing AS
+    sql: "CREATE VIEW mz_internal.mz_arrangement_sizes AS
+SELECT
+    operator_id,
+    pg_catalog.sum(records) AS records,
+    pg_catalog.sum(batches) AS batches
+FROM mz_internal.mz_arrangement_sizes_per_worker
+GROUP BY operator_id",
+};
+
+pub const MZ_ARRANGEMENT_SHARING_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_arrangement_sharing_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_arrangement_sharing_per_worker AS
 SELECT
     operator_id,
     worker_id,
     pg_catalog.count(*) AS count
-FROM mz_internal.mz_arrangement_sharing_internal
+FROM mz_internal.mz_arrangement_sharing_raw
 GROUP BY operator_id, worker_id",
+};
+
+pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
+    name: "mz_arrangement_sharing",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_arrangement_sharing AS
+SELECT operator_id, count
+FROM mz_internal.mz_arrangement_sharing_per_worker
+WHERE worker_id = 0",
 };
 
 pub const MZ_CLUSTER_REPLICA_UTILIZATION: BuiltinView = BuiltinView {
@@ -2393,12 +2923,67 @@ SELECT
     r.id AS replica_id,
     m.process_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
-    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
+    m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
 FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
+};
+
+pub const MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_parents_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_operator_parents_per_worker AS
+WITH operator_addrs AS(
+    SELECT
+        id, address, worker_id
+    FROM mz_internal.mz_dataflow_addresses_per_worker
+        INNER JOIN mz_internal.mz_dataflow_operators_per_worker
+            USING (id, worker_id)
+),
+parent_addrs AS (
+    SELECT
+        id,
+        address[1:list_length(address) - 1] AS parent_address,
+        worker_id
+    FROM operator_addrs
+)
+SELECT pa.id, oa.id AS parent_id, pa.worker_id
+FROM parent_addrs AS pa
+    INNER JOIN operator_addrs AS oa
+        ON pa.parent_address = oa.address
+        AND pa.worker_id = oa.worker_id",
+};
+
+pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_parents",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_operator_parents AS
+SELECT id, parent_id
+FROM mz_internal.mz_dataflow_operator_parents_per_worker
+WHERE worker_id = 0",
+};
+
+pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
+    name: "mz_dataflow_arrangement_sizes",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW
+    mz_internal.mz_dataflow_arrangement_sizes
+    AS
+        SELECT
+            mdod.dataflow_id AS id,
+            mo.name,
+            COALESCE(sum(mas.records), 0) AS records,
+            COALESCE(sum(mas.batches), 0) AS batches
+        FROM
+            mz_internal.mz_dataflow_operators AS mdo
+                LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdo.id = mas.operator_id
+                JOIN mz_internal.mz_dataflow_addresses AS mda ON mda.id = mdo.id
+                JOIN mz_internal.mz_compute_exports AS mce ON mce.dataflow_id = mda.address[1]
+                JOIN mz_objects AS mo ON mo.id = mce.export_id
+                JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON mdo.id = mdod.id
+        GROUP BY mo.name, mdod.dataflow_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
@@ -2447,6 +3032,24 @@ LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p')",
 };
 
+pub const PG_TABLESPACE: BuiltinView = BuiltinView {
+    name: "pg_tablespace",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_tablespace AS
+    SELECT oid, spcname, spcowner, spcacl, spcoptions
+    FROM (
+        VALUES (
+            --These are the same defaults CockroachDB uses.
+            0::pg_catalog.oid,
+            'pg_default'::pg_catalog.text,
+            NULL::pg_catalog.oid,
+            NULL::pg_catalog.text[],
+            NULL::pg_catalog.text[]
+        )
+    ) AS _ (oid, spcname, spcowner, spcacl, spcoptions)
+",
+};
+
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
@@ -2473,6 +3076,8 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     '********'::pg_catalog.text AS rolpassword,
     r.rolvaliduntil,
     r.rolbypassrls,
+    --Note: this is NULL because Materialize doesn't support Role-specific config values.
+    NULL::pg_catalog.text[] as rolconfig,
     r.oid AS oid
 FROM pg_catalog.pg_authid r",
 };
@@ -2483,11 +3088,12 @@ pub const PG_VIEWS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_views AS SELECT
     s.name AS schemaname,
     v.name AS viewname,
-    NULL::pg_catalog.oid AS viewowner,
+    role_owner.oid AS viewowner,
     v.definition AS definition
 FROM mz_catalog.mz_views v
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = v.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
@@ -2497,11 +3103,12 @@ pub const PG_MATVIEWS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_matviews AS SELECT
     s.name AS schemaname,
     m.name AS matviewname,
-    NULL::pg_catalog.oid AS matviewowner,
+    role_owner.oid AS matviewowner,
     m.definition AS definition
 FROM mz_catalog.mz_materialized_views m
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = m.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
@@ -2549,7 +3156,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const PG_COLLATION: BuiltinView = BuiltinView {
     name: "pg_collation",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_class
+    sql: "CREATE VIEW pg_catalog.pg_collation
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS collname,
@@ -2568,7 +3175,7 @@ WHERE false",
 pub const PG_POLICY: BuiltinView = BuiltinView {
     name: "pg_policy",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_class
+    sql: "CREATE VIEW pg_catalog.pg_policy
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS polname,
@@ -2594,6 +3201,31 @@ AS SELECT
 WHERE false",
 };
 
+pub const PG_LOCKS: BuiltinView = BuiltinView {
+    name: "pg_locks",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_locks
+AS SELECT
+-- While there exist locks in Materialize, we don't expose them, so all of these fields are NULL.
+    NULL::pg_catalog.text AS locktype,
+    NULL::pg_catalog.oid AS database,
+    NULL::pg_catalog.oid AS relation,
+    NULL::pg_catalog.int4 AS page,
+    NULL::pg_catalog.int2 AS tuple,
+    NULL::pg_catalog.text AS virtualxid,
+    NULL::pg_catalog.text AS transactionid,
+    NULL::pg_catalog.oid AS classid,
+    NULL::pg_catalog.oid AS objid,
+    NULL::pg_catalog.int2 AS objsubid,
+    NULL::pg_catalog.text AS virtualtransaction,
+    NULL::pg_catalog.int4 AS pid,
+    NULL::pg_catalog.text AS mode,
+    NULL::pg_catalog.bool AS granted,
+    NULL::pg_catalog.bool AS fastpath,
+    NULL::pg_catalog.timestamptz AS waitstart
+WHERE false",
+};
+
 pub const PG_AUTHID: BuiltinView = BuiltinView {
     name: "pg_authid",
     schema: PG_CATALOG_SCHEMA,
@@ -2601,18 +3233,19 @@ pub const PG_AUTHID: BuiltinView = BuiltinView {
 AS SELECT
     r.oid AS oid,
     r.name AS rolname,
+    -- We determine superuser status each time a role logs in, so there's no way to accurately
+    -- depict this in the catalog. Except for mz_system, which is always a superuser. For all other
+    -- roles we hardcode NULL.
     CASE
         WHEN r.name = 'mz_system' THEN true
-        ELSE false
+        ELSE NULL::pg_catalog.bool
     END AS rolsuper,
-    -- MZ doesn't have role inheritence
-    false AS rolinherit,
-    -- All roles can create other roles
-    true AS rolcreaterole,
-    -- All roles can create other dbs
-    true AS rolcreatedb,
-    -- All roles can login
-    true AS rolcanlogin,
+    inherit AS rolinherit,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
+    -- We determine login status each time a role logs in, so there's no way to accurately depict
+    -- this in the catalog. Instead we just hardcode NULL.
+    NULL::pg_catalog.bool AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
@@ -2624,6 +3257,107 @@ AS SELECT
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
 FROM mz_catalog.mz_roles r",
+};
+
+pub const PG_AGGREGATE: BuiltinView = BuiltinView {
+    name: "pg_aggregate",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_aggregate
+AS SELECT
+    a.oid as aggfnoid,
+    -- Currently Materialize only support 'normal' aggregate functions.
+    a.agg_kind as aggkind,
+    a.agg_num_direct_args as aggnumdirectargs,
+    -- Materialize doesn't support these fields.
+    NULL::pg_catalog.regproc as aggtransfn,
+    '0'::pg_catalog.regproc as aggfinalfn,
+    '0'::pg_catalog.regproc as aggcombinefn,
+    '0'::pg_catalog.regproc as aggserialfn,
+    '0'::pg_catalog.regproc as aggdeserialfn,
+    '0'::pg_catalog.regproc as aggmtransfn,
+    '0'::pg_catalog.regproc as aggminvtransfn,
+    '0'::pg_catalog.regproc as aggmfinalfn,
+    false as aggfinalextra,
+    false as aggmfinalextra,
+    NULL::pg_catalog.\"char\" AS aggfinalmodify,
+    NULL::pg_catalog.\"char\" AS aggmfinalmodify,
+    '0'::pg_catalog.oid as aggsortop,
+    NULL::pg_catalog.oid as aggtranstype,
+    NULL::pg_catalog.int4 as aggtransspace,
+    '0'::pg_catalog.oid as aggmtranstype,
+    NULL::pg_catalog.int4 as aggmtransspace,
+    NULL::pg_catalog.text as agginitval,
+    NULL::pg_catalog.text as aggminitval
+FROM mz_internal.mz_aggregates a",
+};
+
+pub const PG_TRIGGER: BuiltinView = BuiltinView {
+    name: "pg_trigger",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_trigger
+AS SELECT
+    -- MZ doesn't support triggers so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.oid AS tgrelid,
+    NULL::pg_catalog.oid AS tgparentid,
+    NULL::pg_catalog.text AS tgname,
+    NULL::pg_catalog.oid AS tgfoid,
+    NULL::pg_catalog.int2 AS tgtype,
+    NULL::pg_catalog.\"char\" AS tgenabled,
+    NULL::pg_catalog.bool AS tgisinternal,
+    NULL::pg_catalog.oid AS tgconstrrelid,
+    NULL::pg_catalog.oid AS tgconstrindid,
+    NULL::pg_catalog.oid AS tgconstraint,
+    NULL::pg_catalog.bool AS tgdeferrable,
+    NULL::pg_catalog.bool AS tginitdeferred,
+    NULL::pg_catalog.int2 AS tgnargs,
+    NULL::pg_catalog.int2vector AS tgattr,
+    NULL::pg_catalog.bytea AS tgargs,
+    -- NOTE: The tgqual column is actually type `pg_node_tree` which we don't support. CockroachDB
+    -- uses text as a placeholder, so we'll follow their lead here.
+    NULL::pg_catalog.text AS tgqual,
+    NULL::pg_catalog.text AS tgoldtable,
+    NULL::pg_catalog.text AS tgnewtable
+WHERE false
+    ",
+};
+
+pub const PG_REWRITE: BuiltinView = BuiltinView {
+    name: "pg_rewrite",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_rewrite
+AS SELECT
+    -- MZ doesn't support rewrite rules so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS rulename,
+    NULL::pg_catalog.oid AS ev_class,
+    NULL::pg_catalog.\"char\" AS ev_type,
+    NULL::pg_catalog.\"char\" AS ev_enabled,
+    NULL::pg_catalog.bool AS is_instead,
+    -- NOTE: The ev_qual and ev_action columns are actually type `pg_node_tree` which we don't
+    -- support. CockroachDB uses text as a placeholder, so we'll follow their lead here.
+    NULL::pg_catalog.text AS ev_qual,
+    NULL::pg_catalog.text AS ev_action
+WHERE false
+    ",
+};
+
+pub const PG_EXTENSION: BuiltinView = BuiltinView {
+    name: "pg_extension",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_extension
+AS SELECT
+    -- MZ doesn't support extensions so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS extname,
+    NULL::pg_catalog.oid AS extowner,
+    NULL::pg_catalog.oid AS extnamespace,
+    NULL::pg_catalog.bool AS extrelocatable,
+    NULL::pg_catalog.text AS extversion,
+    NULL::pg_catalog.oid[] AS extconfig,
+    NULL::pg_catalog.text[] AS extcondition
+WHERE false
+    ",
 };
 
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
@@ -2695,12 +3429,61 @@ FROM
 ORDER BY 1, 2"#,
 };
 
+pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
+    name: "mz_cluster_replica_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW
+    mz_internal.mz_cluster_replica_history
+    AS
+        WITH
+            creates AS
+            (
+                SELECT
+                    details ->> 'logical_size' AS size,
+                    details ->> 'replica_id' AS replica_id,
+                    details ->> 'replica_name' AS replica_name,
+                    details ->> 'cluster_name' AS cluster_name,
+                    occurred_at
+                FROM mz_catalog.mz_audit_events
+                WHERE
+                    object_type = 'cluster-replica' AND event_type = 'create'
+                        AND
+                    details ->> 'replica_id' IS NOT NULL
+                        AND
+                    details ->> 'cluster_id' !~~ 's%'
+            ),
+            drops AS
+            (
+                SELECT details ->> 'replica_id' AS replica_id, occurred_at
+                FROM mz_catalog.mz_audit_events
+                WHERE object_type = 'cluster-replica' AND event_type = 'drop'
+            )
+        SELECT
+            creates.replica_id AS internal_replica_id,
+            creates.size,
+            creates.cluster_name,
+            creates.replica_name,
+            creates.occurred_at AS created_at,
+            drops.occurred_at AS dropped_at,
+            mz_internal.mz_error_if_null(
+                    mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
+                )
+                AS credits_per_hour
+        FROM
+            creates
+                LEFT JOIN drops ON creates.replica_id = drops.replica_id
+                LEFT JOIN
+                    mz_internal.mz_cluster_replica_sizes
+                    ON mz_cluster_replica_sizes.size = creates.size"#,
+};
+
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_databases_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_databases (name)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
@@ -2709,6 +3492,7 @@ pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_schemas_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_schemas (database_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
@@ -2717,6 +3501,7 @@ pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_connections_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_connections (schema_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
@@ -2725,6 +3510,7 @@ pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_tables_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_tables (schema_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
@@ -2733,6 +3519,7 @@ pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_sources_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_sources (schema_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
@@ -2741,6 +3528,7 @@ pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_views_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_views (schema_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
@@ -2749,6 +3537,7 @@ pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_materialized_views_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_show_materialized_views (schema_id, cluster_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
@@ -2757,6 +3546,7 @@ pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_sinks_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_sinks (schema_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
@@ -2765,6 +3555,7 @@ pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_types_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_types (schema_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
@@ -2773,6 +3564,7 @@ pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_all_objects_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_objects (schema_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
@@ -2781,6 +3573,7 @@ pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_indexes_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_show_indexes (on_id, schema_id, cluster_id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
@@ -2789,6 +3582,7 @@ pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_columns_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_columns (id)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
@@ -2797,6 +3591,7 @@ pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_clusters_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (name)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
@@ -2805,6 +3600,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_cluster_replicas_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_show_cluster_replicas (cluster, replica, size, ready)",
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
@@ -2813,18 +3609,110 @@ pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_secrets_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_clusters_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_clusters_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_clusters (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statuses (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_status_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_status_history_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_status_history (source_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statistics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_statistics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statistics (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sink_statistics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sink_statistics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_sink_statistics (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replicas_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replicas_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_cluster_replicas (id)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_CLUSTER_REPLICA_SIZES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_sizes_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_sizes_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_sizes (size)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_CLUSTER_REPLICA_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_statuses (replica_id)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_metrics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_metrics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_metrics (replica_id)",
+    is_retained_metrics_object: true,
 };
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
+    attributes: RoleAttributes::new().with_all(),
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
+    attributes: RoleAttributes::new(),
 });
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
     name: &*SYSTEM_USER.name,
+    privileges: vec![
+        MzAclItem {
+            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
+    ],
 });
 
 pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
@@ -2835,6 +3723,19 @@ pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
 
 pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
     name: &*INTROSPECTION_USER.name,
+    privileges: vec![
+        MzAclItem {
+            grantee: RoleId::Public,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        MzAclItem {
+            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
+    ],
 });
 
 pub static MZ_INTROSPECTION_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
@@ -2925,6 +3826,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_DATE_RANGE_ARRAY),
         Builtin::Type(&TYPE_NUM_RANGE),
         Builtin::Type(&TYPE_NUM_RANGE_ARRAY),
+        Builtin::Type(&TYPE_TS_RANGE),
+        Builtin::Type(&TYPE_TS_RANGE_ARRAY),
+        Builtin::Type(&TYPE_TSTZ_RANGE),
+        Builtin::Type(&TYPE_TSTZ_RANGE_ARRAY),
+        Builtin::Type(&TYPE_MZ_ACL_ITEM),
+        Builtin::Type(&TYPE_MZ_ACL_ITEM_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -2944,29 +3851,30 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         }
     }
     builtins.append(&mut vec![
-        Builtin::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
-        Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
-        Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),
-        Builtin::Log(&MZ_DATAFLOW_CHANNELS),
-        Builtin::Log(&MZ_DATAFLOW_OPERATORS),
-        Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
-        Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-        Builtin::Log(&MZ_COMPUTE_EXPORTS),
-        Builtin::Log(&MZ_WORKER_COMPUTE_DEPENDENCIES),
-        Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
-        Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
-        Builtin::Log(&MZ_ACTIVE_PEEKS),
-        Builtin::Log(&MZ_RAW_PEEK_DURATIONS),
-        Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
-        Builtin::Log(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS_INTERNAL),
-        Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
-        Builtin::Log(&MZ_WORKER_COMPUTE_FRONTIERS),
-        Builtin::Log(&MZ_WORKER_COMPUTE_IMPORT_FRONTIERS),
-        Builtin::Log(&MZ_RAW_WORKER_COMPUTE_DELAYS),
+        Builtin::Log(&MZ_ARRANGEMENT_SHARING_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_BATCHES_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_RECORDS_RAW),
+        Builtin::Log(&MZ_DATAFLOW_CHANNELS_PER_WORKER),
+        Builtin::Log(&MZ_DATAFLOW_OPERATORS_PER_WORKER),
+        Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
+        Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
+        Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_DEPENDENCIES_PER_WORKER),
+        Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
+        Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
+        Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
+        Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_SCHEDULING_ELAPSED_RAW),
+        Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_DELAYS_HISTOGRAM_RAW),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
+        Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
@@ -2985,8 +3893,11 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_LIST_TYPES),
         Builtin::Table(&MZ_MAP_TYPES),
         Builtin::Table(&MZ_ROLES),
+        Builtin::Table(&MZ_ROLE_MEMBERS),
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
+        Builtin::Table(&MZ_OPERATORS),
+        Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
@@ -3002,29 +3913,57 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
+        Builtin::Table(&MZ_SUBSCRIPTIONS),
+        Builtin::Table(&MZ_SESSIONS),
+        Builtin::Table(&MZ_DEFAULT_PRIVILEGES),
+        Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
+        Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
+        Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOWS),
+        Builtin::View(&MZ_DATAFLOW_ADDRESSES),
+        Builtin::View(&MZ_DATAFLOW_CHANNELS),
+        Builtin::View(&MZ_DATAFLOW_OPERATORS),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
+        Builtin::View(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
+        Builtin::View(&MZ_COMPUTE_EXPORTS),
+        Builtin::View(&MZ_COMPUTE_DEPENDENCIES),
+        Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
+        Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
+        Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
+        Builtin::View(&MZ_MESSAGE_COUNTS_PER_WORKER),
         Builtin::View(&MZ_MESSAGE_COUNTS),
-        Builtin::View(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS),
-        Builtin::View(&MZ_COMPUTE_OPERATOR_DURATIONS),
-        Builtin::View(&MZ_WORKER_COMPUTE_DELAYS),
-        Builtin::View(&MZ_PEEK_DURATIONS),
+        Builtin::View(&MZ_ACTIVE_PEEKS),
+        Builtin::View(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM),
+        Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
+        Builtin::View(&MZ_RECORDS_PER_DATAFLOW_PER_WORKER),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
-        Builtin::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
+        Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER),
+        Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
+        Builtin::View(&MZ_SCHEDULING_ELAPSED_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
-        Builtin::View(&MZ_SCHEDULING_PARKS),
+        Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),
+        Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
+        Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
+        Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
         Builtin::View(&PG_DATABASE),
@@ -3033,13 +3972,17 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TYPE),
         Builtin::View(&PG_ATTRIBUTE),
         Builtin::View(&PG_PROC),
+        Builtin::View(&PG_OPERATOR),
         Builtin::View(&PG_RANGE),
         Builtin::View(&PG_ENUM),
         Builtin::View(&PG_ATTRDEF),
         Builtin::View(&PG_SETTINGS),
+        Builtin::View(&PG_AUTH_MEMBERS),
         Builtin::View(&PG_CONSTRAINT),
         Builtin::View(&PG_TABLES),
+        Builtin::View(&PG_TABLESPACE),
         Builtin::View(&PG_ACCESS_METHODS),
+        Builtin::View(&PG_LOCKS),
         Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
@@ -3047,6 +3990,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
+        Builtin::View(&PG_AGGREGATE),
+        Builtin::View(&PG_TRIGGER),
+        Builtin::View(&PG_REWRITE),
+        Builtin::View(&PG_EXTENSION),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
@@ -3072,6 +4019,15 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CLUSTERS_IND),
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
+        Builtin::Index(&MZ_CLUSTERS_IND),
+        Builtin::Index(&MZ_SOURCE_STATUSES_IND),
+        Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
+        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
+        Builtin::Index(&MZ_SINK_STATISTICS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
     ]);
 
     builtins
@@ -3098,16 +4054,6 @@ pub mod BUILTINS {
         })
     }
 
-    // TODO(lh): Once we remove legacy logs, this function should not be needed anymore
-    pub fn variant_to_builtin(variant: LogVariant) -> Option<&'static BuiltinLog> {
-        for x in logs() {
-            if x.variant == variant {
-                return Some(x);
-            }
-        }
-        None
-    }
-
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::Type(typ) => Some(*typ),
@@ -3132,13 +4078,14 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::env;
 
-    use tokio_postgres::NoTls;
-
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
-    use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
+    use mz_sql::func::OP_IMPLS;
+    use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
+    use tokio_postgres::types::Type;
+    use tokio_postgres::NoTls;
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
 
@@ -3146,14 +4093,12 @@ mod tests {
 
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
-    #[tokio::test]
-    async fn compare_builtins_postgres() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+    #[mz_ore::test(tokio::test)]
+    async fn test_compare_builtins_postgres() {
+        async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
             // - have a unique OID
             // - if they have a postgres counterpart (same oid) then they have matching name
-            // Note: Use Postgres 13 when testing because older version don't have all
-            // functions.
             let (client, connection) = tokio_postgres::connect(
                 &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
                 NoTls,
@@ -3169,7 +4114,6 @@ mod tests {
 
             struct PgProc {
                 name: String,
-                schema: String,
                 arg_oids: Vec<u32>,
                 ret_oid: Option<u32>,
                 ret_set: bool,
@@ -3182,12 +4126,16 @@ mod tests {
                 array: u32,
             }
 
+            struct PgOper {
+                oprresult: u32,
+                name: String,
+            }
+
             let pg_proc: BTreeMap<_, _> = client
                 .query(
                     "SELECT
                     p.oid,
                     proname,
-                    nspname,
                     proargtypes,
                     prorettype,
                     proretset
@@ -3202,18 +4150,12 @@ mod tests {
                     let oid: u32 = row.get("oid");
                     let pg_proc = PgProc {
                         name: row.get("proname"),
-                        schema: row.get("nspname"),
                         arg_oids: row.get("proargtypes"),
                         ret_oid: row.get("prorettype"),
                         ret_set: row.get("proretset"),
                     };
                     (oid, pg_proc)
                 })
-                .collect();
-
-            let pg_proc_by_name: BTreeMap<_, _> = pg_proc
-                .iter()
-                .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
                 .collect();
 
             let pg_type: BTreeMap<_, _> = client
@@ -3236,10 +4178,25 @@ mod tests {
                 })
                 .collect();
 
+            let pg_oper: BTreeMap<_, _> = client
+                .query("SELECT oid, oprname, oprresult FROM pg_operator", &[])
+                .await
+                .expect("pg query failed")
+                .into_iter()
+                .map(|row| {
+                    let oid: u32 = row.get("oid");
+                    let pg_oper = PgOper {
+                        name: row.get("oprname"),
+                        oprresult: row.get("oprresult"),
+                    };
+                    (oid, pg_oper)
+                })
+                .collect();
+
             let conn_catalog = catalog.for_system_session();
             let resolve_type_oid = |item: &str| {
                 conn_catalog
-                    .resolve_item(&PartialObjectName {
+                    .resolve_item(&PartialItemName {
                         database: None,
                         // All functions we check exist in PG, so the types must, as
                         // well
@@ -3250,19 +4207,38 @@ mod tests {
                     .oid()
             };
 
-            let mut proc_oids = BTreeSet::new();
-            let mut type_oids = BTreeSet::new();
+            let mut all_oids = BTreeSet::new();
+
+            // A function to determine if two oids are equivalent enough for these tests. We don't
+            // support some types, so map exceptions here.
+            let equivalent_types: BTreeSet<(Option<u32>, Option<u32>)> = BTreeSet::from_iter(
+                [
+                    // We don't support NAME.
+                    (Type::NAME, Type::TEXT),
+                    (Type::NAME_ARRAY, Type::TEXT_ARRAY),
+                    // We don't support time with time zone.
+                    (Type::TIME, Type::TIMETZ),
+                    (Type::TIME_ARRAY, Type::TIMETZ_ARRAY),
+                ]
+                .map(|(a, b)| (Some(a.oid()), Some(b.oid()))),
+            );
+            let ignore_return_types: BTreeSet<u32> = BTreeSet::from([
+                1619, // pg_typeof: TODO: We now have regtype and can correctly implement this.
+            ]);
+            let is_same_type = |fn_oid: u32, a: Option<u32>, b: Option<u32>| -> bool {
+                if ignore_return_types.contains(&fn_oid) {
+                    return true;
+                }
+                if equivalent_types.contains(&(a, b)) || equivalent_types.contains(&(b, a)) {
+                    return true;
+                }
+                a == b
+            };
 
             for builtin in BUILTINS::iter() {
                 match builtin {
                     Builtin::Type(ty) => {
-                        // Verify that all type OIDs are unique.
-                        assert!(
-                            type_oids.insert(ty.oid),
-                            "{} reused oid {}",
-                            ty.name,
-                            ty.oid
-                        );
+                        assert!(all_oids.insert(ty.oid), "{} reused oid {}", ty.name, ty.oid);
 
                         if ty.oid >= FIRST_MATERIALIZE_OID {
                             // High OIDs are reserved in Materialize and don't have
@@ -3334,19 +4310,19 @@ mod tests {
                             .resolve_schema_in_database(
                                 &ResolvedDatabaseSpecifier::Ambient,
                                 ty.schema,
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve schema");
                         let allocated_type = catalog
                             .resolve_entry(
                                 None,
                                 &vec![(ResolvedDatabaseSpecifier::Ambient, schema.id().clone())],
-                                &PartialObjectName {
+                                &PartialItemName {
                                     database: None,
                                     schema: Some(schema.name().schema.clone()),
                                     item: ty.name.to_string(),
                                 },
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve type");
                         let ty = if let CatalogItem::Type(ty) = &allocated_type.item {
@@ -3372,31 +4348,17 @@ mod tests {
                     }
                     Builtin::Func(func) => {
                         for imp in func.inner.func_impls() {
-                            // Verify that all function OIDs are unique.
                             assert!(
-                                proc_oids.insert(imp.oid),
+                                all_oids.insert(imp.oid),
                                 "{} reused oid {}",
                                 func.name,
                                 imp.oid
                             );
 
-                            if imp.oid >= FIRST_MATERIALIZE_OID {
-                                // High OIDs are reserved in Materialize and don't have
-                                // postgres counterparts.
-                                continue;
-                            }
-
                             // For functions that have a postgres counterpart, verify that the name and
                             // oid match.
                             let pg_fn = if imp.oid >= FIRST_UNPINNED_OID {
-                                pg_proc_by_name
-                                    .get(&(func.schema, func.name))
-                                    .unwrap_or_else(|| {
-                                        panic!(
-                                            "pg_proc missing function {}.{}",
-                                            func.schema, func.name
-                                        )
-                                    })
+                                continue;
                             } else {
                                 pg_proc.get(&imp.oid).unwrap_or_else(|| {
                                     panic!(
@@ -3428,29 +4390,61 @@ mod tests {
 
                             let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
 
-                            if imp_return_oid != pg_fn.ret_oid {
-                                println!(
+                            assert!(
+                                is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
                             );
-                            }
 
-                            if imp.return_is_set != pg_fn.ret_set {
-                                println!(
+                            assert_eq!(
+                                imp.return_is_set,
+                                pg_fn.ret_set,
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
-                            }
                         }
                     }
                     _ => (),
                 }
             }
-        }).await
+
+            for (op, func) in OP_IMPLS.iter() {
+                for imp in func.func_impls() {
+                    assert!(all_oids.insert(imp.oid), "{} reused oid {}", op, imp.oid);
+
+                    // For operators that have a postgres counterpart, verify that the name and oid match.
+                    let pg_op = if imp.oid >= FIRST_UNPINNED_OID {
+                        continue;
+                    } else {
+                        pg_oper.get(&imp.oid).unwrap_or_else(|| {
+                            panic!("pg_operator missing operator {}: oid {}", op, imp.oid)
+                        })
+                    };
+
+                    assert_eq!(*op, pg_op.name);
+
+                    let imp_return_oid = imp
+                        .return_typ
+                        .map(|item| resolve_type_oid(item))
+                        .expect("must have oid");
+                    if imp_return_oid != pg_op.oprresult {
+                        println!(
+                            "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
+                            imp.oid,
+                            op,
+                            imp_return_oid,
+                            pg_op.oprresult
+                        );
+                    }
+                }
+            }
+        }
+
+        Catalog::with_debug(NOW_ZERO.clone(), inner).await
     }
 
     // Make sure pg views don't use types that only exist in Materialize.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -3459,7 +4453,7 @@ mod tests {
                 view.schema == PG_CATALOG_SCHEMA || view.schema == INFORMATION_SCHEMA
             }) {
                 let item = conn_catalog
-                    .resolve_item(&PartialObjectName {
+                    .resolve_item(&PartialItemName {
                         database: None,
                         schema: Some(view.schema.to_string()),
                         item: view.name.to_string(),
@@ -3477,7 +4471,8 @@ mod tests {
                         | typ @ ScalarType::UInt64
                         | typ @ ScalarType::MzTimestamp
                         | typ @ ScalarType::List { .. }
-                        | typ @ ScalarType::Map { .. } => {
+                        | typ @ ScalarType::Map { .. }
+                        | typ @ ScalarType::MzAclItem => {
                             panic!("{typ:?} type found in {full_name}");
                         }
                         ScalarType::Bool

@@ -18,7 +18,7 @@ pip install dbt-materialize      # install the adapter
 ## Requirements
 
 <!-- If you update this, bump the constraint in connections.py too. -->
-`dbt-materialize` requires Materialize v0.28.0+.
+`dbt-materialize` requires Materialize v0.49.0+.
 
 ## Configuring your profile
 

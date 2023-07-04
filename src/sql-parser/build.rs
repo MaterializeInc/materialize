@@ -51,8 +51,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,14 +79,12 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::env;
-use std::fs;
 use std::path::PathBuf;
+use std::{env, fs};
 
 use anyhow::{bail, Context, Result};
-use uncased::UncasedStr;
-
 use mz_ore::codegen::CodegenBuf;
+use uncased::UncasedStr;
 
 const AST_DEFS_MOD: &str = "src/ast/defs.rs";
 const KEYWORDS_LIST: &str = "src/keywords.txt";

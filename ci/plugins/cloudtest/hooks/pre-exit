@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
@@ -12,24 +12,6 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
-
-kubectl() {
-    bin/ci-builder run stable kubectl --context=kind-cloudtest "$@"
-}
-
-ci_unimportant_heading "cloudtest: Uploading logs..."
-for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
-  kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
-  kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
-done
-kubectl get events > kubectl-get-events.log || true
-kubectl get all > kubectl-get-all.log || true
-kubectl describe all > kubectl-describe-all.log || true
-buildkite-agent artifact upload "kubectl-*.log"
-
-# shellcheck disable=SC2024
-sudo journalctl --merge > journalctl-merge.log
-buildkite-agent artifact upload journalctl-merge.log
 
 ci_unimportant_heading "cloudtest: Resetting..."
 bin/ci-builder run stable test/cloudtest/reset

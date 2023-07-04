@@ -92,6 +92,9 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty pg_postmaster_start_time = 12;
         google.protobuf.Empty version = 13;
         google.protobuf.Empty mz_version_num = 14;
+        google.protobuf.Empty current_setting = 15;
+        google.protobuf.Empty is_rbac_enabled = 16;
+        google.protobuf.Empty session_user = 17;
     }
 }
 
@@ -410,6 +413,14 @@ message ProtoUnaryFunc {
         google.protobuf.Empty range_upper_inc = 287;
         google.protobuf.Empty range_lower_inf = 288;
         google.protobuf.Empty range_upper_inf = 289;
+        google.protobuf.Empty cast_pg_legacy_char_to_char = 290;
+        google.protobuf.Empty cast_pg_legacy_char_to_var_char = 291;
+        google.protobuf.Empty mz_acl_item_grantor = 292;
+        google.protobuf.Empty mz_acl_item_grantee = 293;
+        google.protobuf.Empty mz_acl_item_privileges = 294;
+        ProtoCastToVariableType cast_array_to_array = 295;
+        google.protobuf.Empty mz_validate_privileges = 296;
+        google.protobuf.Empty quote_ident = 297;
     }
 }
 
@@ -599,6 +610,11 @@ message ProtoBinaryFunc {
         google.protobuf.Empty range_union = 180;
         google.protobuf.Empty range_intersection = 181;
         google.protobuf.Empty range_difference = 182;
+        google.protobuf.Empty uuid_generate_v5 = 183;
+        google.protobuf.Empty mz_acl_item_contains_privilege = 184;
+        google.protobuf.Empty parse_ident = 185;
+        google.protobuf.Empty age_timestamp = 186;
+        google.protobuf.Empty age_timestamp_tz = 187;
     }
 }
 
@@ -619,7 +635,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty jsonb_build_object = 10;
         mz_repr.relation_and_scalar.ProtoScalarType array_create = 11;
         mz_repr.relation_and_scalar.ProtoScalarType array_to_string = 12;
-        uint64 array_index = 13;
+        int64 array_index = 13;
         mz_repr.relation_and_scalar.ProtoScalarType list_create = 14;
         ProtoRecordCreate record_create = 15;
         google.protobuf.Empty list_index = 6;
@@ -634,6 +650,15 @@ message ProtoVariadicFunc {
         google.protobuf.Empty and = 25;
         google.protobuf.Empty or = 26;
         mz_repr.relation_and_scalar.ProtoScalarType range_create = 27;
+        google.protobuf.Empty make_mz_acl_item = 28;
+        google.protobuf.Empty translate = 29;
+        google.protobuf.Empty array_position = 30;
+        mz_repr.relation_and_scalar.ProtoScalarType array_fill = 31;
+        google.protobuf.Empty concat_ws = 32;
+        google.protobuf.Empty date_diff_timestamp = 33;
+        google.protobuf.Empty date_diff_timestamp_tz = 34;
+        google.protobuf.Empty date_diff_date = 35;
+        google.protobuf.Empty date_diff_time = 36;
     }
 }
 
@@ -686,6 +711,18 @@ message ProtoEvalError {
         int32 provided = 1;
         int32 valid_end = 2;
     }
+    message ProtoInvalidIdentifier {
+        string ident = 1;
+        optional string detail = 2;
+    }
+    message ProtoValueOutOfRange {
+        string value = 1;
+    }
+    message ProtoDateDiffOverflow {
+        string unit = 1;
+        string a = 2;
+        string b = 3;
+    }
     oneof kind {
         int32 character_not_valid_for_encoding = 1;
         int32 character_too_large_for_encoding = 2;
@@ -695,13 +732,13 @@ message ProtoEvalError {
         google.protobuf.Empty float_overflow = 6;
         google.protobuf.Empty float_underflow = 7;
         google.protobuf.Empty numeric_field_overflow = 8;
-        google.protobuf.Empty float32_out_of_range = 9;
-        google.protobuf.Empty float64_out_of_range = 10;
-        google.protobuf.Empty int16_out_of_range = 11;
-        google.protobuf.Empty int32_out_of_range = 12;
-        google.protobuf.Empty int64_out_of_range = 13;
-        google.protobuf.Empty oid_out_of_range = 14;
-        google.protobuf.Empty interval_out_of_range = 15;
+        ProtoValueOutOfRange float32_out_of_range = 9;
+        ProtoValueOutOfRange float64_out_of_range = 10;
+        ProtoValueOutOfRange int16_out_of_range = 11;
+        ProtoValueOutOfRange int32_out_of_range = 12;
+        ProtoValueOutOfRange int64_out_of_range = 13;
+        ProtoValueOutOfRange oid_out_of_range = 14;
+        ProtoValueOutOfRange interval_out_of_range = 15;
         google.protobuf.Empty timestamp_out_of_range = 16;
         google.protobuf.Empty char_out_of_range = 17;
         google.protobuf.Empty invalid_base64_equals = 18;
@@ -741,13 +778,24 @@ message ProtoEvalError {
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
         ProtoIndexOutOfRange index_out_of_range = 54;
-        google.protobuf.Empty uint16_out_of_range = 55;
-        google.protobuf.Empty uint32_out_of_range = 56;
-        google.protobuf.Empty uint64_out_of_range = 57;
+        ProtoValueOutOfRange uint16_out_of_range = 55;
+        ProtoValueOutOfRange uint32_out_of_range = 56;
+        ProtoValueOutOfRange uint64_out_of_range = 57;
         google.protobuf.Empty date_out_of_range = 58;
-        google.protobuf.Empty mz_timestamp_out_of_range = 59;
+        ProtoValueOutOfRange mz_timestamp_out_of_range = 59;
         google.protobuf.Empty mz_timestamp_step_overflow = 60;
         google.protobuf.Empty timestamp_cannot_be_nan = 61;
         mz_repr.adt.range.ProtoInvalidRangeError invalid_range = 62;
+        string invalid_role_id = 63;
+        string invalid_privileges = 64;
+        string wmr_recursion_limit_exceeded = 65;
+        google.protobuf.Empty multi_dimensional_array_search = 66;
+        string must_not_be_null = 67;
+        ProtoInvalidIdentifier invalid_identifier = 68;
+        google.protobuf.Empty array_fill_wrong_array_subscripts = 69;
+        uint64 max_array_size_exceeded = 70;
+        string invalid_date_part = 71;
+        ProtoDateDiffOverflow date_diff_overflow = 72;
+        string if_null_error = 73;
     }
 }

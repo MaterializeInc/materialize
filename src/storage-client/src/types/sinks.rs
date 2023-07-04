@@ -11,15 +11,15 @@
 
 use std::fmt::Debug;
 
+use mz_persist_client::ShardId;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationDesc};
+use mz_stash::objects::proto;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
-
-use mz_persist_client::ShardId;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc};
 
 use crate::controller::CollectionMetadata;
 use crate::types::connections::{CsrConnection, KafkaConnection};
@@ -169,15 +169,14 @@ pub struct SinkAsOf<T = mz_repr::Timestamp> {
 }
 
 impl<T: PartialOrder + Clone> SinkAsOf<T> {
-    pub fn maybe_fast_forward(&self, other_since: &Antichain<T>) -> Self {
+    /// Forwards the since frontier of this `SinkAsOf`. If it is already
+    /// sufficiently far advanced the downgrade is a no-op.
+    pub fn downgrade(&mut self, other_since: &Antichain<T>) {
         if PartialOrder::less_equal(&self.frontier, other_since) {
-            SinkAsOf {
-                frontier: other_since.to_owned(),
-                // If we're using the since, never read the snapshot
-                strict: true,
-            }
-        } else {
-            self.to_owned()
+            // TODO(aljoscha): Should this be meet_assign?
+            self.frontier.clone_from(other_since);
+            // If we're using the since, never read the snapshot
+            self.strict = true;
         }
     }
 }
@@ -212,6 +211,23 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
             frontier: proto
                 .frontier
                 .into_rust_if_some("ProtoSinkAsOf::frontier")?,
+            strict: proto.strict,
+        })
+    }
+}
+
+impl RustType<proto::SinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
+    fn into_proto(&self) -> proto::SinkAsOf {
+        proto::SinkAsOf {
+            frontier: Some(self.frontier.into_proto()),
+            strict: self.strict,
+        }
+    }
+
+    fn from_proto(proto: proto::SinkAsOf) -> Result<Self, TryFromProtoError> {
+        let frontier = proto.frontier.into_rust_if_some("SinkAsOf::frontier")?;
+        Ok(SinkAsOf {
+            frontier,
             strict: proto.strict,
         })
     }

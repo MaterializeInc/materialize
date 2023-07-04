@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import os
-import subprocess
+from inspect import Traceback
 from typing import Optional
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
@@ -49,36 +49,31 @@ class Testdrive(K8sPod):
         input: Optional[str] = None,
         no_reset: bool = False,
         seed: Optional[int] = None,
+        caller: Optional[Traceback] = None,
     ) -> None:
         wait(condition="condition=Ready", resource="pod/testdrive")
-        subprocess.run(
-            [
-                "kubectl",
-                "--context",
-                self.context(),
-                "exec",
-                "-it",
-                "testdrive",
-                "--",
-                "testdrive",
-                "--materialize-url=postgres://materialize:materialize@environmentd:6875/materialize",
-                "--materialize-internal-url=postgres://materialize:materialize@environmentd:6877/materialize",
-                "--kafka-addr=redpanda:9092",
-                "--schema-registry-url=http://redpanda:8081",
-                "--default-timeout=300s",
-                "--var=replicas=1",
-                "--var=default-storage-size=1",
-                "--var=default-replica-size=1",
-                *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
-                # S3 sources are not compatible with Minio unfortunately
-                # "--aws-endpoint=http://minio-service.default:9000",
-                # "--aws-access-key-id=minio",
-                # "--aws-secret-access-key=minio123",
-                *(["--no-reset"] if no_reset else []),
-                *([f"--seed={seed}"] if seed else []),
-                *args,
-            ],
-            check=True,
+        self.kubectl(
+            "exec",
+            "-it",
+            "testdrive",
+            "--",
+            "testdrive",
+            "--materialize-url=postgres://materialize:materialize@environmentd:6875/materialize",
+            "--materialize-internal-url=postgres://materialize:materialize@environmentd:6877/materialize",
+            "--kafka-addr=redpanda:9092",
+            "--schema-registry-url=http://redpanda:8081",
+            "--default-timeout=300s",
+            "--var=replicas=1",
+            "--var=default-storage-size=1",
+            "--var=default-replica-size=1",
+            *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
+            # S3 sources are not compatible with Minio unfortunately
+            # "--aws-endpoint=http://minio-service.default:9000",
+            # "--aws-access-key-id=minio",
+            # "--aws-secret-access-key=minio123",
+            *(["--no-reset"] if no_reset else []),
+            *([f"--seed={seed}"] if seed else []),
+            *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),
+            *args,
             input=input,
-            text=True,
         )

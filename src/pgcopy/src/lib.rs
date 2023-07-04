@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -83,5 +81,7 @@
 
 mod copy;
 
-pub use copy::{decode_copy_format, encode_copy_row_binary, encode_copy_row_text};
-pub use copy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams, CopyTextFormatParser};
+pub use copy::{
+    decode_copy_format, encode_copy_row_binary, encode_copy_row_text, CopyCsvFormatParams,
+    CopyFormatParams, CopyTextFormatParams, CopyTextFormatParser,
+};

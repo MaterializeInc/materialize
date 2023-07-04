@@ -23,10 +23,25 @@
             {{- if .HasChildren }}
             <ul>
               {{- range .Children }}
-              <li class="level-3">
-                <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+              <li class="level-3 {{if .HasChildren }}has-children{{ else }}no-children{{ end }}">
+                <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+                  {{- if .HasChildren }}
+                    {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
+                  {{ end }}
                   {{.Name | markdownify}}
                 </a>
+
+                {{- if .HasChildren }}
+                <ul>
+                  {{- range .Children }}
+                  <li class="level-4">
+                    <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+                      {{.Name | markdownify}}
+                    </a>
+                  </li>
+                  {{- end}}
+                </ul>
+                {{- end}}
               </li>
               {{- end}}
             </ul>

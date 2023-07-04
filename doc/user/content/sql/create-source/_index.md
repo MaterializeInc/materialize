@@ -11,7 +11,8 @@ menu:
     weight: 20
 ---
 
-A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+A [source](../../get-started/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+Like other relations, sources are [namespaced](../namespaces/) by a database and schema.
 
 [//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
 
@@ -88,7 +89,7 @@ CREATE VIEW my_jsonb_source AS
 Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
 {{</ note >}}
 
-To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/overview/key-concepts/#materialized-views).
+To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/get-started/key-concepts/#materialized-views).
 
 ```sql
 -- parse jsonb into typed columns
@@ -108,9 +109,9 @@ Retrieving schemas from a schema registry is not supported yet for JSON-formatte
 
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT PROTOBUF</code></p>
 
-Materialize can decode Protobuf messages by integrating with a schema registry to retrieve a `.proto` schema definition, and automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
+Materialize can decode Protobuf messages by integrating with a schema registry or parsing an inline schema to retrieve a `.proto` schema definition. It can then automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
 
-* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with `protoc`, for example:
+* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with [`protoc`](https://grpc.io/docs/protoc-installation/), for example:
 
   ```shell
   protoc --include_imports --descriptor_set_out=SCHEMA billing.proto
@@ -251,7 +252,7 @@ Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.
 
 You can also choose to place a source in an existing
-[cluster](/overview/key-concepts/#clusters) by using the `IN CLUSTER` option.
+[cluster](/get-started/key-concepts/#clusters) by using the `IN CLUSTER` option.
 Sources in a cluster share the resource allocation of the cluster with all other
 objects in the cluster.
 
@@ -261,7 +262,7 @@ capacity.
 
 ## Related pages
 
-- [Key Concepts](../../overview/key-concepts/)
+- [Key Concepts](../../get-started/key-concepts/)
 - [`SHOW SOURCES`](/sql/show-sources/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SOURCE`](/sql/show-create-source/)

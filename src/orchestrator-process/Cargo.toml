@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
-async-trait = "0.1.59"
+async-trait = "0.1.68"
 chrono = { version = "0.4.23", default_features = false, features = ["clock"] }
 futures = "0.3.25"
 hex = "0.4.3"
@@ -21,6 +21,7 @@ mz-ore = { path = "../ore", features = ["async"] }
 mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+nix = "0.26.1"
 serde = "1.0.147"
 serde_json = "1.0.89"
 scopeguard = "1.1.0"

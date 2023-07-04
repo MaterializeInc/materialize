@@ -8,6 +8,10 @@
 # by the Apache License, Version 2.0.
 
 # bin_date
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_binary_date_bin = true
+----
+COMPLETE 0
 
 # Tests adapted from Postgresql
 # https://github.com/postgres/postgres/blob/master/src/test/regress/sql/timestamptz.sql

@@ -59,8 +59,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -401,11 +399,11 @@
 
 mod codec;
 mod decode;
-pub mod encode;
 mod reader;
 mod util;
 mod writer;
 
+pub mod encode;
 pub mod error;
 pub mod schema;
 pub mod types;
@@ -428,13 +426,15 @@ pub use crate::writer::{to_avro_datum, write_avro_datum, ValidationError, Writer
 mod tests {
     use std::str::FromStr;
 
-    use super::*;
     use crate::reader::Reader;
     use crate::schema::Schema;
     use crate::types::{Record, Value};
 
+    use super::*;
+
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_default() {
         let writer_raw_schema = r#"
             {
@@ -487,7 +487,8 @@ mod tests {
     }
 
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_string_value() {
         let raw_schema = r#"
             {
@@ -530,7 +531,8 @@ mod tests {
     }
 
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_resolution() {
         let writer_raw_schema = r#"
             {
@@ -586,7 +588,7 @@ mod tests {
     }
 
     //TODO: move where it fits better
-    #[test]
+    #[mz_ore::test]
     fn test_enum_no_reader_schema() {
         let writer_raw_schema = r#"
             {
@@ -626,7 +628,7 @@ mod tests {
             ])
         );
     }
-    #[test]
+    #[mz_ore::test]
     fn test_datetime_value() {
         let writer_raw_schema = r#"{
         "type": "record",
@@ -655,7 +657,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_malformed_length() {
         let raw_schema = r#"
             {

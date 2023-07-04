@@ -1,0 +1,60 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+query T
+SELECT 1 IS DISTINCT FROM 1
+----
+false
+
+query T
+SELECT 1 IS DISTINCT FROM 2
+----
+true
+
+query T
+SELECT 1 IS DISTINCT FROM NULL
+----
+true
+
+query T
+SELECT NULL IS DISTINCT FROM 1
+----
+true
+
+query T
+SELECT NULL IS DISTINCT FROM NULL
+----
+false
+
+query T
+SELECT 1 IS NOT DISTINCT FROM 1
+----
+true
+
+query T
+SELECT 1 IS NOT DISTINCT FROM 2
+----
+false
+
+query T
+SELECT 1 IS NOT DISTINCT FROM NULL
+----
+false
+
+query T
+SELECT NULL IS NOT DISTINCT FROM 1
+----
+false
+
+query T
+SELECT NULL IS NOT DISTINCT FROM NULL
+----
+true

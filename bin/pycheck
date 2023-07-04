@@ -36,6 +36,6 @@ if ! try_last_failed; then
         try bin/pyactivate -m mypy "$file"
     done
 fi
-try bin/pyactivate -m flake8 --select F --ignore F541 --extend-exclude venv "${flake8_folders[@]}"
+try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
 try bin/pyactivate -m pytest -qq --doctest-modules misc/python
 try_finish

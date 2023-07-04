@@ -17,15 +17,6 @@ use std::sync::Arc;
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::Operator;
-use timely::progress::Timestamp;
-use timely::scheduling::{Scheduler, SyncActivator};
-use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
-
 use mz_cluster::server::TimelyContainerRef;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -35,9 +26,16 @@ use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_persist_client::cache::PersistClientCache;
+use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::source;
+use timely::dataflow::operators::Operator;
+use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::{Scheduler, SyncActivator};
+use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
 
-use crate::compute_state::ActiveComputeState;
-use crate::compute_state::ComputeState;
+use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 use crate::{TraceManager, TraceMetrics};
@@ -388,15 +386,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
+                let command_history =
+                    ComputeCommandHistory::new(self.compute_metrics.for_history());
+
                 self.compute_state = Some(ComputeState {
                     traces: TraceManager::new(
                         self.trace_metrics.clone(),
                         self.timely_worker.index(),
                     ),
                     sink_tokens: BTreeMap::new(),
-                    subscribe_response_buffer: std::rc::Rc::new(
-                        std::cell::RefCell::new(Vec::new()),
-                    ),
+                    subscribe_response_buffer: Rc::new(RefCell::new(Vec::new())),
                     sink_write_frontiers: BTreeMap::new(),
                     flow_control_probes: BTreeMap::new(),
                     pending_peeks: BTreeMap::new(),
@@ -404,9 +403,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     dropped_collections: Vec::new(),
                     compute_logger: None,
                     persist_clients: Arc::clone(&self.persist_clients),
-                    command_history: ComputeCommandHistory::default(),
+                    command_history,
                     max_result_size: u32::MAX,
                     dataflow_max_inflight_bytes: usize::MAX,
+                    linear_join_impl: Default::default(),
                     metrics: self.compute_metrics.clone(),
                 });
             }
@@ -471,9 +471,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // and creating new dataflows, in addition to standard peek and compaction commands.
         // The result should be the same as if dropping all dataflows and running `new_commands`.
         let mut todo_commands = Vec::new();
-        // Exported identifiers from dataflows we retain.
-        let mut retain_ids = BTreeSet::default();
-
         // We only have a compute history if we are in an initialized state
         // (i.e. after a `CreateInstance`).
         // If this is not the case, just copy `new_commands` into `todo_commands`.
@@ -527,6 +524,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             // Compaction commands that can be applied to existing dataflows.
             let mut old_compaction = BTreeMap::default();
+            // Exported identifiers from dataflows we retain.
+            let mut retain_ids = BTreeSet::default();
 
             // Traverse new commands, sorting out what remediation we can do.
             for command in new_commands.iter() {
@@ -537,7 +536,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                         // Attempt to find an existing match for each dataflow.
                         for dataflow in dataflows.iter() {
+                            let as_of = dataflow.as_of.as_ref().unwrap();
                             let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
+
                             if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
                                 let compatible = old_dataflow.compatible_with(dataflow);
                                 let uncompacted = !export_ids
@@ -560,7 +561,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                     // and compact its outputs to the dataflow's `as_of`.
                                     old_dataflows.remove(&export_ids);
                                     for id in export_ids.iter() {
-                                        old_compaction.insert(*id, dataflow.as_of.clone().unwrap());
+                                        old_compaction.insert(*id, as_of.clone());
                                     }
                                     retain_ids.extend(export_ids);
                                 } else {
@@ -590,11 +591,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 old_logging_config,
                             );
                         }
-
-                        // Ensure we retain the logging sink dataflows.
-                        for (id, _) in logging.sink_logs.values() {
-                            retain_ids.insert(*id);
-                        }
                     }
                     // All other commands we apply as requested.
                     command => {
@@ -608,16 +604,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 for id in dataflow.export_ids() {
                     // We want to drop anything that has not yet been dropped,
                     // and nothing that has already been dropped.
-                    if old_frontiers.get(&id) != Some(&&timely::progress::Antichain::default()) {
-                        old_compaction.insert(id, timely::progress::Antichain::default());
+                    if old_frontiers.get(&id) != Some(&&Antichain::new()) {
+                        old_compaction.insert(id, Antichain::new());
                     }
                 }
             }
             if !old_compaction.is_empty() {
-                todo_commands.insert(
-                    0,
-                    ComputeCommand::AllowCompaction(old_compaction.into_iter().collect::<Vec<_>>()),
-                );
+                let compactions = old_compaction
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect();
+                todo_commands.insert(0, ComputeCommand::AllowCompaction(compactions));
             }
 
             // Clean up worker-local state.
@@ -635,29 +632,62 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
                 }
             }
-            // We compact away removed frontiers, and so only need to reset ids we continue to use.
-            // We must remember, though, to compensate what already was sent to logging sources.
-            for (&id, frontier) in compute_state.reported_frontiers.iter_mut() {
+
+            // Clear the list of dropped collections.
+            // We intended to report their dropping, but the controller does not expect to hear
+            // about them anymore.
+            compute_state.dropped_collections = Default::default();
+
+            // Adjust reported frontiers:
+            //  * For dataflows we continue to use, reset to ensure we report something not before
+            //    the new `as_of` next.
+            //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
+            //    anything for them. This is only needed until we implement #16275.
+            for (&id, reported_frontier) in compute_state.reported_frontiers.iter_mut() {
+                let retained = retain_ids.contains(&id);
+                let compaction = old_compaction.remove(&id);
+                let new_reported_frontier = match (retained, compaction) {
+                    (true, Some(new_as_of)) => ReportedFrontier::NotReported { lower: new_as_of },
+                    (true, None) => {
+                        unreachable!("retained dataflows are compacted to the new as_of")
+                    }
+                    (false, Some(new_frontier)) => {
+                        assert!(new_frontier.is_empty());
+                        ReportedFrontier::Reported(new_frontier)
+                    }
+                    (false, None) => {
+                        // Logging dataflows are implicitly retained and don't have a new as_of.
+                        // Reset them to the minimal frontier.
+                        ReportedFrontier::new()
+                    }
+                };
+
+                // Compensate what already was sent to logging sources.
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(&time) = frontier.get(0) {
+                    if let Some(time) = reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                        logger.log(ComputeEvent::Frontier {
-                            id,
-                            time: Timestamp::minimum(),
-                            diff: 1,
-                        });
+                    }
+                    if let Some(time) = new_reported_frontier.logging_time() {
+                        logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
                     }
                 }
-                *frontier = timely::progress::Antichain::from_elem(<_>::minimum());
+
+                *reported_frontier = new_reported_frontier;
             }
+
             // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
+            //
+            // Dropping the tokens of active subscribes makes them place `DroppedAt` responses into
+            // the subscribe response buffer. We drop that buffer in the next step, which ensures
+            // that we don't send out `DroppedAt` responses for subscribes dropped during
+            // reconciliation.
             compute_state
                 .sink_tokens
                 .retain(|id, _| retain_ids.contains(id));
+
             // We must drop the subscribe response buffer as it is global across all subscribes.
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
-            compute_state.subscribe_response_buffer =
-                std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
         } else {
             todo_commands = new_commands.clone();
         }
@@ -670,21 +700,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history = ComputeCommandHistory::default();
+            let mut command_history =
+                ComputeCommandHistory::new(self.compute_metrics.for_history());
             for command in new_commands.iter() {
                 command_history.push(command.clone(), &compute_state.pending_peeks);
             }
             compute_state.command_history = command_history;
-            compute_state.metrics.command_history_size.set(
-                u64::try_from(compute_state.command_history.len()).expect(
-                    "The compute command history size must be non-negative and fit a 64-bit number",
-                ),
-            );
-            compute_state.metrics.dataflow_count_in_history.set(
-                u64::try_from(compute_state.command_history.dataflow_count()).expect(
-                    "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
-                ),
-            );
         }
         Ok(())
     }

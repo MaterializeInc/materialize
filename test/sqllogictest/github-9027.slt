@@ -68,9 +68,9 @@ Explained Query:
       linear_stage[0]
         closure
           project=()
-        lookup={ relation=1, key=[#0] }
+        lookup={ relation=0, key=[#0] }
         stream={ key=[#0], thinning=() }
-      source={ relation=0, key=[#0] }
+      source={ relation=1, key=[#0] }
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
@@ -88,9 +88,9 @@ Explained Query:
             lookup={ relation=0, key=[] }
             stream={ key=[], thinning=(#0, #1) }
           linear_stage[0]
-            lookup={ relation=1, key=[#0] }
-            stream={ key=[#0], thinning=(#1) }
-          source={ relation=2, key=[#0] }
+            lookup={ relation=2, key=[#0] }
+            stream={ key=[#0], thinning=() }
+          source={ relation=1, key=[#0] }
           ArrangeBy
             raw=true
             arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
@@ -113,9 +113,9 @@ Explained Query:
     cte l0 =
       Join::Linear
         linear_stage[0]
-          lookup={ relation=0, key=[] }
-          stream={ key=[], thinning=() }
-        source={ relation=1, key=[] }
+          lookup={ relation=1, key=[] }
+          stream={ key=[], thinning=(#0) }
+        source={ relation=0, key=[] }
         ArrangeBy
           raw=true
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }

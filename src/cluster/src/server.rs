@@ -15,20 +15,20 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use futures::future;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
+use mz_ore::halt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_persist_client::cache::PersistClientCache;
+use mz_service::client::{GenericClient, Partitionable, Partitioned};
+use mz_service::local::LocalClient;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
-use mz_ore::cast::CastFrom;
-use mz_ore::halt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_persist_client::cache::PersistClientCache;
-use mz_service::client::{GenericClient, Partitionable, Partitioned};
-use mz_service::local::LocalClient;
 
 use crate::communication::initialize_networking;
 
@@ -226,7 +226,7 @@ where
                     Self::build_timely(worker_config, config, epoch, persist_clients, handle).await;
                 match build_timely_result {
                     Err(e) => {
-                        warn!("timely initialization failed: {e:#}");
+                        warn!("timely initialization failed: {}", e.display_with_causes());
                         return Err(e);
                     }
                     Ok(ok) => ok,

@@ -9,13 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{Datum, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Row};
-
-use self::proto_map_filter_project::ProtoPredicate;
+use crate::linear::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -1376,7 +1375,6 @@ pub mod util {
             .enumerate()
             .collect();
         let thinning = (0..unthinned_arity)
-            .into_iter()
             .filter(|c| !columns_in_key.contains_key(c))
             .collect();
         (permutation, thinning)
@@ -1427,12 +1425,11 @@ pub mod plan {
     use std::collections::BTreeMap;
     use std::iter;
 
+    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+    use mz_repr::{Datum, Diff, Row, RowArena};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
-
-    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use mz_repr::{Datum, Diff, Row, RowArena};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
@@ -1442,7 +1439,7 @@ pub mod plan {
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SafeMfpPlan {
-        mfp: MapFilterProject,
+        pub(crate) mfp: MapFilterProject,
     }
 
     impl RustType<ProtoSafeMfpPlan> for SafeMfpPlan {
@@ -1566,13 +1563,13 @@ pub mod plan {
     #[derive(Arbitrary, Clone, Debug, PartialEq)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
-        mfp: SafeMfpPlan,
+        pub(crate) mfp: SafeMfpPlan,
         /// Expressions that when evaluated lower-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
-        lower_bounds: Vec<MirScalarExpr>,
+        pub(crate) lower_bounds: Vec<MirScalarExpr>,
         /// Expressions that when evaluated upper-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
-        upper_bounds: Vec<MirScalarExpr>,
+        pub(crate) upper_bounds: Vec<MirScalarExpr>,
     }
 
     impl RustType<ProtoMfpPlan> for MfpPlan {
@@ -1886,14 +1883,16 @@ pub mod plan {
 
 #[cfg(test)]
 mod tests {
-    use super::plan::*;
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use crate::linear::plan::*;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         fn mfp_plan_protobuf_roundtrip(expect in any::<MfpPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoMfpPlan>(&expect);
             assert!(actual.is_ok());

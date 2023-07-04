@@ -11,7 +11,8 @@
 
 use mz_expr::MirRelationExpr;
 
-use super::{subtree_size::SubtreeSize, Attribute, DerivedAttributes, RequiredAttributes};
+use crate::attribute::subtree_size::SubtreeSize;
+use crate::attribute::{Attribute, DerivedAttributes, RequiredAttributes};
 
 /// Compute the column types of each subtree of a [MirRelationExpr] from the
 /// bottom-up.

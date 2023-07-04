@@ -17,19 +17,18 @@ steps:
       - select: Tests
         key: tests
         options:
-          - { value: coverage }
           - { value: kafka-matrix }
           - { value: kafka-multi-broker }
           - { value: redpanda-testdrive }
 #         - { value: redpanda-testdrive-aarch64 }
           - { value: limits }
-          - { value: cluster-limits }
           - { value: limits-instance-size }
           - { value: testdrive-partitions-5 }
-          - { value: testdrive-replicas-4}
-          - { value: testdrive-size-1}
-          - { value: testdrive-size-8}
-          - { value: testdrive-in-cloudtest}
+          - { value: testdrive-replicas-4 }
+          - { value: testdrive-size-1 }
+          - { value: testdrive-size-8 }
+          - { value: testdrive-in-cloudtest }
+          - { value: upsert-compaction-disabled }
           - { value: feature-benchmark }
           - { value: zippy-kafka-sources }
           - { value: zippy-kafka-parallel-insert }
@@ -37,34 +36,41 @@ steps:
           - { value: zippy-debezium-postgres }
           - { value: zippy-postgres-cdc }
           - { value: zippy-cluster-replicas }
-          - { value: zippy-crdb-minio-restart }
-          - { value: zippy-crdb-latest-restart }
+          - { value: zippy-crdb-latest }
           - { value: secrets }
-          - { value: checks-oneatatime-drop-create-default-replica }
-          - { value: checks-oneatatime-restart-clusterd-compute }
-          - { value: checks-oneatatime-restart-entire-mz }
-          - { value: checks-oneatatime-restart-environmentd-clusterd-storage }
-          - { value: checks-oneatatime-kill-clusterd-storage }
-          - { value: checks-oneatatime-restart-cockroach }
-          - { value: checks-oneatatime-restart-redpanda }
+          - { value: checks-restart-cockroach }
+          - { value: checks-restart-entire-mz }
           - { value: checks-parallel-drop-create-default-replica }
           - { value: checks-parallel-restart-clusterd-compute }
           - { value: checks-parallel-restart-entire-mz }
           - { value: checks-parallel-restart-environmentd-clusterd-storage }
           - { value: checks-parallel-kill-clusterd-storage }
-          - { value: checks-parallel-restart-cockroach }
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-entire-mz-previous-version }
+          - { value: checks-upgrade-entire-mz-two-versions }
+          - { value: checks-upgrade-entire-mz-skip-version }
+          - { value: checks-upgrade-entire-mz-four-versions }
           - { value: checks-upgrade-clusterd-compute-first }
           - { value: checks-upgrade-clusterd-compute-last }
+          - { value: checks-upgrade-matrix }
           - { value: cloudtest-upgrade }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
+          - { value: sql-feature-flags }
           - { value: launchdarkly }
           - { value: bounded-memory }
           - { value: cloud-canary }
+          - { value: output-consistency-test }
+          - { value: sqlsmith }
+          - { value: sqlsmith-explain }
+          - { value: sqlancer-pqs }
+          - { value: sqlancer-norec }
+          - { value: sqlancer-having }
+          - { value: sqlancer-query-partitioning }
+          - { value: crdb-restarts }
+          - { value: pubsub-disruption }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -90,6 +96,7 @@ steps:
     timeout_in_minutes: 360
     agents:
       queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -97,18 +104,11 @@ steps:
              - --other-tag
              - latest
 
-  - id: coverage
-    label: Code coverage
-    timeout_in_minutes: 240
-    command: bin/ci-builder run nightly bin/pyactivate -m ci.nightly.coverage
-    agents:
-      queue: linux-x86_64
-    skip: Disabled due to persistent OOMs when linking
-
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-matrix
@@ -117,6 +117,7 @@ steps:
     label: Kafka multi-broker test
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-multi-broker
@@ -126,11 +127,12 @@ steps:
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--redpanda, --aws-region=us-east-2]
+          args: [--redpanda, --aws-region=us-east-1]
 
 # Disabled due to taking too long for the value provided
 #  - id: redpanda-testdrive-aarch64
@@ -138,29 +140,21 @@ steps:
 #    timeout_in_minutes: 600
 #    agents:
 #      queue: linux-aarch64
+#    artifact_paths: junit_*.xml
 #    plugins:
 #      - ./ci/plugins/scratch-aws-access: ~
 #      - ./ci/plugins/mzcompose:
 #          composition: testdrive
-#          args: [--redpanda, --aws-region=us-east-2]
+#          args: [--redpanda, --aws-region=us-east-1]
 
   - id: limits
     label: "Product limits"
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
-    timeout_in_minutes: 50
-
-  - id: cluster-limits
-    label: "Cluster Product limits"
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: limits
-          run: cluster
     timeout_in_minutes: 50
 
   - id: limits-instance-size
@@ -169,6 +163,7 @@ steps:
       # A larger instance is needed due to the
       # many containers that are being created
       queue: builder-linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
@@ -180,66 +175,83 @@ steps:
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --kafka-default-partitions=5]
+          args: [--aws-region=us-east-1, --kafka-default-partitions=5]
 
   - id: testdrive-replicas-4
     label: ":racing_car: testdrive 4 replicas"
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --replicas=4]
+          args: [--aws-region=us-east-1, --replicas=4]
 
   - id: testdrive-size-1
     label: ":racing_car: testdrive with SIZE 1"
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --default-size=1]
+          args: [--aws-region=us-east-1, --default-size=1]
 
   - id: testdrive-size-8
     label: ":racing_car: testdrive with SIZE 8"
     timeout_in_minutes: 600
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --default-size=8]
+          args: [--aws-region=us-east-1, --default-size=8]
 
   - id: testdrive-in-cloudtest
     label: Full Testdrive in Cloudtest (K8s)
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long, --aws-region=us-east-2, test/cloudtest/test_full_testdrive.py]
+          args: [-m=long, --aws-region=us-east-1, test/cloudtest/test_full_testdrive.py]
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --persistent-user-tables]
+          args: [--aws-region=us-east-1, --persistent-user-tables]
     skip: Persistence tests disabled
+
+  - id: upsert-compaction-disabled
+    label: Upsert (compaction disabled)
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upsert
+          args: [--compaction-disabled]
+    agents:
+      queue: linux-x86_64
 
   - id: zippy-kafka-sources
     label: "Zippy Kafka Sources"
@@ -248,26 +260,29 @@ steps:
       # Workload takes slightly more than 8Gb, so it OOMs
       # on the instances from the linux-x86_64 queue
       queue: builder-linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=1000]
+          args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-kafka-parallel-insert
     label: "Zippy Kafka Parallel Insert"
     timeout_in_minutes: 120
     agents:
       queue: builder-linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=2000]
+          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-user-tables
     label: "Zippy User Tables"
     timeout_in_minutes: 180
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -278,135 +293,85 @@ steps:
     timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=PostgresCdc, --actions=3000]
+          args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-debezium-postgres
     label: "Zippy Debezium Postgres"
     timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=DebeziumPostgres, --actions=1000]
+          args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-cluster-replicas
     label: "Zippy Cluster Replicas"
     timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=ClusterReplicas, --actions=1000]
+          args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=30m]
 
-  - id: zippy-crdb-minio-restart
-    label: "Zippy CRDB/Minio restarts"
+  - id: zippy-crdb-latest
+    label: "Zippy w/ latest CRDB"
     timeout_in_minutes: 120
     agents:
-      queue: linux-x86_64
+      # Workload takes slightly more than 8Gb, so it OOMs
+      # on the instances from the linux-x86_64 queue
+      queue: builder-linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=CrdbMinioRestart, --actions=1000]
-
-  - id: zippy-crdb-latest-restart
-    label: "Zippy CRDB restarts w/ latest CRDB"
-    timeout_in_minutes: 120
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: zippy
-          args: [--scenario=CrdbRestart, --actions=1000, --cockroach-tag=latest]
+          args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=55m]
 
   - id: secrets
     label: "Secrets"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: secrets
 
-  - id: checks-oneatatime-drop-create-default-replica
-    label: "Checks oneatatime + DROP/CREATE replica"
-    timeout_in_minutes: 300
+  - id: checks-restart-cockroach
+    label: "Checks + restart Cockroach"
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=DropCreateDefaultReplica, --execution-mode=oneatatime]
+          args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: checks-oneatatime-restart-clusterd-compute
-    label: "Checks oneatatime + restart compute clusterd"
-    timeout_in_minutes: 300
+  - id: checks-restart-entire-mz
+    label: "Checks + restart of the entire Mz"
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartClusterdCompute, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-entire-mz
-    label: "Checks oneatatime + restart of the entire Mz"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEntireMz, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-environmentd-clusterd-storage
-    label: "Checks oneatatime + restart of environmentd & storage clusterd"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-kill-clusterd-storage
-    label: "Checks oneatatime + kill storage clusterd"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=KillClusterdStorage, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-cockroach
-    label: "Checks oneatatime + restart Cockroach"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartCockroach, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-redpanda-debezium
-    label: "Checks oneatatime + restart Redpanda & Debezium"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartRedpandaDebezium, --execution-mode=oneatatime]
+          args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -417,6 +382,7 @@ steps:
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -427,6 +393,7 @@ steps:
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -437,6 +404,7 @@ steps:
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -447,26 +415,18 @@ steps:
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
-
-  - id: checks-parallel-restart-cockroach
-    label: "Checks parallel + restart Cockroach"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartCockroach, --execution-mode=parallel]
 
   - id: checks-parallel-restart-redpanda
     label: "Checks parallel + restart Redpanda & Debezium"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -474,9 +434,10 @@ steps:
 
   - id: checks-upgrade-entire-mz
     label: "Checks upgrade, whole-Mz restart"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -484,19 +445,54 @@ steps:
 
   - id: checks-upgrade-entire-mz-previous-version
     label: "Checks upgrade from previous version, whole-Mz restart"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzPreviousVersion]
+
+  - id: checks-upgrade-entire-mz-two-versions
+    label: "Checks upgrade across two versions"
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzTwoVersions]
+
+  - id: checks-upgrade-entire-mz-skip-version
+    label: "Checks upgrade from X-2 directly to HEAD"
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzSkipVersion]
+
+  - id: checks-upgrade-entire-mz-four-versions
+    label: "Checks upgrade across four versions"
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzFourVersions]
 
   - id: checks-upgrade-clusterd-compute-first
     label: "Platform checks upgrade, restarting compute clusterd first"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -507,28 +503,40 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeClusterdComputeLast]
+
+  - id: checks-upgrade-matrix
+    label: "Random upgrades over the entire matrix"
+    timeout_in_minutes: 180
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upgrade-matrix
+          args: ["--seed=$BUILDKITE_JOB_ID"]
 
   - id: cloudtest-upgrade
     label: "Platform checks upgrade in Cloudtest/K8s"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
-    artifact_paths: junit_cloudtest_*.xml
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long,  --aws-region=us-east-2, test/cloudtest/test_upgrade.py]
+          args: [-m=long,  --aws-region=us-east-1, test/cloudtest/test_upgrade.py]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist
     timeout_in_minutes: 20
     agents:
       queue: linux-x86_64
-    artifact_paths: [test/persist/maelstrom/**/*.log, junit_mzcompose_*.xml]
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
@@ -539,7 +547,7 @@ steps:
     timeout_in_minutes: 20
     agents:
       queue: linux-x86_64
-    artifact_paths: [test/persist/maelstrom/**/*.log, junit_mzcompose_*.xml]
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
@@ -548,7 +556,7 @@ steps:
   - id: persistence-failpoints
     label: Persistence failpoints
     timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
+    artifact_paths: junit_*.xml
     agents:
       queue: linux-x86_64
     plugins:
@@ -568,9 +576,19 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: sql-feature-flags
+    label: "SQL-level feature flags"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sql-feature-flags
+
   - id: launchdarkly
     label: "LaunchDarkly"
-    artifact_paths: junit_mzcompose_*.xml
+    artifact_paths: junit_*.xml
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -580,7 +598,7 @@ steps:
 
   - id: bounded-memory
     label: "Bounded Memory"
-    artifact_paths: junit_mzcompose_*.xml
+    artifact_paths: junit_*.xml
     timeout_in_minutes: 3600
     agents:
       queue: linux-x86_64
@@ -590,10 +608,120 @@ steps:
 
   - id: cloud-canary
     label: "Canary Deploy in Staging Cloud"
-    artifact_paths: junit_mzcompose_*.xml
+    artifact_paths: junit_*.xml
     timeout_in_minutes: 1200
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
+
+  - id: output-consistency-test
+    label: "Output consistency test"
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: output-consistency
+          args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+
+  - id: sqlsmith
+    label: "SQLsmith"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      # A larger instance is needed since SQLsmith likes creating
+      # large queries and going out of memory
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=1, --runtime=3000]
+
+  - id: sqlsmith-explain
+    label: "SQLsmith explain"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=15, --explain-only, --runtime=3000]
+
+  - id: sqlancer-pqs
+    label: "SQLancer PQS"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3000, --oracle=PQS, --no-qpg]
+
+  - id: sqlancer-norec
+    label: "SQLancer NoREC"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3000, --oracle=NOREC]
+
+  - id: sqlancer-query-partitioning
+    label: "SQLancer QueryPartitioning"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3000, --oracle=QUERY_PARTITIONING]
+
+  - id: sqlancer-having
+    label: "SQLancer Having"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3000, --oracle=HAVING]
+
+  - id: crdb-restarts
+    label: "CRDB rolling restarts"
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: crdb-restarts
+
+  - id: pubsub-disruption
+    label: "PubSub disruption"
+    artifact_paths: junit_*.xml
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: pubsub-disruption
+
+  - wait: ~
+    continue_on_failure: true
+
+  - id: analyze
+    label: Analyze tests
+    plugins:
+      - junit-annotate#v2.0.2:
+          artifacts: "*junit_*.xml"
+          job-uuid-file-pattern: _([^_]*).xml
+    priority: 1
+    agents:
+      queue: linux-x86_64

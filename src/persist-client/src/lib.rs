@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -100,17 +98,19 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
+use crate::cache::StateCache;
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::BatchFetcher;
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::parse_id;
+use crate::internal::encoding::{parse_id, Schemas};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle};
+use crate::rpc::PubSubSender;
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
@@ -125,17 +125,18 @@ pub mod cli {
 pub mod critical;
 pub mod error;
 pub mod fetch;
+pub mod internals_bench;
+pub mod metrics {
+    //! Utilities related to metrics.
+    pub use crate::internal::metrics::{encode_ts_metric, Metrics};
+}
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
     pub mod shard_source;
 }
-pub mod metrics {
-    //! Utilities related to metrics.
-    pub use crate::internal::metrics::encode_ts_metric;
-    pub use crate::internal::metrics::Metrics;
-}
-pub mod internals_bench;
 pub mod read;
+pub mod rpc;
+pub mod stats;
 pub mod usage;
 pub mod write;
 
@@ -149,10 +150,12 @@ mod internal {
     pub mod maintenance;
     pub mod metrics;
     pub mod paths;
+    pub mod service;
     pub mod state;
     pub mod state_diff;
     pub mod state_versions;
     pub mod trace;
+    pub mod watch;
 
     #[cfg(test)]
     pub mod datadriven;
@@ -251,6 +254,8 @@ pub struct PersistClient {
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    shared_states: Arc<StateCache>,
+    pubsub_sender: Arc<dyn PubSubSender>,
 }
 
 impl PersistClient {
@@ -265,6 +270,8 @@ impl PersistClient {
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        shared_states: Arc<StateCache>,
+        pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Result<Self, ExternalError> {
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
@@ -274,6 +281,8 @@ impl PersistClient {
             consensus,
             metrics,
             cpu_heavy_runtime,
+            shared_states,
+            pubsub_sender,
         })
     }
 
@@ -334,8 +343,8 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -354,13 +363,15 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
-        let reader_state = machine
+        let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
                 purpose,
@@ -368,6 +379,11 @@ impl PersistClient {
                 heartbeat_ts,
             )
             .await;
+        maintenance.start_performing(&machine, &gc);
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -375,6 +391,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
+            schemas,
             reader_state.since,
             heartbeat_ts,
         )
@@ -392,8 +409,8 @@ impl PersistClient {
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -417,11 +434,16 @@ impl PersistClient {
         let _ = state_versions
             .maybe_init_shard::<K, V, T, D>(&shard_metrics)
             .await;
-
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let fetcher = BatchFetcher {
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
+            shard_metrics,
             shard_id,
+            schemas,
             _phantom: PhantomData,
         };
 
@@ -496,13 +518,16 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
-        let state = machine
+        let (state, maintenance) = machine
             .register_critical_reader::<O>(&reader_id, purpose)
             .await;
+        maintenance.start_performing(&machine, &gc);
         let handle = SinceHandle::new(
             machine,
             gc,
@@ -527,8 +552,8 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -547,20 +572,28 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
         let writer_id = WriterId::new();
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
+                schemas.clone(),
+                gc.clone(),
             )
         });
         let heartbeat_ts = (self.cfg.now)();
-        let (shard_upper, _) = machine
+        let (shard_upper, _, maintenance) = machine
             .register_writer(
                 &writer_id,
                 purpose,
@@ -568,6 +601,7 @@ impl PersistClient {
                 heartbeat_ts,
             )
             .await;
+        maintenance.start_performing(&machine, &gc);
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -577,11 +611,41 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.cpu_heavy_runtime),
             writer_id,
+            schemas,
             shard_upper.0,
             heartbeat_ts,
         )
         .await;
         Ok(writer)
+    }
+
+    /// Returns the internal state of the shard for debugging and QA.
+    ///
+    /// We'll be thoughtful about making unnecessary changes, but the **output
+    /// of this method needs to be gated from users**, so that it's not subject
+    /// to our backward compatibility guarantees.
+    pub async fn inspect_shard<T: Timestamp + Lattice + Codec64>(
+        &self,
+        shard_id: &ShardId,
+    ) -> Result<impl serde::Serialize, anyhow::Error> {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        // TODO: Don't fetch all live diffs. Feels like we should pull out a new
+        // method in StateVersions for fetching the latest version of State of a
+        // shard that might or might not exist.
+        let versions = state_versions.fetch_all_live_diffs(shard_id).await;
+        if versions.0.is_empty() {
+            return Err(anyhow::anyhow!("{} does not exist", shard_id));
+        }
+        let state = state_versions
+            .fetch_current_state::<T>(shard_id, versions.0)
+            .await;
+        let state = state.check_ts_codec(shard_id)?;
+        Ok(state)
     }
 
     /// Test helper for a [Self::open] call that is expected to succeed.
@@ -628,6 +692,7 @@ mod tests {
     use std::time::Duration;
 
     use differential_dataflow::consolidation::consolidate_updates;
+    use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
     use mz_ore::future::OreFutureExt;
     use mz_ore::now::NowFn;
@@ -636,9 +701,11 @@ mod tests {
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use timely::order::{PartialOrder, Product};
+    use timely::progress::timestamp::PathSummary;
     use timely::progress::Antichain;
-    use timely::PartialOrder;
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
@@ -647,6 +714,68 @@ mod tests {
     use crate::read::ListenEvent;
 
     use super::*;
+
+    /// A product type that fits in Codec64. Used to test persist on partial orders
+    #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+    pub(crate) struct CodecProduct(Product<u32, u32>);
+
+    impl CodecProduct {
+        pub(crate) fn new(outer: u32, inner: u32) -> Self {
+            Self(Product::new(outer, inner))
+        }
+    }
+
+    impl Timestamp for CodecProduct {
+        type Summary = <Product<u32, u32> as Timestamp>::Summary;
+
+        fn minimum() -> Self {
+            Self(Product::minimum())
+        }
+    }
+
+    impl PathSummary<CodecProduct> for <Product<u32, u32> as Timestamp>::Summary {
+        fn results_in(&self, src: &CodecProduct) -> Option<CodecProduct> {
+            self.results_in(&src.0).map(CodecProduct)
+        }
+
+        fn followed_by(&self, other: &Self) -> Option<Self> {
+            PathSummary::<Product<u32, u32>>::followed_by(self, other)
+        }
+    }
+
+    impl PartialOrder for CodecProduct {
+        fn less_equal(&self, other: &Self) -> bool {
+            self.0.less_equal(&other.0)
+        }
+    }
+
+    impl Codec64 for CodecProduct {
+        fn codec_name() -> String {
+            "CodecProduct".to_owned()
+        }
+
+        fn encode(&self) -> [u8; 8] {
+            let [a, b, c, d] = u32::to_le_bytes(self.0.outer);
+            let [e, f, g, h] = u32::to_le_bytes(self.0.inner);
+            [a, b, c, d, e, f, g, h]
+        }
+
+        fn decode([a, b, c, d, e, f, g, h]: [u8; 8]) -> Self {
+            let outer = u32::from_le_bytes([a, b, c, d]);
+            let inner = u32::from_le_bytes([e, f, g, h]);
+            Self(Product::new(outer, inner))
+        }
+    }
+
+    impl Lattice for CodecProduct {
+        fn join(&self, other: &Self) -> Self {
+            Self(self.0.join(&other.0))
+        }
+
+        fn meet(&self, other: &Self) -> Self {
+            Self(self.0.meet(&other.0))
+        }
+    }
 
     pub fn new_test_client_cache() -> PersistClientCache {
         // Configure an aggressively small blob_target_size so we get some
@@ -723,10 +852,9 @@ mod tests {
         (part, updates)
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn sanity_check() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -772,10 +900,8 @@ mod tests {
     }
 
     // Sanity check that the open_reader and open_writer calls work.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn open_reader_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -830,10 +956,8 @@ mod tests {
         assert_eq!(read1.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn invalid_usage() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -843,7 +967,7 @@ mod tests {
         let shard_id0 = "s00000000-0000-0000-0000-000000000000"
             .parse::<ShardId>()
             .expect("invalid shard id");
-        let client = new_test_client().await;
+        let mut client = new_test_client().await;
 
         let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
@@ -862,6 +986,7 @@ mod tests {
                 (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned(), None)
             }
 
+            client.shared_states = Arc::new(StateCache::new_no_metrics());
             assert_eq!(
                 client
                     .open::<Vec<u8>, String, u64, i64>(
@@ -1009,7 +1134,7 @@ mod tests {
                     .await
                     .unwrap_err(),
                 InvalidUsage::UpdateBeyondUpper {
-                    max_ts: 3,
+                    ts: 3,
                     expected_upper: Antichain::from_elem(3),
                 },
             );
@@ -1085,10 +1210,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn multiple_shards() {
-        mz_ore::test::init_logging();
-
         let data1 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1127,10 +1250,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn fetch_upper() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1160,10 +1281,8 @@ mod tests {
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn append_with_invalid_upper() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1225,10 +1344,8 @@ mod tests {
         assert!(is_send_sync(read));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn compare_and_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1283,7 +1400,8 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
@@ -1333,10 +1451,8 @@ mod tests {
 
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
     // be in advance of the current shard upper.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn contiguous_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1382,10 +1498,8 @@ mod tests {
 
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn noncontiguous_append_per_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1426,10 +1540,8 @@ mod tests {
 
     // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
     // batch needs to match the current shard upper.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn contiguous_compare_and_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1474,10 +1586,8 @@ mod tests {
 
     // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
     // all writers combined are contiguous.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn noncontiguous_compare_and_append_per_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1508,10 +1618,8 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn writer_heartbeat() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1600,7 +1708,7 @@ mod tests {
         assert!(matches!(expired_writer_heartbeat, Err(_)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fmt_ids() {
         assert_eq!(
             format!("{}", ShardId([0u8; 16])),
@@ -1644,7 +1752,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn shard_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct ShardIdContainer {
@@ -1677,10 +1785,9 @@ mod tests {
         assert_eq!(container.shard_id, id);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn concurrency() {
-        mz_ore::test::init_logging();
-
         let data = DataGenerator::small();
 
         const NUM_WRITERS: usize = 2;
@@ -1776,9 +1883,9 @@ mod tests {
     // Regression test for #12131. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_blocking_reads() {
-        mz_ore::test::init_logging();
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
@@ -1848,7 +1955,8 @@ mod tests {
         assert_eq!(snap.await, all_ok(&data[..], 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
@@ -1885,7 +1993,7 @@ mod tests {
     /// Regression test for 16743, where the nightly tests found that calling
     /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
     /// would panic.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn regression_16743_heartbeat_tombstone() {
         const EMPTY: &[(((), ()), u64, i64)] = &[];
         let (mut write, mut read) = new_test_client()
@@ -1909,7 +2017,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
             let actual = protobuf_roundtrip::<_, String>(&expect);
             assert!(actual.is_ok());

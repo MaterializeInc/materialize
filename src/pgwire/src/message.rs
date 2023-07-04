@@ -10,15 +10,14 @@
 use std::collections::BTreeMap;
 
 use itertools::Itertools;
-use postgres::error::SqlState;
-
-use mz_adapter::session::ClientSeverity as AdapterClientSeverity;
 use mz_adapter::session::TransactionCode;
 use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
-use mz_sql::plan::PlanError;
+use mz_sql::plan::{PlanError, PlanNotice};
+use mz_sql::session::vars::{ClientSeverity as AdapterClientSeverity, VarError};
+use postgres::error::SqlState;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -123,9 +122,6 @@ pub enum FrontendMessage {
     },
 
     /// Bind an existing prepared statement to a portal.
-    ///
-    /// Note that we can't actually bind parameters yet (issue#609), but that is
-    /// an important part of this command.
     ///
     /// This command is part of the extended query flow.
     Bind {
@@ -311,7 +307,7 @@ impl ErrorResponse {
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
         // inappropriately.
-        let code = match e {
+        let code = match &e {
             // DATA_EXCEPTION to match what Postgres returns for degenerate
             // range bounds
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
@@ -319,8 +315,6 @@ impl ErrorResponse {
             AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
-            AdapterError::ModifyLinkedCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
@@ -333,15 +327,13 @@ impl ErrorResponse {
             }
             AdapterError::Eval(_) => SqlState::INTERNAL_ERROR,
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
-            AdapterError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidLogDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
-            AdapterError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidSetIsolationLevel => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
@@ -354,9 +346,9 @@ impl ErrorResponse {
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
-            AdapterError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
+            AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
                 SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT
             }
@@ -368,14 +360,17 @@ impl ErrorResponse {
             AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::UnallowedOnCluster { .. } => {
+                SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
+            }
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
             AdapterError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
-            AdapterError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnstableDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
@@ -389,6 +384,18 @@ impl ErrorResponse {
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
             }
+            AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
+            AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+            AdapterError::VarError(e) => match e {
+                VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+                VarError::RequiresUnsafeMode { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                VarError::RequiresFeatureFlag { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            },
         };
         ErrorResponse {
             severity,
@@ -408,6 +415,7 @@ impl ErrorResponse {
             AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
             AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
             AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::WARNING,
             AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
@@ -421,6 +429,19 @@ impl ErrorResponse {
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
+            AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
+            AdapterNotice::RbacSystemDisabled => SqlState::WARNING,
+            AdapterNotice::RbacUserDisabled => SqlState::WARNING,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
+            AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
+            AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
+            AdapterNotice::CannotRevoke { .. } => SqlState::WARNING,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::WARNING,
+            AdapterNotice::PlanNotice(plan) => match plan {
+                PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
+                PlanNotice::KeyNotEnforced { .. } => SqlState::WARNING,
+            },
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -560,6 +581,7 @@ impl Severity {
             AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
             AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
             AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
             AdapterNotice::UserRequested { severity } => match severity {
@@ -577,6 +599,19 @@ impl Severity {
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
+            AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
+            AdapterNotice::RbacSystemDisabled => Severity::Notice,
+            AdapterNotice::RbacUserDisabled => Severity::Notice,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
+            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
+            AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
+            AdapterNotice::CannotRevoke { .. } => Severity::Warning,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
+            AdapterNotice::PlanNotice(notice) => match notice {
+                PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
+                PlanNotice::KeyNotEnforced { .. } => Severity::Warning,
+            },
         }
     }
 }
@@ -617,7 +652,7 @@ pub fn encode_row_description(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_should_output_to_client() {
         #[rustfmt::skip]
         let test_cases = [

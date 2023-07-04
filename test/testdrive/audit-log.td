@@ -26,24 +26,10 @@ create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_kafka_src\"}"  
 create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_kafka_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
 create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"kafka\"}"  materialize
 
-$ s3-create-bucket bucket=test
-
-> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
-
-> CREATE CONNECTION s3_conn TO AWS (
-    ACCESS KEY ID = '${testdrive.aws-access-key-id}',
-    SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-    TOKEN = '${testdrive.aws-token}',
-    REGION = '${testdrive.aws-region}',
-    ENDPOINT = '${testdrive.aws-endpoint}'
-  );
-
-> CREATE SOURCE s3_src
-  FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  FORMAT BYTES;
+> CREATE SOURCE counter_src
+  FROM LOAD GENERATOR COUNTER;
 
 > SELECT event_type, object_type, details - 'replica_id', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
-create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_s3_src\"}"  materialize
-create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_s3_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
-create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"s3_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"s3\"}"  materialize
+create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_counter_src\"}"  materialize
+create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_counter_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
+create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"load-generator\"}"  materialize

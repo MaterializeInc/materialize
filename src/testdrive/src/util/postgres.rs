@@ -10,13 +10,12 @@
 use std::str::FromStr;
 
 use anyhow::{bail, Context};
+use mz_ore::task;
+use mz_postgres_util::make_tls;
 use tokio::task::JoinHandle;
 use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config};
 use url::Url;
-
-use mz_ore::task;
-use mz_postgres_util::make_tls;
 
 /// Constructs a URL from PostgreSQL configuration parameters.
 ///

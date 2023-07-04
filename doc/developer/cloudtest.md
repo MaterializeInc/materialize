@@ -20,6 +20,14 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
 
 1. Install [kubectl], the official Kubernetes command-line tool:
 
+    On macOS, use [Homebrew] to install it:
+
+    ```
+    brew install kubectl
+    ```
+
+    On Linux, use:
+
     ```
     curl -fL https://dl.k8s.io/release/v1.24.3/bin/linux/amd64/kubectl > kubectl
     chmod +x kubectl
@@ -30,6 +38,14 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     for additional installation options.
 
 2. Install [kind], which manages local Kubernetes clusters:
+
+    On macOS, use:
+
+    ```
+    brew install kind
+    ```
+
+    On Linux, use:
 
     ```
     curl -fL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-amd64 > kind
@@ -66,6 +82,13 @@ build in debug mode by passing the `--dev` flag:
 
 ```
 ./pytest --dev [-k TEST]
+```
+
+⚠️ By default, cloudtest only runs short tests. To include long tests you can include the `-m=long`
+flag:
+
+```
+./pytest -m=long
 ```
 
 To check the cluster status:
@@ -113,7 +136,7 @@ See the examples in `test/clustertest/test_smoke.py`.
 The tests folow pytest conventions:
 
 ```python
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 def test_something(mz: MaterializeApplication) -> None:
     assert ...
@@ -158,7 +181,7 @@ wait(condition="delete", resource="secret/some_secret")
 ## Running testdrive
 
 ```python
-mz.testdrive.run_string(
+mz.testdrive.run(
     dedent(
         """
         > SELECT 1;
@@ -174,7 +197,7 @@ test, use `no_reset=True` to prevent cleanup and `seed=N` to make sure they all
 share the same random seed:
 
 ```python
-mz.testdrive.run_string(..., no_reset=True, seed = N)
+mz.testdrive.run(..., no_reset=True, seed = N)
 ```
 
 ## Running one-off SQL statements
@@ -212,6 +235,7 @@ mz.environmentd.rbac_api()
 return API handles that can then be used with the official [`kubernetes`] Python
 module.
 
+[Homebrew]: https://brew.sh
 [`kubernetes`]: https://github.com/kubernetes-client/python
 [k9s]: https://k9scli.io
 [kind-installation]: https://kind.sigs.k8s.io/docs/user/quick-start/#installing-with-a-package-manager
@@ -220,3 +244,20 @@ module.
 [kubectl]: https://kubernetes.io/docs/reference/kubectl/
 [MinIO]: https://min.io
 [pytest]: https://pytest.org
+
+# Troubleshooting
+
+## DNS issues
+
+If pods are failing with what seems like DNS issues (can't resolve redpanda, or
+cannot connect to postgres) you can try and have a look at the [relevant
+Kubernetes
+documentation](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/).
+At least the list of [known
+issues](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/#known-issues)
+can be very relevant for your linux distribution, if it is running
+`systemd-resolved`.
+
+In at least one case, a VPN (mullvad) was interfering with DNS resolution. Try
+de-activating your VPN and then tear down and restart your testing cluster to
+see if that helps.

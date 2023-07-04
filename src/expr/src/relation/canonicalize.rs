@@ -11,7 +11,7 @@
 //! into canonical form.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, Datum, ScalarType};
 
@@ -469,4 +469,26 @@ fn propagates_null_from_subexpression(expr: &MirScalarExpr, operand: &MirScalarE
 /// number of non-literal expression nodes within the expression.
 fn compare_predicates(x: &MirScalarExpr, y: &MirScalarExpr) -> Ordering {
     (rank_complexity(x), x).cmp(&(rank_complexity(y), y))
+}
+
+/// For each equivalence class, it finds the simplest expression, which will be the canonical one.
+/// Returns a Map that maps from each expression in each equivalence class to the canonical
+/// expression in the same equivalence class.
+pub fn get_canonicalizer_map(
+    equivalences: &Vec<Vec<MirScalarExpr>>,
+) -> BTreeMap<MirScalarExpr, MirScalarExpr> {
+    let mut canonicalizer_map = BTreeMap::new();
+    for equivalence in equivalences {
+        // The unwrap is ok, because a join equivalence class can't be empty.
+        let canonical_expr = equivalence
+            .iter()
+            .min_by(|a, b| compare_predicates(*a, *b))
+            .unwrap();
+        for e in equivalence {
+            if e != canonical_expr {
+                canonicalizer_map.insert(e.clone(), canonical_expr.clone());
+            }
+        }
+    }
+    canonicalizer_map
 }

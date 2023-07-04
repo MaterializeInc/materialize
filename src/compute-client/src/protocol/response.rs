@@ -11,16 +11,15 @@
 
 use std::num::NonZeroUsize;
 
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{Diff, GlobalId, Row};
+use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
-
-use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row};
-use mz_timely_util::progress::any_antichain;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -47,6 +46,13 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// Replicas must send `FrontierUppers` responses for compute collections that are indexes or
     /// storage sinks. Replicas must not send `FrontierUppers` responses for subscribes.
     ///
+    /// Replicas must never report regressing frontiers. Specifically:
+    ///
+    ///   * The first frontier reported for a collection must not be less than that collection's
+    ///     initial `as_of` frontier.
+    ///   * Subsequent reported frontiers for a collection must not be less than any frontier
+    ///     reported previously for the same collection.
+    ///
     /// Replicas must send a `FrontierUppers` response reporting advancement to the empty frontier
     /// for a collection in two cases:
     ///
@@ -61,12 +67,12 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * The replica must not send further `FrontierUppers` responses for that collection.
     ///
     /// The replica must not send `FrontierUppers` responses for collections that have not
-    /// been created previously by a [`CreateDataflows` command]. An exception are `FrontierUppers`
-    /// responses that report the empty frontier. ([#16247])
+    /// been created previously by a [`CreateDataflows` command] or by a [`CreateInstance`
+    /// command].
     ///
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
-    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
+    /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
 
@@ -93,10 +99,12 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///
     /// For each subscribe that was installed by a previous [`CreateDataflows` command], the
     /// replica must emit [`Batch`] responses that cover the entire time interval from the
-    /// subscribe dataflow's `as_of` until the subscribe advances to the empty frontier or is
+    /// minimum time until the subscribe advances to the empty frontier or is
     /// dropped. The time intervals of consecutive [`Batch`]es must be increasing, contiguous,
-    /// non-overlapping, and non-empty. All updates transmitted in a batch must have times within
-    /// that batch’s time interval.
+    /// non-overlapping, and non-empty. All updates transmitted in a batch must be consolidated and
+    /// have times within that batch’s time interval. All updates' times must be greater than or
+    /// equal to `as_of`. The `upper` of the first [`Batch`] of a subscribe must not be less than
+    /// that subscribe's initial `as_of` frontier.
     ///
     /// The replica must send [`DroppedAt`] responses if the subscribe was dropped in response to
     /// an [`AllowCompaction` command] that advanced its read frontier to the empty frontier. The
@@ -111,16 +119,13 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * It must no longer read from its inputs.
     ///   * The replica must not send further `SubscribeResponse`s for that subscribe.
     ///
-    /// The replica must not send [`Batch`] responses for subscribes that have not been
-    /// created previously by a [`CreateDataflows` command]. The replica may send [`DroppedAt`]
-    /// responses for subscribes that have not been created previously by a [`CreateDataflows`
-    /// command]. ([#16247])
+    /// The replica must not send `SubscribeResponse`s for subscribes that have not been
+    /// created previously by a [`CreateDataflows` command].
     ///
     /// [`Batch`]: SubscribeResponse::Batch
     /// [`DroppedAt`]: SubscribeResponse::DroppedAt
     /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
-    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
 }
 
@@ -458,17 +463,16 @@ impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
             assert!(actual.is_ok());

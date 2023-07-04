@@ -40,15 +40,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use futures::stream::FuturesUnordered;
-use futures::FutureExt;
-use futures::StreamExt;
-use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
-use timely::communication::allocator::GenericBuilder;
-use tracing::{debug, info, warn};
-
+use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
+use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
+use timely::communication::allocator::GenericBuilder;
+use tracing::{debug, info, warn};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
@@ -60,7 +58,7 @@ pub async fn initialize_networking(
     info!(
         process = process,
         ?addresses,
-        "initializing network for multi-process timely instance, with {} processes for epoch number {epoch}",
+        "initializing network for timely instance, with {} processes for epoch number {epoch}",
         addresses.len()
     );
     let sockets = create_sockets(addresses, u64::cast_from(process), epoch)
@@ -141,12 +139,32 @@ async fn create_sockets(
     let mut results: Vec<_> = (0..addresses.len()).map(|_| None).collect();
 
     let my_address = &addresses[my_index_uz];
+
+    // [btv] Binding to the address (which is of the form
+    // `hostname:port`) unnecessarily involves a DNS query. We should
+    // get the port from here, but otherwise just bind to `0.0.0.0`.
+    // Previously we bound to `my_address`, which caused
+    // https://github.com/MaterializeInc/cloud/issues/5070 .
+    let bind_address = match regex::Regex::new(r":(\d{1,5})$")
+        .unwrap()
+        .captures(my_address)
+    {
+        Some(cap) => {
+            let p: u16 = cap[1].parse().context("Port out of range")?;
+            format!("0.0.0.0:{p}")
+        }
+        None => {
+            // Address is not of the form `hostname:port`; it's
+            // probably a path to a Unix-domain socket.
+            my_address.to_string()
+        }
+    };
     let listener = loop {
         let mut tries = 0;
-        match Listener::bind(my_address.clone()).await {
+        match Listener::bind(&bind_address).await {
             Ok(ok) => break ok,
             Err(e) => {
-                warn!("failed to listen on address {my_address}: {e}");
+                warn!("failed to listen on address {bind_address}: {e}");
                 tries += 1;
                 if tries == 10 {
                     return Err(e.into());

@@ -159,7 +159,7 @@ pub fn safe_len(len: usize) -> Result<usize, AvroError> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_zigzag() {
         let mut a = Vec::new();
         let mut b = Vec::new();
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_zig_i64() {
         let mut s = Vec::new();
         zig_i64(2_147_483_647_i64, &mut s);
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(s, [255, 255, 255, 255, 255, 255, 255, 255, 255, 1]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_zig_i32() {
         let mut s = Vec::new();
         zig_i32(1_073_741_823_i32, &mut s);
@@ -222,13 +222,13 @@ mod tests {
         assert_eq!(s, [255, 255, 255, 255, 15]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_overflow() {
         let causes_left_shift_overflow: &[u8] = &[0xe1, 0xe1, 0xe1, 0xe1, 0xe1];
         assert!(decode_variable(&mut &causes_left_shift_overflow[..]).is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_safe_len() {
         assert_eq!(42usize, safe_len(42usize).unwrap());
         assert!(safe_len(1024 * 1024 * 1024).is_err());

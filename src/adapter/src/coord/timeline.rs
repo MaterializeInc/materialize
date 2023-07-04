@@ -9,18 +9,13 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
-use std::cmp;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::thread;
 use std::time::Duration;
+use std::{cmp, fmt, thread};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::error;
-
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -29,11 +24,15 @@ use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_client::types::sources::Timeline;
+use once_cell::sync::Lazy;
+use timely::progress::Timestamp as TimelyTimestamp;
+use tracing::error;
 
 use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{timeline, Coordinator};
 use crate::util::ResultExt;
 use crate::AdapterError;
@@ -83,6 +82,14 @@ pub struct WriteTimestamp<T = mz_repr::Timestamp> {
 pub(crate) struct TimelineState<T> {
     pub(crate) oracle: DurableTimestampOracle<T>,
     pub(crate) read_holds: ReadHolds<T>,
+}
+
+impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimelineState")
+            .field("read_holds", &self.read_holds)
+            .finish()
+    }
 }
 
 /// A timeline can perform reads and writes. Reads happen at the read timestamp
@@ -339,7 +346,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
 
 impl Coordinator {
     pub(crate) fn now(&self) -> EpochMillis {
-        (self.catalog.config().now)()
+        (self.catalog().config().now)()
     }
 
     pub(crate) fn now_datetime(&self) -> DateTime<Utc> {
@@ -384,6 +391,7 @@ impl Coordinator {
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn get_local_write_ts(&mut self) -> WriteTimestamp {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
@@ -432,7 +440,7 @@ impl Coordinator {
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
-            self.catalog.config().now.clone(),
+            self.catalog().config().now.clone(),
             |ts| self.catalog.persist_timestamp(timeline, ts),
             &mut self.global_timelines,
         )
@@ -480,70 +488,88 @@ impl Coordinator {
         global_timelines.get_mut(timeline).expect("inserted above")
     }
 
-    pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
-    where
-        I: IntoIterator<Item = GlobalId>,
-    {
-        let mut empty_timelines = Vec::new();
-        for id in ids {
-            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
-                let TimelineState { read_holds, .. } = self
-                    .global_timelines
-                    .get_mut(&timeline)
-                    .expect("all timelines have a timestamp oracle");
-                read_holds.remove_storage_id(&id);
-                if read_holds.is_empty() {
-                    self.global_timelines.remove(&timeline);
-                    empty_timelines.push(timeline);
-                }
+    /// Groups together storage and compute resources into a [`CollectionIdBundle`]
+    pub(crate) fn build_collection_id_bundle(
+        &self,
+        storage_ids: impl IntoIterator<Item = GlobalId>,
+        compute_ids: impl IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
+        clusters: impl IntoIterator<Item = ComputeInstanceId>,
+    ) -> CollectionIdBundle {
+        let mut compute: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+
+        // Collect all compute_ids.
+        for (instance_id, id) in compute_ids {
+            compute.entry(instance_id).or_default().insert(id);
+        }
+
+        // Collect all GlobalIds associated with a compute instance ID.
+        let cluster_set: BTreeSet<_> = clusters.into_iter().collect();
+        for (_timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
+            let holds = read_holds
+                .compute_ids()
+                .filter(|(instance_id, _id)| cluster_set.contains(instance_id));
+            for (instance_id, ids) in holds {
+                let ids = ids.map(|(_antichain, id)| id);
+                compute.entry(*instance_id).or_default().extend(ids);
             }
         }
-        empty_timelines
+
+        CollectionIdBundle {
+            storage_ids: storage_ids.into_iter().collect(),
+            compute_ids: compute,
+        }
+    }
+
+    /// Given a [`Timeline`] and a [`CollectionIdBundle`], removes all of the "storage ids"
+    /// and "compute ids" in the bundle, from the timeline.
+    pub(crate) fn remove_resources_associated_with_timeline(
+        &mut self,
+        timeline: Timeline,
+        ids: CollectionIdBundle,
+    ) -> bool {
+        let TimelineState { read_holds, .. } = self
+            .global_timelines
+            .get_mut(&timeline)
+            .expect("all timeslines have a timestamp oracle");
+
+        // Remove all of the underlying resources.
+        for id in ids.storage_ids {
+            read_holds.remove_storage_id(&id);
+        }
+        for (compute_id, ids) in ids.compute_ids {
+            for id in ids {
+                read_holds.remove_compute_id(&compute_id, &id);
+            }
+        }
+        let became_empty = read_holds.is_empty();
+
+        // Finally, remove the Timeline if it's empty.
+        if became_empty {
+            self.global_timelines.remove(&timeline);
+        }
+
+        became_empty
     }
 
     pub(crate) fn remove_compute_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
     {
-        let mut empty_timelines = Vec::new();
+        let mut empty_timelines = BTreeSet::new();
         for (compute_instance, id) in ids {
-            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
-                let TimelineState { read_holds, .. } = self
-                    .global_timelines
-                    .get_mut(&timeline)
-                    .expect("all timelines have a timestamp oracle");
+            for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
                 read_holds.remove_compute_id(&compute_instance, &id);
                 if read_holds.is_empty() {
-                    self.global_timelines.remove(&timeline);
-                    empty_timelines.push(timeline);
+                    empty_timelines.insert(timeline.clone());
                 }
             }
         }
-        empty_timelines
-    }
-
-    pub(crate) fn remove_compute_instance_from_timeline(
-        &mut self,
-        compute_instance: ComputeInstanceId,
-    ) -> Vec<Timeline> {
-        let mut empty_timelines = Vec::new();
-        for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-            read_holds.remove_compute_instance(&compute_instance);
-            if read_holds.is_empty() {
-                empty_timelines.push(timeline.clone());
-            }
-        }
-
-        for timeline in &empty_timelines {
-            self.global_timelines.remove(timeline);
-        }
-
-        empty_timelines
+        empty_timelines.into_iter().collect()
     }
 
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {
         let mut id_bundle = CollectionIdBundle::default();
-        for entry in self.catalog.entries() {
+        for entry in self.catalog().entries() {
             if let TimelineContext::TimelineDependent(entry_timeline) =
                 self.get_timeline_context(entry.id())
             {
@@ -656,6 +682,8 @@ impl Coordinator {
             }
             let depends_on = optimized_expr.depends_on();
             if depends_on.is_empty() {
+                // If the definition contains a temporal function, the timeline must
+                // be timestamp dependent.
                 if *contains_temporal {
                     timelines.insert(id, TimelineContext::TimestampDependent);
                 } else {
@@ -671,7 +699,7 @@ impl Coordinator {
             if timelines.contains_key(&id) {
                 continue;
             }
-            if let Some(entry) = self.catalog.try_get_entry(&id) {
+            if let Some(entry) = self.catalog().try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
                         timelines.insert(
@@ -763,7 +791,7 @@ impl Coordinator {
         &self,
         uses_ids: I,
         timeline_context: &TimelineContext,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         compute_instance: ComputeInstanceId,
     ) -> Result<CollectionIdBundle, AdapterError>
     where
@@ -772,7 +800,7 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = BTreeSet::new();
         for id in uses_ids {
-            let entry = self.catalog.get_entry(id);
+            let entry = self.catalog().get_entry(id);
             let name = entry.name();
             schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
@@ -782,19 +810,19 @@ impl Coordinator {
         let system_schemas = [
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_mz_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_catalog_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_information_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_mz_internal_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
             ),
         ];
         if system_schemas.iter().any(|s| schemas.contains(s)) {
@@ -804,7 +832,7 @@ impl Coordinator {
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
-            let schema = self.catalog.get_schema(db, schema, conn_id);
+            let schema = self.catalog().get_schema(db, schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 
@@ -865,10 +893,10 @@ impl Coordinator {
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
                 let id_bundle = self.ids_in_timeline(&timeline);
-                self.largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle))
+                Self::largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle))
             };
             oracle
-                .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
+                .apply_write(now, |ts| self.catalog().persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
             if read_holds.times().any(|time| time.less_than(&read_ts)) {

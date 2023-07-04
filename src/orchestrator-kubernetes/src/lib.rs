@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -86,9 +84,10 @@ use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, ContainerPort, EnvVar, EnvVarSource, ObjectFieldSelector, Pod,
-    PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
-    Service as K8sService, ServicePort, ServiceSpec,
+    Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource, ObjectFieldSelector,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, Pod, PodAffinityTerm, PodAntiAffinity,
+    PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
+    ServiceSpec, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -98,17 +97,15 @@ use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use maplit::btreemap;
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use tracing::warn;
-
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServiceStatus,
+    LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator, NotReadyReason,
+    Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics, ServiceStatus,
 };
-use mz_orchestrator::{LabelSelector as MzLabelSelector, ServiceProcessMetrics};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use tracing::warn;
 
 pub mod cloud_resource_controller;
 pub mod secrets;
@@ -122,6 +119,8 @@ pub struct KubernetesOrchestratorConfig {
     /// The name of a Kubernetes context to use, if the Kubernetes configuration
     /// is loaded from the local kubeconfig.
     pub context: String,
+    /// The name of a non-default Kubernetes scheduler to use, if any.
+    pub scheduler_name: Option<String>,
     /// Labels to install on every service created by the orchestrator.
     pub service_labels: BTreeMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
@@ -133,6 +132,8 @@ pub struct KubernetesOrchestratorConfig {
     /// An AWS external ID prefix to use when making AWS operations on behalf
     /// of the environment.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+    /// Whether to use code coverage mode or not. Always false for production.
+    pub coverage: bool,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -641,6 +642,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 name: "init".to_string(),
                 image: Some(image),
                 image_pull_policy: Some(self.config.image_pull_policy.to_string()),
+                resources: Some(ResourceRequirements {
+                    // Set both limits and requests to the same values, to ensure a
+                    // `Guaranteed` QoS class for the pod.
+                    limits: Some(limits.clone()),
+                    requests: Some(limits.clone()),
+                }),
                 env: Some(vec![
                     EnvVar {
                         name: "MZ_NAMESPACE".to_string(),
@@ -680,6 +687,49 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }]
         });
 
+        let env = if self.config.coverage {
+            Some(vec![EnvVar {
+                name: "LLVM_PROFILE_FILE".to_string(),
+                value: Some(format!("/coverage/{}-%p-%9m%c.profraw", self.namespace)),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let volume_mounts = if self.config.coverage {
+            Some(vec![VolumeMount {
+                name: "coverage".to_string(),
+                mount_path: "/coverage".to_string(),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let volume_claim_templates = if self.config.coverage {
+            Some(vec![PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    name: Some("coverage".to_string()),
+                    ..Default::default()
+                },
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    resources: Some(ResourceRequirements {
+                        requests: Some(BTreeMap::from([(
+                            "storage".to_string(),
+                            Quantity("10Gi".to_string()),
+                        )])),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -704,12 +754,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                             .collect(),
                     ),
                     resources: Some(ResourceRequirements {
-                        limits: Some(limits),
-                        ..Default::default()
+                        // Set both limits and requests to the same values, to ensure a
+                        // `Guaranteed` QoS class for the pod.
+                        limits: Some(limits.clone()),
+                        requests: Some(limits),
                     }),
+                    volume_mounts,
+                    env,
                     ..Default::default()
                 }],
                 node_selector: Some(node_selector),
+                scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),
                 affinity: Some(Affinity {
                     pod_anti_affinity: anti_affinity,
@@ -749,10 +804,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 replicas: Some(scale.into()),
                 template: pod_template_spec,
                 pod_management_policy: Some("Parallel".to_string()),
+                volume_claim_templates,
                 ..Default::default()
             }),
             status: None,
         };
+
         self.service_api
             .patch(
                 &name,
@@ -854,6 +911,39 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
                 .clone();
 
+            fn is_state_oom(state: &ContainerState) -> bool {
+                state
+                    .terminated
+                    .as_ref()
+                    // 137 is the exit code corresponding to OOM in Kubernetes.
+                    // It'd be a bit clearer to compare the reason to "OOMKilled",
+                    // but this doesn't work in Kind for some reason, preventing us from
+                    // writing automated tests.
+                    .map(|terminated| terminated.exit_code == 137)
+                    .unwrap_or(false)
+            }
+            let oomed = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses.iter().any(|cs| {
+                        // We check whether the current _or_ the last state
+                        // is an OOM kill. The reason for this is that after a kill,
+                        // the state toggles from "Terminated" to "Waiting" very quickly,
+                        // at which point the OOM error appears int he last state,
+                        // not the current one.
+                        //
+                        // This "oomed" value is ignored later on if the pod is ready,
+                        // so there is no risk that we will go directly from "Terminated"
+                        // to "Running" and incorrectly report that we are currently
+                        // oom-killed.
+                        cs.last_state.as_ref().map(is_state_oom).unwrap_or(false)
+                            || cs.state.as_ref().map(is_state_oom).unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -864,7 +954,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
-                ServiceStatus::NotReady
+                ServiceStatus::NotReady(oomed.then_some(NotReadyReason::OomKilled))
             };
             let time = if let Some(time) = last_probe_time {
                 time.0

@@ -1,12 +1,12 @@
 ---
 title: "DROP SCHEMA"
-description: "`DROP SCHEMA` removes a schema from your Materialize instances."
+description: "`DROP SCHEMA` removes a schema from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP SCHEMA` removes a schema from your Materialize instances.
+`DROP SCHEMA` removes a schema from Materialize.
 
 ## Syntax
 
@@ -69,3 +69,4 @@ DROP SCHEMA IF EXISTS my_schema;
 
 - [`SHOW SCHEMAS`](../show-schemas)
 - [`CREATE SCHEMA`](../create-schema)
+- [DROP OWNED](../drop-owned)

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -80,11 +78,13 @@
 use std::collections::BTreeMap;
 
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage_client::types::sources::{encoding::SourceDataEncoding, SourceEnvelope};
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::SourceEnvelope;
 
 mod setup;
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_datadriven() {
     datadriven::walk("tests/datadriven", |f| {
         let mut sources: BTreeMap<

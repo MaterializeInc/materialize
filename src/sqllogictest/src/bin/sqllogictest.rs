@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -83,12 +81,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
-use time::Instant;
-use walkdir::WalkDir;
-
 use mz_ore::cli::{self, CliConfig};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
+use time::Instant;
+use walkdir::WalkDir;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
 #[derive(clap::Parser)]
@@ -125,9 +122,20 @@ struct Args {
     /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
     #[clap(long)]
     auto_index_tables: bool,
-    /// Run Materialize with persisted introspection sources enabled.
+    /// Inject `CREATE VIEW <view_name> AS <select_query>` and `CREATE DEFAULT INDEX ON <view_name> ...`
+    /// to redundantly execute a given `SELECT` query and contrast outcomes.
     #[clap(long)]
-    persisted_introspection: bool,
+    auto_index_selects: bool,
+    /// Inject `BEGIN` and `COMMIT` to create longer running transactions for faster testing of the
+    /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
+    #[clap(long)]
+    auto_transactions: bool,
+    /// Inject `ALTER SYSTEM SET enable_table_keys = true` before running the SLT file.
+    #[clap(long)]
+    enable_table_keys: bool,
+    /// Wrapper program to start child processes
+    #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
+    orchestrator_process_wrapper: Option<String>,
 }
 
 #[tokio::main]
@@ -145,7 +153,10 @@ async fn main() -> ExitCode {
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
-        persisted_introspection: args.persisted_introspection,
+        auto_index_selects: args.auto_index_selects,
+        auto_transactions: args.auto_transactions,
+        enable_table_keys: args.enable_table_keys,
+        orchestrator_process_wrapper: args.orchestrator_process_wrapper.clone(),
     };
 
     if args.rewrite_results {
@@ -200,7 +211,12 @@ async fn main() -> ExitCode {
                             outcomes += o;
                         }
                         Err(err) => {
-                            writeln!(config.stderr, "error: parsing file: {}", err);
+                            writeln!(
+                                config.stderr,
+                                "error: running file {}: {}",
+                                entry.file_name().to_string_lossy(),
+                                err
+                            );
                             bad_file = true;
                         }
                     }
@@ -316,11 +332,12 @@ where
             // We need to prefix every line in `s` with the current timestamp.
 
             let timestamp = Utc::now();
+            let timestamp_str = timestamp.format("%Y-%m-%d %H:%M:%S.%f %Z");
 
             // If the last character we outputted was a newline, then output a
             // timestamp prefix at the start of this line.
             if self.need_timestamp.replace(false) {
-                self.emit_str(&format!("[{}] ", timestamp));
+                self.emit_str(&format!("[{}] ", timestamp_str));
             }
 
             // Emit `s`, installing a timestamp at the start of every line
@@ -329,7 +346,7 @@ where
                 None => (&*s, false),
                 Some(s) => (s, true),
             };
-            self.emit_str(&s.replace('\n', &format!("\n[{}] ", timestamp)));
+            self.emit_str(&s.replace('\n', &format!("\n[{}] ", timestamp_str)));
 
             // If the line ended with a newline, output the newline but *not*
             // the timestamp prefix. We want the timestamp to reflect the moment

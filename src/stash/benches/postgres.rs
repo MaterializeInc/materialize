@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -78,11 +76,10 @@
 use std::str::FromStr;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use once_cell::sync::Lazy;
-use tokio::runtime::Runtime;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_stash::{Stash, StashError, StashFactory, TypedCollection};
+use once_cell::sync::Lazy;
+use tokio::runtime::Runtime;
 
 pub static FACTORY: Lazy<StashFactory> = Lazy::new(|| StashFactory::new(&MetricsRegistry::new()));
 

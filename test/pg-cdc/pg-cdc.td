@@ -39,9 +39,13 @@ INSERT INTO nonpk_table VALUES (1, 1), (1, 1);
 ALTER TABLE nonpk_table REPLICA IDENTITY FULL;
 INSERT INTO nonpk_table VALUES (2, 2), (2, 2);
 
-CREATE TABLE types_table (char_col char(3), date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col UUID, double_col DOUBLE PRECISION, numeric NUMERIC(8,4));
-INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678);
+CREATE TABLE types_table (char_col char(3), date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col UUID, double_col DOUBLE PRECISION, numeric NUMERIC(8,4), int4range_col INT4RANGE, int8range_col INT8RANGE, daterange_col DATERANGE, numrange_col NUMRANGE);
+INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678, '(,)', '(,)', '(,)', '(,)');
 ALTER TABLE types_table REPLICA IDENTITY FULL;
+
+CREATE TABLE array_types_table (date_col DATE[], time_col TIME[], timestamp_col TIMESTAMP[], uuid_col UUID[], double_col DOUBLE PRECISION[], numeric NUMERIC[], int4range_col INT4RANGE[], int8range_col INT8RANGE[], daterange_col DATERANGE[], numrange_col NUMRANGE[]);
+INSERT INTO array_types_table VALUES ('{2011-11-11}', '{11:11:11}', '{2011-11-11 11:11:11}', '{A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11}', '{1234.56768}', '{1234.5678}', '{"(,)"}', '{"(,)"}', '{"(,)"}', '{"(,)"}');
+ALTER TABLE array_types_table REPLICA IDENTITY FULL;
 
 CREATE TABLE large_text (f1 TEXT, f2 TEXT);
 INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), REPEAT('y', 1 * 1024 * 1024));
@@ -74,6 +78,14 @@ INSERT INTO no_replica_identity VALUES (1), (2);
 CREATE TABLE "таблица" ("колона" TEXT);
 ALTER TABLE "таблица" REPLICA IDENTITY FULL;
 INSERT INTO "таблица" VALUES ('стойност');
+
+CREATE TABLE """literal_quotes""" (a TEXT);
+ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
+INSERT INTO """literal_quotes""" VALUES ('v');
+
+CREATE TABLE "create" (a TEXT);
+ALTER TABLE "create" REPLICA IDENTITY FULL;
+INSERT INTO "create" VALUES ('v');
 
 CREATE TABLE escaped_text_table (f1 TEXT, f2 TEXt);
 ALTER TABLE escaped_text_table REPLICA IDENTITY FULL;
@@ -111,6 +123,16 @@ DROP PUBLICATION IF EXISTS mz_source_narrow;
 
 CREATE PUBLICATION mz_source_narrow FOR TABLE enum_table, public.another_enum_table, pk_table;
 
+DROP SCHEMA IF EXISTS another_schema CASCADE;
+CREATE SCHEMA another_schema;
+CREATE TABLE another_schema.another_table (f1 TEXT);
+ALTER TABLE another_schema.another_table REPLICA IDENTITY FULL;
+INSERT INTO another_schema.another_table VALUES ('123');
+
+DROP PUBLICATION IF EXISTS another_publication;
+
+CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
+
 #
 # Test that slots created for replication sources are deleted on DROP
 #
@@ -122,6 +144,10 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
+> SHOW SUBSOURCES ON test_slot_source
+pk_table subsource
+test_slot_source_progress progress
+
 > DROP SOURCE test_slot_source
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
@@ -130,67 +156,52 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 # Error checking
 #
 
-> CREATE CONNECTION no_such_host TO POSTGRES (
+! CREATE CONNECTION no_such_host TO POSTGRES (
     HOST 'no_such_postgres.mtrlz.com',
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_host"
-  FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+contains:error connecting to server: failed to lookup address information: Name or service not known: failed to lookup address
 
-> CREATE CONNECTION no_such_port TO POSTGRES (
+! CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
     PORT 65534,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_port"
-  FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+contains:error connecting to server: Connection refused
 
-> CREATE CONNECTION no_such_user TO POSTGRES (
+! CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER no_such_user,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_user"
-  FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+contains:password authentication failed for user "no_such_user"
 
 > CREATE SECRET badpass AS 'badpass'
-> CREATE CONNECTION no_such_password TO POSTGRES (
+! CREATE CONNECTION no_such_password TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET badpass
   )
-! CREATE SOURCE "no_such_password"
-  FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+contains:password authentication failed for user "postgres"
 
-> CREATE CONNECTION no_such_dbname TO POSTGRES (
+! CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
     DATABASE no_such_dbname,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_dbname"
-  FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+contains:database "no_such_dbname" does not exist
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
 # TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -222,6 +233,7 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
     "pk_table",
     "nonpk_table",
     "types_table",
+    "array_types_table",
     "large_text",
     "trailing_space_pk",
     "trailing_space_nopk",
@@ -231,17 +243,20 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
     "таблица",
     "escaped_text_table",
     conflict_schema.conflict_table AS public.conflict_table,
-    "space table"
+    "space table",
+    """literal_quotes""",
+    "create"
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
-
 > SHOW SOURCES
+array_types_table     subsource <null>
 conflict_table        subsource <null>
+create                subsource <null>
 escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
-mz_source             postgres  <NUMBER>
+mz_source             postgres  ${arg.default-storage-size}
+mz_source_progress    progress  <null>
 no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
@@ -249,9 +264,18 @@ pk_table              subsource <null>
 "space table"         subsource <null>
 trailing_space_nopk   subsource <null>
 trailing_space_pk     subsource <null>
+"\"literal_quotes\""  subsource <null>
 types_table           subsource <null>
-utf<NUMBER>_table     subsource <null>
+utf8_table            subsource <null>
 таблица               subsource <null>
+
+> SELECT lsn > 0 FROM mz_source_progress
+true
+
+# Ensure we report the write frontier of the progress subsource
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -264,10 +288,10 @@ $ unset-regex
 
 # Cannot drop subsources independent of primary source
 ! DROP SOURCE conflict_table
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 ! DROP SOURCE conflict_table CASCADE
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 > SELECT * FROM no_replica_identity;
 1
@@ -289,10 +313,13 @@ contains: SOURCE materialize.public.conflict_table is a subsource and cannot be 
 2 2
 
 > SELECT * FROM types_table;
-"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
+"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678" "(,)" "(,)" "(,)" "(,)"
 
 > SELECT pg_typeof(numeric) FROM types_table;
 "numeric"
+
+> SELECT * FROM array_types_table;
+"{2011-11-11}" "{11:11:11}" "{2011-11-11 11:11:11}" "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}" "{1234.56768}" "{1234.5678}" "{(,)}" "{(,)}" "{(,)}" "{(,)}"
 
 > SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
 16777216 1048576
@@ -322,6 +349,12 @@ contains: SOURCE materialize.public.conflict_table is a subsource and cannot be 
 
 > SELECT * FROM conflict_table;
 234
+
+> SELECT * FROM """literal_quotes"""
+v
+
+> SELECT * FROM "create"
+v
 
 #
 # Confirm that the new sources can be used to build upon
@@ -364,7 +397,9 @@ DELETE FROM nonpk_table WHERE ctid = '(0,1)';
 UPDATE nonpk_table SET f1 = f1 + 10 WHERE ctid = '(0,2)';
 UPDATE nonpk_table SET f1 = f1 + 100 WHERE f1 = 3;
 
-INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678);
+INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678, 'empty', 'empty', 'empty', 'empty');
+
+INSERT INTO array_types_table VALUES ('{2011-11-11}', '{11:11:11}', '{2011-11-11 11:11:11}', '{A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11}', '{1234.56768}', '{1234.5678}', '{"(,)"}', '{"(,)"}', '{"(,)"}', '{"(,)"}');
 
 INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), 'abc');
 
@@ -385,7 +420,6 @@ UPDATE nulls_table SET f2 = NULL WHERE f2 = 2;
 
 INSERT INTO utf8_table VALUES ('това е текст 2', 'това ''е'' "текст" 2');
 UPDATE utf8_table SET f1 = f1 || f1 , f2 = f2 || f2;
-
 INSERT INTO "таблица" SELECT * FROM "таблица";
 #
 # Check the updated data on the Materialize side
@@ -405,8 +439,12 @@ INSERT INTO "таблица" SELECT * FROM "таблица";
 2 2
 
 > SELECT * FROM types_table;
-"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
-"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
+"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678" "(,)" "(,)" "(,)" "(,)"
+"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678" "empty" "empty" "empty" "empty"
+
+> SELECT * FROM array_types_table;
+"{2011-11-11}" "{11:11:11}" "{2011-11-11 11:11:11}" "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}" "{1234.56768}" "{1234.5678}" "{(,)}" "{(,)}" "{(,)}" "{(,)}"
+"{2011-11-11}" "{11:11:11}" "{2011-11-11 11:11:11}" "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}" "{1234.56768}" "{1234.5678}" "{(,)}" "{(,)}" "{(,)}" "{(,)}"
 
 > SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
 16777216 1048576
@@ -535,7 +573,10 @@ contains: invalid TEXT COLUMNS option value: table table_dne not found in source
     PUBLICATION 'mz_source',
     TEXT COLUMNS [another_enum_table."колона"]
   )
-  FOR ALL TABLES;
+  FOR TABLES(
+    conflict_schema.another_enum_table AS conflict_enum,
+    public.another_enum_table AS public_enum
+  );
 contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
 
 ! CREATE SOURCE enum_source
@@ -543,7 +584,7 @@ contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguo
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
 ! CREATE SOURCE enum_source
@@ -551,7 +592,7 @@ contains: invalid TEXT COLUMNS option value: column name 'foo' must have at leas
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo.bar.qux.qax.foo]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
 ! CREATE SOURCE enum_source
@@ -559,7 +600,7 @@ contains: invalid TEXT COLUMNS option value: qualified name did not have between
     PUBLICATION 'mz_source',
     TEXT COLUMNS [enum_table.a, enum_table.a]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
 # utf8_table is not part of mz_source_narrow publication
@@ -568,7 +609,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
     PUBLICATION 'mz_source_narrow',
     TEXT COLUMNS [enum_table.a, utf8_table.f1]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
 
 # n.b includes a reference to pk_table, which is not a table that's part of the
@@ -588,13 +629,11 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
     public.another_enum_table
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null>
-enum_source             postgres  <NUMBER>
+enum_source             postgres  ${arg.default-storage-size}
+enum_source_progress    progress  <null>
 enum_table              subsource <null>
-
-$ unset-regex
 
 > SELECT * FROM enum_table
 var0
@@ -617,7 +656,28 @@ INSERT INTO pk_table VALUES (99999);
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
 ! SELECT COUNT(*) = 0 FROM pk_table;
-regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
+regex:publication "mz_source" does not exist
+
+> DROP SOURCE enum_source CASCADE;
+> DROP SOURCE "mz_source" CASCADE;
+
+#
+# Check schema scoped tables
+
+> CREATE SOURCE another_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'another_publication'
+  )
+  FOR SCHEMAS (
+    another_schema
+  );
+
+> SHOW SOURCES
+another_source          postgres  ${arg.default-storage-size}
+another_source_progress progress  <null>
+another_table           subsource <null>
+
+> DROP SOURCE another_source
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA conflict_schema CASCADE;

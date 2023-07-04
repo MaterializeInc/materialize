@@ -43,7 +43,7 @@ steps:
   $bootstrap_steps
   - wait
   - label: mkpipeline
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.mkpipeline
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.mkpipeline "$@"
     priority: 2
     agents:
       queue: linux

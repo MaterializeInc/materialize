@@ -1,14 +1,12 @@
 ---
 title: "SHOW TABLES"
-description: "`SHOW TABLES` returns a list of all tables available to your Materialize instances."
+description: "`SHOW TABLES` returns a list of all tables available in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
-`SHOW TABLES` returns a list of all tables available to your Materialize instances.
+`SHOW TABLES` returns a list of all tables available in Materialize.
 
 ## Syntax
 
@@ -16,7 +14,7 @@ menu:
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show tables from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show tables from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

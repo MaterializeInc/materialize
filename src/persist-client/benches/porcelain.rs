@@ -11,18 +11,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use criterion::{black_box, Criterion, Throughput};
-use mz_persist_types::codec_impls::VecU8Schema;
-use timely::progress::Antichain;
-use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
-use tracing::debug;
-
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::task;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::Codec64;
+use timely::progress::Antichain;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
+use tracing::debug;
 
 use crate::{bench_all_clients, load};
 

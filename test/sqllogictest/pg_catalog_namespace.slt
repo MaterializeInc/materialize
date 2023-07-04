@@ -15,24 +15,34 @@ CREATE SCHEMA other;
 statement ok
 CREATE DATABASE other
 
-query TTT rowsort
-SELECT nspname, nspowner, nspacl FROM pg_catalog.pg_namespace
+query TT rowsort
+SELECT nspname, nspacl FROM pg_catalog.pg_namespace
 ----
-information_schema NULL NULL
-mz_catalog   NULL NULL
-mz_internal  NULL  NULL
-other   NULL  NULL
-pg_catalog   NULL  NULL
-public   NULL  NULL
+information_schema NULL
+mz_catalog   NULL
+mz_internal  NULL
+other   NULL
+pg_catalog   NULL
+public   NULL
+
+query I
+SELECT COUNT(*) FROM pg_catalog.pg_namespace WHERE nspowner IS NOT NULL
+----
+6
 
 statement ok
 SET database = other;
 
-query TTT rowsort
-SELECT nspname, nspowner, nspacl FROM pg_catalog.pg_namespace
+query TT rowsort
+SELECT nspname, nspacl FROM pg_catalog.pg_namespace
 ----
-information_schema NULL NULL
-mz_catalog   NULL NULL
-mz_internal  NULL  NULL
-pg_catalog   NULL  NULL
-public   NULL  NULL
+information_schema NULL
+mz_catalog   NULL
+mz_internal  NULL
+pg_catalog   NULL
+public   NULL
+
+query I
+SELECT COUNT(*) FROM pg_catalog.pg_namespace WHERE nspowner IS NOT NULL
+----
+5

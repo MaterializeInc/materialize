@@ -33,8 +33,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_ore::{stack::RecursionLimitError, str::Indent};
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::Indent;
 
+use crate::explain::dot::{dot_string, DisplayDot};
+use crate::explain::json::{json_string, DisplayJson};
+use crate::explain::text::{text_string, DisplayText};
 use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
@@ -43,11 +47,8 @@ pub mod text;
 #[cfg(feature = "tracing_")]
 pub mod tracing;
 
-use self::dot::{dot_string, DisplayDot};
-use self::json::{json_string, DisplayJson};
-use self::text::{text_string, DisplayText};
 #[cfg(feature = "tracing_")]
-pub use self::tracing::trace_plan;
+pub use crate::explain::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -82,6 +83,7 @@ pub enum ExplainError {
     AnyhowError(anyhow::Error),
     RecursionLimitError(RecursionLimitError),
     SerdeJsonError(serde_json::Error),
+    LinearChainsPlusRecursive,
     UnknownError(String),
 }
 
@@ -103,6 +105,14 @@ impl fmt::Display for ExplainError {
             }
             ExplainError::SerdeJsonError(error) => {
                 write!(f, "{}", error)
+            }
+            ExplainError::LinearChainsPlusRecursive => {
+                write!(
+                    f,
+                    "The linear_chains option is not supported with WITH MUTUALLY RECURSIVE. \
+                If you would like to see added support, then please comment at \
+                https://github.com/MaterializeInc/materialize/issues/19012."
+                )
             }
             ExplainError::UnknownError(error) => {
                 write!(f, "{}", error)
@@ -149,6 +159,7 @@ pub struct ExplainConfig {
     /// Show the `non_negative` in the explanation if it is supported by the backing IR.
     pub non_negative: bool,
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
+    /// Enforced if `timing` is set.
     pub no_fast_path: bool,
     /// Don't normalize plans before explaining them.
     pub raw_plans: bool,
@@ -156,10 +167,31 @@ pub struct ExplainConfig {
     pub raw_syntax: bool,
     /// Show the `subtree_size` attribute in the explanation if it is supported by the backing IR.
     pub subtree_size: bool,
-    /// Print optimization timings (currently unsupported).
+    /// Print optimization timings.
     pub timing: bool,
     /// Show the `type` attribute in the explanation.
     pub types: bool,
+    /// Show MFP pushdown information.
+    pub mfp_pushdown: bool,
+}
+
+impl Default for ExplainConfig {
+    fn default() -> Self {
+        Self {
+            arity: false,
+            join_impls: true,
+            keys: false,
+            linear_chains: false,
+            non_negative: false,
+            no_fast_path: true,
+            raw_plans: true,
+            raw_syntax: true,
+            subtree_size: false,
+            timing: false,
+            types: false,
+            mfp_pushdown: false,
+        }
+    }
 }
 
 impl ExplainConfig {
@@ -183,12 +215,13 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             keys: flags.remove("keys"),
             linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
             non_negative: flags.remove("non_negative"),
-            no_fast_path: flags.remove("no_fast_path"),
+            no_fast_path: flags.remove("no_fast_path") || flags.contains("timing"),
             raw_plans: flags.remove("raw_plans"),
             raw_syntax: flags.remove("raw_syntax"),
             subtree_size: flags.remove("subtree_size"),
             timing: flags.remove("timing"),
             types: flags.remove("types"),
+            mfp_pushdown: flags.remove("mfp_pushdown"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -199,7 +232,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
 }
 
 /// The type of object to be explained
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Explainee {
     /// An object that will be served using a dataflow
     Dataflow(GlobalId),
@@ -587,6 +620,7 @@ mod tests {
             subtree_size: false,
             timing: true,
             types: false,
+            mfp_pushdown: false,
         };
         let context = ExplainContext {
             env,
@@ -597,7 +631,7 @@ mod tests {
         expr.explain(&format, &context)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_mutable_context() {
         let mut env = Environment::default();
         let frontiers = Frontiers::<u64>::new(3, 7);

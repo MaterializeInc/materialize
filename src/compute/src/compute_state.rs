@@ -12,22 +12,9 @@ use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::Collection;
-use timely::communication::Allocate;
-use timely::logging::Logger;
-use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
-use timely::progress::reachability::logging::TrackerEvent;
-use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
-use tracing::{error, info, span, Level};
-use uuid::Uuid;
-
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameters, Peek};
@@ -35,19 +22,25 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::UIntGauge;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::activator::RcActivator;
-use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
+use timely::communication::Allocate;
+use timely::order::PartialOrder;
+use timely::progress::frontier::Antichain;
+use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
+use tracing::{error, info, span, Level};
+use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
+use crate::render::LinearJoinImpl;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -76,7 +69,7 @@ pub struct ComputeState {
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
-    pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    pub reported_frontiers: BTreeMap<GlobalId, ReportedFrontier>,
     /// Collections that were recently dropped and whose removal needs to be reported.
     pub dropped_collections: Vec<GlobalId>,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -85,11 +78,13 @@ pub struct ComputeState {
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
     /// History of commands received by this workers and all its peers.
-    pub command_history: ComputeCommandHistory,
+    pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: usize,
+    /// Implementation to use for rendering linear joins.
+    pub linear_join_impl: LinearJoinImpl,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
 }
@@ -112,11 +107,13 @@ pub struct ActiveComputeState<'a, A: Allocate> {
 }
 
 /// A token that keeps a sink alive.
-pub struct SinkToken {
-    /// The underlying token.
-    pub token: Box<dyn Any>,
-    /// Whether the sink token is keeping a subscribe alive.
-    pub is_subscribe: bool,
+pub struct SinkToken(Box<dyn Any>);
+
+impl SinkToken {
+    /// Create a new `SinkToken`.
+    pub fn new(t: Box<dyn Any>) -> Self {
+        Self(t)
+    }
 }
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
@@ -124,19 +121,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
+
         self.compute_state
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
-        self.compute_state.metrics.command_history_size.set(
-            u64::try_from(self.compute_state.command_history.len()).expect(
-                "The compute command history size must be non-negative and fit a 64-bit number",
-            ),
-        );
-        self.compute_state.metrics.dataflow_count_in_history.set(
-            u64::try_from(self.compute_state.command_history.dataflow_count()).expect(
-                "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
-            ),
-        );
+
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(logging) => self.handle_create_instance(logging),
@@ -162,6 +151,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            enable_mz_join_core,
             persist,
         } = params;
 
@@ -170,6 +160,12 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
+        }
+        if let Some(v) = enable_mz_join_core {
+            self.compute_state.linear_join_impl = match v {
+                false => LinearJoinImpl::DifferentialDataflow,
+                true => LinearJoinImpl::Materialize,
+            };
         }
 
         persist.apply(self.compute_state.persist_clients.cfg())
@@ -192,12 +188,18 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
             let exported_ids = index_ids.chain(sink_ids);
 
+            let dataflow_index = self.timely_worker.next_dataflow_index();
+
             // Initialize frontiers for each object, and optionally log their construction.
             for (object_id, collection_id) in exported_ids {
-                if let Some(frontier) = self.compute_state.reported_frontiers.insert(
-                    object_id,
-                    Antichain::from_elem(timely::progress::Timestamp::minimum()),
-                ) {
+                let reported_frontier = ReportedFrontier::NotReported {
+                    lower: dataflow.as_of.clone().unwrap(),
+                };
+                if let Some(frontier) = self
+                    .compute_state
+                    .reported_frontiers
+                    .insert(object_id, reported_frontier)
+                {
                     error!(
                         "existing frontier {frontier:?} for newly created dataflow id {object_id}"
                     );
@@ -205,16 +207,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::Dataflow(object_id, true));
+                    logger.log(ComputeEvent::Export {
+                        id: object_id,
+                        dataflow_index,
+                    });
                     logger.log(ComputeEvent::Frontier {
                         id: object_id,
                         time: timely::progress::Timestamp::minimum(),
                         diff: 1,
                     });
-                    for import_id in dataflow.depends_on(collection_id) {
-                        logger.log(ComputeEvent::DataflowDependency {
-                            dataflow: object_id,
-                            source: import_id,
+                    for import_id in dataflow.depends_on_imports(collection_id) {
+                        logger.log(ComputeEvent::ExportDependency {
+                            export_id: object_id,
+                            import_id,
                         })
                     }
                 }
@@ -246,8 +251,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .remove(&id)
                     .expect("Dropped compute collection with no frontier");
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::Dataflow(id, false));
-                    if let Some(&time) = prev_frontier.get(0) {
+                    logger.log(ComputeEvent::ExportDropped { id });
+                    if let Some(time) = prev_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                 }
@@ -323,255 +328,27 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
-    pub fn initialize_logging(&mut self, logging: &LoggingConfig) {
+    pub fn initialize_logging(&mut self, config: &LoggingConfig) {
         if self.compute_state.compute_logger.is_some() {
             panic!("dataflow server has already initialized logging");
         }
 
-        use crate::logging::BatchLogger;
-        use timely::dataflow::operators::capture::event::link::EventLink;
-
-        let interval = std::cmp::max(1, logging.interval.as_millis())
-            .try_into()
-            .expect("must fit");
-
-        // Track time relative to the Unix epoch, rather than when the server
-        // started, so that the logging sources can be joined with tables and
-        // other real time sources for semi-sensible results.
-        let now = Instant::now();
-        let start_offset = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .expect("Failed to get duration since Unix epoch");
-
-        // Establish loggers first, so we can either log the logging or not, as we like.
-        let t_linked = std::rc::Rc::new(EventLink::new());
-        let mut t_logger = BatchLogger::new(Rc::clone(&t_linked), interval);
-        let r_linked = std::rc::Rc::new(EventLink::new());
-        let mut r_logger = BatchLogger::new(Rc::clone(&r_linked), interval);
-        let d_linked = std::rc::Rc::new(EventLink::new());
-        let mut d_logger = BatchLogger::new(Rc::clone(&d_linked), interval);
-        let c_linked = std::rc::Rc::new(EventLink::new());
-        let mut c_logger = BatchLogger::new(Rc::clone(&c_linked), interval);
-
-        let mut t_traces = BTreeMap::new();
-        let mut r_traces = BTreeMap::new();
-        let mut d_traces = BTreeMap::new();
-        let mut c_traces = BTreeMap::new();
-
-        let activate_after = 128;
-
-        let t_activator = RcActivator::new("t_activator".into(), activate_after);
-        let r_activator = RcActivator::new("r_activator".into(), activate_after);
-        let d_activator = RcActivator::new("d_activator".into(), activate_after);
-        let c_activator = RcActivator::new("c_activator".into(), activate_after);
-
-        if !logging.log_logging {
-            // Construct logging dataflows and endpoints before registering any.
-            t_traces.extend(logging::timely::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                Rc::clone(&t_linked),
-                t_activator.clone(),
-            ));
-            r_traces.extend(logging::reachability::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                Rc::clone(&r_linked),
-                r_activator.clone(),
-            ));
-            d_traces.extend(logging::differential::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                Rc::clone(&d_linked),
-                d_activator.clone(),
-            ));
-            c_traces.extend(logging::compute::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                Rc::clone(&c_linked),
-                c_activator.clone(),
-            ));
-        }
-
-        // Register each logger endpoint.
-        let activator = t_activator.clone();
-        self.timely_worker.log_register().insert_logger(
-            "timely",
-            Logger::new(
-                now,
-                start_offset,
-                self.timely_worker.index(),
-                move |time, data| {
-                    t_logger.publish_batch(time, data);
-                    activator.activate();
-                },
-            ),
-        );
-
-        let activator = r_activator.clone();
-        self.timely_worker.log_register().insert_logger(
-            "timely/reachability",
-            Logger::new(
-                now,
-                start_offset,
-                self.timely_worker.index(),
-                move |time, data: &mut Vec<(Duration, usize, TrackerEvent)>| {
-                    let mut converted_updates = Vec::new();
-                    for event in data.drain(..) {
-                        match event.2 {
-                            TrackerEvent::SourceUpdate(update) => {
-                                let massaged: Vec<_> = update
-                                    .updates
-                                    .iter()
-                                    .map(|u| {
-                                        let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
-                                        (*u.0, *u.1, true, ts, *u.3)
-                                    })
-                                    .collect();
-
-                                converted_updates.push((
-                                    event.0,
-                                    event.1,
-                                    (update.tracker_id, massaged),
-                                ));
-                            }
-                            TrackerEvent::TargetUpdate(update) => {
-                                let massaged: Vec<_> = update
-                                    .updates
-                                    .iter()
-                                    .map(|u| {
-                                        let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
-                                        (*u.0, *u.1, true, ts, *u.3)
-                                    })
-                                    .collect();
-
-                                converted_updates.push((
-                                    event.0,
-                                    event.1,
-                                    (update.tracker_id, massaged),
-                                ));
-                            }
-                        }
-                    }
-                    r_logger.publish_batch(time, &mut converted_updates);
-                    activator.activate();
-                },
-            ),
-        );
-
-        let activator = d_activator.clone();
-        self.timely_worker.log_register().insert_logger(
-            "differential/arrange",
-            Logger::new(
-                now,
-                start_offset,
-                self.timely_worker.index(),
-                move |time, data| {
-                    d_logger.publish_batch(time, data);
-                    activator.activate();
-                },
-            ),
-        );
-
-        let activator = c_activator.clone();
-        self.timely_worker.log_register().insert_logger(
-            "materialize/compute",
-            Logger::new(
-                now,
-                start_offset,
-                self.timely_worker.index(),
-                move |time, data| {
-                    c_logger.publish_batch(time, data);
-                    activator.activate();
-                },
-            ),
-        );
-
-        let errs = self
-            .timely_worker
-            .dataflow_named("Dataflow: logging", |scope| {
-                Collection::<_, DataflowError, Diff>::empty(scope)
-                    .arrange()
-                    .trace
-            });
-
-        let logger = self
-            .timely_worker
-            .log_register()
-            .get("materialize/compute")
-            .unwrap();
-
-        if logging.log_logging {
-            // Create log processing dataflows after registering logging so we can log the
-            // logging.
-            t_traces.extend(logging::timely::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                t_linked,
-                t_activator,
-            ));
-            r_traces.extend(logging::reachability::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                r_linked,
-                r_activator,
-            ));
-            d_traces.extend(logging::differential::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                d_linked,
-                d_activator,
-            ));
-            c_traces.extend(logging::compute::construct(
-                self.timely_worker,
-                logging,
-                self.compute_state,
-                c_linked,
-                c_activator,
-            ));
-        }
+        let (logger, traces) = logging::initialize(self.timely_worker, config);
 
         // Install traces as maintained indexes
-        for (log, (trace, token)) in t_traces {
-            let id = logging.index_logs[&log];
-            self.compute_state
-                .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
-        }
-        for (log, (trace, token)) in r_traces {
-            let id = logging.index_logs[&log];
-            self.compute_state
-                .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
-        }
-        for (log, (trace, token)) in d_traces {
-            let id = logging.index_logs[&log];
-            self.compute_state
-                .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
-        }
-        for (log, (trace, token)) in c_traces {
-            let id = logging.index_logs[&log];
-            self.compute_state
-                .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
+        for (log, trace) in traces {
+            let id = config.index_logs[&log];
+            self.compute_state.traces.set(id, trace);
         }
 
-        // Initialize frontier reporting for all logging indexes and sinks.
-        let index_ids = logging.index_logs.values().copied();
-        let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
-        for id in index_ids.chain(sink_ids) {
-            if let Some(frontier) = self.compute_state.reported_frontiers.insert(
-                id,
-                Antichain::from_elem(timely::progress::Timestamp::minimum()),
-            ) {
+        // Initialize frontier reporting for all logging indexes.
+        let index_ids = config.index_logs.values().copied();
+        for id in index_ids {
+            if let Some(frontier) = self
+                .compute_state
+                .reported_frontiers
+                .insert(id, ReportedFrontier::new())
+            {
                 error!(
                     "existing frontier {frontier:?} for newly initialized logging export id {id}"
                 );
@@ -608,26 +385,42 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let mut new_uppers = Vec::new();
 
         let mut update_frontier = |id, new_frontier: &Antichain<Timestamp>| {
-            let prev_frontier = self.compute_state.reported_frontiers.get_mut(&id);
-            let prev_frontier = prev_frontier
+            let reported_frontier = self
+                .compute_state
+                .reported_frontiers
+                .get_mut(&id)
                 .unwrap_or_else(|| panic!("Frontier update for untracked identifier: {id}"));
 
-            assert!(PartialOrder::less_equal(prev_frontier, new_frontier));
-            if prev_frontier == new_frontier {
-                return; // nothing new to report
+            match reported_frontier {
+                ReportedFrontier::Reported(old_frontier) => {
+                    // In steady state it is not expected for `old_frontier` to be beyond
+                    // `new_frontier`. However, during reconcilation this can happen as we
+                    // artificially advance the frontiers of to-be-dropped collections to disable
+                    // frontier reporting for them.
+                    if !PartialOrder::less_than(old_frontier, new_frontier) {
+                        return; // nothing new to report
+                    }
+                }
+                ReportedFrontier::NotReported { lower } => {
+                    if !PartialOrder::less_equal(lower, new_frontier) {
+                        return; // lower bound for reporting not yet reached
+                    }
+                }
             }
 
+            let new_reported_frontier = ReportedFrontier::Reported(new_frontier.clone());
+
             if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                if let Some(&time) = prev_frontier.get(0) {
+                if let Some(time) = reported_frontier.logging_time() {
                     logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                 }
-                if let Some(&time) = new_frontier.get(0) {
+                if let Some(time) = new_reported_frontier.logging_time() {
                     logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
                 }
             }
 
             new_uppers.push((id, new_frontier.clone()));
-            prev_frontier.clone_from(new_frontier);
+            *reported_frontier = new_reported_frontier;
         };
 
         let mut new_frontier = Antichain::new();
@@ -649,19 +442,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     pub fn report_dropped_collections(&mut self) {
         let dropped_collections = std::mem::take(&mut self.compute_state.dropped_collections);
 
-        // TODO(teske): It is, in fact, wrong to report the dropping of a collection before it has
+        // TODO(#16275): It is, in fact, wrong to report the dropping of a collection before it has
         // advanced to the empty frontier by announcing that it has advanced to the empty
         // frontier. We should introduce a new compute response variant that has the right
         // semantics.
-        let new_uppers: Vec<_> = dropped_collections
-            .into_iter()
-            .filter(|id| {
-                // The collection might have been temporarily dropped and re-created during
-                // reconciliation. In this case, announcing its removal would confuse the controller.
-                !self.compute_state.collection_exists(*id)
-            })
-            .map(|id| (id, Antichain::new()))
-            .collect();
+        let mut new_uppers = Vec::with_capacity(dropped_collections.len());
+        for id in dropped_collections {
+            // Sanity check: A collection that was dropped should not exist.
+            assert!(
+                !self.compute_state.collection_exists(id),
+                "tried to report a dropped collection that still exists: {id}"
+            );
+            new_uppers.push((id, Antichain::new()));
+        }
 
         if !new_uppers.is_empty() {
             self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
@@ -709,22 +502,40 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
         for (sink_id, mut response) in subscribe_responses.drain(..) {
             // Update frontier logging for this subscribe.
-            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&sink_id) {
+            if let Some(reported_frontier) = self.compute_state.reported_frontiers.get_mut(&sink_id)
+            {
                 let new_frontier = match &response {
                     SubscribeResponse::Batch(b) => b.upper.clone(),
                     SubscribeResponse::DroppedAt(_) => Antichain::new(),
                 };
-                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
+
+                match reported_frontier {
+                    ReportedFrontier::Reported(old_frontier) => {
+                        assert!(
+                            PartialOrder::less_than(old_frontier, &new_frontier),
+                            "new frontier {new_frontier:?} is not beyond \
+                             old frontier {old_frontier:?}"
+                        );
+                    }
+                    ReportedFrontier::NotReported { lower } => {
+                        assert!(
+                            PartialOrder::less_equal(lower, &new_frontier),
+                            "new frontier {new_frontier:?} is before lower bound {lower:?}"
+                        );
+                    }
+                }
+
+                let new_reported_frontier = ReportedFrontier::Reported(new_frontier);
 
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    if let Some(&time) = prev_frontier.get(0) {
+                    if let Some(time) = reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier {
                             id: sink_id,
                             time,
                             diff: -1,
                         });
                     }
-                    if let Some(&time) = new_frontier.get(0) {
+                    if let Some(time) = new_reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier {
                             id: sink_id,
                             time,
@@ -733,7 +544,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     }
                 }
 
-                prev_frontier.clone_from(&new_frontier);
+                *reported_frontier = new_reported_frontier;
             } else {
                 // Presumably tracking state for this frontier was already dropped by
                 // `handle_allow_compaction`. There is nothing left to do for logging.
@@ -931,7 +742,7 @@ impl PendingPeek {
                     .peek
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
-                    .map_err_to_string()?
+                    .map_err_to_string_with_causes()?
                 {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {
@@ -1014,5 +825,41 @@ impl PendingPeek {
         }
 
         Ok(results)
+    }
+}
+
+/// A frontier we have reported to the controller, or the least frontier we are allowed to report.
+#[derive(Debug)]
+pub enum ReportedFrontier {
+    /// A frontier has been previously reported.
+    Reported(Antichain<Timestamp>),
+    /// No frontier has been reported yet.
+    NotReported {
+        /// A lower bound for frontiers that may be reported in the future.
+        lower: Antichain<Timestamp>,
+    },
+}
+
+impl ReportedFrontier {
+    /// Create a new `ReportedFrontier` enforcing the minimum lower bound.
+    pub fn new() -> Self {
+        let lower = Antichain::from_elem(timely::progress::Timestamp::minimum());
+        Self::NotReported { lower }
+    }
+
+    /// Whether the reported frontier is the empty frontier.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Reported(frontier) => frontier.is_empty(),
+            Self::NotReported { .. } => false,
+        }
+    }
+
+    /// Return a timestamp suitable for logging the reported frontier.
+    pub fn logging_time(&self) -> Option<Timestamp> {
+        match self {
+            Self::Reported(frontier) => frontier.get(0).copied(),
+            Self::NotReported { .. } => Some(timely::progress::Timestamp::minimum()),
+        }
     }
 }

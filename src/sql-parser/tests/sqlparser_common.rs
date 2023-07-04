@@ -56,8 +56,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -86,23 +84,23 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use itertools::Itertools;
 use std::error::Error;
 use std::iter;
 
-use unicode_width::UnicodeWidthStr;
-
+use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawObjectName};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName};
 use mz_sql_parser::parser::{
     self, parse_statements, parse_statements_with_limit, ParserError, MAX_STATEMENT_BATCH_SIZE,
 };
+use unicode_width::UnicodeWidthStr;
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     use datadriven::{walk, TestCase};
 
@@ -134,10 +132,10 @@ fn datadriven() {
                 let stmt = s.into_element();
                 let parsed = match parser::parse_statements(&stmt.to_string()) {
                     Ok(parsed) => parsed.into_element(),
-                    Err(err) => return format!("reparse failed: {}\n", err),
+                    Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
                 };
                 if parsed != stmt {
-                    return format!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
+                    panic!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
                 }
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", stmt)
@@ -147,7 +145,7 @@ fn datadriven() {
                     format!("{}\n=>\n{:?}\n", stmt, stmt)
                 }
             }
-            Err(e) => render_error(input, e),
+            Err(e) => render_error(input, e.error),
         }
     }
 
@@ -178,7 +176,8 @@ fn datadriven() {
     });
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
 
@@ -219,7 +218,7 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+#[mz_ore::test]
 fn format_ident() {
     let cases = vec![
         ("foo", "foo", "\"foo\""),
@@ -248,7 +247,8 @@ fn format_ident() {
     }
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     struct Visitor<'a> {
         seen_idents: Vec<&'a str>,
@@ -258,8 +258,8 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         fn visit_ident(&mut self, ident: &'a Ident) {
             self.seen_idents.push(ident.as_str());
         }
-        fn visit_object_name(&mut self, object_name: &'a <Raw as AstInfo>::ObjectName) {
-            if let RawObjectName::Name(name) = object_name {
+        fn visit_item_name(&mut self, item_name: &'a <Raw as AstInfo>::ItemName) {
+            if let RawItemName::Name(name) = item_name {
                 for ident in &name.0 {
                     self.seen_idents.push(ident.as_str());
                 }
@@ -267,7 +267,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         }
         fn visit_data_type(&mut self, data_type: &'a <Raw as AstInfo>::DataType) {
             if let RawDataType::Other { name, .. } = data_type {
-                self.visit_object_name(name)
+                self.visit_item_name(name)
             }
         }
     }
@@ -355,7 +355,8 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
     let size = statement.bytes().count();

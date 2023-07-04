@@ -11,17 +11,20 @@
 //!
 //! Maintenance operations for persist, shared among active handles
 
-use crate::internal::compact::CompactReq;
-use crate::internal::gc::GcReq;
-use crate::{Compactor, GarbageCollector, Machine};
+use std::fmt::Debug;
+use std::mem;
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
-use std::fmt::Debug;
 use timely::progress::Timestamp;
+
+use crate::internal::compact::CompactReq;
+use crate::internal::gc::GcReq;
+use crate::{Compactor, GarbageCollector, Machine};
 
 /// Every handle to this shard may be occasionally asked to perform
 /// routine maintenance after a successful compare_and_set operation.
@@ -34,13 +37,17 @@ use timely::progress::Timestamp;
 /// Operations that run regularly once a handle is registered, such
 /// as heartbeats, are expected to always perform maintenance.
 #[must_use]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
     pub(crate) write_rollup: Option<SeqNo>,
 }
 
 impl RoutineMaintenance {
+    pub(crate) fn is_empty(&self) -> bool {
+        self == &RoutineMaintenance::default()
+    }
+
     /// Initiates any routine maintenance necessary in background tasks
     pub(crate) fn start_performing<K, V, T, D>(
         self,
@@ -70,8 +77,16 @@ impl RoutineMaintenance {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        let mut more_maintenance = RoutineMaintenance::default();
         for future in self.perform_in_background(machine, gc) {
-            let _ = future.await;
+            more_maintenance.merge(future.await);
+        }
+
+        while !more_maintenance.is_empty() {
+            let maintenance = mem::take(&mut more_maintenance);
+            for future in maintenance.perform_in_background(machine, gc) {
+                more_maintenance.merge(future.await);
+            }
         }
     }
 
@@ -83,7 +98,7 @@ impl RoutineMaintenance {
         self,
         machine: &Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
-    ) -> Vec<BoxFuture<'static, ()>>
+    ) -> Vec<BoxFuture<'static, RoutineMaintenance>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -95,7 +110,7 @@ impl RoutineMaintenance {
             if let Some(recv) = gc.gc_and_truncate_background(gc_req) {
                 // it's safe to ignore errors on the receiver. in the
                 // case of shutdown, the sender may have been dropped
-                futures.push(recv.map(|_| ()).boxed());
+                futures.push(recv.map(Result::unwrap_or_default).boxed());
             }
         }
 
@@ -103,9 +118,10 @@ impl RoutineMaintenance {
             let mut machine = machine.clone();
             futures.push(
                 mz_ore::task::spawn(|| "persist::write_rollup", async move {
-                    if machine.seqno() < rollup_seqno {
-                        machine.applier.fetch_and_update_state().await;
-                    }
+                    machine
+                        .applier
+                        .fetch_and_update_state(Some(rollup_seqno))
+                        .await;
                     // We don't have to write at exactly rollup_seqno, just need
                     // something recent.
                     assert!(
@@ -114,9 +130,9 @@ impl RoutineMaintenance {
                         machine.seqno(),
                         rollup_seqno
                     );
-                    machine.add_rollup_for_current_seqno().await;
+                    machine.add_rollup_for_current_seqno().await
                 })
-                .map(|_| ())
+                .map(Result::unwrap_or_default)
                 .boxed(),
             );
         }
@@ -178,14 +194,16 @@ where
         V: Debug + Codec,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let _ = self.perform_in_background(machine, gc, compactor);
+        let machine = machine.clone();
+        let gc = gc.clone();
+        let compactor = compactor.cloned();
+        mz_ore::task::spawn(|| "writer-maintenance", async move {
+            self.perform(&machine, &gc, compactor.as_ref()).await
+        });
     }
 
     /// Performs any writer maintenance necessary. Returns when all background
     /// tasks have completed and the maintenance is done.
-    ///
-    /// Used for testing maintenance-related state transitions deterministically
-    #[cfg(test)]
     pub(crate) async fn perform<K, V, D>(
         self,
         machine: &Machine<K, V, T, D>,
@@ -196,38 +214,30 @@ where
         V: Debug + Codec,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        for future in self.perform_in_background(machine, gc, compactor) {
-            let _ = future.await;
+        let Self {
+            routine,
+            compaction,
+        } = self;
+        let mut more_maintenance = RoutineMaintenance::default();
+        for future in routine.perform_in_background(machine, gc) {
+            more_maintenance.merge(future.await);
         }
-    }
-
-    /// Initiates maintenance work in the background, either through spawned tasks
-    /// or by sending messages to existing tasks. The returned futures may be
-    /// awaited to know when the work is completed, but do not need to be polled
-    /// to drive the work to completion.
-    fn perform_in_background<K, V, D>(
-        self,
-        machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector<K, V, T, D>,
-        compactor: Option<&Compactor<K, V, T, D>>,
-    ) -> Vec<BoxFuture<'static, ()>>
-    where
-        K: Debug + Codec,
-        V: Debug + Codec,
-        D: Semigroup + Codec64 + Send + Sync,
-    {
-        let mut futures = self.routine.perform_in_background(machine, gc);
 
         if let Some(compactor) = compactor {
-            for req in self.compaction {
+            for req in compaction {
                 if let Some(receiver) = compactor.compact_and_apply_background(req, machine) {
                     // it's safe to ignore errors on the receiver. in the
                     // case of shutdown, the sender may have been dropped
-                    futures.push(receiver.map(|_| ()).boxed());
+                    let _ = receiver.await;
                 }
             }
         }
 
-        futures
+        while !more_maintenance.is_empty() {
+            let maintenance = mem::take(&mut more_maintenance);
+            for future in maintenance.perform_in_background(machine, gc) {
+                more_maintenance.merge(future.await);
+            }
+        }
     }
 }

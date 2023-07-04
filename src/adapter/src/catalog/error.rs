@@ -10,6 +10,7 @@
 use std::fmt;
 
 use mz_ore::str::StrExt;
+use mz_proto::TryFromProtoError;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 
@@ -46,12 +47,16 @@ pub enum ErrorKind {
     ReservedSchemaName(String),
     #[error("role name {} is reserved", .0.quoted())]
     ReservedRoleName(String),
+    #[error("role name {} is reserved", .0.quoted())]
+    ReservedSystemRoleName(String),
     #[error("cluster name {} is reserved", .0.quoted())]
     ReservedClusterName(String),
     #[error("replica name {} is reserved", .0.quoted())]
     ReservedReplicaName(String),
     #[error("system cluster '{0}' cannot be modified")]
     ReadOnlyCluster(String),
+    #[error("system database '{0}' cannot be modified")]
+    ReadOnlyDatabase(String),
     #[error("system schema '{0}' cannot be modified")]
     ReadOnlySystemSchema(String),
     #[error("system item '{0}' cannot be modified")]
@@ -86,6 +91,13 @@ pub enum ErrorKind {
     UnexpectedStashState,
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
+    #[error("role \"{role_name}\" is a member of role \"{member_name}\"")]
+    CircularRoleMembership {
+        role_name: String,
+        member_name: String,
+    },
+    #[error("cluster '{0}' is managed and cannot be directly modified")]
+    ManagedCluster(String),
 }
 
 impl Error {
@@ -100,7 +112,10 @@ impl Error {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system schemas.".into())
             }
             ErrorKind::ReservedRoleName(_) => {
-                Some("The prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+                Some("The role \"public\" and the prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+            }
+            ErrorKind::ReservedSystemRoleName(_) => {
+                Some("The role prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
             }
             ErrorKind::ReservedClusterName(_) => {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system clusters.".into())
@@ -124,6 +139,12 @@ impl From<SqlCatalogError> for Error {
 impl From<mz_stash::StashError> for Error {
     fn from(e: mz_stash::StashError) -> Error {
         Error::new(ErrorKind::from(e))
+    }
+}
+
+impl From<TryFromProtoError> for Error {
+    fn from(e: TryFromProtoError) -> Error {
+        Error::new(ErrorKind::from(mz_stash::StashError::from(e)))
     }
 }
 

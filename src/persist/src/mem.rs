@@ -15,11 +15,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
@@ -118,8 +119,9 @@ impl MemBlob {
 
 #[async_trait]
 impl Blob for MemBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        self.core.lock().await.get(key)
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        let maybe_bytes = self.core.lock().await.get(key)?;
+        Ok(maybe_bytes.map(SegmentedBytes::from))
     }
 
     async fn list_keys_and_metadata(
@@ -192,7 +194,7 @@ impl Consensus for MemConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(ExternalError::from(
@@ -217,13 +219,12 @@ impl Consensus for MemConsensus {
         let seqno = data.as_ref().map(|data| data.seqno);
 
         if seqno != expected {
-            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            return Ok(Err(Self::scan_store(&store, key, from, usize::MAX)?));
+            return Ok(CaSResult::ExpectationMismatch);
         }
 
         store.entry(key.to_string()).or_default().push(new);
 
-        Ok(Ok(()))
+        Ok(CaSResult::Committed)
     }
 
     async fn scan(
@@ -264,7 +265,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn mem_blob() -> Result<(), ExternalError> {
         let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
         blob_impl_test(move |path| {
@@ -275,7 +276,7 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn mem_consensus() -> Result<(), ExternalError> {
         consensus_impl_test(|| async { Ok(MemConsensus::default()) }).await
     }

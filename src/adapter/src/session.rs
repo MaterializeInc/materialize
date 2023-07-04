@@ -17,81 +17,73 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use rand::Rng;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::OwnedMutexGuard;
-use uuid::Uuid;
-
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_ore::now::EpochMillis;
 use mz_pgrepr::Format;
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
+use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES, SYSTEM_USER};
+pub use mz_sql::session::vars::{
+    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+};
+use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
+use rand::Rng;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::OwnedMutexGuard;
 
-use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
-use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
 
-pub use self::vars::{
-    ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
-    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
-};
+const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
+const DUMMY_CONNECT_TIME: EpochMillis = 0;
 
-pub(crate) mod vars;
-
-const DUMMY_CONNECTION_ID: ConnectionId = 0;
-
-/// Identifies a user.
+/// Metadata about a Session's role.
 #[derive(Debug, Clone)]
-pub struct User {
-    /// The name of the user within the system.
-    pub name: String,
-    /// Metadata about this user in an external system.
-    pub external_metadata: Option<ExternalUserMetadata>,
-}
-
-/// Metadata about a [`User`] in an external system.
-#[derive(Debug, Clone)]
-pub struct ExternalUserMetadata {
-    /// The ID of the user in the external system.
-    pub user_id: Uuid,
-    /// The ID of the user's active group in the external system.
-    pub group_id: Uuid,
-}
-
-impl PartialEq for User {
-    fn eq(&self, other: &User) -> bool {
-        self.name == other.name
-    }
-}
-
-impl User {
-    /// Returns whether this is an internal user.
-    pub fn is_internal(&self) -> bool {
-        INTERNAL_USER_NAMES.contains(&self.name)
-    }
+struct RoleMetadata {
+    /// The role of the current execution context.
+    current_role: RoleId,
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    session_role: RoleId,
 }
 
 /// A session holds per-connection state.
 #[derive(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
     conn_id: ConnectionId,
+    /// The time when the session's connection was initiated.
+    connect_time: EpochMillis,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
-    user: User,
+    /// The role metadata of the current session.
+    ///
+    /// Invariant: role_metadata must be `Some` after the user has
+    /// successfully connected to and authenticated with Materialize.
+    ///
+    /// Prefer using this value over [`Self.user.name`].
+    //
+    // It would be better for this not to be an Option, but the
+    // `Session` is initialized before the user has connected to
+    // Materialize and is able to look up the `RoleMetadata`. The `Session`
+    // is also used to return an error when no role exists and
+    // therefore there is no valid `RoleMetadata`.
+    role_metadata: Option<RoleMetadata>,
     vars: SessionVars,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     next_transaction_id: TransactionId,
     secret_key: u32,
+    external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
+    external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -100,9 +92,10 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
+        connect_time: EpochMillis,
     ) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(build_info, conn_id, user)
+        Self::new_internal(build_info, conn_id, user, connect_time)
     }
 
     /// Creates a new dummy session.
@@ -110,42 +103,61 @@ impl<T: TimestampManipulation> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone())
+        let mut dummy = Self::new_internal(
+            &DUMMY_BUILD_INFO,
+            DUMMY_CONNECTION_ID,
+            SYSTEM_USER.clone(),
+            DUMMY_CONNECT_TIME,
+        );
+        dummy.initialize_role_metadata(RoleId::User(0));
+        dummy
     }
 
     fn new_internal(
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
+        connect_time: EpochMillis,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
-        let vars = if INTERNAL_USER_NAMES.contains(&user.name) {
-            SessionVars::for_cluster(build_info, &user.name)
-        } else {
-            SessionVars::new(build_info)
-        };
+        let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
+        let default_cluster = INTERNAL_USER_NAMES
+            .contains(&user.name)
+            .then(|| user.name.clone());
+        let mut vars = SessionVars::new(build_info, user);
+        if let Some(default_cluster) = default_cluster {
+            vars.set_cluster(default_cluster);
+        }
         Session {
             conn_id,
+            connect_time,
             transaction: TransactionStatus::Default,
             pcx: None,
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
-            user,
+            role_metadata: None,
             vars,
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
             secret_key: rand::thread_rng().gen(),
+            external_metadata_tx,
+            external_metadata_rx,
         }
     }
 
     /// Returns the connection ID associated with the session.
-    pub fn conn_id(&self) -> ConnectionId {
-        self.conn_id
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    /// Returns the time at which the session connected to Materialize.
+    pub fn connect_time(&self) -> EpochMillis {
+        self.connect_time
     }
 
     /// Returns the secret key associated with the session.
-    pub fn secret_key(&self) -> ConnectionId {
+    pub fn secret_key(&self) -> u32 {
         self.secret_key
     }
 
@@ -159,19 +171,14 @@ impl<T: TimestampManipulation> Session<T> {
             .pcx
     }
 
-    /// Reports whether the session is a system session.
-    pub fn is_system(&self) -> bool {
-        crate::catalog::is_reserved_name(&self.user().name)
-    }
-
     /// Starts an explicit transaction, or changes an implicit to an explicit
     /// transaction.
     pub fn start_transaction(
-        mut self,
+        &mut self,
         wall_time: DateTime<Utc>,
         access: Option<TransactionAccessMode>,
         isolation_level: Option<TransactionIsolationLevel>,
-    ) -> (Self, Result<(), AdapterError>) {
+    ) -> Result<(), AdapterError> {
         // Check that current transaction state is compatible with new `access`
         if let Some(txn) = self.transaction.inner() {
             // `READ WRITE` prohibited if:
@@ -185,11 +192,11 @@ impl<T: TimestampManipulation> Session<T> {
             };
 
             if read_write_prohibited && access == Some(TransactionAccessMode::ReadWrite) {
-                return (self, Err(AdapterError::ReadWriteUnavailable));
+                return Err(AdapterError::ReadWriteUnavailable);
             }
         }
 
-        match self.transaction {
+        match std::mem::take(&mut self.transaction) {
             TransactionStatus::Default => {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
@@ -214,16 +221,16 @@ impl<T: TimestampManipulation> Session<T> {
 
         if let Some(isolation_level) = isolation_level {
             self.vars
-                .set("transaction_isolation", IsolationLevel::from(isolation_level).as_str(), true)
+                .set(None, mz_sql::session::vars::TRANSACTION_ISOLATION_VAR_NAME.as_str(), VarInput::Flat(IsolationLevel::from(isolation_level).as_str()), true)
                 .expect("transaction_isolation should be a valid var and isolation level is a valid value");
         }
 
-        (self, Ok(()))
+        Ok(())
     }
 
     /// Starts either a single statement or implicit transaction based on the
     /// number of statements, but only if no transaction has been started already.
-    pub fn start_transaction_implicit(mut self, wall_time: DateTime<Utc>, stmts: usize) -> Self {
+    pub fn start_transaction_implicit(&mut self, wall_time: DateTime<Utc>, stmts: usize) {
         if let TransactionStatus::Default = self.transaction {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
@@ -240,7 +247,6 @@ impl<T: TimestampManipulation> Session<T> {
                 _ => {}
             }
         }
-        self
     }
 
     /// Clears a transaction, setting its state to Default and destroying all
@@ -369,8 +375,15 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Adds a notice to the session.
-    pub fn add_notice(&mut self, notice: AdapterNotice) {
-        let _ = self.notices_tx.send(notice);
+    pub fn add_notice(&self, notice: AdapterNotice) {
+        self.add_notices([notice])
+    }
+
+    /// Adds multiple notices to the session.
+    pub fn add_notices(&self, notices: impl IntoIterator<Item = AdapterNotice>) {
+        for notice in notices {
+            let _ = self.notices_tx.send(notice);
+        }
     }
 
     /// Awaits a possible notice.
@@ -517,7 +530,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// responsibility to ensure that the correct number of parameters is
     /// provided.
     ///
-    // The `results_formats` parameter sets the desired format of the results,
+    /// The `results_formats` parameter sets the desired format of the results,
     /// and is stored on the portal.
     pub fn set_portal(
         &mut self,
@@ -607,12 +620,19 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::new(self.vars.build_info());
+        self.vars = SessionVars::new(self.vars.build_info(), self.vars.user().clone());
     }
 
     /// Returns the user who owns this session.
     pub fn user(&self) -> &User {
-        &self.user
+        self.vars.user()
+    }
+
+    /// Returns the [application_name] that created this session.
+    ///
+    /// [application_name]: (https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
+    pub fn application_name(&self) -> &str {
+        self.vars.application_name()
     }
 
     /// Returns a reference to the variables in this session.
@@ -642,12 +662,63 @@ impl<T: TimestampManipulation> Session<T> {
             Some(txn) => txn.write_lock_guard.is_some(),
         }
     }
+
+    /// Returns whether the current session is a superuser.
+    pub fn is_superuser(&self) -> bool {
+        self.vars.is_superuser()
+    }
+
+    /// Returns a channel on which to send external metadata to the session.
+    pub fn retain_external_metadata_transmitter(
+        &mut self,
+    ) -> UnboundedSender<ExternalUserMetadata> {
+        self.external_metadata_tx.clone()
+    }
+
+    /// Drains any external metadata updates and applies the changes from the latest update.
+    pub fn apply_external_metadata_updates(&mut self) {
+        while let Ok(metadata) = self.external_metadata_rx.try_recv() {
+            self.vars.set_external_user_metadata(metadata);
+        }
+    }
+
+    /// Initializes the session's role metadata.
+    pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
+        self.role_metadata = Some(RoleMetadata {
+            current_role: role_id,
+            session_role: role_id,
+        });
+    }
+
+    /// Returns the session's current role ID.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn current_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .current_role
+    }
+
+    /// Returns the session's session role ID.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn session_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .session_role
+    }
 }
 
 /// A prepared statement.
 #[derive(Debug, Clone)]
 pub struct PreparedStatement {
-    sql: Option<Statement<Raw>>,
+    stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
     /// The most recent catalog revision that has verified this statement.
     pub catalog_revision: u64,
@@ -656,21 +727,21 @@ pub struct PreparedStatement {
 impl PreparedStatement {
     /// Constructs a new prepared statement.
     pub fn new(
-        sql: Option<Statement<Raw>>,
+        stmt: Option<Statement<Raw>>,
         desc: StatementDesc,
         catalog_revision: u64,
     ) -> PreparedStatement {
         PreparedStatement {
-            sql,
+            stmt,
             desc,
             catalog_revision,
         }
     }
 
-    /// Returns the raw SQL string associated with this prepared statement,
+    /// Returns the AST associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&Statement<Raw>> {
-        self.sql.as_ref()
+    pub fn stmt(&self) -> Option<&Statement<Raw>> {
+        self.stmt.as_ref()
     }
 
     /// Returns the description of the prepared statement.
@@ -844,6 +915,14 @@ impl<T> TransactionStatus<T> {
             | TransactionStatus::Failed(txn) => txn.timeline(),
         }
     }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    pub fn contains_ops(&self) -> bool {
+        match self.inner() {
+            Some(txn) => txn.contains_ops(),
+            None => false,
+        }
+    }
 }
 
 /// An abstraction allowing us to identify different transactions.
@@ -890,6 +969,11 @@ impl<T> Transaction<T> {
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_) => None,
         }
+    }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    fn contains_ops(&self) -> bool {
+        !matches!(self.ops, TransactionOps::None)
     }
 }
 
@@ -977,13 +1061,4 @@ pub struct WriteOp {
     pub id: GlobalId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
-}
-
-/// The action to take during end_transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndTransactionAction {
-    /// Commit the transaction.
-    Commit,
-    /// Rollback the transaction.
-    Rollback,
 }

@@ -9,5 +9,6 @@
 
 //! SQL parsing.
 
-pub use mz_sql_parser::parser::parse_statements as parse;
-pub use mz_sql_parser::parser::parse_statements_with_limit as parse_with_limit;
+pub use mz_sql_parser::parser::{
+    parse_statements as parse, parse_statements_with_limit as parse_with_limit,
+};

@@ -16,20 +16,10 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{
-    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
-};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
-use timely::PartialOrder;
-use tracing::trace;
-
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use mz_persist_client::batch::Batch;
+use mz_persist_client::batch::{Batch, BatchBuilder};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -39,6 +29,15 @@ use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::{self, ProbeNotify};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::{
+    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
+};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::PartialOrder;
+use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -52,6 +51,7 @@ where
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
+        as_of: Antichain<Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         probes: Vec<probe::Handle<Timestamp>>,
@@ -70,7 +70,7 @@ where
             sink_id,
             &self.storage_metadata,
             desired_collection,
-            sink.as_of.frontier.clone(),
+            as_of,
             compute_state,
             probes,
         )
@@ -146,6 +146,12 @@ where
 ///    batches. Whenever the frontiers sufficiently advance, we take a batch
 ///    description and all the batches that belong to it and append it to the
 ///    persist shard.
+///
+/// Note that `mint_batch_descriptions` inspects the frontier of
+/// `desired_collection`, and passes the data through to `write_batches`.
+/// This is done to avoid a clone of the underlying data so that both
+/// operators can have the collection as input.
+///
 fn install_desired_into_persist<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
@@ -183,7 +189,7 @@ where
     // the timestamp on feeding back using the summary.
     let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
 
-    let (batch_descriptions, mint_token) = mint_batch_descriptions(
+    let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
         target,
@@ -199,7 +205,7 @@ where
         operator_name.clone(),
         target,
         &batch_descriptions,
-        &desired_collection.inner,
+        &passthrough_desired_stream,
         &persist_collection.inner,
         Arc::clone(&persist_clients),
     );
@@ -244,6 +250,7 @@ fn mint_batch_descriptions<G>(
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
@@ -283,17 +290,41 @@ where
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
     let (mut output, output_stream) = mint_op.new_output();
+    let (mut data_output, data_output_stream) = mint_op.new_output();
 
+    // The description and the data-passthrough outputs are both driven by this input, so
+    // they use a standard input connection.
     let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
-    let mut persist_feedback_input =
-        mint_op.new_input_connection(persist_feedback_stream, Pipeline, vec![Antichain::new()]);
 
-    let shutdown_button = mint_op.build(move |mut capabilities| async move {
+    let mut persist_feedback_input = mint_op.new_input_connection(
+        persist_feedback_stream,
+        Pipeline,
+        // Neither output's capabilities should depend on the feedback input.
+        vec![Antichain::new(), Antichain::new()],
+    );
+
+    let shutdown_button = mint_op.build(move |capabilities| async move {
+        // Non-active workers should just pass the data through.
         if !active_worker {
+            // The description output is entirely driven by the active worker, so we drop
+            // its capability here. The data-passthrough output just uses the data
+            // capabilities.
+            drop(capabilities);
+            while let Some(event) = desired_input.next_mut().await {
+                match event {
+                    Event::Data(cap, data) => {
+                        data_output.give_container(&cap, data).await;
+                    }
+                    Event::Progress(_) => {}
+                }
+            }
             return;
         }
 
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+        // The data-passthrough output will use the data capabilities, so we drop
+        // its capability here.
+        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+        let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
         // TODO(aljoscha): We need to figure out what to do with error
         // results from these calls.
@@ -363,10 +394,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_input.next_mut() => {
                     match event {
-                        Event::Data(_cap, _data) => {
-                            // Just read away data.
+                        Event::Data(cap, data) => {
+                            // Just passthrough the data.
+                            data_output.give_container(&cap, data).await;
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -377,7 +409,7 @@ where
                 Some(event) = persist_feedback_input.next() => {
                     match event {
                         Event::Data(_cap, _data) => {
-                            // Just read away data.
+                            // This input produces no data.
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -459,9 +491,7 @@ where
                     batch_description
                 );
 
-                let mut output = output.activate();
-                let mut session = output.session(&cap);
-                session.give(batch_description);
+                output.give(&cap, batch_description).await;
 
                 // WIP: We downgrade our capability so that downstream
                 // operators (writer and appender) can know when all the
@@ -490,7 +520,17 @@ where
     }
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    (output_stream, data_output_stream, token)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum BatchOrData {
+    Batch(WriterEnrichedHollowBatch<Timestamp>),
+    Data {
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+        contents: Vec<(Result<Row, DataflowError>, Timestamp, Diff)>,
+    },
 }
 
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
@@ -504,7 +544,7 @@ fn write_batches<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
-) -> (Stream<G, WriterEnrichedHollowBatch<Timestamp>>, Rc<dyn Any>)
+) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -548,9 +588,6 @@ where
     // will cause the changes of desired to be committed to persist.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
-        let mut buffer = Vec::new();
-        let mut batch_descriptions_buffer = Vec::new();
-
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
@@ -591,12 +628,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next() => {
+                Some(event) = descriptions_input.next_mut() => {
                     match event {
                         Event::Data(cap, data) => {
                             // Ingest new batch descriptions.
-                            data.swap(&mut batch_descriptions_buffer);
-                            for description in batch_descriptions_buffer.drain(..) {
+                            for description in data.drain(..) {
                                 if sink_id.is_user() {
                                     trace!(
                                         "persist_sink {sink_id}/{shard_id}: \
@@ -632,12 +668,11 @@ where
                         }
                     }
                 }
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Extract desired rows as positive contributions to `correction`.
-                            data.swap(&mut buffer);
-                            if sink_id.is_user() && !buffer.is_empty() {
+                            if sink_id.is_user() && !data.is_empty() {
                                 trace!(
                                     "persist_sink {sink_id}/{shard_id}: \
                                         updates: {:?}, \
@@ -645,14 +680,14 @@ where
                                         desired_frontier: {:?}, \
                                         batch_descriptions_frontier: {:?}, \
                                         persist_frontier: {:?}",
-                                    buffer,
+                                    data,
                                     in_flight_batches,
                                     desired_frontier,
                                     batch_descriptions_frontier,
                                     persist_frontier
                                 );
                             }
-                            correction.append(&mut buffer);
+                            correction.append(data);
 
                             continue;
                         }
@@ -661,12 +696,11 @@ where
                         }
                     }
                 }
-                Some(event) = persist_input.next() => {
+                Some(event) = persist_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Extract persist rows as negative contributions to `correction`.
-                            data.swap(&mut buffer);
-                            correction.extend(buffer.drain(..).map(|(d, t, r)| (d, t, -r)));
+                            correction.extend(data.drain(..).map(|(d, t, r)| (d, t, -r)));
 
                             continue;
                         }
@@ -780,33 +814,46 @@ where
                         .filter(|(_, time, _)| {
                             batch_lower.less_equal(time) && !batch_upper.less_equal(time)
                         })
-                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff))
                         .peekable();
 
-                    let mut batch_tokens = if to_append.peek().is_some() {
-                        let batch = write
-                            .batch(to_append, batch_lower.clone(), batch_upper.clone())
-                            .await
-                            .expect("invalid usage");
+                    if to_append.peek().is_some() {
+                        // We want to pass along the data directly if `to_append` is small, but to avoid
+                        // having to iterate through everything twice we'll check if `correction`
+                        // is small as a reasonable proxy.
+                        let minimum_batch_updates =
+                            persist_clients.cfg().sink_minimum_batch_updates();
+                        let batch_or_data = if correction.len() >= minimum_batch_updates {
+                            let batch = write
+                                .batch(
+                                    to_append.map(|(data, time, diff)| {
+                                        ((SourceData(data.clone()), ()), time, diff)
+                                    }),
+                                    batch_lower.clone(),
+                                    batch_upper.clone(),
+                                )
+                                .await
+                                .expect("invalid usage");
 
-                        if sink_id.is_user() {
-                            trace!(
-                                "persist_sink {sink_id}/{shard_id}: \
+                            if sink_id.is_user() {
+                                trace!(
+                                    "persist_sink {sink_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?})",
-                                worker_index,
-                                batch.lower(),
-                                batch.upper()
-                            );
-                        }
+                                    worker_index,
+                                    batch.lower(),
+                                    batch.upper()
+                                );
+                            }
+                            BatchOrData::Batch(batch.into_writer_hollow_batch())
+                        } else {
+                            BatchOrData::Data {
+                                lower: batch_lower.clone(),
+                                upper: batch_upper.clone(),
+                                contents: to_append.cloned().collect(),
+                            }
+                        };
 
-                        vec![batch.into_writer_hollow_batch()]
-                    } else {
-                        vec![]
-                    };
-
-                    let mut output = output.activate();
-                    let mut session = output.session(&cap);
-                    session.give_vec(&mut batch_tokens);
+                        output.give(&cap, batch_or_data).await;
+                    }
                 }
             } else {
                 trace!(
@@ -832,12 +879,16 @@ where
 /// we know that no future batches will arrive, that is, for those batch
 /// descriptions that are not beyond the frontier of both the
 /// `batch_descriptions` and `batches` inputs.
+///
+/// To avoid contention over the persist shard, we route all batches to a single worker.
+/// This worker may also batch up individual records sent by the upstream operator, as
+/// a way to coalesce what would otherwise be many tiny batches into fewer, larger ones.
 fn append_batches<G>(
     sink_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
+    batches: &Stream<G, BatchOrData>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
 where
@@ -888,9 +939,6 @@ where
 
         let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
-        let mut description_buffer = Vec::new();
-        let mut batch_buffer = Vec::new();
-
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
@@ -902,9 +950,15 @@ where
             (Antichain<Timestamp>, Antichain<Timestamp>)
         >::new();
 
+        #[derive(Debug, Default)]
+        struct BatchSet {
+            finished: Vec<Batch<SourceData, (), Timestamp, Diff>>,
+            incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
+        }
+
         let mut in_flight_batches = HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
-            Vec<Batch<_, _, _, _>>,
+            BatchSet,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -929,12 +983,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next() => {
+                Some(event) = descriptions_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new batch descriptions.
-                            data.swap(&mut description_buffer);
-                            for batch_description in description_buffer.drain(..) {
+                            for batch_description in data.drain(..) {
                                 if sink_id.is_user() {
                                     trace!(
                                         "persist_sink {sink_id}/{shard_id}: \
@@ -964,20 +1017,36 @@ where
                         }
                     }
                 }
-                Some(event) = batches_input.next() => {
+                Some(event) = batches_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new written batches
-                            data.swap(&mut batch_buffer);
-                            for batch in batch_buffer.drain(..) {
-                                let batch = write.batch_from_hollow_batch(batch);
-                                let batch_description = (batch.lower().clone(), batch.upper().clone());
+                            for batch in data.drain(..) {
+                                match batch {
+                                    BatchOrData::Batch(batch) => {
+                                        let batch = write.batch_from_hollow_batch(batch);
+                                        let batch_description = (batch.lower().clone(), batch.upper().clone());
 
-                                let batches = in_flight_batches
-                                    .entry(batch_description)
-                                    .or_insert_with(Vec::new);
+                                        let batches = in_flight_batches
+                                            .entry(batch_description)
+                                            .or_default();
 
-                                batches.push(batch);
+                                        batches.finished.push(batch);
+                                    }
+                                    BatchOrData::Data { lower, upper, contents } => {
+                                        let batches = in_flight_batches
+                                            .entry((lower.clone(), upper))
+                                            .or_default();
+                                        let builder = batches.incomplete.get_or_insert_with(|| {
+                                            write.builder(lower)
+                                        });
+                                        for (data, time, diff) in contents {
+                                            persist_client.metrics().sink.forwarded_updates.inc();
+                                            builder.add(&SourceData(data), &(), &time, &diff).await.expect("invalid usage");
+                                        }
+                                    }
+                                }
+
                             }
 
                             continue;
@@ -1035,9 +1104,17 @@ where
             for done_batch_metadata in done_batches.into_iter() {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
-                let mut batches = in_flight_batches
+                let batch_set = in_flight_batches
                     .remove(&done_batch_metadata)
-                    .unwrap_or_else(Vec::new);
+                    .unwrap_or_default();
+
+                let mut batches = batch_set.finished;
+                if let Some(builder) = batch_set.incomplete {
+                    let (_lower, upper) = &done_batch_metadata;
+                    let batch = builder.finish(upper.clone()).await.expect("invalid usage");
+                    batches.push(batch);
+                    persist_client.metrics().sink.forwarded_batches.inc();
+                }
 
                 trace!(
                     "persist_sink {sink_id}/{shard_id}: \

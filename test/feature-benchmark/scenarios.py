@@ -62,6 +62,34 @@ true
         )
 
 
+class MFPPushdown(Scenario):
+    """Test MFP pushdown -- WHERE clause with a suitable condition and no index defined."""
+
+    SCALE = 7
+
+    def init(self) -> List[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            """
+> /* A */ SELECT 1;
+1
+> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+"""
+        )
+
+
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 
@@ -86,7 +114,7 @@ true
 
     def benchmark(self) -> MeasurementSource:
         hundred_selects = "\n".join(
-            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
+            "> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
         return Td(
@@ -900,7 +928,7 @@ class KafkaEnvelopeNoneBytesScalability(ScenarioBig):
     def shared(self) -> List[Action]:
         return [
             TdAction(
-                f"""
+                """
 $ kafka-create-topic topic=kafka-scalability partitions=8
 """
             ),
@@ -1039,7 +1067,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS mz_source_pgcdc;
             """
         )
@@ -1075,7 +1103,7 @@ class PgCdcStreaming(PgCdc):
 
     def shared(self) -> Action:
         return TdAction(
-            f"""
+            """
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -1088,7 +1116,7 @@ CREATE PUBLICATION p1 FOR ALL TABLES;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS s1;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -1144,7 +1172,7 @@ class QueryLatency(Coordinator):
     """Measure the time it takes to run SELECT 1 queries"""
 
     def benchmark(self) -> MeasurementSource:
-        selects = "\n".join(f"> SELECT 1\n1\n" for i in range(0, self.n()))
+        selects = "\n".join("> SELECT 1\n1\n" for i in range(0, self.n()))
 
         return Td(
             f"""
@@ -1170,8 +1198,8 @@ class ConnectionLatency(Coordinator):
 
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
-            f"""
-$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
+            """
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 SELECT 1;
 """
             for i in range(0, self.n())
@@ -1205,7 +1233,7 @@ class StartupEmpty(Startup):
         return [
             Lambda(lambda e: e.RestartMz()),
             Td(
-                f"""
+                """
 > SELECT 1;
   /* B */
 1
@@ -1218,15 +1246,18 @@ class StartupLoaded(Scenario):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
     SCALE = 1.2  # 25 objects of each kind
+    FIXED_SCALE = (
+        True  # Can not scale to 100s of objects, so --size=+N will have no effect
+    )
 
     def shared(self) -> Action:
         return TdAction(
             self.schema()
-            + f"""
+            + """
 $ kafka-create-topic topic=startup-time
 
-$ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
-{{"f2": 1}}
+$ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
+{"f2": 1}
 """
         )
 

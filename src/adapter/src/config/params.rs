@@ -9,12 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_sql::ast::{
-    AlterSystemResetStatement, AlterSystemSetStatement, Ident, Raw, SetVariableValue, Statement,
-    Value,
-};
-
-use crate::session::vars::SystemVars;
+use mz_sql::session::vars::{SystemVars, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
 pub struct SynchronizedParameters {
@@ -75,7 +70,7 @@ impl SynchronizedParameters {
             .map(|var| {
                 let name = var.name().to_string();
                 let value = var.value();
-                let is_default = self.system_vars.is_default(&name, &value).expect("This will never panic because both the name and the value come from a `Var` instance");
+                let is_default = self.system_vars.is_default(&name, VarInput::Flat(&value)).expect("This will never panic because both the name and the value come from a `Var` instance");
                 ModifiedParameter {
                     name,
                     value,
@@ -111,6 +106,7 @@ impl SynchronizedParameters {
             // It's OK to call `unwrap_or(false)` here because for fixed `name`
             // and `value` an error in `self.is_default(name, value)` implies
             // the same error in `self.system_vars.set(name, value)`.
+            let value = VarInput::Flat(value);
             let modified = if self.system_vars.is_default(name, value).unwrap_or(false) {
                 self.system_vars.reset(name)
             } else {
@@ -143,23 +139,27 @@ pub struct ModifiedParameter {
     pub is_default: bool,
 }
 
-impl ModifiedParameter {
-    pub fn as_alter_system(&self) -> String {
-        match self.is_default {
-            true => format!("ALTER SYSTEM RESET {}", self.name),
-            false => format!("ALTER SYSTEM SET {} = {}", self.name, self.value),
-        }
+#[cfg(test)]
+mod tests {
+    use mz_sql::session::vars::SystemVars;
+
+    use super::SynchronizedParameters;
+
+    #[mz_ore::test]
+    fn test_github_18189() {
+        let vars = SystemVars::default();
+        let mut sync = SynchronizedParameters::new(vars);
+        assert!(sync.modify("allowed_cluster_replica_sizes", "1,2"));
+        assert_eq!(sync.get("allowed_cluster_replica_sizes"), r#""1", "2""#);
+        assert!(sync.modify("allowed_cluster_replica_sizes", ""));
+        assert_eq!(sync.get("allowed_cluster_replica_sizes"), "");
     }
 
-    pub fn as_stmt(&self) -> Statement<Raw> {
-        match self.is_default {
-            true => Statement::AlterSystemReset(AlterSystemResetStatement {
-                name: Ident::from(self.name.clone()),
-            }),
-            false => Statement::AlterSystemSet(AlterSystemSetStatement {
-                name: Ident::from(self.name.clone()),
-                value: SetVariableValue::Literal(Value::String(self.value.clone())),
-            }),
-        }
+    #[mz_ore::test]
+    fn test_vars_are_synced() {
+        let vars = SystemVars::default();
+        let sync = SynchronizedParameters::new(vars);
+
+        assert!(!sync.synchronized().is_empty());
     }
 }

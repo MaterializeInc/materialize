@@ -30,18 +30,13 @@
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::num::NonZeroI64;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
-use serde::{Deserialize, Serialize};
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::{Antichain, Timestamp};
-use tracing::warn;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_expr::RowSetFinishing;
@@ -51,32 +46,52 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 use mz_storage_client::types::instances::StorageInstanceId;
+use serde::{Deserialize, Serialize};
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
+use uuid::Uuid;
 
-use crate::logging::{LogVariant, LogView, LoggingConfig};
+use crate::controller::error::{
+    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
+    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
+};
+use crate::controller::instance::{ActiveInstance, Instance};
+use crate::controller::replica::ReplicaConfig;
+use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
 
-use self::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
-    SubscribeTargetError,
-};
-use self::instance::{ActiveInstance, Instance};
-use self::replica::ReplicaConfig;
-
 mod instance;
 mod replica;
 
 pub mod error;
 
-/// Identifer of a compute instance.
+/// Identifier of a compute instance.
 pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.
-pub type ReplicaId = u64;
+pub type ReplicaId = mz_cluster_client::ReplicaId;
+
+/// Identifier of a replica.
+// TODO(#18377): Replace `ReplicaId` with this type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum NewReplicaId {
+    /// A user replica.
+    User(u64),
+}
+
+impl fmt::Display for NewReplicaId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -117,31 +132,12 @@ pub struct ComputeReplicaLogging {
     ///
     /// A `None` value indicates that logging is disabled.
     pub interval: Option<Duration>,
-    /// Log sources of this replica.
-    pub sources: Vec<(LogVariant, GlobalId)>,
-    /// Log views of this replica.
-    pub views: Vec<(LogView, GlobalId)>,
 }
 
 impl ComputeReplicaLogging {
     /// Return whether logging is enabled.
     pub fn enabled(&self) -> bool {
         self.interval.is_some()
-    }
-
-    /// Return all ids of the persisted introspection views contained.
-    pub fn view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.views.iter().map(|(_, id)| *id)
-    }
-
-    /// Return all ids of the persisted introspection sources contained.
-    pub fn source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.sources.iter().map(|(_, id)| *id)
-    }
-
-    /// Return all ids of the persisted introspection sources and logs contained.
-    pub fn source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.source_ids().chain(self.view_ids())
     }
 }
 
@@ -426,17 +422,6 @@ where
             None => (false, Duration::from_secs(1)),
         };
 
-        let mut sink_logs = BTreeMap::new();
-        for (variant, id) in config.logging.sources {
-            let storage_meta = self
-                .storage
-                .collection(id)
-                .map_err(|_| CollectionMissing(id))?
-                .collection_metadata
-                .clone();
-            sink_logs.insert(variant, (id, storage_meta));
-        }
-
         let idle_arrangement_merge_effort = config
             .idle_arrangement_merge_effort
             .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
@@ -448,7 +433,6 @@ where
                 enable_logging,
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
-                sink_logs,
             },
             idle_arrangement_merge_effort,
         };
@@ -559,6 +543,11 @@ where
 
     /// Processes the work queued by [`ComputeController::ready`].
     pub fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
+        // Update controller state metrics.
+        for instance in self.compute.instances.values_mut() {
+            instance.refresh_state_metrics();
+        }
+
         // Rehydrate any failed replicas.
         for instance in self.compute.instances.values_mut() {
             instance.activate(self.storage).rehydrate_failed_replicas();

@@ -103,3 +103,4 @@ DROP TYPE IF EXISTS int4_list;
 
 * [`CREATE TYPE`](../create-type)
 * [`SHOW TYPES`](../show-types)
+* [DROP OWNED](../drop-owned)

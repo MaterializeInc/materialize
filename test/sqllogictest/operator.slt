@@ -129,6 +129,12 @@ SHOW CREATE VIEW ADDER
 materialize.public.adder
 CREATE VIEW "materialize"."public"."adder" AS SELECT 2 + 2
 
+simple conn=mz_introspection,user=mz_introspection
+SHOW CREATE VIEW ADDER
+----
+materialize.public.adder,CREATE VIEW "materialize"."public"."adder" AS SELECT 2 + 2
+COMPLETE 1
+
 statement ok
 CREATE VIEW MULTIPLIER AS SELECT 2 OPERATOR(*) 2;
 

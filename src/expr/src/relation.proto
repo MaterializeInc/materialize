@@ -68,6 +68,7 @@ message ProtoAggregateFunc {
             google.protobuf.Empty lag = 2;
             google.protobuf.Empty lead = 3;
         }
+        bool ignore_nulls = 4;
     };
 
     message ProtoWindowFrame {
@@ -113,6 +114,7 @@ message ProtoAggregateFunc {
         ProtoColumnOrders list_concat  = 35;
         ProtoColumnOrders string_agg  = 36;
         ProtoColumnOrders row_number  = 37;
+        ProtoColumnOrders rank  = 54;
         ProtoColumnOrders dense_rank  = 38;
         ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;
@@ -145,6 +147,11 @@ message ProtoTableFunc {
         uint64 width = 2;
     }
 
+    message ProtoTabletizedScalar {
+        string name = 1;
+        mz_repr.relation_and_scalar.ProtoRelationType relation = 2;
+    }
+
     oneof kind {
         bool jsonb_each = 1;
         google.protobuf.Empty jsonb_object_keys = 2;
@@ -160,5 +167,6 @@ message ProtoTableFunc {
         mz_repr.relation_and_scalar.ProtoScalarType unnest_list = 12;
         ProtoWrap wrap = 13;
         google.protobuf.Empty generate_subscripts_array = 14;
+        ProtoTabletizedScalar tabletized_scalar = 15;
     }
 }

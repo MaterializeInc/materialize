@@ -12,16 +12,19 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
 use columnation::{CloneRegion, Columnation};
+use mz_lowertest::MzReflect;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
-
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 
 /// The identifier for a global dataflow.
+///
+/// WARNING: Despite the fact that `GlobalId` implements `Ord`, the ordering of
+/// IDs does not express any relationship between dependencies. We retain the
+/// `Ord` implementation exclusively to facilitate placing `GlobalId`s in
+/// maps/sets.
 #[derive(
     Arbitrary,
     Clone,

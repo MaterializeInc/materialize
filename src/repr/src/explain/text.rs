@@ -13,9 +13,10 @@ use std::fmt;
 
 use mz_ore::str::{Indent, IndentLike};
 
+use crate::explain::{
+    CompactScalarSeq, ExprHumanizer, Indices, ScalarOps, UnsupportedFormat, UsedIndexes,
+};
 use crate::Row;
-
-use super::{CompactScalarSeq, ExprHumanizer, Indices, ScalarOps, UnsupportedFormat, UsedIndexes};
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`super::ExplainFormat::Text`].
@@ -217,10 +218,7 @@ where
             first_rows.push((row, diff));
         }
     }
-    let rest_of_row_count = rows
-        .into_iter()
-        .map(|(_, diff)| diff.abs())
-        .sum::<crate::Diff>();
+    let rest_of_row_count = rows.map(|(_, diff)| diff.abs()).sum::<crate::Diff>();
     if rest_of_row_count != 0 {
         writeln!(
             f,

@@ -25,6 +25,9 @@ materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg
 > CREATE TABLE s (a int DEFAULT 1)
 > DROP TABLE s;
 
+> CREATE TABLE s (a int DEFAULT (1))
+> DROP TABLE s;
+
 > CREATE TABLE s (a date DEFAULT now())
 > DROP TABLE s;
 
@@ -194,6 +197,21 @@ a       b
 ! INSERT INTO s VALUES (1 + NULL);
 contains:null value in column "a" violates not-null constraint
 
+! INSERT INTO s VALUES (case when now() = now() then NULL else 2 end);
+contains:null value in column "a" violates not-null constraint
+
+! INSERT INTO s SELECT (case when now() = now() then NULL else 2 end);
+contains:null value in column "a" violates not-null constraint
+
+> CREATE TABLE n (a int);
+
+> INSERT INTO n VALUES (NULL);
+
+! INSERT INTO s SELECT * FROM n;
+contains:null value in column "a" violates not-null constraint
+
+> DROP TABLE n
+
 > CREATE TABLE v (a timestamptz);
 > INSERT INTO v VALUES (now());
 
@@ -329,7 +347,7 @@ contains:column "a" specified more than once
 # Test pg_table_is_visible.
 > CREATE SCHEMA non_default
 > CREATE TABLE non_default.hidden (dummy int)
-> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1 AND id LIKE 'u%'
+> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 'u1' AND id LIKE 'u%'
 name    visible
 ---------------
 hidden  false

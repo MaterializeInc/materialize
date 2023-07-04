@@ -13,10 +13,11 @@
 //! set of columns that form unique keys for the input, the reduce
 //! can be simplified to a map operation.
 
-use crate::TransformArgs;
 use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformArgs;
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]

@@ -60,3 +60,8 @@ SELECT relname FROM pg_catalog.pg_class WHERE relname IN ('a', 'foo', 'bar', 'pg
 bar
 foo
 pg_class
+
+query TT
+SELECT min(relchecks), max(relchecks) FROM pg_catalog.pg_class
+----
+0 0

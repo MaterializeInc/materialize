@@ -11,7 +11,7 @@ from materialize import ROOT, ci_util
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Cockroach, SqlLogicTest
 
-SERVICES = [Cockroach(), SqlLogicTest()]
+SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
 
 
 def workflow_default(c: Composition) -> None:

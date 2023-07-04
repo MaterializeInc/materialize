@@ -9,16 +9,20 @@
 
 //! Transaction control language (TCL).
 //!
-//! This module houses the handlers for statements that manipulate the session,
+//! This module houses the handlers for statements that manipulate the session's transaction,
 //! like `BEGIN` and `COMMIT`.
+
+use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::ast::{
     CommitStatement, RollbackStatement, SetTransactionStatement, StartTransactionStatement,
     TransactionAccessMode, TransactionMode,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::{Plan, PlanError, StartTransactionPlan};
-use mz_sql_parser::ast::TransactionIsolationLevel;
+use crate::plan::{
+    AbortTransactionPlan, CommitTransactionPlan, Plan, PlanError, SetTransactionPlan,
+    StartTransactionPlan, TransactionType,
+};
 
 pub fn describe_start_transaction(
     _: &StatementContext,
@@ -42,14 +46,14 @@ pub fn describe_set_transaction(
     _: &StatementContext,
     _: SetTransactionStatement,
 ) -> Result<StatementDesc, PlanError> {
-    bail_unsupported!("SET TRANSACTION")
+    Ok(StatementDesc::new(None))
 }
 
 pub fn plan_set_transaction(
     _: &StatementContext,
-    _: SetTransactionStatement,
+    SetTransactionStatement { local, modes }: SetTransactionStatement,
 ) -> Result<Plan, PlanError> {
-    bail_unsupported!("SET TRANSACTION")
+    Ok(Plan::SetTransaction(SetTransactionPlan { local, modes }))
 }
 
 fn verify_transaction_modes(
@@ -86,7 +90,9 @@ pub fn plan_rollback(
     RollbackStatement { chain }: RollbackStatement,
 ) -> Result<Plan, PlanError> {
     verify_chain(chain)?;
-    Ok(Plan::AbortTransaction)
+    Ok(Plan::AbortTransaction(AbortTransactionPlan {
+        transaction_type: TransactionType::Explicit,
+    }))
 }
 
 pub fn describe_commit(
@@ -101,7 +107,9 @@ pub fn plan_commit(
     CommitStatement { chain }: CommitStatement,
 ) -> Result<Plan, PlanError> {
     verify_chain(chain)?;
-    Ok(Plan::CommitTransaction)
+    Ok(Plan::CommitTransaction(CommitTransactionPlan {
+        transaction_type: TransactionType::Explicit,
+    }))
 }
 
 fn verify_chain(chain: bool) -> Result<(), PlanError> {

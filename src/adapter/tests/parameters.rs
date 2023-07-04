@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,7 +79,7 @@ use mz_ore::now::NOW_ZERO;
 use mz_repr::ScalarType;
 use mz_sql::plan::PlanContext;
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_parameter_type_inference() {
     let test_cases = vec![
         (

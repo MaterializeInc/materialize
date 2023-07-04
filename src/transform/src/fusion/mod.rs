@@ -10,7 +10,6 @@
 //! Transformations that fuse together others of their kind.
 
 pub mod filter;
-pub mod flatmap_to_map;
 pub mod join;
 pub mod map;
 pub mod negate;
@@ -19,8 +18,9 @@ pub mod reduce;
 pub mod top_k;
 pub mod union;
 
-use crate::TransformArgs;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformArgs;
 
 /// Fuses multiple like operators together when possible.
 #[derive(Debug)]
@@ -47,10 +47,6 @@ impl crate::Transform for Fusion {
 
 impl Fusion {
     /// Apply fusion action for variants we know how to fuse.
-    ///
-    /// The return value indicates a changed expression, on which we should
-    /// re-execute the transform (e.g. due to a `Negate` elision leaving an
-    /// as-yet-unexplored expression).
     pub(crate) fn action(expr: &mut MirRelationExpr) {
         match expr {
             MirRelationExpr::Filter { .. } => filter::Filter::action(expr),

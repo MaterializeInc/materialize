@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -75,29 +73,31 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::Infallible,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::time::Duration;
 
 use futures::Future;
-use postgres_openssl::MakeTlsConnector;
-use timely::progress::Antichain;
-use tokio_postgres::Config;
-
-use mz_ore::{assert_contains, metrics::MetricsRegistry};
-
+use mz_ore::assert_contains;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::spawn;
 use mz_stash::{
     Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
+    INSERT_BATCH_SPLIT_SIZE,
 };
+use postgres_openssl::MakeTlsConnector;
+use timely::progress::Antichain;
+use tokio::sync::oneshot;
+use tokio_postgres::Config;
 
 pub static C1: TypedCollection<i64, i64> = TypedCollection::new("c1");
 pub static C2: TypedCollection<i64, i64> = TypedCollection::new("c2");
 pub static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_savepoint");
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_postgres() {
-    mz_ore::test::init_logging();
+    mz_ore::test::init_logging_default("debug");
 
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
     let factory = StashFactory::new(&MetricsRegistry::new());
@@ -146,6 +146,75 @@ async fn test_stash_postgres() {
             _ => panic!("expected error"),
         });
         let _: StashCollection<String, String> = conn2.collection("c").await.unwrap();
+    }
+    // Test failures after commit.
+    {
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let col = stash.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, 1);
+        stash.append(vec![batch]).await.unwrap();
+        assert_eq!(
+            C1.peek_one(&mut stash).await.unwrap(),
+            BTreeMap::from([(1, 2)])
+        );
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, -1);
+
+        fail::cfg("stash_commit_pre", "return(commit failpoint)").unwrap();
+        fail::cfg("stash_commit_post", "return(commit failpoint)").unwrap();
+        // Because the commit error will either retry or discover it succeeded,
+        // it never returns an error. Thus, we need to re-enable the failpoint
+        // in another thread. Use both a pre and post commit error to test both
+        // commit success and fail paths. Use a channel to check that we haven't
+        // succeeded unexpectedly.
+        let (tx, mut rx) = oneshot::channel();
+        let handle = spawn(|| "stash_commit_enable", async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Assert no success yet.
+            rx.try_recv().unwrap_err();
+            fail::cfg("stash_commit_post", "off").unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Assert no success yet.
+            rx.try_recv().unwrap_err();
+            fail::cfg("stash_commit_pre", "off").unwrap();
+            rx.await.unwrap();
+        });
+        stash.append(vec![batch.clone()]).await.unwrap();
+        assert_eq!(C1.peek_one(&mut stash).await.unwrap(), BTreeMap::new());
+        tx.send(()).unwrap();
+        handle.await.unwrap();
+    }
+
+    // Test batches with a large serialized size.
+    {
+        static S: TypedCollection<i64, String> = TypedCollection::new("s");
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let _16mb = "0".repeat(1 << 24);
+        // A too large update will always fail.
+        assert_contains!(
+            S.upsert(&mut stash, vec![(1, _16mb)])
+                .await
+                .unwrap_err()
+                .to_string(),
+            "message size 16 MiB bigger than maximum allowed message size"
+        );
+        // An large but reasonable update will be split into batches.
+        let large = "0".repeat(INSERT_BATCH_SPLIT_SIZE);
+        S.upsert(&mut stash, vec![(1, large.clone()), (2, large)])
+            .await
+            .unwrap();
+        assert_eq!(S.iter(&mut stash).await.unwrap().len(), 2);
+    }
+    // Test batches with a large number of individual updates.
+    {
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let col = stash.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        for i in 0..500_000 {
+            col.append_to_batch(&mut batch, &i, &(i + 1), 1);
+        }
+        stash.append(vec![batch]).await.unwrap();
     }
     // Test readonly.
     {
@@ -221,7 +290,7 @@ async fn test_stash_postgres() {
         );
         // But the RW collection can't see it.
         assert_eq!(
-            stash_rw.collections().await.unwrap(),
+            BTreeSet::from_iter(stash_rw.collections().await.unwrap().into_values()),
             BTreeSet::from(["c1".to_string()])
         );
 
@@ -408,9 +477,13 @@ where
     stash
         .with_transaction(move |tx| {
             Box::pin(async move {
-                tx.update_savepoint(orders.id, &[(("k3".into(), "v3".into()), 1, 1)], None)
-                    .await
-                    .unwrap();
+                tx.update_savepoint(
+                    orders.id,
+                    &[(("k3".to_string(), "v3".to_string()), 1, 1)],
+                    None,
+                )
+                .await
+                .unwrap();
                 tx.seal(orders.id, Antichain::from_elem(2), None)
                     .await
                     .unwrap();
@@ -485,12 +558,18 @@ where
             Box::pin(async move {
                 // Create an arrangement, write some data into it, then read it back.
                 let orders = tx.collection::<String, String>("orders").await.unwrap();
-                tx.update_savepoint(orders.id, &[(("widgets".into(), "1".into()), 1, 1)], None)
+                tx.update_savepoint(orders.id, &[(("widgets".to_string(), "1".to_string()), 1, 1)], None)
                     .await
                     .unwrap();
-                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, 2)], None)
+                tx.update_savepoint(orders.id, &[(("wombats".to_string(), "2".to_string()), 1, 2)], None)
                     .await
                     .unwrap();
+
+                let collections = tx.collections().await;
+                tracing::info!("{collections:?}");
+                let data: Vec<_> = tx.iter_raw(orders.id).await.unwrap().collect();
+                tracing::info!("{data:?}");
+
                 // Move this before iter to better test the memory tx's iter_key.
                 assert_eq!(
                     tx.iter_key(orders, &"widgets".to_string()).await.unwrap(),
@@ -510,7 +589,7 @@ where
 
                 // Write to another arrangement and ensure the data stays separate.
                 let other = tx.collection::<String, String>("other").await.unwrap();
-                tx.update_savepoint(other.id, &[(("foo".into(), "bar".into()), 1, 1)], None)
+                tx.update_savepoint(other.id, &[(("foo".to_string(), "bar".to_string()), 1, 1)], None)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -526,7 +605,7 @@ where
                 );
 
                 // Check that consolidation happens immediately...
-                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, -1)], None)
+                tx.update_savepoint(orders.id, &[(("wombats".to_string(), "2".to_string()), 1, -1)], None)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -538,7 +617,7 @@ where
                 );
 
                 // ...even when it results in a entry's removal.
-                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, -1)], None)
+                tx.update_savepoint(orders.id, &[(("wombats".to_string(), "2".to_string()), 1, -1)], None)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -550,9 +629,9 @@ where
                 tx.update_savepoint(
                     orders.id,
                     &[
-                        (("widgets".into(), "1".into()), 2, 1),
-                        (("widgets".into(), "1".into()), 3, 1),
-                        (("widgets".into(), "1".into()), 4, 1),
+                        (("widgets".to_string(), "1".to_string()), 2, 1),
+                        (("widgets".to_string(), "1".to_string()), 3, 1),
+                        (("widgets".to_string(), "1".to_string()), 4, 1),
                     ],
                     None,
                 )
@@ -615,7 +694,7 @@ where
                     "stash error: compact request {4} is greater than the current upper frontier {3}",
                 );
                 assert_eq!(
-                    tx.update_savepoint(orders.id, &[(("wodgets".into(), "1".into()), 2, 1)], None)
+                    tx.update_savepoint(orders.id, &[(("wodgets".to_string(), "1".to_string()), 2, 1)], None)
                         .await
                         .unwrap_err()
                         .to_string(),
@@ -710,7 +789,7 @@ async fn test_stash_table(stash: &mut Stash) {
         .await
         .unwrap();
     let mut table =
-        TableTransaction::new(TABLE.peek_one(stash).await.unwrap(), uniqueness_violation);
+        TableTransaction::new(TABLE.peek_one(stash).await.unwrap(), uniqueness_violation).unwrap();
     assert_eq!(
         table.items(),
         BTreeMap::from([
@@ -768,7 +847,7 @@ async fn test_stash_table(stash: &mut Stash) {
         ])
     );
 
-    let mut table = TableTransaction::new(items, uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
     // Deleting then creating an item that has a uniqueness violation should work.
     assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
     table
@@ -810,7 +889,7 @@ async fn test_stash_table(stash: &mut Stash) {
         ])
     );
 
-    let mut table = TableTransaction::new(items, uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
     assert_eq!(table.delete(|_k, _v| true).len(), 3);
     table
         .insert(1i64.to_le_bytes().to_vec(), "v1".to_string())
@@ -823,7 +902,7 @@ async fn test_stash_table(stash: &mut Stash) {
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
     );
 
-    let mut table = TableTransaction::new(items, uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
         .insert(1i64.to_le_bytes().to_vec(), "v2".to_string())
@@ -836,7 +915,7 @@ async fn test_stash_table(stash: &mut Stash) {
     );
 
     // Verify we don't try to delete v3 or v4 during commit.
-    let mut table = TableTransaction::new(items, uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
         .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
@@ -857,7 +936,7 @@ async fn test_stash_table(stash: &mut Stash) {
 
     // Test `set`.
     let items = TABLE.peek_one(stash).await.unwrap();
-    let mut table = TableTransaction::new(items, uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
     // Uniqueness violation.
     table
         .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()))
@@ -883,7 +962,7 @@ async fn test_stash_table(stash: &mut Stash) {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn test_table() {
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
@@ -891,7 +970,8 @@ fn test_table() {
     let mut table = TableTransaction::new(
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
         uniqueness_violation,
-    );
+    )
+    .unwrap();
 
     table
         .insert(2i64.to_le_bytes().to_vec(), "b".to_string())

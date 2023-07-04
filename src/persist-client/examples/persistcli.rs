@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -86,12 +84,14 @@
 use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle;
 use tracing::{info_span, Instrument};
 
 pub mod maelstrom;
 pub mod open_loop;
+pub mod service;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -111,6 +111,7 @@ enum Command {
     OpenLoop(crate::open_loop::Args),
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
+    Service(crate::service::Args),
 }
 
 fn main() {
@@ -161,10 +162,11 @@ fn main() {
         Command::Admin(command) => {
             runtime.block_on(mz_persist_client::cli::admin::run(command).instrument(root_span))
         }
+        Command::Service(args) => runtime.block_on(crate::service::run(args).instrument(root_span)),
     };
 
     if let Err(err) = res {
-        eprintln!("error: {:#}", err);
+        eprintln!("persistcli: fatal: {}", err.display_with_causes());
         std::process::exit(1);
     }
 }

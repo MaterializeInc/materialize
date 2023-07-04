@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true
+ALTER SYSTEM SET enable_index_options = true
+ALTER SYSTEM SET enable_logical_compaction_window = true
+
 # Test consolidation and compaction behavior.
 #
 # The various tests in this file use the following Debezium-formatted Kafka

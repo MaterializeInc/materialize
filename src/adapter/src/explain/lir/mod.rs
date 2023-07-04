@@ -13,7 +13,7 @@ use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_repr::explain::{Explain, ExplainError};
 
-use super::Explainable;
+use crate::explain::Explainable;
 
 impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
     type Context = <DataflowDescription<Plan> as Explain<'a>>::Context;

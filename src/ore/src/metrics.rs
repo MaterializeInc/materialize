@@ -42,6 +42,7 @@
 //! ```
 
 use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use prometheus::core::{
@@ -51,12 +52,10 @@ use prometheus::core::{
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
 
-pub use prometheus::Opts as PrometheusOpts;
-
 mod delete_on_drop;
 
 pub use delete_on_drop::*;
-use std::fmt::{Debug, Formatter};
+pub use prometheus::Opts as PrometheusOpts;
 
 /// Define a metric for use in materialize.
 #[macro_export]
@@ -182,6 +181,8 @@ pub type UIntGauge = GenericGauge<AtomicU64>;
 pub type CounterVec = DeleteOnDropWrapper<prometheus::CounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::Gauge].
 pub type Gauge = DeleteOnDropWrapper<prometheus::Gauge>;
+/// Delete-on-drop shadow of Prometheus [prometheus::CounterVec].
+pub type GaugeVec = DeleteOnDropWrapper<prometheus::GaugeVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::HistogramVec].
 pub type HistogramVec = DeleteOnDropWrapper<prometheus::HistogramVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::IntCounterVec].
@@ -305,6 +306,17 @@ where
         let labels = mk_opts.opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();
         Self::new(mk_opts.opts, labels).expect("defining a gauge vec")
+    }
+}
+
+impl MakeCollector for Histogram {
+    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+        assert!(mk_opts.buckets.is_some());
+        Self::with_opts(HistogramOpts {
+            common_opts: mk_opts.opts,
+            buckets: mk_opts.buckets.unwrap(),
+        })
+        .expect("defining a histogram")
     }
 }
 

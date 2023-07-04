@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
+use std::collections::BTreeMap;
+use std::fmt::Display;
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
+use std::{fmt, fs};
 
 use anyhow::{bail, Context};
 use dirs::home_dir;
@@ -37,7 +39,17 @@ pub struct Endpoint {
 impl Endpoint {
     /// Returns the URL for the cloud regions.
     pub fn cloud_regions_url(&self) -> Url {
-        self.with_path(&["_metadata", "cloud-regions.json"])
+        let host = self
+            .url
+            .host()
+            .to_owned()
+            .expect("endpoint url has a valid host");
+        let url_str = format!("https://sync.{host}");
+        let mut url = Url::parse(&url_str).expect("sync endpoint name should be valid");
+        url.path_segments_mut()
+            .expect("constructor validated URL can be a base")
+            .extend(["api", "cloud-regions"]);
+        url
     }
 
     /// Returns the URL for the OAuth token exchange.

@@ -76,18 +76,16 @@
 //! ```
 
 use std::borrow::Cow;
-use std::fmt;
-use std::io;
 use std::str::{self, FromStr};
+use std::{fmt, io};
 
 use dec::OrderedDecimal;
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Serializer};
 
-use self::vec_stack::VecStack;
+use crate::adt::jsonb::vec_stack::VecStack;
 use crate::adt::numeric::Numeric;
-use crate::strconv;
-use crate::{Datum, Row, RowPacker};
+use crate::{strconv, Datum, Row, RowPacker};
 
 /// An owned JSON value backed by a [`Row`].
 ///
@@ -209,7 +207,7 @@ impl<'a> JsonbRef<'a> {
     /// Panics if this `JsonbRef` was constructed with a [`Datum`] that is not
     /// representable as JSON.
     pub fn to_serde_json(&self) -> serde_json::Value {
-        serde_json::to_value(&JsonbDatum(self.datum))
+        serde_json::to_value(JsonbDatum(self.datum))
             .expect("conversion to serde_json::Value known to be valid")
     }
 }

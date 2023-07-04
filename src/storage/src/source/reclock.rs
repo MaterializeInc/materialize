@@ -29,14 +29,13 @@ use differential_dataflow::consolidation;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
-use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
-use timely::progress::Timestamp;
-
 use mz_persist_client::error::UpperMismatch;
 use mz_repr::Diff;
 use mz_storage_client::util::remap_handle::RemapHandle;
 use mz_timely_util::antichain::AntichainExt;
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::Timestamp;
 
 pub mod compat;
 
@@ -45,14 +44,14 @@ pub mod compat;
 /// associated timestamps.
 ///
 /// Shareable with `.share()`
-pub struct ReclockFollower<FromTime: Timestamp, IntoTime: Timestamp> {
+pub struct ReclockFollower<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> {
     /// The `since` maintained by the local handle. This may be beyond the shared `since`
     since: Antichain<IntoTime>,
     pub inner: Rc<RefCell<ReclockFollowerInner<FromTime, IntoTime>>>,
 }
 
 #[derive(Debug)]
-pub struct ReclockFollowerInner<FromTime: Timestamp, IntoTime: Timestamp> {
+pub struct ReclockFollowerInner<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> {
     /// A dTVC trace of the remap collection containing all updates at `t: since <= t < upper`.
     // NOTE(petrosagg): Once we write this as a timely operator this should just be an arranged
     // trace of the remap collection
@@ -296,33 +295,35 @@ where
                     dest_frontier.extend(dest_ts);
                 }
                 Err(ReclockError::BeyondUpper(_)) => {}
-                Err(err @ ReclockError::NotBeyondSince(_) | err @ ReclockError::Uninitialized) => {
-                    return Err(err)
-                }
+                Err(err @ ReclockError::Uninitialized) => return Err(err),
             }
         }
 
         Ok(dest_frontier)
     }
 
-    /// Implements the inverse of the `reclock_frontier` operation.
+    /// Reclocks an `IntoTime` frontier into a `FromTime` frontier.
+
+    /// The conversion has the property that all messages that would be reclocked to times beyond
+    /// the provided `IntoTime` frontier will be beyond the returned `FromTime` frontier. This can
+    /// be used to compute a safe starting point to resume producing an `IntoTime` collection at a
+    /// particular frontier.
     pub fn source_upper_at_frontier<'a>(
         &self,
         frontier: AntichainRef<'a, IntoTime>,
     ) -> Result<Antichain<FromTime>, ReclockError<AntichainRef<'a, IntoTime>>> {
         let inner = self.inner.borrow();
-        if *frontier == [IntoTime::minimum()] {
+        if PartialOrder::less_equal(&frontier, &inner.since.frontier()) {
             return Ok(Antichain::from_elem(FromTime::minimum()));
         }
         if !PartialOrder::less_than(&frontier, &inner.upper.borrow()) {
             if PartialOrder::less_equal(&frontier, &inner.upper.borrow()) {
                 return Ok(inner.source_upper.frontier().to_owned());
+            } else if frontier.is_empty() {
+                return Ok(Antichain::new());
             } else {
                 return Err(ReclockError::BeyondUpper(frontier));
             }
-        }
-        if !PartialOrder::less_than(&inner.since.frontier(), &frontier) {
-            return Err(ReclockError::NotBeyondSince(frontier));
         }
         let mut source_upper = MutableAntichain::new();
 
@@ -391,20 +392,18 @@ where
     }
 }
 
-impl<FromTime: Timestamp, IntoTime: Timestamp> Drop for ReclockFollower<FromTime, IntoTime> {
+impl<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> Drop
+    for ReclockFollower<FromTime, IntoTime>
+{
     fn drop(&mut self) {
         // Release read hold
-        let mut inner = self.inner.borrow_mut();
-        inner
-            .since
-            .update_iter(self.since.iter().map(|t| (t.clone(), -1)));
+        self.compact(Antichain::new());
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReclockError<T> {
     Uninitialized,
-    NotBeyondSince(T),
     BeyondUpper(T),
 }
 
@@ -542,7 +541,7 @@ where
         };
 
         while PartialOrder::less_than(&self.source_upper.frontier(), &new_source_upper) {
-            let (ts, upper) = self
+            let (ts, mut upper) = self
                 .clock_stream
                 .by_ref()
                 .skip_while(|(_ts, upper)| {
@@ -554,6 +553,11 @@ where
                 .next()
                 .await
                 .expect("clock stream ended without reaching the empty frontier");
+
+            // If source is closed, close remap shard as well.
+            if new_source_upper.is_empty() {
+                upper = Antichain::new();
+            }
 
             let mut updates = vec![];
             for src_ts in self.source_upper.frontier().iter().cloned() {
@@ -598,30 +602,22 @@ where
             Err(mismatch) => Err(mismatch),
         }
     }
-
-    pub async fn compact(&mut self, new_since: Antichain<IntoTime>) {
-        self.remap_handle.compact(new_since).await;
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::Duration;
 
     use futures::Stream;
     use itertools::Itertools;
-    use once_cell::sync::Lazy;
-    use timely::progress::Timestamp as _;
-
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
@@ -629,6 +625,10 @@ mod tests {
     use mz_storage_client::types::sources::{MzOffset, SourceData};
     use mz_storage_client::util::remap_handle::RemapHandle;
     use mz_timely_util::order::Partitioned;
+    use once_cell::sync::Lazy;
+    use timely::progress::Timestamp as _;
+
+    use super::*;
 
     // 15 minutes
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
@@ -636,7 +636,11 @@ mod tests {
     static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
         let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
-        Arc::new(PersistClientCache::new(persistcfg, &MetricsRegistry::new()))
+        Arc::new(PersistClientCache::new(
+            persistcfg,
+            &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
+        ))
     });
 
     static PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
@@ -668,7 +672,7 @@ mod tests {
                 blob_uri: "mem://".to_owned(),
                 consensus_uri: "mem://".to_owned(),
             },
-            remap_shard: shard,
+            remap_shard: Some(shard),
             data_shard: ShardId::new(),
             status_shard: None,
             relation_desc: RelationDesc::empty(),
@@ -680,10 +684,13 @@ mod tests {
             (ts, upper)
         }));
 
+        let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
+
         let remap_handle = crate::source::reclock::compat::PersistHandle::new(
             Arc::clone(&*PERSIST_CACHE),
             metadata,
             as_of.clone(),
+            write_frontier,
             GlobalId::Explain,
             "unittest",
             0,
@@ -722,7 +729,8 @@ mod tests {
         frontier
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_basic_usage() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -774,10 +782,33 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_reclock_frontier() {
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let remap_shard = ShardId::new();
+
+        let persist_client = PERSIST_CACHE
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+
+        let mut remap_read_handle = persist_client
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+                remap_shard,
+                "test_since_hold",
+                Arc::new(PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .expect("error opening persist shard");
+
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
 
         let query = Antichain::from_elem(Partitioned::minimum());
         // This is the initial source frontier so we should get the initial ts upper
@@ -892,7 +923,9 @@ mod tests {
         );
 
         // Compact but not enough to change the bindings
-        operator.compact(Antichain::from_elem(900.into())).await;
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(900.into()))
+            .await;
         follower.compact(Antichain::from_elem(900.into()));
         let query = partitioned_frontier([(1, MzOffset::from(9))]);
         assert_eq!(
@@ -901,7 +934,9 @@ mod tests {
         );
 
         // Compact enough to compact bindings
-        operator.compact(Antichain::from_elem(1500.into())).await;
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(1500.into()))
+            .await;
         follower.compact(Antichain::from_elem(1500.into()));
         let query = partitioned_frontier([(1, MzOffset::from(9))]);
         // Now reclocking the same offset maps to the compacted binding, which is the same result
@@ -917,7 +952,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_reclock() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1005,7 +1041,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_reclock_gh16318() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1033,12 +1070,33 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(50, 3000.into())]);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_compaction() {
-        let binding_shard = ShardId::new();
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let remap_shard = ShardId::new();
+
+        let persist_client = PERSIST_CACHE
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+
+        let mut remap_read_handle = persist_client
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+                remap_shard,
+                "test_since_hold",
+                Arc::new(PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .expect("error opening persist shard");
 
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
@@ -1069,7 +1127,9 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
         // Compact enough so that offsets >= 3 remain uncompacted
-        operator.compact(Antichain::from_elem(1000.into())).await;
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(1000.into()))
+            .await;
         follower.compact(Antichain::from_elem(1000.into()));
 
         // Reclock offsets 3 and 4 again to see we get the uncompacted result
@@ -1096,7 +1156,7 @@ mod tests {
 
         // Starting a new operator with an `as_of` is the same as having compacted
         let (_operator, follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(1000.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(1000.into())).await;
 
         // Reclocking offsets 3 and 4 should succeed
         let batch = vec![
@@ -1120,7 +1180,39 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(2, 1000.into())]);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    async fn test_sharing() {
+        let (mut operator, mut follower) =
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+
+        // Install a since hold
+        let shared_follower = follower.share();
+
+        // First mint bindings for partition 0 offset 1 at timestamp 1000
+        let source_upper = partitioned_frontier([(0, MzOffset::from(1))]);
+        follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
+
+        // Advance the since frontier on one of the handles at a timestamp that is less than 1000
+        // to leave the previously minted binding intact. Since we have an active since hold
+        // through `shared_follower` nothing in the trace is actually compacted.
+        follower.compact(Antichain::from_elem(500.into()));
+
+        // This will release since hold of {0} through `shared_follower` and the overall since
+        // frontier will become {500} which must now actually compact the in-memory trace.
+        drop(shared_follower);
+
+        // Verify that we reclock partition 0 offset 0 correctly
+        let batch = vec![(0, Partitioned::with_partition(0, MzOffset::from(0)))];
+        let reclocked_msgs = follower
+            .reclock(batch)
+            .map(|(m, ts)| (m, ts.unwrap()))
+            .collect_vec();
+        assert_eq!(reclocked_msgs, &[(0, 1000.into())]);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_concurrency() {
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
@@ -1144,8 +1236,6 @@ mod tests {
             .collect_vec();
         assert_eq!(reclocked_msgs, &[(1, 1000.into()), (2, 1000.into())]);
 
-        // Also compact operator A. Since operator B has its own read handle it shouldn't affect it
-        op_a.compact(Antichain::from_elem(1000.into())).await;
         follower_a.compact(Antichain::from_elem(1000.into()));
 
         // Advance the time by a lot
@@ -1177,12 +1267,33 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_inversion() {
-        let binding_shard = ShardId::new();
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let remap_shard = ShardId::new();
+
+        let persist_client = PERSIST_CACHE
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+
+        let mut remap_read_handle = persist_client
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+                remap_shard,
+                "test_since_hold",
+                Arc::new(PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .expect("error opening persist shard");
 
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
 
         // SETUP
         // Reclock offsets 1 and 2 to timestamp 1000
@@ -1280,6 +1391,9 @@ mod tests {
         );
 
         // After compaction it should still work
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(1000.into()))
+            .await;
         follower.compact(Antichain::from_elem(1000.into()));
         assert_eq!(
             follower
@@ -1288,6 +1402,9 @@ mod tests {
             partitioned_frontier([(0, MzOffset::from(5))])
         );
         // compact as close as we can
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(2000.into()))
+            .await;
         follower.compact(Antichain::from_elem(2000.into()));
         assert_eq!(
             follower
@@ -1298,19 +1415,21 @@ mod tests {
 
         // If we compact too far, we get an error. Note we compact
         // to the previous UPPER we were checking.
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(2001.into()))
+            .await;
         follower.compact(Antichain::from_elem(2001.into()));
 
         assert_eq!(
             follower.source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow()),
-            Err(ReclockError::NotBeyondSince(
-                Antichain::from_elem(2001.into()).borrow()
-            ))
+            Ok(Antichain::from_elem(Partitioned::minimum()))
         );
     }
 
     // Regression test for
     // https://github.com/MaterializeInc/materialize/issues/14740.
-    #[tokio::test(start_paused = true)]
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 

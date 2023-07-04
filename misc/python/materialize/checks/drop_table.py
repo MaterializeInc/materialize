@@ -35,6 +35,12 @@ class DropTable(Check):
                 > DROP TABLE drop_table1;
                 """,
                 """
+                # When upgrading from old version without roles the table is
+                # owned by default_role, thus we have to change the owner
+                # before dropping it:
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER TABLE drop_table2 OWNER TO materialize;
+
                 > DROP TABLE drop_table2;
                 """,
             ]

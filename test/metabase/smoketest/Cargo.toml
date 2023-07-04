@@ -12,7 +12,7 @@ itertools = "0.10.5"
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["network", "async", "test"] }
 tokio = { version = "1.24.2", features = ["macros"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { version = "0.7.8" }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../../../src/workspace-hack" }
 

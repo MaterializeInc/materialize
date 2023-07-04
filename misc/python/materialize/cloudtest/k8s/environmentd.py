@@ -51,15 +51,32 @@ class EnvironmentdService(K8sService):
         )
 
 
+class MaterializedAliasService(K8sService):
+    """Some testdrive tests expect that Mz is accessible as 'materialized'"""
+
+    def __init__(self) -> None:
+        self.service = V1Service(
+            api_version="v1",
+            kind="Service",
+            metadata=V1ObjectMeta(name="materialized"),
+            spec=V1ServiceSpec(
+                type="ExternalName",
+                external_name="environmentd.default.svc.cluster.local",
+            ),
+        )
+
+
 class EnvironmentdStatefulSet(K8sStatefulSet):
     def __init__(
         self,
         tag: Optional[str] = None,
         release_mode: bool = True,
+        coverage_mode: bool = False,
         log_filter: Optional[str] = None,
     ) -> None:
         self.tag = tag
         self.release_mode = release_mode
+        self.coverage_mode = coverage_mode
         self.log_filter = log_filter
         self.env: Dict[str, str] = {}
         super().__init__()
@@ -86,16 +103,37 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(
                 name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
             ),
+            # TODO: these should be the same as in mzcompose
+            V1EnvVar(
+                name="MZ_SYSTEM_PARAMETER_DEFAULT",
+                value="enable_envelope_upsert_in_subscribe=true",
+            ),
         ]
+
+        if self.coverage_mode:
+            env.extend(
+                [
+                    V1EnvVar(
+                        name="LLVM_PROFILE_FILE",
+                        value="/coverage/environmentd-%p-%9m%c.profraw",
+                    ),
+                    V1EnvVar(
+                        name="CI_COVERAGE_ENABLED",
+                        value="1",
+                    ),
+                    V1EnvVar(name="MZ_ORCHESTRATOR_KUBERNETES_COVERAGE", value="1"),
+                ]
+            )
 
         for (k, v) in self.env.items():
             env.append(V1EnvVar(name=k, value=v))
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
-        volume_mounts = [
-            V1VolumeMount(name="data", mount_path="/data"),
-        ]
+        volume_mounts = [V1VolumeMount(name="data", mount_path="/data")]
+
+        if self.coverage_mode:
+            volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
 
         s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
 
@@ -117,7 +155,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--internal-sql-listen-addr=0.0.0.0:6877",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
-            # Materializel too! If you are adding a command-line option that is
+            # Materialize too! If you are adding a command-line option that is
             # only supported on newer releases, do not add it here. Add it as a
             # version-gated argument below, using `self._meets_minimum_version`.
         ]
@@ -126,19 +164,43 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_minimum_version("0.38.0"):
             args += [
                 "--clusterd-image",
-                self.image("clusterd", tag=self.tag, release_mode=self.release_mode),
+                self.image(
+                    "clusterd",
+                    tag=self.tag,
+                    release_mode=self.release_mode,
+                ),
             ]
         else:
             args += [
                 "--storaged-image",
-                self.image("storaged", tag=self.tag, release_mode=self.release_mode),
+                self.image(
+                    "storaged",
+                    tag=self.tag,
+                    release_mode=self.release_mode,
+                ),
                 "--computed-image",
-                self.image("computed", tag=self.tag, release_mode=self.release_mode),
+                self.image(
+                    "computed",
+                    tag=self.tag,
+                    release_mode=self.release_mode,
+                ),
+            ]
+        if self._meets_minimum_version("0.53.0"):
+            args += [
+                "--bootstrap-role",
+                "materialize",
+            ]
+        if self._meets_minimum_version("0.54.0"):
+            args += [
+                "--internal-persist-pubsub-listen-addr=0.0.0.0:6879",
+                "--persist-pubsub-url=http://persist-pubsub",
             ]
         container = V1Container(
             name="environmentd",
             image=self.image(
-                "environmentd", tag=self.tag, release_mode=self.release_mode
+                "environmentd",
+                tag=self.tag,
+                release_mode=self.release_mode,
             ),
             args=args,
             env=env,
@@ -155,8 +217,19 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                     access_modes=["ReadWriteOnce"],
                     resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
                 ),
-            )
+            ),
         ]
+
+        if self.coverage_mode:
+            claim_templates.append(
+                V1PersistentVolumeClaim(
+                    metadata=V1ObjectMeta(name="coverage"),
+                    spec=V1PersistentVolumeClaimSpec(
+                        access_modes=["ReadWriteOnce"],
+                        resources=V1ResourceRequirements(requests={"storage": "10Gi"}),
+                    ),
+                )
+            )
 
         return V1StatefulSet(
             api_version="apps/v1",

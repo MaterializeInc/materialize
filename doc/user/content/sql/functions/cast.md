@@ -89,6 +89,7 @@ Source type                                | Return type                        
 [`list`](../../types/list/)<sup>1</sup>    | [`list`](../../types/list/)                   | Implicit
 [`list`](../../types/list/)<sup>1</sup>    | [`text`](../../types/text/)                   | Assignment
 [`map`](../../types/map/)                  | [`text`](../../types/text/)                   | Assignment
+[`mz_aclitem`](../../types/mz_aclitem/)    | [`text`](../../types/text/)                   | Explicit
 [`numeric`](../../types/numeric/)          | [`bigint`](../../types/integer/)              | Assignment
 [`numeric`](../../types/numeric/)          | [`float`](../../types/float/)                 | Implicit
 [`numeric`](../../types/numeric/)          | [`int`](../../types/integer/)                 | Assignment

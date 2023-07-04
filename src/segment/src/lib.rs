@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -84,6 +82,8 @@
 //! [Segment]: https://segment.com
 //! [`segment`]: https://docs.rs/segment
 
+use std::fmt;
+
 use segment::message::{Batch, BatchMessage, Group, Message, Track, User};
 use segment::{Batcher, Client as _, HttpClient};
 use tokio::sync::mpsc::error::TrySendError;
@@ -104,6 +104,12 @@ const MAX_PENDING_EVENTS: usize = 32_768;
 #[derive(Clone)]
 pub struct Client {
     tx: Sender<BatchMessage>,
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<segment client>")
+    }
 }
 
 impl Client {

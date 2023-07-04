@@ -13,15 +13,14 @@ use std::fmt;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use serde_json::json;
-
 use mz_avro::types::{DecimalValue, ToAvro, Value};
 use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
+use once_cell::sync::Lazy;
+use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::envelopes::{self, ENVELOPE_CUSTOM_NAMES};
@@ -403,6 +402,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 }
                 ScalarType::MzTimestamp => Value::String(datum.unwrap_mz_timestamp().to_string()),
                 ScalarType::Range { .. } => Value::String(datum.unwrap_range().to_string()),
+                ScalarType::MzAclItem => Value::String(datum.unwrap_mz_acl_item().to_string()),
             };
             if typ.nullable {
                 val = Value::Union {

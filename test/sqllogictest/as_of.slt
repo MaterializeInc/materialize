@@ -78,10 +78,13 @@ SELECT * FROM t;
 query error Timestamp \(1\) is not valid for all inputs
 SELECT * FROM t AS OF 1
 
-query I
-SELECT * FROM t AS OF AT LEAST 1
+# AS OF escapes linearizability, so this could choose a timestamp before the INSERT. We're just
+# testing that we can type AS OF AT LEAST 1. Use a query that has the same output regardless of chosen
+# timestamp.
+query B
+SELECT count(*) = 2 FROM t AS OF AT LEAST 1
 ----
-1
+false
 
 query error can't use null as a mz_timestamp for AS OF
 SELECT 1 AS OF NULL::timestamp;

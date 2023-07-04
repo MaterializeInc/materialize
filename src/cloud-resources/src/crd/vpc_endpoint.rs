@@ -56,7 +56,7 @@ mod tests {
     use kube::core::crd::merge_crds;
     use kube::CustomResourceExt;
 
-    #[test]
+    #[mz_ore::test]
     fn test_vpc_endpoint_crd_matches() {
         let crd = merge_crds(vec![super::v1::VpcEndpoint::crd()], "v1").unwrap();
         let crd_json = serde_json::to_string(&serde_json::json!(&crd)).unwrap();

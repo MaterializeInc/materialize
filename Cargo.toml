@@ -9,6 +9,7 @@ members = [
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/cloud-api",
     "src/cluster",
     "src/clusterd",
     "src/cluster-client",
@@ -17,12 +18,13 @@ members = [
     "src/controller",
     "src/environmentd",
     "src/expr",
+    "src/expr-parser",
     "src/expr-test-util",
     "src/frontegg-auth",
+    "src/frontegg-client",
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
-    "src/kinesis-util",
     "src/lowertest",
     "src/lowertest-derive",
     "src/metabase",
@@ -38,6 +40,7 @@ members = [
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",
+    "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
     "src/pid-file",
@@ -46,6 +49,8 @@ members = [
     "src/proto",
     "src/repr",
     "src/repr-test-util",
+    "src/rocksdb",
+    "src/rocksdb-types",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
@@ -58,6 +63,7 @@ members = [
     "src/stash-debug",
     "src/storage",
     "src/storage-client",
+    "src/test-macro",
     "src/testdrive",
     "src/timely-util",
     "src/transform",
@@ -65,7 +71,6 @@ members = [
     "src/walkabout",
     "src/workspace-hack",
     "test/metabase/smoketest",
-    "test/perf-kinesis",
     "test/test-util",
 ]
 # Use Cargo's new feature resolver, which can handle target-specific features.
@@ -76,7 +81,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.67.0"
+rust-version = "1.68.2"
 
 [profile.dev]
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved
@@ -95,28 +100,75 @@ object = { opt-level = 3 }
 rustc-demangle = { opt-level = 3 }
 
 [profile.release]
-# Emit only the line info tables, not full debug info, in release builds, to
-# substantially reduce the size of the debug info. Line info tables are enough
-# to correctly symbolicate a backtrace, but do not produce an ideal interactive
-# debugger experience. This seems to be the right tradeoff for release builds:
-# it's unlikely we're going to get interactive access to a debugger in
-# production installations, but we still want useful crash reports.
-debug = 1
-
-# Use this section only to change the source of dependencies that appear as
-# transitive dependencies of other external dependencies in the dependency
-# graph. For everything else (e.g. rust-postgres, rdkafka,
-# differential-dataflow, proptest, timely), use a `git` source directly in each
-# Cargo.toml.
+# Emit full debug info, allowing us to easily analyze core dumps from
+# staging (and, in an emergency, also prod).
 #
-# The reasons for each of these overrides are listed in deny.toml.
+# This does not negatively impact the sizes of the main binaries
+# (clusterd and environmentd), since we split the debuginfo from those
+# and ship it separately to an s3 bucket before building their
+# docker containers.
+debug = 2
+
+# IMPORTANT: when patching a dependency, you should only depend on "main",
+# "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
+# feature/patch branch (e.g., "fix-thing" or "pr-1234"). Feature/patch branches
+# tend to get rewritten or disappear (e.g., because a PR is force pushed or gets
+# merged), after which point it becomes impossible to build that historical
+# version of Materialize.
 [patch.crates-io]
-axum = { git = "https://github.com/tokio-rs/axum.git" }
-chrono = { git = "https://github.com/chronotope/chrono.git", branch = "0.4.x" }
-csv = { git = "https://github.com/BurntSushi/rust-csv.git" }
-csv-core = { git = "https://github.com/BurntSushi/rust-csv.git" }
+# Projects that do not reliably release to crates.io.
+columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
+timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+
+# Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
+# which depends on ahash v0.8 instead of v0.7. In the meantime we've
+# backported the ahash v0.8 bump into hashbrown v0.12.
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+
+# Waiting on https://github.com/sfackler/rust-postgres/pull/752.
+postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+
+# Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-vte = { git = "https://github.com/alacritty/vte" }
+
+# Waiting for a new release of strip-ansi-escapes that avoids the indirect
+# dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
+vte = { git = "https://github.com/MaterializeInc/vte", rev = "45670c47cebd7af050def2f80a307bdeec7caba3" }
+
+# Waiting on https://github.com/hyperium/tonic/pull/1398.
+tonic-build = { git = "https://github.com/MaterializeInc/tonic" }
+
+# Waiting on https://github.com/MaterializeInc/tracing/pull/1 to be submitted
+# upstream.
+tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
+
+# Waiting on https://github.com/tokio-rs/console/pull/388.
+console-api = { git = "https://github.com/MaterializeInc/tokio-console.git" }
+console-subscriber = { git = "https://github.com/MaterializeInc/tokio-console.git" }
+
+# Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
+# it into a release.
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
+
+# Waiting on https://github.com/AltSysrq/proptest/pull/264.
+proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
+
+# Waiting on https://github.com/edenhill/librdkafka/pull/4051.
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+
+# Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
+# a release.
+openssh = { git = "https://github.com/MaterializeInc/openssh.git" }

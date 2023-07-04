@@ -46,15 +46,9 @@
 
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap as StdMap;
-use std::collections::HashSet as StdSet;
-use std::collections::TryReserveError;
+use std::collections::{HashMap as StdMap, HashSet as StdSet, TryReserveError};
 use std::hash::Hash;
-use std::ops::BitAnd;
-use std::ops::BitOr;
-use std::ops::BitXor;
-use std::ops::Index;
-use std::ops::Sub;
+use std::ops::{BitAnd, BitOr, BitXor, Index, Sub};
 
 /// A wrapper around [`std::collections::HashMap`] that hides methods that expose unstable
 /// iteration order.

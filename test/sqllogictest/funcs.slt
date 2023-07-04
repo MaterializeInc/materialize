@@ -247,7 +247,7 @@ Explained Query:
     Map (date_truncts(#0, #1)) // { arity: 3 }
       CrossJoin type=differential // { arity: 2 }
         implementation
-          %1:date_trunc_timestamps[×] » %0:date_trunc_fields[×]A
+          %0:date_trunc_fields[×] » %1:date_trunc_timestamps[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Get materialize.public.date_trunc_fields // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
@@ -285,6 +285,11 @@ SELECT ceil(CAST (1.1 AS float))
 
 query RRRRR
 SELECT ceil(1.1), ceil(1.111), ceil(100.1), ceil(100.11), ceil(-4.1)
+----
+2  2  101  101  -4
+
+query RRRRR
+SELECT ceiling(1.1), ceiling(1.111), ceiling(100.1), ceiling(100.11), ceiling(-4.1)
 ----
 2  2  101  101  -4
 
@@ -382,29 +387,34 @@ SELECT cbrt(NULL)
 NULL
 
 query R
-SELECT cbrt(1.23783::float)
+SELECT cbrt(1.23783::float)::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(1.23783::double)
+SELECT cbrt(1.23783::double)::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(1.23783::decimal(15,5))
+SELECT cbrt(1.23783::decimal(15,5))::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(-8::double)
+SELECT cbrt(-8::double)::float4
 ----
 -2
 
 query R
-SELECT cbrt(3::int)
+SELECT cbrt(3::int)::float4
 ----
-1.4422495703074083
+1.4422495
+
+query R
+SELECT cbrt(27::int)::float4
+----
+3
 
 # Test coalesce.
 query I
@@ -774,7 +784,7 @@ SELECT materialize.pg_catalog.abs(1)
 ----
 1
 
-query error function mz_catalog.abs\(integer\) does not exist
+query error db error: ERROR: function "mz_catalog\.abs" does not exist
 SELECT mz_catalog.abs(1)
 
 query error unknown database 'noexist'
@@ -793,7 +803,7 @@ SELECT pg_catalog.mod(7, 4)
 ----
 3
 
-query error function mz_catalog.mod\(integer, integer\) does not exist
+query error db error: ERROR: function "mz_catalog\.mod" does not exist
 SELECT mz_catalog.mod(7, 4)
 
 query error unknown database 'noexist'
@@ -1446,6 +1456,12 @@ SELECT exp(ln(2::decimal(15, 5)))
 ----
 2
 
+query error value out of range: overflow
+SELECT exp(10000::float)
+
+query error value out of range: underflow
+SELECT exp(-10000::float)
+
 query R
 SELECT power(382, 5);
 ----
@@ -1481,6 +1497,17 @@ query T
 SELECT pow(9::decimal(15, 5), 0.5::decimal(15, 5));
 ----
 3
+
+query error value out of range: overflow
+SELECT pow(3::float, 10000)
+
+query T
+SELECT pow(0::float, 10000)
+----
+0.000
+
+query error value out of range: underflow
+SELECT pow(3::float, -10000)
 
 query T
 SELECT pg_column_size(NULL)
@@ -1538,7 +1565,20 @@ SELECT mz_internal.mz_error_if_null(1, '')
 ----
 1
 
+query error unexpected NULL
+SELECT mz_internal.mz_error_if_null(NULL, NULL)
+
 query B
 SELECT pg_backend_pid() > 0
+----
+true
+
+query B
+SELECT pg_is_in_recovery()
+----
+false
+
+query B
+SELECT pg_tablespace_location(0) IS NULL
 ----
 true

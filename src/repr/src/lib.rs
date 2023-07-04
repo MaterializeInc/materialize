@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -103,6 +101,9 @@ pub mod antichain;
 pub mod chrono;
 pub mod explain;
 pub mod global_id;
+pub mod namespaces;
+pub mod role_id;
+pub mod stats;
 pub mod strconv;
 pub mod url;
 
@@ -112,6 +113,10 @@ pub use crate::global_id::GlobalId;
 pub use crate::relation::{
     ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationDesc,
     ProtoRelationType, RelationDesc, RelationType,
+};
+pub use crate::row::encoding::{
+    is_no_stats_type, DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder,
+    RowEncoder,
 };
 pub use crate::row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,

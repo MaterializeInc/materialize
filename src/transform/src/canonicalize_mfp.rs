@@ -9,6 +9,8 @@
 
 //! Canonicalizes MFPs, e.g., performs CSE on the scalar expressions, eliminates identity MFPs.
 //!
+//! Also calls `canonicalize_predicates` through `fusion::filter`.
+//!
 //! This transform takes a sequence of Maps, Filters, and Projects and
 //! canonicalizes it to a sequence like this:
 //! | Map
@@ -26,9 +28,10 @@
 //! busywork and less efficiency, but the wins can be substantial when
 //! expressions re-use complex subexpressions.
 
-use crate::{IndexOracle, TransformArgs};
 use mz_expr::visit::VisitChildren;
 use mz_expr::{MapFilterProject, MirRelationExpr};
+
+use crate::{IndexOracle, TransformArgs};
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.
 #[derive(Debug)]

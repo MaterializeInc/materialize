@@ -11,4 +11,8 @@
 #
 # mz -- build and run the Materialize CLI.
 
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
 exec cargo run --bin mz -- "$@"

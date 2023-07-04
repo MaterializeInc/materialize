@@ -9,13 +9,25 @@
 
 #![allow(missing_docs)]
 
-use std::fmt;
-use std::iter;
+use std::iter::Sum;
 use std::ops::Deref;
+use std::{fmt, iter};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
+use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
+
+use mz_ore::str::separated;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::date::Date;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::numeric::{self, NumericMaxScale};
+use mz_repr::adt::regex::Regex as ReprRegex;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
+use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -24,22 +36,11 @@ use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use mz_lowertest::MzReflect;
-use mz_ore::cast::CastFrom;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::date::Date;
-use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{self, NumericMaxScale};
-use mz_repr::adt::regex::Regex as ReprRegex;
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::adt::timestamp::TimestampLike;
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
-
+use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders};
+use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
-    compare_columns, proto_aggregate_func, proto_aggregate_func::ProtoColumnOrders,
-    proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
+    WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
@@ -413,107 +414,21 @@ where
     Datum::from(x)
 }
 
-fn sum_int16<'a, I>(datums: I) -> Datum<'a>
+fn sum_datum<'a, I, DatumType, ResultType>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
+    DatumType: TryFrom<Datum<'a>>,
+    <DatumType as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    ResultType: From<DatumType> + Sum + Into<Datum<'a>>,
 {
     let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: i64 = datums.map(|d| i64::from(d.unwrap_int16())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_int32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: i64 = datums.map(|d| i64::from(d.unwrap_int32())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_int64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: i128 = datums.map(|d| i128::from(d.unwrap_int64())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_uint16<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: u64 = datums.map(|d| u64::from(d.unwrap_uint16())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_uint32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: u64 = datums.map(|d| u64::from(d.unwrap_uint32())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_uint64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: u128 = datums.map(|d| u128::from(d.unwrap_uint64())).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_float32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: f32 = datums.map(|d| d.unwrap_float32()).sum();
-        Datum::from(x)
-    }
-}
-
-fn sum_float64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let x: f64 = datums.map(|d| d.unwrap_float64()).sum();
-        Datum::from(x)
+        let x = datums
+            .map(|d| ResultType::from(DatumType::try_from(d).expect("unexpected type")))
+            .sum::<ResultType>();
+        x.into()
     }
 }
 
@@ -753,6 +668,49 @@ where
     })
 }
 
+fn rank<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Keep the row used for ordering around, as it is used to determine the rank
+    let datums = order_aggregate_datums_with_rank(datums, order_by);
+
+    let mut datums = datums
+        .into_iter()
+        .map(|(d0, order_row)| {
+            d0.unwrap_list()
+                .iter()
+                .map(move |d1| (d1, order_row.clone()))
+        })
+        .flatten();
+
+    let datums = datums
+        .next()
+        .map_or(vec![], |(first_datum, first_order_row)| {
+            // Folding with (last order_by row, last assigned rank, row number, output vec)
+            datums.fold((first_order_row, 1, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_order_row)| {
+                let (ref mut acc_row, ref mut acc_rank, ref mut acc_row_num, ref mut output) = acc;
+                *acc_row_num += 1;
+                // Identity is based on the order_by expression
+                if *acc_row != next_order_row {
+                    *acc_rank = *acc_row_num;
+                    *acc_row = next_order_row;
+                }
+
+                (*output).push((next_datum, *acc_rank));
+                acc
+            })
+        }.3).into_iter().map(|(d, i)| {
+        temp_storage.make_datum(|packer| {
+            packer.push_list(vec![Datum::Int64(i), d]);
+        })
+    });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(datums);
+    })
+}
+
 fn dense_rank<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -762,19 +720,23 @@ where
 
     let mut datums = datums
         .into_iter()
-        .map(|(d0, row)| d0.unwrap_list().iter().map(move |d1| (d1, row.clone())))
+        .map(|(d0, order_row)| {
+            d0.unwrap_list()
+                .iter()
+                .map(move |d1| (d1, order_row.clone()))
+        })
         .flatten();
 
     let datums = datums
         .next()
-        .map_or(vec![], |(first_datum, first_row)| {
+        .map_or(vec![], |(first_datum, first_order_row)| {
             // Folding with (last order_by row, last assigned rank, output vec)
-            datums.fold((first_row, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_row)| {
+            datums.fold((first_order_row, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_order_row)| {
                 let (ref mut acc_row, ref mut acc_rank, ref mut output) = acc;
                 // Identity is based on the order_by expression
-                if *acc_row != next_row {
+                if *acc_row != next_order_row {
                     *acc_rank += 1;
-                    *acc_row = next_row;
+                    *acc_row = next_order_row;
                 }
 
                 (*output).push((next_datum, *acc_rank));
@@ -797,6 +759,7 @@ fn lag_lead<'a, I>(
     temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
     lag_lead_type: &LagLeadType,
+    ignore_nulls: &bool,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -833,18 +796,50 @@ where
         let idx = i64::try_from(idx).expect("Array index does not fit in i64");
         let offset = i64::from(offset.unwrap_int32());
         // By default, offset is applied backwards (for `lag`): flip the sign if `lead` should run instead
-        let offset = match lag_lead_type {
-            LagLeadType::Lag => offset,
-            LagLeadType::Lead => -offset,
+        let (offset, decrement) = match lag_lead_type {
+            LagLeadType::Lag => (offset, 1),
+            LagLeadType::Lead => (-offset, -1),
         };
-        let vec_offset = idx - offset;
 
-        let lagged_value = match u64::try_from(vec_offset) {
-            Ok(vec_offset) => datums
-                .get(usize::cast_from(vec_offset))
-                .map(|d| d.0)
-                .unwrap_or(*default_value),
-            Err(_) => *default_value,
+        // Get a Datum from `datums`. Return None if index is out of range.
+        let datums_get = |i: i64| -> Option<Datum> {
+            match u64::try_from(i) {
+                Ok(i) => datums
+                    .get(usize::cast_from(i))
+                    .map(|d| Some(d.0)) // succeeded in getting a Datum from the vec
+                    .unwrap_or(None), // overindexing
+                Err(_) => None, // underindexing (negative index)
+            }
+        };
+
+        let lagged_value = if !ignore_nulls {
+            datums_get(idx - offset).unwrap_or(*default_value)
+        } else {
+            // We start j from idx, and step j until we have seen an abs(offset) number of non-null
+            // values.
+            //
+            // (This is a very naive implementation: We could avoid an inner loop, and instead step
+            // two indexes in one loop, with one index lagging behind. But a common use case is an
+            // offset of 1 and not too many nulls, for which this doesn't matter. And anyhow, the
+            // whole thing hopefully will be replaced by prefix sum soon.)
+            let mut to_go = num::abs(offset);
+            let mut j = idx;
+            loop {
+                j -= decrement;
+                match datums_get(j) {
+                    Some(datum) => {
+                        if !datum.is_null() {
+                            to_go -= 1;
+                            if to_go == 0 {
+                                break datum;
+                            }
+                        }
+                    }
+                    None => {
+                        break *default_value;
+                    }
+                };
+            }
         };
 
         result.push((lagged_value, *original_row));
@@ -1165,12 +1160,16 @@ pub enum AggregateFunc {
     RowNumber {
         order_by: Vec<ColumnOrder>,
     },
+    Rank {
+        order_by: Vec<ColumnOrder>,
+    },
     DenseRank {
         order_by: Vec<ColumnOrder>,
     },
     LagLead {
         order_by: Vec<ColumnOrder>,
         lag_lead: LagLeadType,
+        ignore_nulls: bool,
     },
     FirstValue {
         order_by: Vec<ColumnOrder>,
@@ -1190,7 +1189,7 @@ pub enum AggregateFunc {
 /// An explicit [`Arbitrary`] implementation needed here because of a known
 /// `proptest` issue.
 ///
-/// Revert to the derive-macro impementation once the issue[^1] is fixed.
+/// Revert to the derive-macro implementation once the issue[^1] is fixed.
 ///
 /// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
 impl Arbitrary for AggregateFunc {
@@ -1268,8 +1267,15 @@ impl Arbitrary for AggregateFunc {
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
                 proptest_any::<LagLeadType>(),
+                proptest_any::<bool>(),
             )
-                .prop_map(|(order_by, lag_lead)| AggregateFunc::LagLead { order_by, lag_lead })
+                .prop_map(
+                    |(order_by, lag_lead, ignore_nulls)| AggregateFunc::LagLead {
+                        order_by,
+                        lag_lead,
+                        ignore_nulls,
+                    },
+                )
                 .boxed(),
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
@@ -1361,20 +1367,22 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into_proto()),
                 AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into_proto()),
                 AggregateFunc::RowNumber { order_by } => Kind::RowNumber(order_by.into_proto()),
+                AggregateFunc::Rank { order_by } => Kind::Rank(order_by.into_proto()),
                 AggregateFunc::DenseRank { order_by } => Kind::DenseRank(order_by.into_proto()),
-                AggregateFunc::LagLead { order_by, lag_lead } => {
-                    Kind::LagLead(proto_aggregate_func::ProtoLagLead {
-                        order_by: Some(order_by.into_proto()),
-                        lag_lead: Some(match lag_lead {
-                            LagLeadType::Lag => {
-                                proto_aggregate_func::proto_lag_lead::LagLead::Lag(())
-                            }
-                            LagLeadType::Lead => {
-                                proto_aggregate_func::proto_lag_lead::LagLead::Lead(())
-                            }
-                        }),
-                    })
-                }
+                AggregateFunc::LagLead {
+                    order_by,
+                    lag_lead,
+                    ignore_nulls,
+                } => Kind::LagLead(proto_aggregate_func::ProtoLagLead {
+                    order_by: Some(order_by.into_proto()),
+                    lag_lead: Some(match lag_lead {
+                        LagLeadType::Lag => proto_aggregate_func::proto_lag_lead::LagLead::Lag(()),
+                        LagLeadType::Lead => {
+                            proto_aggregate_func::proto_lag_lead::LagLead::Lead(())
+                        }
+                    }),
+                    ignore_nulls: *ignore_nulls,
+                }),
                 AggregateFunc::FirstValue {
                     order_by,
                     window_frame,
@@ -1460,6 +1468,9 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             Kind::RowNumber(order_by) => AggregateFunc::RowNumber {
                 order_by: order_by.into_rust()?,
             },
+            Kind::Rank(order_by) => AggregateFunc::Rank {
+                order_by: order_by.into_rust()?,
+            },
             Kind::DenseRank(order_by) => AggregateFunc::DenseRank {
                 order_by: order_by.into_rust()?,
             },
@@ -1478,6 +1489,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                         ))
                     }
                 },
+                ignore_nulls: pll.ignore_nulls,
             },
             Kind::FirstValue(pfv) => AggregateFunc::FirstValue {
                 order_by: pfv
@@ -1536,14 +1548,14 @@ impl AggregateFunc {
             AggregateFunc::MinDate => min_date(datums),
             AggregateFunc::MinTimestamp => min_timestamp(datums),
             AggregateFunc::MinTimestampTz => min_timestamptz(datums),
-            AggregateFunc::SumInt16 => sum_int16(datums),
-            AggregateFunc::SumInt32 => sum_int32(datums),
-            AggregateFunc::SumInt64 => sum_int64(datums),
-            AggregateFunc::SumUInt16 => sum_uint16(datums),
-            AggregateFunc::SumUInt32 => sum_uint32(datums),
-            AggregateFunc::SumUInt64 => sum_uint64(datums),
-            AggregateFunc::SumFloat32 => sum_float32(datums),
-            AggregateFunc::SumFloat64 => sum_float64(datums),
+            AggregateFunc::SumInt16 => sum_datum::<'a, I, i16, i64>(datums),
+            AggregateFunc::SumInt32 => sum_datum::<'a, I, i32, i64>(datums),
+            AggregateFunc::SumInt64 => sum_datum::<'a, I, i64, i128>(datums),
+            AggregateFunc::SumUInt16 => sum_datum::<'a, I, u16, u64>(datums),
+            AggregateFunc::SumUInt32 => sum_datum::<'a, I, u32, u64>(datums),
+            AggregateFunc::SumUInt64 => sum_datum::<'a, I, u64, u128>(datums),
+            AggregateFunc::SumFloat32 => sum_datum::<'a, I, f32, f32>(datums),
+            AggregateFunc::SumFloat64 => sum_datum::<'a, I, f64, f64>(datums),
             AggregateFunc::SumNumeric => sum_numeric(datums),
             AggregateFunc::Count => count(datums),
             AggregateFunc::Any => any(datums),
@@ -1556,11 +1568,13 @@ impl AggregateFunc {
             AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
             AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
             AggregateFunc::RowNumber { order_by } => row_number(datums, temp_storage, order_by),
+            AggregateFunc::Rank { order_by } => rank(datums, temp_storage, order_by),
             AggregateFunc::DenseRank { order_by } => dense_rank(datums, temp_storage, order_by),
             AggregateFunc::LagLead {
                 order_by,
                 lag_lead: lag_lead_type,
-            } => lag_lead(datums, temp_storage, order_by, lag_lead_type),
+                ignore_nulls,
+            } => lag_lead(datums, temp_storage, order_by, lag_lead_type, ignore_nulls),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -1633,50 +1647,15 @@ impl AggregateFunc {
                 }
             }
             AggregateFunc::StringAgg { .. } => ScalarType::String,
-            AggregateFunc::RowNumber { .. } => match input_type.scalar_type {
-                ScalarType::Record { ref fields, .. } => ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
-                        fields: vec![
-                            (
-                                ColumnName::from("?row_number?"),
-                                ScalarType::Int64.nullable(false),
-                            ),
-                            (ColumnName::from("?record?"), {
-                                let inner = match &fields[0].1.scalar_type {
-                                    ScalarType::List { element_type, .. } => element_type.clone(),
-                                    _ => unreachable!(),
-                                };
-                                inner.nullable(false)
-                            }),
-                        ],
-                        custom_id: None,
-                    }),
-                    custom_id: None,
-                },
-                _ => unreachable!(),
-            },
-            AggregateFunc::DenseRank { .. } => match input_type.scalar_type {
-                ScalarType::Record { ref fields, .. } => ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
-                        fields: vec![
-                            (
-                                ColumnName::from("?dense_rank?"),
-                                ScalarType::Int64.nullable(false),
-                            ),
-                            (ColumnName::from("?record?"), {
-                                let inner = match &fields[0].1.scalar_type {
-                                    ScalarType::List { element_type, .. } => element_type.clone(),
-                                    _ => unreachable!(),
-                                };
-                                inner.nullable(false)
-                            }),
-                        ],
-                        custom_id: None,
-                    }),
-                    custom_id: None,
-                },
-                _ => unreachable!(),
-            },
+            AggregateFunc::RowNumber { .. } => {
+                AggregateFunc::output_type_ranking_window_funcs(&input_type, "?row_number?")
+            }
+            AggregateFunc::Rank { .. } => {
+                AggregateFunc::output_type_ranking_window_funcs(&input_type, "?rank?")
+            }
+            AggregateFunc::DenseRank { .. } => {
+                AggregateFunc::output_type_ranking_window_funcs(&input_type, "?dense_rank?")
+            }
             AggregateFunc::LagLead { lag_lead, .. } => {
                 // The input type for Lag is a ((OriginalRow, EncodedArgs), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
@@ -1767,6 +1746,32 @@ impl AggregateFunc {
             _ => input_type.nullable,
         };
         scalar_type.nullable(nullable)
+    }
+
+    /// Compute output type for ROW_NUMBER, RANK, DENSE_RANK
+    fn output_type_ranking_window_funcs(input_type: &ColumnType, col_name: &str) -> ScalarType {
+        match input_type.scalar_type {
+            ScalarType::Record { ref fields, .. } => ScalarType::List {
+                element_type: Box::new(ScalarType::Record {
+                    fields: vec![
+                        (
+                            ColumnName::from(col_name),
+                            ScalarType::Int64.nullable(false),
+                        ),
+                        (ColumnName::from("?record?"), {
+                            let inner = match &fields[0].1.scalar_type {
+                                ScalarType::List { element_type, .. } => element_type.clone(),
+                                _ => unreachable!(),
+                            };
+                            inner.nullable(false)
+                        }),
+                    ],
+                    custom_id: None,
+                }),
+                custom_id: None,
+            },
+            _ => unreachable!(),
+        }
     }
 
     /// Returns true if the non-null constraint on the aggregation can be
@@ -1974,17 +1979,17 @@ fn generate_subscripts_array(
     match a.unwrap_array().dims().into_iter().nth(
         (dim - 1)
             .try_into()
-            .map_err(|_| EvalError::Int32OutOfRange)?,
+            .map_err(|_| EvalError::Int32OutOfRange((dim - 1).to_string()))?,
     ) {
         Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
             requested_dim
                 .lower_bound
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange)?,
+                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.lower_bound.to_string()))?,
             requested_dim
                 .length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange)?,
+                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string()))?,
             1,
         )?)),
         None => Ok(Box::new(iter::empty())),
@@ -2049,23 +2054,84 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
-            AggregateFunc::JsonbAgg { .. } => f.write_str("jsonb_agg"),
-            AggregateFunc::JsonbObjectAgg { .. } => f.write_str("jsonb_object_agg"),
-            AggregateFunc::ArrayConcat { .. } => f.write_str("array_agg"),
-            AggregateFunc::ListConcat { .. } => f.write_str("list_agg"),
-            AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
-            AggregateFunc::RowNumber { .. } => f.write_str("row_number"),
-            AggregateFunc::DenseRank { .. } => f.write_str("dense_rank"),
+            AggregateFunc::JsonbAgg { order_by } => {
+                write!(f, "jsonb_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::JsonbObjectAgg { order_by } => {
+                write!(
+                    f,
+                    "jsonb_object_agg[order_by=[{}]]",
+                    separated(", ", order_by)
+                )
+            }
+            AggregateFunc::ArrayConcat { order_by } => {
+                write!(f, "array_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::ListConcat { order_by } => {
+                write!(f, "list_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::StringAgg { order_by } => {
+                write!(f, "string_agg[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::RowNumber { order_by } => {
+                write!(f, "row_number[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::Rank { order_by } => {
+                write!(f, "rank[order_by=[{}]]", separated(", ", order_by))
+            }
+            AggregateFunc::DenseRank { order_by } => {
+                write!(f, "dense_rank[order_by=[{}]]", separated(", ", order_by))
+            }
             AggregateFunc::LagLead {
                 lag_lead: LagLeadType::Lag,
-                ..
-            } => f.write_str("lag"),
+                ignore_nulls,
+                order_by,
+            } => {
+                f.write_str("lag")?;
+                f.write_str("[")?;
+                if *ignore_nulls {
+                    f.write_str("ignore_nulls=true, ")?;
+                }
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                f.write_str("]")
+            }
             AggregateFunc::LagLead {
                 lag_lead: LagLeadType::Lead,
-                ..
-            } => f.write_str("lead"),
-            AggregateFunc::FirstValue { .. } => f.write_str("first_value"),
-            AggregateFunc::LastValue { .. } => f.write_str("last_value"),
+                ignore_nulls,
+                order_by,
+            } => {
+                f.write_str("lag")?;
+                f.write_str("[")?;
+                if *ignore_nulls {
+                    f.write_str("ignore_nulls=true, ")?;
+                }
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                f.write_str("]")
+            }
+            AggregateFunc::FirstValue {
+                order_by,
+                window_frame,
+            } => {
+                f.write_str("first_value")?;
+                f.write_str("[")?;
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                if *window_frame != WindowFrame::default() {
+                    write!(f, " {}", window_frame)?;
+                }
+                f.write_str("]")
+            }
+            AggregateFunc::LastValue {
+                order_by,
+                window_frame,
+            } => {
+                f.write_str("last_value")?;
+                f.write_str("[")?;
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                if *window_frame != WindowFrame::default() {
+                    write!(f, " {}", window_frame)?;
+                }
+                f.write_str("]")
+            }
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
@@ -2218,12 +2284,15 @@ pub enum TableFunc {
         width: usize,
     },
     GenerateSubscriptsArray,
+    TabletizedScalar {
+        name: String,
+        relation: RelationType,
+    },
 }
 
 impl RustType<ProtoTableFunc> for TableFunc {
     fn into_proto(&self) -> ProtoTableFunc {
-        use proto_table_func::Kind;
-        use proto_table_func::ProtoWrap;
+        use proto_table_func::{Kind, ProtoWrap};
 
         ProtoTableFunc {
             kind: Some(match self {
@@ -2244,6 +2313,12 @@ impl RustType<ProtoTableFunc> for TableFunc {
                     width: width.into_proto(),
                 }),
                 TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
+                TableFunc::TabletizedScalar { name, relation } => {
+                    Kind::TabletizedScalar(ProtoTabletizedScalar {
+                        name: name.into_proto(),
+                        relation: Some(relation.into_proto()),
+                    })
+                }
             }),
         }
     }
@@ -2277,6 +2352,12 @@ impl RustType<ProtoTableFunc> for TableFunc {
                 types: x.types.into_rust()?,
             },
             Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
+            Kind::TabletizedScalar(v) => TableFunc::TabletizedScalar {
+                name: v.name,
+                relation: v
+                    .relation
+                    .into_rust_if_some("ProtoTabletizedScalar::relation")?,
+            },
         })
     }
 }
@@ -2349,6 +2430,10 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
+            TableFunc::TabletizedScalar { .. } => {
+                let r = Row::pack_slice(datums);
+                Ok(Box::new(std::iter::once((r, 1))))
+            }
         }
     }
 
@@ -2445,6 +2530,9 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
+            TableFunc::TabletizedScalar { relation, .. } => {
+                return relation.clone();
+            }
         };
 
         if !keys.is_empty() {
@@ -2470,6 +2558,7 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
             TableFunc::Wrap { width, .. } => *width,
+            TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
         }
     }
 
@@ -2489,6 +2578,7 @@ impl TableFunc {
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
             TableFunc::Wrap { .. } => false,
+            TableFunc::TabletizedScalar { .. } => false,
         }
     }
 
@@ -2511,6 +2601,7 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::Wrap { .. } => true,
+            TableFunc::TabletizedScalar { .. } => false,
         }
     }
 }
@@ -2532,18 +2623,20 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
+            TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
+    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
+
     proptest! {
-       #[test]
+       #[mz_ore::test]
         fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
             assert!(actual.is_ok());
@@ -2552,7 +2645,7 @@ mod tests {
     }
 
     proptest! {
-       #[test]
+       #[mz_ore::test]
         fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
             assert!(actual.is_ok());

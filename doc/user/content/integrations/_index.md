@@ -13,7 +13,10 @@ aliases:
 
 [//]: # "TODO(morsapaes) Once #8396 lands, link the page here"
 
-Materialize is **wire-compatible** with PostgreSQL, which means it integrates with most client libraries, ORM frameworks and other third-party tools that support PostgreSQL. This page describes the status, level of support, and usage notes for commonly used and requested Materialize integrations and tools.
+Materialize is **wire-compatible** with PostgreSQL, which means it integrates
+with many SQL clients and other tools in the data ecosystem that support
+PostgreSQL. This page describes the status, level of support, and usage notes
+for commonly used and requested Materialize integrations and tools.
 
 {{< note >}}
 If there's a tool that you'd like to use with Materialize but is not listed, let us know by submitting a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
@@ -33,30 +36,30 @@ For listed tools that are not yet production-ready, you can register your intere
 
 ### Kafka
 
-Kafka is supported as a [**source**](/overview/key-concepts/#sources), with features like **upserts** and **Debezium** CDC, and as a [**sink**](/overview/key-concepts/#sinks) with **exactly-once** semantics.
+Kafka is supported as a [**source**](/get-started/key-concepts/#sources), with features like **upserts** and **Debezium** CDC, and as a [**sink**](/get-started/key-concepts/#sinks) with **exactly-once** semantics.
 
 | Service                               | Support level                   | Notes                                                                                                                                                                                                                                                                                                                                                      |             |
 | ------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | Apache Kafka                          | {{< supportLevel production >}} | See the [source](/sql/create-source/kafka/) and [sink](/sql/create-sink/kafka) documentation for more details.                                                                                                                                                                                                                                      |             |
-| Confluent Cloud                       | {{< supportLevel production >}} | Use [`SASL/PLAIN` authentication](/sql/create-connection/#kafka-sasl), to securely connect to a Confluent Cloud cluster. See the [Confluent Cloud guide](/integrations/confluent-cloud) for a step-by-step breakdown of the integration.                                                                                                                   |             |
+| Confluent Cloud                       | {{< supportLevel production >}} | Use [`SASL/PLAIN` authentication](/sql/create-connection/#kafka-auth-sasl-options), to securely connect to a Confluent Cloud cluster. See the [Confluent Cloud guide](/integrations/confluent-cloud) for a step-by-step breakdown of the integration.                                                                                                                   |             |
 | Amazon MSK (Managed Streaming for Apache Kafka) | {{< supportLevel production >}} | See the [source documentation](/sql/create-source/kafka/) for more details, and the [Amazon MSK guide](/integrations/aws-msk/) for a step-by-step breakdown of the integration.                                                                                                                                                                               |             |
 | Upstash Kafka                         | {{< supportLevel production >}} | See the [source documentation](/sql/create-source/kafka/) for more details, and the [Upstash Kafka guide](/integrations/upstash-kafka/) for a step-by-step breakdown of the integration.                                                                                                                                                                               |             |
-| Heroku Kafka                          | {{< supportLevel alpha >}}      | Use [`SSL` authentication](/sql/create-connection/#kafka-ssl) and the Heroku-provided provided keys and certificates for security, and the `KAFKA_URL` as the broker address (replacing `kafka+ssl://` with `ssl://`). Heroku is not supported as a sink yet ([#8378](https://github.com/MaterializeInc/materialize/issues/8378#issuecomment-1061317275)). | [](#notify) |
+| Heroku Kafka                          | {{< supportLevel alpha >}}      | Use [`SSL` authentication](/sql/create-connection/#kafka-auth-ssl-options) and the Heroku-provided provided keys and certificates for security, and the `KAFKA_URL` as the broker address (replacing `kafka+ssl://` with `ssl://`). Heroku is not supported as a sink yet ([#8378](https://github.com/MaterializeInc/materialize/issues/8378#issuecomment-1061317275)). | [](#notify) |
 
 ### Redpanda
 
-Being Kafka API-compatible, Redpanda is supported as a [**source**](/overview/key-concepts/#sources) and as a [**sink**](/overview/key-concepts/#sinks) at the same level and with the same features as Kafka.
+Being Kafka API-compatible, Redpanda is supported as a [**source**](/get-started/key-concepts/#sources) and as a [**sink**](/get-started/key-concepts/#sinks) at the same level and with the same features as Kafka.
 
 | Service        | Support level             | Notes                                                                                                                                                                                                                                                                                                                                 |             |
 | -------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | Redpanda       | {{< supportLevel beta >}} | See the [source](/sql/create-source/kafka/) and [sink](/sql/create-sink/kafka) documentation for more details.                                                                                                                                                                                                                 | [](#notify) |
-| Redpanda Cloud | {{< supportLevel beta >}} | Use [`SASL` authentication](/sql/create-connection/#kafka-sasl) to securely connect to Redpanda Cloud clusters. See the [Redpanda documentation](https://docs.redpanda.com/docs/security/acls/#acls) for more details, and the [Redpanda Cloud guide](/integrations/redpanda-cloud/) for a step-by-step breakdown of the integration. | [](#notify) |
+| Redpanda Cloud | {{< supportLevel beta >}} | Use [`SASL` authentication](/sql/create-connection/#kafka-auth-sasl-options) to securely connect to Redpanda Cloud clusters. See the [Redpanda documentation](https://docs.redpanda.com/docs/security/acls/#acls) for more details, and the [Redpanda Cloud guide](/integrations/redpanda-cloud/) for a step-by-step breakdown of the integration. | [](#notify) |
 
 ### Kinesis Data Streams
 
 | Service                  | Support level                    | Notes                                           |             |
 | ------------------------ | -------------------------------- | ----------------------------------------------- | ----------- |
-| AWS Kinesis Data Streams | {{< supportLevel in-progress >}} | Subscribe via “Notify Me” to register interest. | [](#notify) |
+| AWS Kinesis Data Streams | {{< supportLevel researching >}} | Subscribe via “Notify Me” to register interest. | [](#notify) |
 
 ### Other message brokers
 
@@ -74,24 +77,16 @@ Materialize can efficiently maintain real-time materialized views on top of **Ch
 
 ### PostgreSQL
 
-Postgres is supported as a [**source**](/overview/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
+PostgreSQL 11+ is supported as a [**source**](/get-started/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
 
 | Service                         | Support level                    | Notes                                                                                                                                                                                                                                                                                         |             |
 | ------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| PostgreSQL _(direct)_           | {{< supportLevel beta >}}        | See the [source documentation](/sql/create-source/postgres/) for more details, and the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) for a step-by-step breakdown of the integration.                                                                            | [](#notify) |
-| PostgreSQL _(via Debezium)_     | {{< supportLevel production >}}  | See the [PostgreSQL CDC guide](/integrations/cdc-postgres/#kafka--debezium) for a step-by-step breakdown of the integration.                                                                                                                                                                  | [](#notify) |
-| Amazon RDS for PostgreSQL       | {{< supportLevel beta >}}        | See the AWS RDS tab in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) for a step-by-step breakdown of the integration.                                                                                                                                                                                       | [](#notify) |
-| GCP Cloud SQL for PostgreSQL    | {{< supportLevel beta >}}        | See the Cloud SQL tab in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) for a step-by-step breakdown of the integration.                                                                                                                                                                              | [](#notify) |
-| Amazon Aurora                   | {{< supportLevel beta >}}        | See the AWS Aurora tab in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) for a step-by-step breakdown of the integration.                                                                                                                                                                                 | [](#notify) |
-| Amazon Aurora Serverless        | {{< supportLevel researching >}} | Aurora serverless v1 does [not support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) logical replication, which is required for PostgreSQL CDC.                                                                         | [](#notify) |
-| Heroku Postgres                 | {{< supportLevel researching >}} | Heroku Postgres does not support logical replication, which is required for PostgreSQL CDC. Heroku provides [Heroku Data Connectors](https://devcenter.heroku.com/articles/heroku-data-connectors) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
-| Azure Database for PostgreSQL   | {{< supportLevel beta >}}        | See the Azure DB tab in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) for a step-by-step breakdown of the integration.                                                                                                                                                                            | [](#notify) |
-| DigitalOcean Managed PostgreSQL | {{< supportLevel beta >}}        | Logical replication is enabled by default. See the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) for a step-by-step breakdown of the integration.                                                                                                                                                                  | [](#notify) |
-| CrunchyBridge Postgres          | {{< supportLevel beta >}}        | Logical replication is enabled by default. See the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) for a step-by-step breakdown of the integration.                                                                                                                | [](#notify) |     |
+| PostgreSQL _(direct)_           | {{< supportLevel production >}}        | See the [source documentation](/sql/create-source/postgres/) for more details, and the relevant integration guide for step-by-step instructions:<p></p><ul><li>[Amazon RDS for PostgreSQL](/ingest-data/postgres-amazon-rds)</li><li>[Amazon Aurora for PostgreSQL](/ingest-data/postgres-amazon-aurora)</li><li>[Azure DB for PostgreSQL](/ingest-data/postgres-azure-db)</li><li>[Google Cloud SQL for PostgreSQL](/ingest-data/postgres-google-cloud-sql)</li><li>[Self-hosted PostgreSQL](/ingest-data/postgres-self-hosted)</li></ul> |
+| PostgreSQL _(via Debezium)_     | {{< supportLevel production >}}  | See the [PostgreSQL guide](/ingest-data/cdc-postgres-kafka-debezium/) for a step-by-step breakdown of the integration. |
 
 ### MySQL
 
-MySQL is indirectly supported as a [**source**](/overview/key-concepts/#sources) through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a MySQL instance as a source requires enabling **row-based replication**.
+MySQL is indirectly supported as a [**source**](/get-started/key-concepts/#sources) through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a MySQL instance as a source requires enabling **row-based replication**.
 
 | Service                | Support level                    | Notes                                                                                                |             |
 | ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------- |
@@ -109,7 +104,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 | Service                     | Support level                    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                        |             |
 | --------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | MongoDB _(via Debezium)_    | {{< supportLevel researching >}} | Not supported yet {{% gh 7289 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                                                                                                                                                           | [](#notify) |
-| SQL Server _(via Debezium)_ | {{< supportLevel alpha >}}       | Supported with [known limitations](https://materializecommunity.slack.com/archives/C0157GZ7UKF/p1646142131506359) unrelated to Materialize. See the [Debezium documentation](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html) for details on how to configure a SQL Server instance for [CDC](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html#sqlserver-overview). | [](#notify) |
+| SQL Server _(via Debezium)_ | {{< supportLevel alpha >}}       | Supported with known limitations {{% gh 8054 %}}. See the [Debezium documentation](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html) for details on how to configure a SQL Server instance for [CDC](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html#sqlserver-overview). | [](#notify) |
 
 👋 _Is there another database you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
@@ -119,7 +114,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 | Service              | Support level                    | Notes                                                                                                                                                                                                            |             |
 | -------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| Amazon S3            | {{< supportLevel in-progress >}} | Subscribe via “Notify Me” to register interest.                                                                                                                                                                  | [](#notify) |
+| Amazon S3            | {{< supportLevel researching >}} | Subscribe via “Notify Me” to register interest.                                                                                                                                                                  | [](#notify) |
 | MinIO Object Storage | {{< supportLevel researching >}} | Not supported yet {{% gh 6568 %}}. <br> MinIO provides a [S3-compatible API](https://min.io/product/s3-compatibility) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
 
 ### Other object storage services
@@ -131,7 +126,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 👋 _Is there another object storage tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
-## Database management tools
+## Database and infrastructure management tools
 
 ### dbt
 
@@ -146,12 +141,28 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 
 | Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
 | ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| psql         | {{< supportLevel production >}}  | See [SQL Clients](/integrations/#sql-clients) for more details. Some backslash meta-commands are not yet supported {{% gh 9721 %}}.
 | DBeaver      | {{< supportLevel production >}}  | Connect using the [PostgreSQL database driver](https://hevodata.com/learn/dbeaver-postgresql/#a5).                                                                                                                                                                                |             |
 | DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/) with [introspection disabled](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760-How-to-turn-off-automatic-database-introspection-in-Datagrip). |             |
 | pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                | [](#notify) |
 | TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html).                                                                                                                                                                  | [](#notify) |
 
 👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+
+### Terraform
+
+Materialize maintains a
+[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you safely and predictably provision and manage connections, sources, and other database objects.
+
+Materialize also maintains several [Terraform modules](https://registry.terraform.io/namespaces/MaterializeInc) to help manage your other
+cloud resources. Modules allow you to bypass manually configuring cloud
+resources and are an efficient way of deploying essential infrastructure for
+your organization.
+
+{{< note >}}
+While Materialize offers support for its provider, Materialize does not offer
+support for these modules.
+{{</ note >}}
 
 ## Client libraries and ORMs
 
@@ -213,7 +224,7 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service | Support level              | Notes                                                                           |             |
 | ------- | -------------------------- | ------------------------------------------------------------------------------- | ----------- |
-| Cube.js | {{< supportLevel alpha >}} | Connect using the [Materialize driver](https://cube.dev/docs/config/databases). | [](#notify) |
+| Cube.js | {{< supportLevel alpha >}} | Connect using the [Materialize driver](https://cube.dev/docs/config/databases). See the [Cube guide](/integrations/cube) for a step-by-step breakdown of the integration. | [](#notify) |
 
 ### Reverse ETL
 

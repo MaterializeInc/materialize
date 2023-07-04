@@ -10,16 +10,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use serde::Deserialize;
-
+use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
+use mz_orchestrator::MemoryLimit;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
+use serde::Deserialize;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;
@@ -31,8 +35,8 @@ pub struct Config<'a> {
     pub storage: storage::Connection,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
-    /// Whether to enable persisted introspection sources.
-    pub persisted_introspection: bool,
+    /// Whether the build is a local dev build.
+    pub all_features: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
@@ -47,9 +51,8 @@ pub struct Config<'a> {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
     pub default_storage_cluster_size: Option<String>,
-    /// Values to set for system parameters, if those system parameters have not
-    /// already been set by the system user.
-    pub bootstrap_system_parameters: BTreeMap<String, String>,
+    /// Dynamic defaults for system parameters.
+    pub system_parameter_defaults: BTreeMap<String, String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// A handle to a secrets manager that can only read secrets.
@@ -64,12 +67,27 @@ pub struct Config<'a> {
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    /// How long to retain storage usage records
+    pub storage_usage_retention_period: Option<Duration>,
+    /// Needed only for migrating PG source column metadata. If `None`, will
+    /// skip any migrations that require it, which will likely cause tests to
+    /// fail.
+    ///
+    /// TODO(migration): delete in version v.51 (released in v0.49 + 1
+    /// additional release)
+    pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
+    /// Global connection limit and count
+    pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
+    // Used for testing and local purposes. This default value should not be used in production.
+    //
+    // Credits per hour are calculated as being equal to scale. This is not necessarily how the
+    // value is computed in production.
     fn default() -> Self {
         // {
         //     "1": {"scale": 1, "workers": 1},
@@ -87,17 +105,22 @@ impl Default for ClusterReplicaSizeMap {
         //     "2-1": {"scale": 2, "workers": 1},
         //     ...
         //     "16-1": {"scale": 16, "workers": 1},
+        //     /// Used in the cloudtest tests that force OOMs
+        //     "mem-2": { "memory_limit": 2Gb },
+        //     ...
+        //     "mem-16": { "memory_limit": 16Gb },
         // }
         let mut inner = (0..=5)
             .map(|i| {
-                let workers = 1 << i;
+                let workers: u8 = 1 << i;
                 (
                     workers.to_string(),
                     ReplicaAllocation {
                         memory_limit: None,
                         cpu_limit: None,
                         scale: 1,
-                        workers,
+                        workers: workers.into(),
+                        credits_per_hour: 1.into(),
                     },
                 )
             })
@@ -112,6 +135,7 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: 1,
+                    credits_per_hour: scale.into(),
                 },
             );
 
@@ -122,6 +146,18 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: scale.into(),
+                    credits_per_hour: scale.into(),
+                },
+            );
+
+            inner.insert(
+                format!("mem-{scale}"),
+                ReplicaAllocation {
+                    memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
+                    cpu_limit: None,
+                    scale: 1,
+                    workers: 8,
+                    credits_per_hour: 1.into(),
                 },
             );
         }
@@ -133,6 +169,7 @@ impl Default for ClusterReplicaSizeMap {
                 cpu_limit: None,
                 scale: 2,
                 workers: 4,
+                credits_per_hour: 2.into(),
             },
         );
         Self(inner)

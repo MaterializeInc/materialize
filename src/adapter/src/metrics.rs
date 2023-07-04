@@ -7,14 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
-
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use mz_sql::ast::{AstInfo, Statement, StatementKind};
-
-use crate::session::Session;
+use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
+use mz_sql::session::user::User;
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -25,6 +23,8 @@ pub struct Metrics {
     pub determine_timestamp: IntCounterVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: HistogramVec,
+    pub subscribe_outputs: IntCounterVec,
+    pub canceled_peeks: IntCounterVec,
 }
 
 impl Metrics {
@@ -58,19 +58,28 @@ impl Metrics {
             commands: registry.register(metric!(
                 name: "mz_adapter_commands",
                 help: "The total number of adapter commands issued of the given type since process start.",
-                var_labels: ["command_type", "status"],
+                var_labels: ["command_type", "status", "application_name"],
             )),
             storage_usage_collection_time_seconds: registry.register(metric!(
                 name: "mz_storage_usage_collection_time_seconds",
                 help: "The number of seconds the coord spends collecting usage metrics from storage.",
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
-            ))
+            )),
+            subscribe_outputs: registry.register(metric!(
+                name: "mz_subscribe_outputs",
+                help: "The total number of different subscribe outputs used",
+                var_labels: ["session_type", "subscribe_output"],
+            )),
+            canceled_peeks: registry.register(metric!(
+                name: "mz_canceled_peeks_total",
+                help: "The total number of canceled peeks since process start.",
+            )),
         }
     }
 }
 
-pub(crate) fn session_type_label_value(session: &Session) -> &'static str {
-    match session.is_system() {
+pub(crate) fn session_type_label_value(user: &User) -> &'static str {
+    match user.is_internal() {
         true => "system",
         false => "user",
     }
@@ -102,22 +111,21 @@ where
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
+        StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterIndex => "alter_index",
+        StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
         StatementKind::AlterSink => "alter_sink",
         StatementKind::AlterSource => "alter_source",
         StatementKind::AlterSystemSet => "alter_system_set",
         StatementKind::AlterSystemReset => "alter_system_reset",
         StatementKind::AlterSystemResetAll => "alter_system_reset_all",
+        StatementKind::AlterOwner => "alter_owner",
         StatementKind::AlterConnection => "alter_connection",
         StatementKind::Discard => "discard",
-        StatementKind::DropDatabase => "drop_database",
-        StatementKind::DropSchema => "drop_schema",
         StatementKind::DropObjects => "drop_objects",
-        StatementKind::DropRoles => "drop_roles",
-        StatementKind::DropClusters => "drop_clusters",
-        StatementKind::DropClusterReplicas => "drop_cluster_replicas",
+        StatementKind::DropOwned => "drop_owned",
         StatementKind::SetVariable => "set_variable",
         StatementKind::ResetVariable => "reset_variable",
         StatementKind::Show => "show",
@@ -134,5 +142,24 @@ where
         StatementKind::Execute => "execute",
         StatementKind::Deallocate => "deallocate",
         StatementKind::Raise => "raise",
+        StatementKind::GrantRole => "grant_role",
+        StatementKind::RevokeRole => "revoke_role",
+        StatementKind::GrantPrivileges => "grant_privileges",
+        StatementKind::RevokePrivileges => "revoke_privileges",
+        StatementKind::AlterDefaultPrivileges => "alter_default_privileges",
+        StatementKind::ReassignOwned => "reassign_owned",
+        StatementKind::ValidateConnection => "validate_connection",
+    }
+}
+
+pub(crate) fn subscribe_output_label_value<T>(output: &SubscribeOutput<T>) -> &'static str
+where
+    T: AstInfo,
+{
+    match output {
+        SubscribeOutput::Diffs => "diffs",
+        SubscribeOutput::WithinTimestampOrderBy { .. } => "within_timestamp_order_by",
+        SubscribeOutput::EnvelopeUpsert { .. } => "envelope_upsert",
+        SubscribeOutput::EnvelopeDebezium { .. } => "envelope_debezium",
     }
 }

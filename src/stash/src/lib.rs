@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,21 +79,42 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use futures::Future;
 use mz_ore::soft_assert;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use mz_proto::{RustType, TryFromProtoError};
 use timely::progress::Antichain;
+
+pub mod objects;
 
 mod postgres;
 mod transaction;
 
+// TODO(parkmycar): This shouldn't be public, but it is for now to prevent dead code warnings.
+pub mod upgrade;
+
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
-pub use crate::transaction::Transaction;
+pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
+
+/// The current version of the [`Stash`].
+///
+/// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
+/// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
+/// change, we need to bump this version.
+pub const STASH_VERSION: u64 = 25;
+
+/// The minimum [`Stash`] version number that we support migrating from.
+///
+/// After bumping this we can delete the old migrations.
+pub const MIN_STASH_VERSION: u64 = 13;
+
+/// The key within the Config Collection that stores the version of the Stash.
+pub const USER_VERSION_KEY: &str = "user_version";
+pub const COLLECTION_CONFIG: TypedCollection<
+    objects::proto::ConfigKey,
+    objects::proto::ConfigValue,
+> = TypedCollection::new("config");
 
 pub type Diff = i64;
 pub type Timestamp = i64;
@@ -103,9 +122,8 @@ pub type Id = i64;
 
 // A common trait for uses of K and V to express in a single place all of the
 // traits required by async_trait and StashCollection.
-pub trait Data: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync {}
-
-impl<T: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync> Data for T {}
+pub trait Data: prost::Message + Default + Ord + Send + Sync {}
+impl<T: prost::Message + Default + Ord + Send + Sync> Data for T {}
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
 /// state of the collection is durable.
@@ -183,15 +201,21 @@ pub struct StashError {
 }
 
 impl StashError {
-    /// Reports whether the error is unrecoverable (retrying will never
-    /// succeed).
+    /// Reports whether the error is unrecoverable (retrying will never succeed,
+    /// or a retry is not safe due to an indeterminate state).
     pub fn is_unrecoverable(&self) -> bool {
-        matches!(self.inner, InternalStashError::Fence(_))
+        match &self.inner {
+            InternalStashError::Fence(_) => true,
+            _ => false,
+        }
     }
 
-    /// Reports whether the error is a fence error.
-    pub fn is_fence(&self) -> bool {
-        matches!(self.inner, InternalStashError::Fence(_))
+    /// Reports whether the error can be recovered if we opened the stash in writeable
+    pub fn can_recover_with_write_mode(&self) -> bool {
+        match &self.inner {
+            InternalStashError::StashNotWritable(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -200,6 +224,11 @@ enum InternalStashError {
     Postgres(::tokio_postgres::Error),
     Fence(String),
     PeekSinceUpper(String),
+    IncompatibleVersion(u64),
+    Proto(TryFromProtoError),
+    Decoding(prost::DecodeError),
+    Uninitialized,
+    StashNotWritable(String),
     Other(String),
 }
 
@@ -208,8 +237,15 @@ impl fmt::Display for StashError {
         f.write_str("stash error: ")?;
         match &self.inner {
             InternalStashError::Postgres(e) => write!(f, "postgres: {e}"),
+            InternalStashError::Proto(e) => write!(f, "proto: {e}"),
+            InternalStashError::Decoding(e) => write!(f, "prost decoding: {e}"),
             InternalStashError::Fence(e) => f.write_str(e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(e),
+            InternalStashError::IncompatibleVersion(v) => {
+                write!(f, "incompatible Stash version {v}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}")
+            }
+            InternalStashError::Uninitialized => write!(f, "uninitialized"),
+            InternalStashError::StashNotWritable(e) => f.write_str(e),
             InternalStashError::Other(e) => f.write_str(e),
         }
     }
@@ -223,10 +259,18 @@ impl From<InternalStashError> for StashError {
     }
 }
 
-impl From<serde_json::Error> for StashError {
-    fn from(e: serde_json::Error) -> StashError {
+impl From<prost::DecodeError> for StashError {
+    fn from(e: prost::DecodeError) -> Self {
         StashError {
-            inner: InternalStashError::Other(e.to_string()),
+            inner: InternalStashError::Decoding(e),
+        }
+    }
+}
+
+impl From<TryFromProtoError> for StashError {
+    fn from(e: TryFromProtoError) -> Self {
+        StashError {
+            inner: InternalStashError::Proto(e),
         }
     }
 }
@@ -249,6 +293,14 @@ impl From<&str> for StashError {
 
 impl From<std::io::Error> for StashError {
     fn from(e: std::io::Error) -> StashError {
+        StashError {
+            inner: InternalStashError::Other(e.to_string()),
+        }
+    }
+}
+
+impl From<anyhow::Error> for StashError {
+    fn from(e: anyhow::Error) -> Self {
         StashError {
             inner: InternalStashError::Other(e.to_string()),
         }
@@ -291,7 +343,7 @@ pub struct AppendBatch {
     pub lower: Antichain<Timestamp>,
     pub upper: Antichain<Timestamp>,
     pub timestamp: Timestamp,
-    pub entries: Vec<((Value, Value), Timestamp, Diff)>,
+    pub entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
 }
 
 impl<K, V> StashCollection<K, V> {
@@ -337,9 +389,9 @@ where
     V: Data,
 {
     pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
-        let key = serde_json::to_value(key).expect("must serialize");
-        let value = serde_json::to_value(value).expect("must serialize");
-        batch.entries.push(((key, value), batch.timestamp, diff));
+        let key = key.encode_to_vec();
+        let val = value.encode_to_vec();
+        batch.entries.push(((key, val), batch.timestamp, diff));
     }
 }
 
@@ -377,22 +429,6 @@ where
     K: Data,
     V: Data,
 {
-    pub async fn transact<F, Fut, T>(&self, stash: &mut Stash, f: F) -> Result<T, StashError>
-    where
-        F: Fn(Transaction, StashCollection<K, V>) -> Fut + Clone + Send + Sync + 'static,
-        Fut: Future<Output = Result<T, StashError>> + Send,
-    {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                let f = f.clone();
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    f(tx, collection).await
-                })
-            })
-            .await
-    }
     pub async fn make_batch(
         &self,
         stash: &mut Stash,
@@ -412,6 +448,10 @@ where
 
     pub async fn get(&self, stash: &mut Stash) -> Result<StashCollection<K, V>, StashError> {
         stash.collection(self.name).await
+    }
+
+    pub async fn from_tx(&self, tx: &Transaction<'_>) -> Result<StashCollection<K, V>, StashError> {
+        tx.collection(self.name).await
     }
 
     pub async fn upper(&self, stash: &mut Stash) -> Result<Antichain<Timestamp>, StashError> {
@@ -441,10 +481,7 @@ where
             .await
     }
 
-    pub async fn peek(&self, stash: &mut Stash) -> Result<Vec<(K, V, Diff)>, StashError>
-    where
-        K: Hash,
-    {
+    pub async fn peek(&self, stash: &mut Stash) -> Result<Vec<(K, V, Diff)>, StashError> {
         let name = self.name;
         stash
             .with_transaction(move |tx| {
@@ -456,10 +493,7 @@ where
             .await
     }
 
-    pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError>
-    where
-        K: Hash,
-    {
+    pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError> {
         let name = self.name;
         stash
             .with_transaction(move |tx| {
@@ -552,7 +586,7 @@ where
     where
         I: IntoIterator<Item = (K, V)>,
         // TODO: Figure out if it's possible to remove the 'static bounds.
-        K: Clone + Hash + 'static,
+        K: Clone + 'static,
         V: Clone + 'static,
     {
         let name = self.name;
@@ -651,7 +685,7 @@ where
     pub async fn upsert<I>(&self, stash: &mut Stash, entries: I) -> Result<(), StashError>
     where
         I: IntoIterator<Item = (K, V)>,
-        K: Hash + 'static,
+        K: 'static,
         V: 'static,
     {
         let name = self.name;
@@ -701,7 +735,7 @@ where
     pub async fn delete<P>(&self, stash: &mut Stash, predicate: P) -> Result<(), StashError>
     where
         P: Fn(&K, &V) -> bool + Clone + Sync + Send + 'static,
-        K: Hash + Clone,
+        K: Clone,
         V: Clone,
     {
         let name = self.name;
@@ -739,6 +773,53 @@ where
             .await
     }
 
+    /// Transactionally deletes any kv pair from `self` whose key is in `keys`.
+    ///
+    /// Note that:
+    /// - Unlike `delete`, this operation operates in time O(keys), and not
+    ///   O(set), however does so by parallelizing a number of point queries so
+    ///   is likely not performant for more than 10-or-so keys.
+    /// - This operation runs in a single transaction and cannot be combined
+    ///   with other transactions.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn delete_keys(&self, stash: &mut Stash, keys: BTreeSet<K>) -> Result<(), StashError>
+    where
+        K: Clone + 'static,
+        V: Clone,
+    {
+        use futures::StreamExt;
+
+        let name = self.name.to_string();
+        stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let collection = tx.collection::<K, V>(&name).await?;
+                    let lower = tx.upper(collection.id).await?;
+                    let mut batch = collection.make_batch_lower(lower)?;
+
+                    let tx = &tx;
+
+                    let kv_results: Vec<(K, Result<Option<V>, StashError>)> =
+                        futures::stream::iter(keys.into_iter())
+                            .map(|key| async move {
+                                (key.clone(), tx.peek_key_one(collection.clone(), &key).await)
+                            })
+                            .buffer_unordered(10)
+                            .collect()
+                            .await;
+
+                    for (key, val) in kv_results {
+                        if let Some(v) = val? {
+                            collection.append_to_batch(&mut batch, &key, &v, -1);
+                        }
+                    }
+                    tx.append(vec![batch]).await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
     /// Transactionally updates values in all KV pairs using `transform`.
     ///
     /// Note that this operation:
@@ -749,7 +830,7 @@ where
     pub async fn update<T>(&self, stash: &mut Stash, transform: T) -> Result<(), StashError>
     where
         T: Fn(&K, &V) -> Option<V> + Clone + Sync + Send + 'static,
-        K: Hash + Clone,
+        K: Clone,
         V: Clone,
     {
         let name = self.name;
@@ -811,23 +892,43 @@ pub struct TableTransaction<K, V> {
 
 impl<K, V> TableTransaction<K, V>
 where
-    K: Ord + Eq + Hash + Clone,
+    K: Ord + Eq + Clone,
     V: Ord + Clone,
 {
-    /// Create a new TableTransaction with initial data.
-    /// `uniqueness_violation` is a function whether there is a
-    /// uniqueness violation among two values.
-    pub fn new(initial: BTreeMap<K, V>, uniqueness_violation: fn(a: &V, b: &V) -> bool) -> Self {
-        Self {
+    /// Create a new TableTransaction with initial data. `uniqueness_violation` is a function
+    /// whether there is a uniqueness violation among two values.
+    ///
+    /// Internally the [`Stash`] serializes data as protobuf. All fields in a proto message are
+    /// optional, which makes using them in Rust cumbersome. Generic parameters `KP` and `VP` are
+    /// protobuf types which deserialize to `K` and `V` that a [`TableTransaction`] is generic
+    /// over.
+    pub fn new<KP, VP>(
+        initial: BTreeMap<KP, VP>,
+        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+    ) -> Result<Self, TryFromProtoError>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
+        let initial = initial
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
             initial,
             pending: BTreeMap::new(),
             uniqueness_violation,
-        }
+        })
     }
 
     /// Consumes and returns the pending changes and their diffs. `Diff` is
     /// guaranteed to be 1 or -1.
-    pub fn pending(self) -> Vec<(K, V, Diff)> {
+    pub fn pending<KP, VP>(self) -> Vec<(KP, VP, Diff)>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
         soft_assert!(self.verify().is_ok());
         // Pending describes the desired final state for some keys. K,V pairs should be
         // retracted if they already exist and were deleted or are being updated.
@@ -850,6 +951,7 @@ where
                 }
             })
             .flatten()
+            .map(|(key, val, diff)| (key.into_proto(), val.into_proto(), diff))
             .collect()
     }
 
@@ -960,6 +1062,37 @@ where
         }
     }
 
+    /// Migrates k, v pairs. `f` is a function that can return `Some((K, V))` if the key and value should
+    /// be updated, otherwise `None`. Returns the number of changed entries.
+    ///
+    /// Returns an error if the uniqueness check failed.
+    pub fn migrate<F: Fn(&K, &V) -> Option<(K, V)>>(&mut self, f: F) -> Result<Diff, StashError> {
+        let mut changed = 0;
+        // Keep a copy of pending in case of uniqueness violation.
+        let pending = self.pending.clone();
+        self.for_values_mut(|p, k, v| {
+            if let Some((new_k, new_v)) = f(k, v) {
+                changed += 1;
+
+                // If the key has changed, delete the old entry.
+                if *k != new_k {
+                    p.insert(k.clone(), None);
+                }
+
+                // Insert the new key and value.
+                p.insert(new_k, Some(new_v));
+            }
+        });
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            // Reset our pending set if we have a violation.
+            self.pending = pending;
+            Err(err)
+        } else {
+            Ok(changed)
+        }
+    }
+
     /// Set the value for a key. Returns the previous entry if the key existed,
     /// otherwise None.
     ///
@@ -1012,73 +1145,4 @@ where
         soft_assert!(self.verify().is_ok());
         deleted
     }
-}
-
-/// Helper function to consolidate `serde_json::Value`. `Value` doesn't
-/// implement `Ord` which is required by `consolidate`, so we must serialize and
-/// deserialize through bytes.
-fn consolidate<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Diff)>,
-{
-    // This assumes the to bytes representation is deterministic. The current
-    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
-    // guarantee.
-    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
-    let mut rows = rows
-        .into_iter()
-        .map(|((key, value), diff)| {
-            let key = serde_json::to_vec(&key).expect("must serialize");
-            let value = serde_json::to_vec(&value).expect("must serialize");
-            ((key, value), diff)
-        })
-        .collect();
-    differential_dataflow::consolidation::consolidate(&mut rows);
-    rows.into_iter().map(|((key, value), diff)| {
-        let key = serde_json::from_slice(&key).expect("must deserialize");
-        let value = serde_json::from_slice(&value).expect("must deserialize");
-        ((key, value), diff)
-    })
-}
-
-/// Helper function to consolidate `serde_json::Value` updates. `Value` doesn't
-/// implement `Ord` which is required by `consolidate_updates`, so we must
-/// serialize and deserialize through bytes.
-fn consolidate_updates<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Timestamp, Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
-{
-    // This assumes the to bytes representation is deterministic. The current
-    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
-    // guarantee.
-    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
-    let mut rows = rows
-        .into_iter()
-        .map(|((key, value), ts, diff)| {
-            let key = serde_json::to_vec(&key).expect("must serialize");
-            let value = serde_json::to_vec(&value).expect("must serialize");
-            ((key, value), ts, diff)
-        })
-        .collect();
-    differential_dataflow::consolidation::consolidate_updates(&mut rows);
-    rows.into_iter().map(|((key, value), ts, diff)| {
-        let key = serde_json::from_slice(&key).expect("must deserialize");
-        let value = serde_json::from_slice(&value).expect("must deserialize");
-        ((key, value), ts, diff)
-    })
-}
-
-fn consolidate_updates_kv<K, V, I>(rows: I) -> impl Iterator<Item = ((K, V), Timestamp, Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
-    K: Data,
-    V: Data,
-{
-    consolidate_updates(rows)
-        .into_iter()
-        .map(|((key, value), ts, diff)| {
-            let key: K = serde_json::from_value(key).expect("must deserialize");
-            let value: V = serde_json::from_value(value).expect("must deserialize");
-            ((key, value), ts, diff)
-        })
 }

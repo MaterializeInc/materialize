@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -75,6 +73,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -83,21 +82,9 @@ use std::time::Duration;
 use std::{env, thread};
 
 use anyhow::anyhow;
-use once_cell::sync::Lazy;
-use postgres::error::DbError;
-use postgres::tls::{MakeTlsConnect, TlsConnect};
-use postgres::types::{FromSql, Type};
-use postgres::{NoTls, Socket};
-use regex::Regex;
-use tempfile::TempDir;
-use tokio::runtime::Runtime;
-use tokio_postgres::config::Host;
-use tokio_postgres::Client;
-use tower_http::cors::AllowOrigin;
-
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
@@ -108,15 +95,31 @@ use mz_ore::tracing::{
     TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, PersistParameters};
+use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
-use tracing_subscriber::filter::Targets;
+use once_cell::sync::Lazy;
+use postgres::error::DbError;
+use postgres::tls::{MakeTlsConnect, TlsConnect};
+use postgres::types::{FromSql, Type};
+use postgres::{NoTls, Socket};
+use regex::Regex;
+use tempfile::TempDir;
+use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
+use tokio_postgres::config::Host;
+use tokio_postgres::Client;
+use tokio_stream::wrappers::TcpListenerStream;
+use tower_http::cors::AllowOrigin;
+use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
+use url::Url;
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -131,10 +134,14 @@ pub struct Config {
     now: NowFn,
     seed: u32,
     storage_usage_collection_interval: Duration,
+    storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
     builtin_cluster_replica_size: String,
     propagate_crashes: bool,
     enable_tracing: bool,
+    bootstrap_role: Option<String>,
+    deploy_generation: Option<u64>,
+    waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
 }
 
 impl Default for Config {
@@ -148,10 +155,14 @@ impl Default for Config {
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
             builtin_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
             enable_tracing: false,
+            bootstrap_role: Some("materialize".into()),
+            deploy_generation: None,
+            waiting_on_leader_promotion: None,
         }
     }
 }
@@ -162,14 +173,8 @@ impl Config {
         self
     }
 
-    pub fn with_tls(
-        mut self,
-        mode: TlsMode,
-        cert_path: impl Into<PathBuf>,
-        key_path: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn with_tls(mut self, cert_path: impl Into<PathBuf>, key_path: impl Into<PathBuf>) -> Self {
         self.tls = Some(mz_environmentd::TlsConfig {
-            mode,
             cert: cert_path.into(),
             key: key_path.into(),
         });
@@ -204,6 +209,14 @@ impl Config {
         self
     }
 
+    pub fn with_storage_usage_retention_period(
+        mut self,
+        storage_usage_retention_period: Duration,
+    ) -> Self {
+        self.storage_usage_retention_period = Some(storage_usage_retention_period);
+        self
+    }
+
     pub fn with_default_cluster_replica_size(
         mut self,
         default_cluster_replica_size: String,
@@ -227,6 +240,24 @@ impl Config {
 
     pub fn with_enable_tracing(mut self, enable_tracing: bool) -> Self {
         self.enable_tracing = enable_tracing;
+        self
+    }
+
+    pub fn with_bootstrap_role(mut self, bootstrap_role: Option<String>) -> Self {
+        self.bootstrap_role = bootstrap_role;
+        self
+    }
+
+    pub fn with_deploy_generation(mut self, deploy_generation: Option<u64>) -> Self {
+        self.deploy_generation = deploy_generation;
+        self
+    }
+
+    pub fn with_waiting_on_leader_promotion(
+        mut self,
+        waiting_on_leader_promotion: Option<mpsc::Sender<SocketAddr>>,
+    ) -> Self {
+        self.waiting_on_leader_promotion = waiting_on_leader_promotion;
         self
     }
 }
@@ -276,6 +307,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             command_wrapper: vec![],
             propagate_crashes: config.propagate_crashes,
             tcp_proxy: None,
+            scratch_directory: None,
         }))?,
     );
     // Messing with the clock causes persist to expire leases, causing hangs and
@@ -285,7 +317,36 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Tune down the number of connections to make this all work a little easier
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
-    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
+    // Stress persist more by writing rollups frequently
+    let mut persist_parameters = PersistParameters::default();
+    persist_parameters.rollup_threshold = Some(5);
+    persist_parameters.apply(&persist_cfg);
+
+    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
+    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+    let persist_pubsub_tcp_listener = runtime
+        .block_on(TcpListener::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        )))
+        .expect("pubsub addr binding");
+    let persist_pubsub_server_port = persist_pubsub_tcp_listener
+        .local_addr()
+        .expect("pubsub addr has local addr")
+        .port();
+    let _persist_pubsub_server = {
+        let _tokio_guard = runtime.enter();
+        mz_ore::task::spawn(|| "persist_pubsub_server", async move {
+            persist_pubsub_server
+                .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
+                .await
+                .expect("success")
+        });
+    };
+    let persist_clients = {
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client)
+    };
     let persist_clients = Arc::new(persist_clients);
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
@@ -295,12 +356,12 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             service_name: "environmentd",
             stderr_log: StderrLogConfig {
                 format: StderrLogFormat::Json,
-                filter: Targets::default(),
+                filter: EnvFilter::default(),
             },
             opentelemetry: Some(OpenTelemetryConfig {
                 endpoint: "http://fake_address_for_testing:8080".to_string(),
                 headers: http::HeaderMap::new(),
-                filter: Targets::default().with_default(tracing_core::Level::DEBUG),
+                filter: EnvFilter::default().add_directive("debug".parse().expect("directive")),
                 resource: opentelemetry::sdk::resource::Resource::default(),
                 start_enabled: true,
             }),
@@ -334,6 +395,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
+            scratch_directory_enabled: false,
+            persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
         },
         secrets_controller,
         cloud_resource_controller: None,
@@ -344,7 +407,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tls: config.tls,
         frontegg: config.frontegg,
         unsafe_mode: config.unsafe_mode,
-        persisted_introspection: true,
+        all_features: false,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
         environment_id,
@@ -353,11 +416,12 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_cluster_size: None,
         bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-        bootstrap_system_parameters: Default::default(),
+        system_parameter_defaults: Default::default(),
         availability_zones: Default::default(),
         connection_context,
         tracing_handle,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        storage_usage_retention_period: config.storage_usage_retention_period,
         segment_api_key: None,
         egress_ips: vec![],
         aws_account_id: None,
@@ -365,6 +429,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         launchdarkly_sdk_key: None,
         launchdarkly_key_map: Default::default(),
         config_sync_loop_interval: None,
+        bootstrap_role: config.bootstrap_role,
+        deploy_generation: config.deploy_generation,
+        waiting_on_leader_promotion: config.waiting_on_leader_promotion,
     }))?;
     let server = Server {
         inner,
@@ -401,7 +468,7 @@ impl Server {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("materialize");
+            .user("mz_system");
         config
     }
 
@@ -415,20 +482,40 @@ impl Server {
         config
     }
 
-    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    pub fn enable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .unwrap();
+        }
+    }
+
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
         T::Stream: Send,
         <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
     {
-        Ok(self.pg_config().connect(tls)?)
+        self.pg_config().connect(tls)
+    }
+
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        Ok(self.pg_config_internal().connect(tls)?)
     }
 
     pub async fn connect_async<T>(
         &self,
         tls: T,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), anyhow::Error>
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
@@ -442,6 +529,14 @@ impl Server {
             }
         });
         Ok((client, handle))
+    }
+
+    pub fn ws_addr(&self) -> Url {
+        Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            self.inner.http_local_addr()
+        ))
+        .unwrap()
     }
 }
 
@@ -634,7 +729,6 @@ pub fn wait_for_view_population(
         .get::<_, String>(0);
     mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
     Retry::default()
-        .max_duration(Duration::from_secs(10))
         .retry(|_| {
             let rows = mz_client
                 .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
@@ -655,28 +749,40 @@ pub fn wait_for_view_population(
     Ok(())
 }
 
-pub fn auth_with_ws(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
+// Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.
+pub fn auth_with_ws(
+    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    options: BTreeMap<String, String>,
+) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
     ws.write_message(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
             password: "".into(),
+            options,
         })
         .unwrap(),
-    ))
-    .unwrap();
+    ))?;
     // Wait for initial ready response.
+    let mut msgs = Vec::new();
     loop {
-        let resp = ws.read_message().unwrap();
+        let resp = ws.read_message()?;
         match resp {
             Message::Text(msg) => {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                 match msg {
                     WebSocketResponse::ReadyForQuery(_) => break,
-                    _ => {}
+                    msg => {
+                        msgs.push(msg);
+                    }
                 }
             }
             Message::Ping(_) => continue,
+            Message::Close(None) => return Err(anyhow!("ws closed after auth")),
+            Message::Close(Some(close_frame)) => {
+                return Err(anyhow!("ws closed after auth").context(close_frame))
+            }
             _ => panic!("unexpected response: {:?}", resp),
         }
     }
+    Ok(msgs)
 }

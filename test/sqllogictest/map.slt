@@ -18,10 +18,10 @@ mode cockroach
 # we just convert everything to `text`.
 
 # Test basic string to map casts.
-query error VALUE TYPE   parameter required
+query error VALUE TYPE option is required
 CREATE TYPE custom AS MAP (KEY TYPE = text)
 
-query error KEY TYPE parameter required
+query error KEY TYPE option is required
 CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 
 query error Expected one of KEY or VALUE, found identifier "extra_type"
@@ -33,13 +33,13 @@ CREATE TYPE tbl_map AS MAP (KEY TYPE = pg_enum, VALUE TYPE = text)
 query error VALUE TYPE must be of class type, but received pg_catalog.pg_enum which is of class view
 CREATE TYPE tbl_map AS MAP (KEY TYPE = text, VALUE TYPE = pg_enum)
 
-query error CREATE TYPE ... AS MAP option "VALUE TYPE "  cannot accept type modifier on numeric, you must use the default type
+query error CREATE TYPE ... AS MAP option VALUE TYPE cannot accept type modifier on pg_catalog.numeric, you must use the default type
 CREATE TYPE typ_mod_map AS MAP (KEY TYPE = text, VALUE TYPE = numeric(38,0))
 
-query error CREATE TYPE ... AS LIST option "VALUE TYPE "  can only use named data types, but found unnamed data type int4 list. Use CREATE TYPE to create a named type first
+query error CREATE TYPE ... AS MAP option VALUE TYPE can only use named data types, but found unnamed data type pg_catalog.int4 list. Use CREATE TYPE to create a named type first
 CREATE TYPE unnamed_element_map AS MAP (KEY TYPE = text, VALUE TYPE = int4 list)
 
-query error CREATE TYPE not yet supported
+statement ok
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 
 query error expected '\{', found a: "a=>1"
@@ -164,7 +164,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ? 'c'
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \? integer
+query error operator does not exist: map\[text=>integer\] \? integer
 SELECT '{a=>1, b=>2}'::map[text=>int] ? 1
 
 query T
@@ -182,14 +182,14 @@ SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 
 ----
 true
 
-query error db error: ERROR: operator is not unique: unknown \? unknown
+query error operator is not unique: unknown \? unknown
 SELECT NULL ? 'a'
 
 ## ?&
-query error malformed array literal: missing opening left brace
+query error invalid input syntax for type array: Array value must start with "\{": "a"
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \?\& integer\[\]
+query error operator does not exist: map\[text=>integer\] \?\& integer\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[1]
 
 query error cannot determine type of empty array
@@ -223,7 +223,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['c', 'b']
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>boolean\] \?\& integer\[\]
+query error operator does not exist: map\[text=>boolean\] \?\& integer\[\]
 SELECT '{1=>t, 2=>f}'::map[text=>bool] ?& ARRAY[1]
 
 query T
@@ -252,10 +252,10 @@ SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text
 false
 
 ## ?|
-query error malformed array literal: missing opening left brace
+query error invalid input syntax for type array: Array value must start with "\{": "a"
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \?\| integer\[\]
+query error operator does not exist: map\[text=>integer\] \?\| integer\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY[1]
 
 query error could not determine polymorphic type because input has type unknown
@@ -286,7 +286,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['c', 'd', '1']
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>boolean\] \?\| integer\[\]
+query error operator does not exist: map\[text=>boolean\] \?\| integer\[\]
 SELECT '{1=>t, 2=>f}'::map[text=>bool] ?| ARRAY[1]
 
 query T
@@ -308,13 +308,13 @@ false
 query error invalid input syntax for type map: expected '\{', found c: "c"
 SELECT '{a=>1, b=>2}'::map[text=>int] @> 'c'
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] @> text
+query error operator does not exist: map\[text=>integer\] @> text
 SELECT '{a=>1, b=>2}'::map[text=>int] @> 'a'::text
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] @> integer\[\]
+query error operator does not exist: map\[text=>integer\] @> integer\[\]
 SELECT '{a=>1, b=>2}'::map[text=>int] @> ARRAY[1]
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] @> map\[text=>boolean\]
+query error operator does not exist: map\[text=>integer\] @> map\[text=>boolean\]
 SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>t}'::map[text=>bool]
 ----
 false
@@ -339,7 +339,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] @> '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 false
 
-query error db error: ERROR: operator does not exist: map\[text=>map\[text=>bytea\]\] @> map\[text=>text\]
+query error operator does not exist: map\[text=>map\[text=>bytea\]\] @> map\[text=>text\]
 SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>bytea]] @> '{hello=>world}'::map[text=>text]
 ----
 false
@@ -355,7 +355,7 @@ SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]] @> '{hello=>{world
 false
 
 ## <@
-query error db error: ERROR: operator does not exist: map\[text=>integer\] <@ map\[text=>boolean\]
+query error operator does not exist: map\[text=>integer\] <@ map\[text=>boolean\]
 SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>t}'::map[text=>bool]
 ----
 false
@@ -416,7 +416,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] -> 'c'
 ----
 NULL
 
-query error db error: ERROR: operator does not exist: map\[text=>integer\] \-> integer
+query error operator does not exist: map\[text=>integer\] \-> integer
 SELECT '{a=>1, b=>2}'::map[text=>int] -> 1
 
 query T
@@ -464,7 +464,7 @@ SELECT '{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>tex
 ----
 nested
 
-query error db error: ERROR: operator is not unique: unknown \-> text
+query error operator is not unique: unknown \-> text
 SELECT NULL -> 'hello'::text
 
 query error could not determine polymorphic type because input has type unknown

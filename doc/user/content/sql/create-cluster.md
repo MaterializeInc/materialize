@@ -7,7 +7,7 @@ menu:
     parent: commands
 ---
 
-`CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters),
+`CREATE CLUSTER` creates a logical [cluster](/get-started/key-concepts#clusters),
 which contains dataflow-powered objects. By default, a cluster named `default`
 with a single cluster replica will exist in every environment.
 
@@ -36,7 +36,7 @@ We plan to remove this restriction in a future version of Materialize.
 {{< /warning >}}
 
 Importantly, clusters are strictly a logical component; they rely on [cluster
-replicas](/overview/key-concepts#cluster-replicas) to run dataflows. Said a
+replicas](/get-started/key-concepts#cluster-replicas) to run dataflows. Said a
 slightly different way, a cluster with no replicas does no computation. For
 example, if you create an index on a cluster with no replicas, you cannot select
 from that index because there is no physical representation of the index to read
@@ -72,6 +72,17 @@ _replica_name_ | A name for a cluster replica.
 ### Replica options
 
 {{% replica-options %}}
+
+{{< note >}}
+If you do not specify an availability zone, Materialize will automatically
+assign the availability zone with the least existing replicas for the
+associated cluster to increase the cluster's tolerance to availability zone
+failure.
+
+To check the availability zone associated with each replica in a cluster, use
+the [`mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
+system table.
+{{< /note >}}
 
 ## Details
 

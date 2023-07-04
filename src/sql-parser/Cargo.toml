@@ -16,19 +16,23 @@ phf = { version = "0.11.1", features = ["uncased"] }
 serde = { version = "1.0.152", features = ["derive"] }
 tracing = "0.1.37"
 uncased = "0.9.7"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 datadriven = "0.6.0"
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 unicode-width = "0.1.10"
 
 [build-dependencies]
 anyhow = "1.0.66"
 mz-ore = { path = "../ore", default-features = false }
-mz-walkabout = { path = "../walkabout" }
+mz-walkabout = { path = "../walkabout", default-features = false }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_codegen = "0.11.1"
 uncased = "0.9.7"
+
+[features]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

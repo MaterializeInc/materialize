@@ -162,6 +162,12 @@ impl From<Timestamp> for u64 {
     }
 }
 
+impl From<Timestamp> for u128 {
+    fn from(ts: Timestamp) -> Self {
+        u128::from(ts.internal)
+    }
+}
+
 impl TryFrom<Timestamp> for i64 {
     type Error = TryFromIntError;
 

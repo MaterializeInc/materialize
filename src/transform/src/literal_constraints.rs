@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! See if there are predicates of the form `<expr>=literal` that can be sped up using an index.
+//! See if there are predicates of the form `<expr> = literal` that can be sped up using an index.
 //! More specifically, look for an MFP on top of a Get, where the MFP has an appropriate filter, and
 //! the Get has a matching index. Convert these to `IndexedFilter` joins, which is a semi-join with
 //! a constant collection.
@@ -18,8 +18,8 @@
 //! `SELECT f1, f2, f3 FROM t, (SELECT * FROM (VALUES (lit1, lit2))) as filter_list
 //!  WHERE t.f1 = filter_list.column1 AND t.f2 = filter_list.column2`
 
-use crate::canonicalize_mfp::CanonicalizeMfp;
-use crate::{IndexOracle, TransformArgs};
+use std::collections::{BTreeMap, BTreeSet};
+
 use itertools::Itertools;
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::{Visit, VisitChildren};
@@ -30,7 +30,9 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{GlobalId, Row};
-use std::collections::{BTreeMap, BTreeSet};
+
+use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::{IndexOracle, TransformArgs};
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]
@@ -141,9 +143,17 @@ impl LiteralConstraints {
                         typ: mz_repr::RelationType {
                             column_types: key
                                 .iter()
-                                .map(|e| e.typ(&inp_typ.column_types))
+                                .map(|e| {
+                                    e.typ(&inp_typ.column_types)
+                                        // We make sure to not include a null in `expr_eq_literal`.
+                                        .nullable(false)
+                                })
                                 .collect(),
-                            keys: vec![],
+                            // (Note that the key inference for `MirRelationExpr::Constant` inspects
+                            // the constant values to detect keys not listed within the node, but it
+                            // can only detect a single-column key this way. A multi-column key is
+                            // common here, so we explicitly add it.)
+                            keys: vec![(0..key.len()).collect()],
                         },
                     };
 

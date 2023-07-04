@@ -14,7 +14,7 @@
 /.github                            @benesch
 /bin
 /ci                                 @MaterializeInc/qa
-/doc/user                           @MaterializeInc/devex
+/doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
@@ -44,7 +44,7 @@
 /src/lowertest                      @MaterializeInc/compute
 /src/lowertest-derive               @MaterializeInc/compute
 /src/metabase                       @benesch
-/src/mz                             @MaterializeInc/surfaces
+/src/mz                             @MaterializeInc/surfaces @MaterializeInc/devex
 /src/npm                            @benesch
 /src/orchestrator                   @benesch
 /src/orchestrator-kubernetes        @benesch
@@ -59,17 +59,24 @@
 /src/pgtest                         @MaterializeInc/surfaces
 /src/pgwire                         @MaterializeInc/surfaces
 /src/pid-file                       @benesch
-/src/postgres-util                  @MaterializeInc/surfaces
+/src/postgres-util                  @MaterializeInc/storage
 /src/prof                           @umanwizard
 /src/proto                          @aalexandrov
 /src/repr                           @MaterializeInc/storage @MaterializeInc/compute
 /src/repr/src/row                   @MaterializeInc/persist
 /src/repr-test-util                 @MaterializeInc/compute
+/src/rocksdb                        @MaterializeInc/storage
 /src/s3-datagen                     @MaterializeInc/storage
 /src/secrets                        @MaterializeInc/cloud
 /src/segment                        @benesch
 /src/service                        @MaterializeInc/storage @MaterializeInc/compute
 /src/sql                            @MaterializeInc/surfaces
+# HirRelationExpr is the boundary between the `sql` crate and the compute
+# layer, and is jointly owned by the two teams.
+/src/sql/src/plan/expr.rs           @MaterializeInc/surfaces @MaterializeInc/compute
+# The lowering of HirRelationExpr to MirRelationExpr is part of the compute
+# layer, despite being located in the `sql` crate.
+/src/sql/src/plan/lowering.rs       @MaterializeInc/compute
 /src/sql-parser                     @MaterializeInc/surfaces
 /src/sqllogictest                   @MaterializeInc/surfaces
 /src/ssh-util                       @MaterializeInc/storage
@@ -77,6 +84,7 @@
 /src/stash-debug                    @MaterializeInc/surfaces
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
+/src/test-macro                     @MaterializeInc/qa
 /src/testdrive                      @MaterializeInc/qa
 /src/timely-util                    @MaterializeInc/compute
 /src/transform                      @MaterializeInc/compute

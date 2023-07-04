@@ -1,6 +1,9 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
 
+[profile.default-miri]
+slow-timeout = { period = "600s", terminate-after = 2 }
+
 # For a given configuration parameter, the first override to match wins. Keep
 # these sorted in order from most specific to least specific.
 
@@ -14,7 +17,22 @@ filter = "package(mz-environmentd)"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
 
+[[profile.default.overrides]]
+filter = "package(mz-stash) and test(proptest_stash_migrate_json_to_proto)"
+slow-timeout = { period = "120s", terminate-after = 2 }
+
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false
 failure-output = "immediate-final"
+
+[profile.coverage]
+slow-timeout = { period = "480s", terminate-after = 2 }
+junit = { path = "junit_cargo-test.xml" }
+fail-fast = false
+failure-output = "immediate-final"
+
+[[profile.coverage.overrides]]
+filter = "package(mz-environmentd)"
+threads-required = 8
+slow-timeout = { period = "800s", terminate-after = 2 }

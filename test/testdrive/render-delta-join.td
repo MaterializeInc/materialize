@@ -31,7 +31,7 @@ count
 1
 
 > EXPLAIN WITH(join_impls) VIEW delta_join;
-"delta_join:  Project (#0, #1, #0, #3)    Filter (#0) IS NOT NULL      Join on=(#0 = #2) type=differential        implementation          %1:t2[#0] » %0:t1[#0]KA        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2Used Indexes:  - i1  - i2"
+"delta_join:  Project (#0, #1, #0, #3)    Filter (#0) IS NOT NULL      Join on=(#0 = #2) type=differential        implementation          %0:t1[#0]KA » %1:t2[#0]KA        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2Used Indexes:  - i1  - i2"
 
 > SELECT count(*) AS count FROM delta_join;
 count
@@ -48,23 +48,20 @@ count
 > SET cluster_replica = r1
 
 > SELECT
-    sum(sent) as sent
+    sent
   FROM
     mz_internal.mz_dataflow_channels AS channels
     LEFT JOIN mz_internal.mz_message_counts AS counts
-        ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
-  WHERE id IN
+        ON channels.id = counts.channel_id
+  WHERE
+    id IN
         (SELECT id
          FROM mz_internal.mz_dataflow_addresses
          WHERE address[1] =
-             (SELECT DISTINCT address[1]
-              FROM mz_internal.mz_dataflow_addresses
-              WHERE id =
-                  (SELECT DISTINCT id
-                   FROM mz_internal.mz_dataflows
-                   WHERE name LIKE '%.delta_join%')))
-  GROUP BY id, from_index, to_index, from_port, to_port
-  HAVING sum(sent) > 100
+             (SELECT id
+              FROM mz_internal.mz_dataflows
+              WHERE name LIKE '%.delta_join%'))
+    AND sent > 100
   ORDER BY sent;
 sent
 ----

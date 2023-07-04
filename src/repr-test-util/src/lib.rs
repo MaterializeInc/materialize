@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -80,13 +78,13 @@
 //! These test utilities are relied by crates other than `repr`.
 
 use chrono::NaiveDateTime;
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use proc_macro2::TokenTree;
-
 use mz_lowertest::deserialize_optional_generic;
 use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::strconv::parse_jsonb;
 use mz_repr::{Datum, Row, RowArena, ScalarType};
+use proc_macro2::TokenTree;
 
 /* #endregion */
 
@@ -153,6 +151,9 @@ where
                         .unwrap(),
                     ))
                 }
+                ScalarType::Jsonb => parse_jsonb(&mz_lowertest::unquote(litval))
+                    .map(|jsonb| temp_storage.push_unary_row(jsonb.into_row()))
+                    .map_err(|parse| format!("Invalid JSON literal: {:?}", parse)),
                 _ => Err(format!("Unsupported literal type {:?}", littyp)),
             }
         }

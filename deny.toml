@@ -1,11 +1,48 @@
 [bans]
 multiple-versions = "deny"
-# Do not add exemptions for duplicate dependencies! Duplicate dependencies slow
-# down compilation, bloat the binary, and tickle race conditions in `cargo doc`
-# (see rust-lang/cargo#3613). Submit PRs upstream to remove duplicated
-# transitive dependencies. If necessary, use patch directives in the root
-# Cargo.toml to point at a Materialize-maintained fork that avoids the
-# duplicated transitive dependencies.
+# Try to avoid exemptions for duplicate dependencies! Duplicate dependencies
+# slow down compilation, bloat the binary, and tickle race conditions in `cargo
+# doc` (see rust-lang/cargo#3613).
+#
+# If possible, submit PRs upstream to remove duplicated transitive dependencies.
+# You can use patch directives in the root Cargo.toml to point at a
+# Materialize-maintained fork that avoids the duplicated transitive
+# dependencies.
+skip = [
+    # One-time exception for base64 due to its prevalence in the crate graph.
+    { name = "base64", version = "0.13.1" },
+    # `syn` is a core crate that a huge part of the ecosystem either directly, or
+    # transitively depends on. They just released v2.0 which not all crates have
+    # migrated to yet.
+    { name = "syn", version = "1.0.107" },
+    # `tokio` depends on a newer version of socket2, we are okay with _temporarily_
+    # allowing these duplicate dependencies until the rest of the ecosystem catches
+    # up.
+    { name = "socket2", version = "0.4.9" },
+    { name = "windows-sys", version = "0.42.0" },
+    { name = "windows-sys", version = "0.45.0" },
+    { name = "windows-targets", version = "0.42.0" },
+    { name = "windows_aarch64_gnullvm", version = "0.42.0" },
+    { name = "windows_aarch64_msvc", version = "0.42.0" },
+    { name = "windows_i686_gnu", version = "0.42.0" },
+    { name = "windows_i686_msvc", version = "0.42.0" },
+    { name = "windows_x86_64_gnullvm", version = "0.42.0" },
+    { name = "windows_x86_64_gnu", version = "0.42.0" },
+    { name = "windows_x86_64_msvc", version = "0.42.0" },
+    # Newer versions of crates like `tempfile` are held back by crates like `atty`.
+    # This is very Unfortunate as we don't actually use these platforms.
+    { name = "hermit-abi", version = "0.1.6" },
+    { name = "hermit-abi", version = "0.2.6" },
+    { name = "redox_syscall", version = "0.2.10" },
+
+    # Waiting for <https://github.com/blackbeam/rust_mysql_common/commit/2a6419aef2ff609cd35a5ce41a9eb48253a8214d>
+    # to be released.
+    { name = "bindgen", version = "0.59.2" },
+
+    # Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
+    # release. (not yet in v0.11.9)
+    { name = "prettyplease", version = "0.1.25" },
+]
 
 # Use `tracing` instead.
 [[bans.deny]]
@@ -75,7 +112,6 @@ name = "rustls"
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-  "aws-arn",
   "aws-http",
   "bindgen",
   "bstr",
@@ -145,68 +181,10 @@ license-files = [
 [sources]
 unknown-git = "deny"
 unknown-registry = "deny"
-allow-git = [
-    # Waiting on https://github.com/tokio-rs/axum/pull/1598 to make it into a
-    # release.
-    "https://github.com/tokio-rs/axum.git",
-
-    # Waiting for a new release of strip-ansi-escapes that avoids the indirect
-    # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
-    "https://github.com/alacritty/vte",
-
-    # Waiting for a new release that bumps to itoa v1.0.
-    # See: https://github.com/BurntSushi/rust-csv/issues/271
-    "https://github.com/BurntSushi/rust-csv.git",
-
-    # Waiting for https://github.com/chronotope/chrono/pull/906
-    # to be released in the v0.4.x series.
-    "https://github.com/chronotope/chrono.git",
-
-    # Waiting on v0.18.
-    # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
-    "https://github.com/MaterializeInc/opentelemetry-rust.git",
-
-    # Waiting on tracing-opentelemetry to upgrade to the as-yet unreleased
-    # v0.18 of opentelemetry.
-    "https://github.com/MaterializeInc/tracing.git",
-
-    # Waiting on https://github.com/tikv/pprof-rs/pull/181 to make it into a
-    # release.
-    "https://github.com/MaterializeInc/pprof-rs.git",
-
-    # Waiting on https://github.com/AltSysrq/proptest/pull/264.
-    "https://github.com/MaterializeInc/proptest.git",
-
-    # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-    "https://github.com/MaterializeInc/rust-postgres.git",
-    "https://github.com/MaterializeInc/rust-postgres-array.git",
-
-    # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
-    "https://github.com/MaterializeInc/serde-value.git",
-
-    # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-    "https://github.com/MaterializeInc/rust-rdkafka.git",
-
-    # Waiting on https://github.com/jorgecarleitao/arrow2/pull/1297 to make it
-    # into a release.
-    "https://github.com/jorgecarleitao/arrow2.git",
-
-    # Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
-    # which depends on ahash v0.8 instead of v0.7. In the meantime we've
-    # backported the ahash v0.8 bump into hashbrown v0.12.
-    "https://github.com/MaterializeInc/hashbrown.git",
-
-    # Dependencies that we control upstream whose official releases we don't
-    # care about.
-    "https://github.com/frankmcsherry/columnation",
-    "https://github.com/TimelyDataflow/timely-dataflow",
-    "https://github.com/TimelyDataflow/differential-dataflow.git",
-
-    # Waiting on https://github.com/launchdarkly/rust-eventsource-client/pull/43
-    # to make it into a release.
-    "https://github.com/MaterializeInc/rust-eventsource-client.git",
-
-    # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
-    # it into a release.
-    "https://github.com/MaterializeInc/rust-server-sdk",
-]
+# Do not allow non-MaterializeInc Git repositories here! Git repositories must
+# be owned by the MaterializeInc organization so that maintainership is shared
+# amongst Materialize employees and so that historical versions of Materialize
+# remain buildable even if upstream Git repositories disappear. If you don't
+# have permissions to create a fork in the MaterializeInc organization, ask in
+# #eng-infra on Slack.
+allow-org = { github = ["MaterializeInc"] }

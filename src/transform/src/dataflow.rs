@@ -19,8 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_compute_client::types::dataflows::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
+use tracing::warn;
 
-use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
+use crate::monotonic::MonotonicFlag;
+use crate::{IndexOracle, Optimizer, TransformArgs, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -37,11 +39,13 @@ pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
+    let ctx = crate::typecheck::empty_context();
+
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
 
     // Logical optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer())?;
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer(&ctx))?;
 
     optimize_dataflow_filters(dataflow)?;
     // TODO: when the linear operator contract ensures that propagated
@@ -54,10 +58,14 @@ pub fn optimize_dataflow(
 
     // A smaller logical optimization pass after projections and filters are
     // pushed down across views.
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass())?;
+    optimize_dataflow_relations(
+        dataflow,
+        indexes,
+        &Optimizer::logical_cleanup_pass(&ctx, false),
+    )?;
 
     // Physical optimization pass
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer())?;
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer(&ctx))?;
 
     optimize_dataflow_monotonic(dataflow)?;
 
@@ -69,6 +77,12 @@ pub fn optimize_dataflow(
 }
 
 /// Inline views used in one other view, and in no exported objects.
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment = "inline_views")
+)]
 fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
@@ -162,6 +176,8 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
         }
     }
 
+    mz_repr::explain::trace_plan(dataflow);
+
     Ok(())
 }
 
@@ -184,7 +200,10 @@ fn optimize_dataflow_relations(
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
-        optimizer.transform(object.plan.as_inner_mut(), indexes)?;
+        optimizer.transform(
+            object.plan.as_inner_mut(),
+            TransformArgs::with_id(indexes, &object.id),
+        )?;
     }
 
     mz_repr::explain::trace_plan(dataflow);
@@ -275,7 +294,7 @@ where
     // Collect the mutable references to views after pushing projection down
     // in order to run cleanup actions on them in a second loop.
     let mut view_refs = Vec::new();
-    let projection_pushdown = crate::projection_pushdown::ProjectionPushdown;
+    let projection_pushdown = crate::movement::ProjectionPushdown;
     for (id, view) in view_sequence {
         if let Some(columns) = demand.get(&id) {
             let projection_pushed_down = columns.iter().map(|c| *c).collect();
@@ -396,6 +415,8 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
         )?;
     }
 
+    mz_repr::explain::trace_plan(dataflow);
+
     Ok(())
 }
 
@@ -468,5 +489,8 @@ fn optimize_dataflow_index_imports(
             false
         }
     });
+
+    mz_repr::explain::trace_plan(dataflow);
+
     Ok(())
 }

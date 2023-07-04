@@ -9,6 +9,9 @@
 
 # Test `mz_internal.mz_object_dependencies`.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_connection_validation_syntax = true
+
 > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SELECT
@@ -25,6 +28,7 @@ with_subsources auctions
 with_subsources bids
 with_subsources organizations
 with_subsources users
+with_subsources with_subsources_progress
 
 # make sure dropping works
 > DROP SOURCE with_subsources CASCADE
@@ -50,7 +54,7 @@ source          subsource
     DATABASE unused,
     USER unused,
     SSH TUNNEL ssh_conn
-  );
+  ) WITH (VALIDATE = false);
 
 > SELECT
   top_level_c.name as conn,

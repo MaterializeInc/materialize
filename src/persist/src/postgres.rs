@@ -9,7 +9,11 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use crate::cfg::ConsensusKnobs;
+use std::fmt::Formatter;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -17,9 +21,9 @@ use deadpool_postgres::tokio_postgres::config::SslMode;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{
-    Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
+    Hook, HookError, HookErrorCause, Manager, ManagerConfig, Object, Pool, PoolError,
+    RecyclingMethod,
 };
-use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -27,14 +31,11 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::fmt::Formatter;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracing::debug;
 
+use crate::cfg::ConsensusKnobs;
 use crate::error::Error;
-use crate::location::{Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL};
+use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
 
 const SCHEMA: &str = "
@@ -143,6 +144,12 @@ impl PostgresConsensusConfig {
             fn connection_pool_ttl_stagger(&self) -> Duration {
                 Duration::MAX
             }
+            fn connect_timeout(&self) -> Duration {
+                Duration::MAX
+            }
+            fn tcp_user_timeout(&self) -> Duration {
+                Duration::ZERO
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -170,7 +177,9 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
-        let pg_config: Config = config.url.parse()?;
+        let mut pg_config: Config = config.url.parse()?;
+        pg_config.connect_timeout(config.knobs.connect_timeout());
+        pg_config.tcp_user_timeout(config.knobs.tcp_user_timeout());
         let tls = make_tls(&pg_config)?;
 
         let manager = Manager::from_config(
@@ -227,10 +236,7 @@ impl PostgresConsensus {
             .build()
             .expect("postgres connection pool built with incorrect parameters");
 
-        let mut client = pool.get().await?;
-
-        let tx = client.transaction().await?;
-        tx.batch_execute(SCHEMA).await?;
+        let client = pool.get().await?;
 
         // The `consensus` table creates and deletes rows at a high frequency, generating many
         // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
@@ -239,10 +245,13 @@ impl PostgresConsensus {
         //
         // See: https://github.com/MaterializeInc/materialize/issues/13975
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-        tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
+        client
+            .batch_execute(&format!(
+                "{}; {}",
+                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;"
+            ))
             .await?;
 
-        tx.commit().await?;
         Ok(PostgresConsensus {
             pool,
             metrics: config.metrics,
@@ -263,6 +272,10 @@ impl PostgresConsensus {
     async fn get_connection(&self) -> Result<Object, PoolError> {
         let start = Instant::now();
         let res = self.pool.get().await;
+        if let Err(PoolError::Backend(err)) = &res {
+            debug!("error establishing connection: {}", err);
+            self.metrics.connpool_connection_errors.inc();
+        }
         self.metrics
             .connpool_acquire_seconds
             .inc_by(start.elapsed().as_secs_f64());
@@ -363,7 +376,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -409,17 +422,9 @@ impl Consensus for PostgresConsensus {
         };
 
         if result == 1 {
-            Ok(Ok(()))
+            Ok(CaSResult::Committed)
         } else {
-            // It's safe to call scan in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
-            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            let current = self.scan(key, from, SCAN_ALL).await?;
-            Ok(Err(current))
+            Ok(CaSResult::ExpectationMismatch)
         }
     }
 
@@ -494,13 +499,15 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::consensus_impl_test;
     use tracing::info;
     use uuid::Uuid;
 
+    use crate::location::tests::consensus_impl_test;
+
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn postgres_consensus() -> Result<(), ExternalError> {
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
@@ -525,7 +532,7 @@ mod tests {
 
         assert_eq!(
             consensus.compare_and_set(&key, None, state.clone()).await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
 
         assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));

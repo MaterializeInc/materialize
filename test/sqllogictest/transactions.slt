@@ -589,6 +589,11 @@ SELECT INTERVAL '1 day'
 statement ok
 COMMIT
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET allow_real_time_recency = true
+----
+COMPLETE 0
+
 statement ok
 SET REAL_TIME_RECENCY TO TRUE
 
@@ -611,3 +616,80 @@ SELECT * FROM rtr
 ----
 1
 1
+
+statement ok
+DROP TABLE t CASCADE;
+
+statement ok
+CREATE TABLE t (a INT);
+
+# AS OF should work in the middle of a transaction
+
+statement ok
+BEGIN
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+# Give t a chance to advance.
+statement ok
+SELECT mz_internal.mz_sleep(2)
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+query T
+SELECT * FROM t;
+----
+
+# Give t a chance to advance.
+statement ok
+SELECT mz_internal.mz_sleep(2)
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+SET TRANSACTION_ISOLATION TO serializable
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+SET TRANSACTION ISOLATION LEVEL serializable
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SET TRANSACTION_ISOLATION TO serializable
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+RESET TRANSACTION_ISOLATION
+
+statement ok
+ROLLBACK

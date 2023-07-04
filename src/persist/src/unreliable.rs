@@ -16,12 +16,14 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, Determinate, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
+    VersionedData,
 };
 
 #[derive(Debug)]
@@ -139,7 +141,7 @@ impl UnreliableBlob {
 
 #[async_trait]
 impl Blob for UnreliableBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         self.handle.run_op("get", || self.blob.get(key)).await
     }
 
@@ -193,7 +195,7 @@ impl Consensus for UnreliableConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         self.handle
             .run_op("compare_and_set", || {
                 self.consensus.compare_and_set(key, expected, new)
@@ -225,7 +227,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn unreliable_blob() {
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let handle = UnreliableHandle::default();
@@ -256,7 +258,7 @@ mod tests {
         assert!(blob.get("a").await.is_err());
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn unreliable_consensus() {
         let consensus = Arc::new(MemConsensus::default());
         let handle = UnreliableHandle::default();

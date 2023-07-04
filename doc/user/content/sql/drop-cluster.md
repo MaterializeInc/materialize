@@ -57,3 +57,4 @@ DROP CLUSTER auction_house CASCADE;
 ## Related pages
 
 - [`SHOW CLUSTERS`](../show-clusters)
+- [DROP OWNED](../drop-owned)

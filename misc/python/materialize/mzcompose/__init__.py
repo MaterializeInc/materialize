@@ -21,14 +21,16 @@ import importlib
 import importlib.abc
 import importlib.util
 import inspect
+import json
 import os
+import re
 import subprocess
 import sys
 import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
-from inspect import getmembers, isfunction
+from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
@@ -52,7 +54,7 @@ from typing import (
 import pg8000
 import sqlparse
 import yaml
-from pg8000 import Cursor
+from pg8000 import Connection, Cursor
 
 from materialize import mzbuild, spawn, ui
 from materialize.mzcompose import loader
@@ -84,11 +86,13 @@ class Composition:
         preserve_ports: bool = False,
         silent: bool = False,
         munge_services: bool = True,
+        project_name: Optional[str] = None,
     ):
         self.name = name
         self.description = None
         self.repo = repo
         self.preserve_ports = preserve_ports
+        self.project_name = project_name
         self.silent = silent
         self.workflows: Dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
@@ -179,22 +183,32 @@ class Composition:
                     # `allow_host_ports` is `True`
                     raise UIError(
                         "programming error: disallowed host port in service {name!r}",
-                        hint=f'Add `"allow_host_ports": True` to the service config to disable this check.',
+                        hint='Add `"allow_host_ports": True` to the service config to disable this check.',
                     )
 
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
 
             if self.repo.rd.coverage:
-                # Emit coverage information to a file in a directory that is
-                # bind-mounted to the "coverage" directory on the host. We
-                # inject the configuration to all services for simplicity, but
-                # this only have an effect if the service runs instrumented Rust
-                # binaries.
-                config.setdefault("environment", []).append(
-                    f"LLVM_PROFILE_FILE=/coverage/{name}-%m.profraw"
+                coverage_volume = "./coverage:/coverage"
+                if coverage_volume not in config.get("volumes", []):
+                    # Emit coverage information to a file in a directory that is
+                    # bind-mounted to the "coverage" directory on the host. We
+                    # inject the configuration to all services for simplicity, but
+                    # this only have an effect if the service runs instrumented Rust
+                    # binaries.
+                    config.setdefault("volumes", []).append(coverage_volume)
+
+                llvm_profile_file = (
+                    f"LLVM_PROFILE_FILE=/coverage/{name}-%p-%9m%c.profraw"
                 )
-                config.setdefault("volumes", []).append("./coverage:/coverage")
+                for i, env in enumerate(config.get("environment", [])):
+                    # Make sure we don't have duplicate environment entries.
+                    if env.startswith("LLVM_PROFILE_FILE="):
+                        config["environment"][i] = llvm_profile_file
+                        break
+                else:
+                    config.setdefault("environment", []).append(llvm_profile_file)
 
         # Determine mzbuild specs and inject them into services accordingly.
         deps = self.repo.resolve_dependencies(images)
@@ -212,13 +226,19 @@ class Composition:
         self.file.flush()
 
     def invoke(
-        self, *args: str, capture: bool = False, stdin: Optional[str] = None
+        self,
+        *args: str,
+        capture: bool = False,
+        capture_stderr: bool = False,
+        stdin: Optional[str] = None,
+        check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
         Args:
             args: The arguments to pass to `docker compose`.
             capture: Whether to capture the child's stdout stream.
+            capture_stderr: Whether to capture the child's stderr stream.
             input: A string to provide as stdin for the command.
         """
 
@@ -230,6 +250,12 @@ class Composition:
         stdout = None
         if capture:
             stdout = subprocess.PIPE
+        stderr = None
+        if capture_stderr:
+            stderr = subprocess.PIPE
+        project_name_args = (
+            ("--project-name", self.project_name) if self.project_name else ()
+        )
 
         try:
             return subprocess.run(
@@ -239,13 +265,16 @@ class Composition:
                     f"-f/dev/fd/{self.file.fileno()}",
                     "--project-directory",
                     self.path,
+                    *project_name_args,
                     *args,
                 ],
                 close_fds=False,
-                check=True,
+                check=check,
                 stdout=stdout,
+                stderr=stderr,
                 input=stdin,
                 text=True,
+                bufsize=1,
             )
         except subprocess.CalledProcessError as e:
             if e.stdout:
@@ -398,6 +427,19 @@ class Composition:
         elapsed = time.time() - start_time
         self.test_results[name] = Composition.TestResult(elapsed, error)
 
+    def sql_connection(
+        self,
+        service: str = "materialized",
+        user: str = "materialize",
+        port: Optional[int] = None,
+        password: Optional[str] = None,
+    ) -> Connection:
+        """Get a connection (with autocommit enabled) to the materialized service."""
+        port = self.port(service, port) if port else self.default_port(service)
+        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
+        conn.autocommit = True
+        return conn
+
     def sql_cursor(
         self,
         service: str = "materialized",
@@ -406,9 +448,7 @@ class Composition:
         password: Optional[str] = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
-        conn.autocommit = True
+        conn = self.sql_connection(service, user, port, password)
         return conn.cursor()
 
     def sql(
@@ -449,8 +489,10 @@ class Composition:
         rm: bool = False,
         env_extra: Dict[str, str] = {},
         capture: bool = False,
+        capture_stderr: bool = False,
         stdin: Optional[str] = None,
         entrypoint: Optional[str] = None,
+        check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -467,6 +509,7 @@ class Composition:
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
             capture: Capture the stdout of the `docker compose` invocation.
+            capture_stderr: Capture the stderr of the `docker compose` invocation.
         """
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
@@ -481,7 +524,9 @@ class Composition:
             service,
             *args,
             capture=capture,
+            capture_stderr=capture_stderr,
             stdin=stdin,
+            check=check,
         )
 
     def exec(
@@ -490,7 +535,9 @@ class Composition:
         *args: str,
         detach: bool = False,
         capture: bool = False,
+        capture_stderr: bool = False,
         stdin: Optional[str] = None,
+        check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -516,7 +563,9 @@ class Composition:
             ),
             *args,
             capture=capture,
+            capture_stderr=capture_stderr,
             stdin=stdin,
+            check=check,
         )
 
     def pull_if_variable(self, services: List[str]) -> None:
@@ -667,12 +716,67 @@ class Composition:
         print(f"Sleeping for {duration} seconds...")
         time.sleep(duration)
 
+    def container_id(self, service: str) -> str:
+        """Return the container_id for the specified service
+
+        Delegates to `docker compose ps`
+        """
+        output_str = self.invoke("ps", "--quiet", service, capture=True).stdout
+        assert output_str is not None
+
+        output_list = output_str.strip("\n").split("\n")
+        assert len(output_list) == 1
+        assert output_list[0] is not None
+
+        return str(output_list[0])
+
+    def stats(
+        self,
+        service: str,
+    ) -> str:
+        """Delegates to `docker stats`
+
+        Args:
+            service: The service whose container's stats will be probed.
+        """
+
+        return subprocess.run(
+            [
+                "docker",
+                "stats",
+                self.container_id(service),
+                "--format",
+                "{{json .}}",
+                "--no-stream",
+                "--no-trunc",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        ).stdout
+
+    def mem(self, service: str) -> int:
+        stats_str = self.stats(service)
+        stats = json.loads(stats_str)
+        assert service in stats["Name"]
+        mem_str, _ = stats["MemUsage"].split("/")  # "MemUsage":"1.542GiB / 62.8GiB"
+        mem_float = float(re.findall(r"[\d.]+", mem_str)[0])
+        if "MiB" in mem_str:
+            mem_float = mem_float * 10**6
+        elif "GiB" in mem_str:
+            mem_float = mem_float * 10**9
+        else:
+            assert False, f"Unable to parse {mem_str}"
+        return round(mem_float)
+
     def testdrive(
         self,
         input: str,
         service: str = "testdrive",
         persistent: bool = True,
         args: List[str] = [],
+        caller: Optional[Traceback] = None,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -683,10 +787,14 @@ class Composition:
             persistent: Whether a persistent testdrive container will be used.
         """
 
+        caller = caller or getframeinfo(stack()[1][0])
+
+        args_with_source = args + [f"--source={caller.filename}:{caller.lineno}"]
+
         if persistent:
-            self.exec(service, *args, stdin=input)
+            self.exec(service, *args_with_source, stdin=input)
         else:
-            self.run(service, *args, stdin=input)
+            self.run(service, *args_with_source, stdin=input)
 
 
 class ServiceHealthcheck(TypedDict, total=False):
@@ -824,6 +932,9 @@ class ServiceConfig(TypedDict, total=False):
     """Configuration for a check to determine whether the containers for this
     service are healthy."""
 
+    restart: str
+    """Restart policy."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
@@ -904,7 +1015,7 @@ def _wait_for_pg(
     args = f"dbname={dbname} host={host} port={port} user={user} password='{obfuscated_password}...'"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
-    for remaining in ui.timeout_loop(timeout_secs, tick=0.1):
+    for remaining in ui.timeout_loop(timeout_secs, tick=0.5):
         try:
             conn = pg8000.connect(
                 database=dbname,
@@ -917,22 +1028,22 @@ def _wait_for_pg(
             )
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True
-            cur = conn.cursor()
-            cur.execute(query)
-            if expected == "any" and cur.rowcount == -1:
-                ui.progress(" success!", finish=True)
-                return
-            result = list(cur.fetchall())
-            if expected == "any" or result == expected:
-                if print_result:
-                    say(f"query result: {result}")
-                else:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                if expected == "any" and cur.rowcount == -1:
                     ui.progress(" success!", finish=True)
-                return
-            else:
-                say(
-                    f"host={host} port={port} did not return rows matching {expected} got: {result}"
-                )
+                    return
+                result = list(cur.fetchall())
+                if expected == "any" or result == expected:
+                    if print_result:
+                        say(f"query result: {result}")
+                    else:
+                        ui.progress(" success!", finish=True)
+                    return
+                else:
+                    say(
+                        f"host={host} port={port} did not return rows matching {expected} got: {result}"
+                    )
         except Exception as e:
             ui.progress(f"{e if print_result else ''} {int(remaining)}")
             error = e

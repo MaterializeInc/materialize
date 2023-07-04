@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -75,19 +73,17 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::io;
-use std::iter;
+use std::{io, iter};
 
-use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
-use aws_sdk_s3::model::{BucketLocationConstraint, CreateBucketConfiguration};
+use aws_sdk_s3::operation::create_bucket::CreateBucketError;
+use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use clap::Parser;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use tracing::event;
-use tracing::{error, info, Level};
-use tracing_subscriber::filter::EnvFilter;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
+use tracing::{error, event, info, Level};
+use tracing_subscriber::filter::EnvFilter;
 
 /// Generate meaningless data in S3 to test download speeds
 #[derive(Parser)]
@@ -117,7 +113,7 @@ struct Args {
     bucket: String,
 
     /// Which region to operate in
-    #[clap(short = 'r', long, default_value = "us-east-2")]
+    #[clap(short = 'r', long, default_value = "us-east-1")]
     region: String,
 
     /// Number of copy operations to run concurrently
@@ -134,7 +130,7 @@ struct Args {
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        error!("{:#}", e);
+        error!("{}", e.display_with_causes());
         std::process::exit(1);
     }
 }
@@ -192,10 +188,7 @@ async fn run() -> anyhow::Result<()> {
         .await
         .map(|_| info!("created s3 bucket {}", args.bucket))
         .or_else(|e| match e.into_service_error() {
-            CreateBucketError {
-                kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
-                ..
-            } => {
+            CreateBucketError::BucketAlreadyOwnedByYou(_) => {
                 event!(Level::INFO, bucket = %args.bucket, "reusing existing bucket");
                 Ok(())
             }

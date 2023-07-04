@@ -19,14 +19,13 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_repr::{Diff, GlobalId, Row};
+use mz_service::client::{GenericClient, Partitionable, PartitionedState};
+use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 use uuid::Uuid;
-
-use mz_repr::{Diff, GlobalId, Row};
-use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
@@ -356,7 +355,10 @@ where
                         if old_frontier != new_frontier && !entry.dropped {
                             let updates = match &mut entry.stashed_updates {
                                 Ok(stashed_updates) => {
+                                    // The compute protocol requires us to only send out
+                                    // consolidated batches.
                                     consolidate_updates(stashed_updates);
+
                                     let mut ship = Vec::new();
                                     let mut keep = Vec::new();
                                     for (time, data, diff) in stashed_updates.drain(..) {

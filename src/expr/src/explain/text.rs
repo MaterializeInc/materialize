@@ -19,7 +19,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{GlobalId, Row};
 
-use super::{ExplainMultiPlan, ExplainSinglePlan};
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource};
 use crate::{
     AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RowSetFinishing,
@@ -49,6 +49,11 @@ where
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
 
+        if self.context.config.timing {
+            writeln!(f, "")?;
+            writeln!(f, "Optimization time: {:?}", self.context.duration)?;
+        }
+
         Ok(())
     }
 }
@@ -69,6 +74,10 @@ where
                 self.context.config,
             );
 
+            if no > 0 {
+                writeln!(f, "")?;
+            }
+
             writeln!(f, "{}{}:", ctx.indent, id)?;
             ctx.indented(|ctx| {
                 match &self.context.finishing {
@@ -85,19 +94,40 @@ where
                 Ok(())
             })?;
         }
-        if self.sources.iter().any(|(_, op)| !op.is_identity()) {
+        if self
+            .sources
+            .iter()
+            .any(|ExplainSource { op, .. }| !op.is_identity())
+        {
             // render one blank line between the plans and sources
             writeln!(f, "")?;
             // render sources
-            for (id, op) in self.sources.iter().filter(|(_, op)| !op.is_identity()) {
+            for ExplainSource {
+                id,
+                op,
+                pushdown_info,
+            } in self
+                .sources
+                .iter()
+                .filter(|ExplainSource { op, .. }| !op.is_identity())
+            {
                 writeln!(f, "{}Source {}", ctx.indent, id)?;
-                ctx.indented(|ctx| op.fmt_text(f, ctx))?;
+                ctx.indented(|ctx| {
+                    op.fmt_text(f, ctx)?;
+                    pushdown_info.fmt_text(f, ctx)?;
+                    Ok(())
+                })?;
             }
         }
 
         if !self.context.used_indexes.is_empty() {
             writeln!(f, "")?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
+
+        if self.context.config.timing {
+            writeln!(f, "")?;
+            writeln!(f, "Optimization time: {:?}", self.context.duration)?;
         }
 
         Ok(())
@@ -267,30 +297,47 @@ impl MirRelationExpr {
                     })?;
                 }
             }
-            LetRec { ids, values, body } => {
-                let bindings = ids.iter().zip(values.iter()).collect::<Vec<_>>();
+            LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } => {
+                assert_eq!(ids.len(), values.len());
+                assert_eq!(ids.len(), limits.len());
+                let bindings =
+                    itertools::izip!(ids.iter(), values.iter(), limits.iter()).collect::<Vec<_>>();
                 let head = body.as_ref();
 
+                // Determine whether all `limits` are the same.
+                // If all of them are the same, then we print it on top of the block (or not print
+                // it at all if it's None). If there are differences, then we print them on the
+                // ctes.
+                let all_limits_same = limits
+                    .iter()
+                    .reduce(|first, i| if i == first { first } else { &None })
+                    .unwrap_or(&None);
+
                 if ctx.config.linear_chains {
-                    writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter() {
-                            writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| value.fmt_text(f, ctx))?;
-                        }
-                        Ok(())
-                    })?;
-                    write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
+                    unreachable!(); // We exclude this case in `as_explain_single_plan`.
                 } else {
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
-                    writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
+                    write!(f, "{}With Mutually Recursive", ctx.indent)?;
+                    if let Some(limit) = all_limits_same {
+                        write!(f, " {}", limit)?;
+                    }
+                    writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
-                            writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        for (id, value, limit) in bindings.iter().rev() {
+                            write!(f, "{}cte", ctx.indent)?;
+                            if all_limits_same.is_none() {
+                                if let Some(limit) = limit {
+                                    write!(f, " {}", limit)?;
+                                }
+                            }
+                            writeln!(f, " {} =", id)?;
                             ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
@@ -348,8 +395,12 @@ impl MirRelationExpr {
             Filter { predicates, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let predicates = separated(" AND ", predicates);
-                        write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        if predicates.is_empty() {
+                            write!(f, "{}Filter", ctx.indent)?;
+                        } else {
+                            let predicates = separated(" AND ", predicates);
+                            write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        }
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
@@ -425,6 +476,7 @@ impl MirRelationExpr {
                     };
                     let join_order = |start_idx: usize,
                                       start_key: &Option<Vec<MirScalarExpr>>,
+                                      start_characteristics: &Option<JoinInputCharacteristics>,
                                       tail: &Vec<(
                         usize,
                         Vec<MirScalarExpr>,
@@ -432,12 +484,16 @@ impl MirRelationExpr {
                     )>|
                      -> String {
                         format!(
-                            "{}{} » {}",
+                            "{}{}{} » {}",
                             input_name(start_idx),
                             match start_key {
                                 None => "".to_owned(),
                                 Some(key) => format!("[{}]", join_key_to_string(key)),
                             },
+                            start_characteristics
+                                .as_ref()
+                                .map(|c| c.explain())
+                                .unwrap_or_else(|| "".to_string()),
                             separated(
                                 " » ",
                                 tail.iter().map(|(pos, key, characteristics)| {
@@ -456,7 +512,10 @@ impl MirRelationExpr {
                     };
                     ctx.indented(|ctx| {
                         match implementation {
-                            JoinImplementation::Differential((start_idx, start_key), tail) => {
+                            JoinImplementation::Differential(
+                                (start_idx, start_key, start_characteristics),
+                                tail,
+                            ) => {
                                 soft_assert!(inputs.len() == tail.len() + 1);
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
@@ -465,7 +524,12 @@ impl MirRelationExpr {
                                         f,
                                         "{}{}",
                                         ctx.indent,
-                                        join_order(*start_idx, start_key, tail)
+                                        join_order(
+                                            *start_idx,
+                                            start_key,
+                                            start_characteristics,
+                                            tail
+                                        )
                                     )
                                 })?;
                             }
@@ -479,7 +543,7 @@ impl MirRelationExpr {
                                             f,
                                             "{}{}",
                                             ctx.indent,
-                                            join_order(pos, &None, chain)
+                                            join_order(pos, &None, &None, chain)
                                         )?;
                                     }
                                     Ok(())
@@ -506,12 +570,13 @@ impl MirRelationExpr {
                 ..
             } => {
                 Self::fmt_indexed_filter(f, ctx, id, Some(literal_constraints.clone()))?;
+                self.fmt_attributes(f, ctx)?;
             }
             Reduce {
                 group_key,
                 aggregates,
                 expected_group_size,
-                monotonic: _, // TODO: monotonic should be an attribute
+                monotonic,
                 input,
             } => {
                 FmtNode {
@@ -529,6 +594,9 @@ impl MirRelationExpr {
                             let aggregates = separated(", ", aggregates);
                             write!(f, " aggregates=[{}]", aggregates)?;
                         }
+                        if *monotonic {
+                            write!(f, " monotonic")?;
+                        }
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }
@@ -545,6 +613,7 @@ impl MirRelationExpr {
                 offset,
                 monotonic,
                 input,
+                expected_group_size,
             } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
@@ -563,7 +632,12 @@ impl MirRelationExpr {
                         if offset > &0 {
                             write!(f, " offset={}", offset)?
                         }
-                        write!(f, " monotonic={}", monotonic)?;
+                        if *monotonic {
+                            write!(f, " monotonic")?;
+                        }
+                        if let Some(expected_group_size) = expected_group_size {
+                            write!(f, " exp_group_size={}", expected_group_size)?;
+                        }
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
@@ -654,12 +728,12 @@ impl MirRelationExpr {
                 humanized_index
             )?;
             if constants.len() == 1 {
-                writeln!(f, "value={}", constants.get(0).unwrap())?;
+                write!(f, "value={}", constants.get(0).unwrap())?;
             } else {
-                writeln!(f, "values=[{}]", separated("; ", constants))?;
+                write!(f, "values=[{}]", separated("; ", constants))?;
             }
         } else {
-            writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
+            write!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
         }
         Ok(())
     }

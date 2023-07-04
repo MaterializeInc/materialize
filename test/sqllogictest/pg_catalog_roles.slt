@@ -12,9 +12,9 @@ mode cockroach
 # Start from a pristine server
 reset-server
 
-query IT
-SELECT oid, rolname FROM pg_roles ORDER BY oid
+query T
+SELECT rolname FROM pg_roles ORDER BY oid
 ----
-20007  mz_system
-20008  mz_introspection
-20009  materialize
+mz_system
+mz_introspection
+materialize

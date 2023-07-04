@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -107,6 +105,7 @@ fn main() {
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
+        .extern_path(".mz_rocksdb_types", "::mz_rocksdb_types")
         .extern_path(".mz_cluster_client", "::mz_cluster_client")
         .compile_with_config(
             config,
@@ -123,5 +122,5 @@ fn main() {
             ],
             &[".."],
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

@@ -31,7 +31,7 @@ The formatting of SQL statements is generally straightforward. For example:
 ```sql
 SELECT
     sum(l_extendedprice * l_discount) AS revenue,
-    EXTRACT(DAY FROM l_shipdate)
+    EXTRACT (DAY FROM l_shipdate)
 FROM
     lineitem
 WHERE
@@ -120,14 +120,14 @@ Some key principles to highlight are:
 * Avoid mentioning called function names. Instead say what the code was trying to do.
 * Tricky words to avoid: unable, bad, illegal, unknown.
 * Avoid contractions and spell out words in full.
-* Word choices to be mindful of: find vs. exists, may vs. can vs. might.
+* Word choices to be mindful of: find vs. exist, may vs. can vs. might.
 
 ### System catalog style
 We adhere to standards for our system catalog relations (tables, views), which includes both the stable `mz_catalog` relations and the unstable `mz_internal` relations.
 
 Modeling standards:
-* Normalize the schema. If you’re adding a table that adds detail to rows in an existing table, refer to those rows by ID, and don’t duplicate columns that already exist. E.g., the `mz_kafka_sources` table does not include the name of the source, since that information is available in the `mz_sources` table.
-  * Remember, Materialize is good at joins! We can always add syntax sugar via a `SHOW` command to spare users from typing out the joins for common queries.
+* Normalize the schema for tables. If you’re adding a table that adds detail to rows in an existing table, refer to those rows by ID, and don’t duplicate columns that already exist. E.g., the `mz_kafka_sources` table does not include the name of the source, since that information is available in the `mz_sources` table.
+  * Remember, Materialize is good at joins! We can always add syntax sugar via a `SHOW` command or a view to spare users from typing out the joins for common queries.
 
 Naming standards:
 * Catalog relation names should be consistent with the user-facing naming and messaging in our docs. The names should not reference internal-only concepts when possible.
@@ -139,6 +139,15 @@ Naming standards:
 * For relation names, pluralize the final noun, unless the final noun in the name is a collective noun. Most relations in the catalog will be plural, e.g. `mz_sources` and `mz_connections`.
   * Examples of collective final nouns are `_usage`, `_history`, and `_utilization`.
   * A good example of these standards in practice is the set of relations `mz_sources`, `mz_source_statuses`, and `mz_source_status_history`.
+
+### Function Style
+
+We adhere to standards for our SQL functions.
+
+Naming standards:
+* If the function exists in PostgreSQL, then use the PostgreSQL function and argument names.
+* If the function is specific to Materialize internals, then the name should be prefixed with `mz_`. For example, `mz_now()`.
+* If the function does not exist in PostgreSQL, but it is not specific to Materialize internals, then the name does not need to be prefixed with `mz_`. However, it should not collide with an existing PostgreSQL function.
 
 ## Log message style
 
@@ -154,7 +163,7 @@ macros. Observe the following guidelines:
     ```
     fn handle_persist_thingy(shard_id: ShardId) {
         // Preferred.
-        info!(shard_id = ?the_shard, "handling persist thingy");
+        info!(shard_id = ?shard_id, "handling persist thingy");
         // Acceptable.
         info!("handling persist thingy for shard {}", shard_id);
     }
@@ -272,6 +281,121 @@ do not produce useful backtraces and instead just point to the line in libtest t
 that the test didn't return an error. Panics will produce useful backtraces that include
 the line where the panic occurred. This is especially useful for debugging flaky tests in CI.
 
+### Errors
+
+#### Prefer structured errors over strings
+
+**Common case:** Use [`thiserror`] to define structured errors instead of using
+strings as errors. Meaning, you should _not_ use `anyhow!("this is my error")`.
+When your error wraps other errors or contain other errors as the underlying
+cause or source, you should make sure to tag them with `#[from]` or
+`#[source]`.
+
+If you write your own error enums, make sure to implement the standard
+[`Error`] trait and to properly implement `source()`. This makes it so that we
+can get the chain of causing/underlying errors so that they can be reported
+correctly when needed. With [`thiserror`] this will happen automatically when
+you use the `#[from]` attribute.
+
+The `Display` impl of your error type should _not_ print the chain of errors
+but only print itself and rely on callers to print the error chain when needed.
+Again, this is the behaviour you will get by just using [`thiserror`]. There
+could be exceptions when your error type is wrapping another error type or is
+compositionally including one or multiple other errors, but those should be
+very rare!
+
+#### Printing errors
+
+As mentioned above, the `Display` impl of an error should not print the chain
+of source errors. Whenever you _do_ need to print an error with its chain of
+errors, say when tracing/logging or surfacing an error to users, you should
+make that explicit. We have the `ResultExt` and `ErrorExt` traits that provide
+`map_err_to_string_with_causes`/`err_to_string_with_causes` (for results) and
+`display_with_causes`/`to_string_with_causes` (for errors), that do this for
+you.
+
+### Imports
+
+There are unfortunately no good ways of enforcing a consistent import style in
+CI. In particular, most of the import formatting features of [rustfmt] are
+unstable and will presumably remain so for some time.
+
+In absence of opinionated auto-formatting, we instead use an import style that
+is compatible with rust-analyzer's [auto import] feature. The intention is to
+reduce the friction experienced during normal development as much as possible. A
+match between the code editor's auto import style and our preferred code style
+also makes it less likely that incorrectly formatted imports end up in PRs.
+
+You should follow these rules for formatting imports in Rust:
+
+* Group imports in the following order:
+  ```rust
+  // `std`/`core` imports
+  use std::collections::{BTreeMap, BTreeSet};
+  use std::iter::repeat;
+
+  // imports from external crates (including `mz_` crates)
+  use itertools::Itertools;
+  use mz_ore::collections::CollectionExt;
+  use tracing::info;
+
+  // `crate` imports
+  use crate::util::{index_sql, ResultExt};
+  use crate::{AdapterError, ExecuteResponse};
+  ```
+* Merge imports from the same module into a single `use` statement.
+* Do *not* merge imports from different modules.
+* Use absolute paths for crate-level imports, i.e. `crate::` rather than
+  `super::` or `self::`.
+  * Note that there are cases where readability is significantly improved by
+    ignoring this rule, the most prominent one being the use of `use super::*;`
+    to make the code under test available inside a `tests` submodule.
+
+#### rust-analyzer Configuration
+
+rust-analyzer's [auto import] feature can be configured to adhere to the above
+rules by setting the following options:
+
+* `imports.granularity.group` = `module`
+* `imports.prefix` = `crate`
+
+### Tests
+
+Use the `mz_ore::test` macro instead of `test`, since it automatically
+initializes logging. For tokio tests you can use
+`#[mz_ore::test(tokio::test)]`.
+
+Before:
+```rust
+#[test]
+fn test_auth_base() {
+    mz_ore::test::init_logging();
+    // Test body here
+}
+```
+
+After:
+```rust
+#[mz_ore::test]
+fn test_auth_base() {
+    // Test body here
+}
+```
+
+For tokio tests with parameters:
+```rust
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+async fn state_cache_concurrency() {
+    // Test body here
+}
+```
+
+By default the `"info"` logging level is used. You can still set a different
+logging level inside your test manually if you wish:
+```rust
+mz_ore::test::init_logging_default("warn");
+```
+
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rust-api]: https://rust-lang.github.io/api-guidelines/
@@ -280,3 +404,6 @@ the line where the panic occurred. This is especially useful for debugging flaky
 [`Handle`]: https://docs.rs/tokio/latest/tokio/runtime/struct.Handle.html
 [`Arc<Runtime>`]: https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html
 [`tokio-console`]: /doc/developer/guide-tokio-console.md
+[`thiserror`]: https://github.com/dtolnay/thiserror
+[`Error`]: https://doc.rust-lang.org/stable/std/error/trait.Error.html
+[auto import]: https://rust-analyzer.github.io/manual.html#auto-import

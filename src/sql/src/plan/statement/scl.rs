@@ -12,24 +12,26 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use uncased::UncasedStr;
-
 use mz_repr::adt::interval::Interval;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_sql_parser::ast::InspectShardStatement;
+use uncased::UncasedStr;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
     ExecuteStatement, FetchOption, FetchOptionName, FetchStatement, PrepareStatement,
-    ResetVariableStatement, SetVariableStatement, ShowVariableStatement,
+    ResetVariableStatement, SetVariableStatement, SetVariableTo, ShowVariableStatement,
 };
 use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
+    FetchPlan, InspectShardPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan,
+    ShowVariablePlan, VariableValue,
 };
+use crate::session::vars::SCHEMA_ALIAS;
 
 pub fn describe_set_variable(
     _: &StatementContext,
@@ -43,14 +45,33 @@ pub fn plan_set_variable(
     SetVariableStatement {
         local,
         variable,
-        value,
+        to,
     }: SetVariableStatement,
 ) -> Result<Plan, PlanError> {
+    let value = plan_set_variable_to(to)?;
     Ok(Plan::SetVariable(SetVariablePlan {
-        name: variable.to_string(),
+        name: variable.into_string(),
         value,
         local,
     }))
+}
+
+pub fn plan_set_variable_to(to: SetVariableTo) -> Result<VariableValue, PlanError> {
+    match to {
+        SetVariableTo::Default => Ok(VariableValue::Default),
+        SetVariableTo::Values(values) => {
+            // Per PostgreSQL, string literals and identifiers are treated
+            // equivalently during `SET`. We retain only the underlying string
+            // value of each element in the list. It's our caller's
+            // responsibility to figure out how to set the variable to the
+            // provided list of values using variable-specific logic.
+            let values = values
+                .into_iter()
+                .map(|v| v.into_unquoted_value())
+                .collect();
+            Ok(VariableValue::Values(values))
+        }
+    }
 }
 
 pub fn describe_reset_variable(
@@ -78,6 +99,8 @@ pub fn describe_show_variable(
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("setting", ScalarType::String.nullable(false))
             .with_column("description", ScalarType::String.nullable(false))
+    } else if variable.as_str() == SCHEMA_ALIAS {
+        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(true))
     } else {
         RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
     };
@@ -95,6 +118,22 @@ pub fn plan_show_variable(
             name: variable.to_string(),
         }))
     }
+}
+
+pub fn describe_inspect_shard(
+    _: &StatementContext,
+    InspectShardStatement { .. }: InspectShardStatement,
+) -> Result<StatementDesc, PlanError> {
+    let desc = RelationDesc::empty().with_column("state", ScalarType::Jsonb.nullable(false));
+    Ok(StatementDesc::new(Some(desc)))
+}
+
+pub fn plan_inspect_shard(
+    _: &StatementContext,
+    InspectShardStatement { id }: InspectShardStatement,
+) -> Result<Plan, PlanError> {
+    let id: GlobalId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
+    Ok(Plan::InspectShard(InspectShardPlan { id }))
 }
 
 pub fn describe_discard(
