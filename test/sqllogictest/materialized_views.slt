@@ -224,6 +224,28 @@ query error unknown catalog item 'v'
 SELECT * FROM v
 
 
+# Test: a view on a materialized view that optimizes to the empty set
+# still prevents the underlying view from being dropped.
+# See: https://github.com/MaterializeInc/materialize/issues/20315
+
+statement ok
+CREATE VIEW v AS SELECT 1 AS c
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM v WHERE c IS NULL
+
+statement error cannot drop view v: still depended upon by materialized view mv
+DROP VIEW v
+
+statement ok
+DROP VIEW v CASCADE
+
+query I
+SELECT count(*) FROM mz_materialized_views WHERE name = 'mv'
+----
+0
+
+
 # Test: Materialized view prevents dropping its cluster.
 
 statement ok
