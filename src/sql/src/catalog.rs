@@ -43,7 +43,8 @@ use uuid::Uuid;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
+    SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -584,7 +585,7 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> &[GlobalId];
+    fn uses(&self) -> &ResolvedIds;
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];

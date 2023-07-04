@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +22,7 @@ use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
@@ -180,7 +182,7 @@ impl Coordinator {
                 self.sequence_plan(
                     ctx,
                     Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
-                    Vec::new(),
+                    ResolvedIds(BTreeSet::new()),
                 )
                 .await;
             }
@@ -256,7 +258,8 @@ impl Coordinator {
                         })
                     }
                 };
-                self.sequence_plan(ctx, plan, Vec::new()).await;
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await;
             }
 
             Command::VerifyPreparedStatement {
@@ -553,11 +556,10 @@ impl Coordinator {
         let catalog = self.catalog();
         let catalog = catalog.for_session(ctx.session());
         let original_stmt = stmt.clone();
-        let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+        let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),
         };
-        let depends_on = depends_on.into_iter().collect();
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
         // purification.  This should be done back on the main thread.
         // We do the validation:
@@ -585,7 +587,7 @@ impl Coordinator {
                             ctx,
                             result,
                             params,
-                            depends_on,
+                            resolved_ids,
                             original_stmt,
                             otel_ctx,
                         },
@@ -633,7 +635,7 @@ impl Coordinator {
                                     ctx,
                                     result,
                                     params,
-                                    depends_on,
+                                    resolved_ids,
                                     original_stmt,
                                     otel_ctx,
                                 },
@@ -643,14 +645,14 @@ impl Coordinator {
                         }
                     });
                 } else {
-                    self.sequence_plan(ctx, Plan::CreateConnection(plan), depends_on)
+                    self.sequence_plan(ctx, Plan::CreateConnection(plan), resolved_ids)
                         .await;
                 }
             }
 
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session_mut(), stmt, &params) {
-                Ok(plan) => self.sequence_plan(ctx, plan, depends_on).await,
+                Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
                 Err(e) => ctx.retire(Err(e)),
             },
         }

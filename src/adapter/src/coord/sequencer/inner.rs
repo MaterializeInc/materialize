@@ -43,7 +43,7 @@ use mz_sql::catalog::{
     ErrorMessageObjectDescription, ObjectType, SessionCatalog,
 };
 use mz_sql::names::{
-    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier,
+    ObjectId, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName, SchemaSpecifier,
     SystemObjectId,
 };
 use mz_sql::plan::{
@@ -58,7 +58,7 @@ use mz_sql::plan::{
     OptimizerConfig, Params, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
     ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SelectPlan, SendDiffsPlan,
     SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -134,7 +134,7 @@ impl Coordinator {
     pub(super) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
-        plans: Vec<(GlobalId, CreateSourcePlan, Vec<GlobalId>)>,
+        plans: Vec<(GlobalId, CreateSourcePlan, ResolvedIds)>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
         let mut sources = vec![];
@@ -244,7 +244,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateConnectionPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog_mut().allocate_oid()?;
         let connection_gid = self.catalog_mut().allocate_user_id().await?;
@@ -268,7 +268,7 @@ impl Coordinator {
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
                 connection: connection.clone(),
-                depends_on,
+                resolved_ids,
             }),
             owner_id: *session.current_role_id(),
         }];
@@ -402,7 +402,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateTablePlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateTablePlan {
             name,
@@ -421,7 +421,7 @@ impl Coordinator {
             desc: table.desc,
             defaults: table.defaults,
             conn_id: conn_id.cloned(),
-            depends_on,
+            resolved_ids,
             custom_logical_compaction_window: None,
             is_retained_metrics_object: false,
         };
@@ -542,7 +542,7 @@ impl Coordinator {
         &mut self,
         ctx: ExecuteContext,
         plan: CreateSinkPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) {
         let CreateSinkPlan {
             name,
@@ -588,7 +588,7 @@ impl Coordinator {
             )),
             envelope: sink.envelope,
             with_snapshot,
-            depends_on,
+            resolved_ids,
             cluster_id,
         };
 
@@ -702,7 +702,7 @@ impl Coordinator {
     fn validate_system_column_references(
         &self,
         uses_ambiguous_columns: bool,
-        depends_on: &Vec<GlobalId>,
+        depends_on: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         if uses_ambiguous_columns
             && depends_on
@@ -720,20 +720,10 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateViewPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.validate_system_column_references(plan.ambiguous_columns, &depends_on)?;
-
         let if_not_exists = plan.if_not_exists;
-        let ops = self
-            .generate_view_ops(
-                session,
-                plan.name.clone(),
-                plan.view.clone(),
-                plan.drop_ids,
-                depends_on,
-            )
-            .await?;
+        let ops = self.generate_view_ops(session, &plan, resolved_ids).await?;
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
             Err(AdapterError::Catalog(catalog::Error {
@@ -753,26 +743,36 @@ impl Coordinator {
     async fn generate_view_ops(
         &mut self,
         session: &Session,
-        name: QualifiedItemName,
-        view: View,
-        replace: Vec<GlobalId>,
-        depends_on: Vec<GlobalId>,
+        CreateViewPlan {
+            name,
+            view,
+            drop_ids,
+            ambiguous_columns,
+            ..
+        }: &CreateViewPlan,
+        resolved_ids: ResolvedIds,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
-        self.validate_timeline_context(view.expr.depends_on())?;
+        // Validate any references in the view's expression. We do this on the
+        // unoptimized plan to better reflect what the user typed. We want to
+        // reject queries that depend on a relation in the wrong timeline, for
+        // example, even if we can *technically* optimize that reference away.
+        let depends_on = view.expr.depends_on();
+        self.validate_timeline_context(depends_on.iter().copied())?;
+        self.validate_system_column_references(*ambiguous_columns, &depends_on)?;
 
         let mut ops = vec![];
 
         ops.extend(
-            replace
-                .into_iter()
-                .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
+            drop_ids
+                .iter()
+                .map(|id| catalog::Op::DropObject(ObjectId::Item(*id))),
         );
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
-        let optimized_expr = self.view_optimizer.optimize(view.expr)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
+        let optimized_expr = self.view_optimizer.optimize(view.expr.clone())?;
+        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
         let view = catalog::View {
-            create_sql: view.create_sql,
+            create_sql: view.create_sql.clone(),
             optimized_expr,
             desc,
             conn_id: if view.temporary {
@@ -780,7 +780,7 @@ impl Coordinator {
             } else {
                 None
             },
-            depends_on,
+            resolved_ids,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -798,7 +798,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateMaterializedViewPlan,
-        planning_depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateMaterializedViewPlan {
             name,
@@ -829,7 +829,7 @@ impl Coordinator {
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
-        let expr_depends_on: Vec<_> = view_expr.depends_on().into_iter().collect();
+        let expr_depends_on = view_expr.depends_on();
         self.validate_timeline_context(expr_depends_on.iter().cloned())?;
         self.validate_system_column_references(ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
@@ -880,7 +880,7 @@ impl Coordinator {
                 create_sql,
                 optimized_expr,
                 desc: desc.clone(),
-                depends_on: planning_depends_on,
+                resolved_ids,
                 cluster_id,
             }),
             owner_id: *session.current_role_id(),
@@ -943,7 +943,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateIndexPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateIndexPlan {
             name,
@@ -971,7 +971,7 @@ impl Coordinator {
             keys: index.keys,
             on: index.on,
             conn_id: None,
-            depends_on,
+            resolved_ids,
             cluster_id,
             is_retained_metrics_object: false,
             custom_logical_compaction_window: None,
@@ -1019,7 +1019,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         plan: CreateTypePlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
@@ -1027,7 +1027,7 @@ impl Coordinator {
                 array_id: None,
                 typ: plan.typ.inner,
             },
-            depends_on,
+            resolved_ids,
         };
         let id = self.catalog_mut().allocate_user_id().await?;
         let oid = self.catalog_mut().allocate_oid()?;
@@ -2310,7 +2310,6 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: SubscribePlan,
-        depends_on: Vec<GlobalId>,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
         let SubscribePlan {
@@ -2350,11 +2349,11 @@ impl Coordinator {
 
         // Determine the frontier of updates to subscribe *from*.
         // Updates greater or equal to this frontier will be produced.
-        let uses = match from {
-            SubscribeFrom::Id(id) => vec![id],
-            SubscribeFrom::Query { .. } => depends_on,
-        };
-        let id_bundle = self.index_oracle(cluster_id).sufficient_collections(&uses);
+        let depends_on = from.depends_on();
+        check_no_invalid_log_reads(self.catalog(), cluster, &depends_on, &mut target_replica)?;
+        let id_bundle = self
+            .index_oracle(cluster_id)
+            .sufficient_collections(&depends_on);
         let timeline = self.validate_timeline_context(id_bundle.iter())?;
         let as_of = self
             .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
@@ -2384,12 +2383,6 @@ impl Coordinator {
 
         let mut dataflow = match from {
             SubscribeFrom::Id(from_id) => {
-                check_no_invalid_log_reads(
-                    self.catalog(),
-                    cluster,
-                    &btreeset!(from_id),
-                    &mut target_replica,
-                )?;
                 let from = self.catalog().get_entry(&from_id);
                 let from_desc = from
                     .desc(
@@ -2406,12 +2399,6 @@ impl Coordinator {
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
             SubscribeFrom::Query { expr, desc } => {
-                check_no_invalid_log_reads(
-                    self.catalog(),
-                    cluster,
-                    &expr.depends_on(),
-                    &mut target_replica,
-                )?;
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
@@ -2440,7 +2427,7 @@ impl Coordinator {
             as_of,
             arity: sink_desc.from_desc.arity(),
             cluster_id,
-            depends_on: uses.into_iter().collect(),
+            depends_on: depends_on.into_iter().collect(),
             start_time: self.now(),
             dropping: false,
             output,
@@ -3190,9 +3177,10 @@ impl Coordinator {
                             && (
                                 // empty `uses` indicates either system func or
                                 // view created from constants
-                                entry.uses().is_empty()
+                                entry.uses().0.is_empty()
                                     || entry
                                         .uses()
+                                        .0
                                         .iter()
                                         .all(|id| validate_read_dependencies(catalog, id))
                             )
@@ -3634,13 +3622,13 @@ impl Coordinator {
                             .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
                     };
 
-                let (mut create_source_stmt, mut depends_on) =
+                let (mut create_source_stmt, mut resolved_ids) =
                     create_sql_to_stmt_deps(self, session, cur_entry.create_sql())?;
 
                 // Ensure that we are only dropping items on which we depend.
                 for t in &to_drop {
                     // Remove dependency.
-                    let existed = depends_on.remove(t);
+                    let existed = resolved_ids.0.remove(t);
                     if !existed {
                         Err(AdapterError::internal(
                             ALTER_SOURCE,
@@ -3682,7 +3670,7 @@ impl Coordinator {
                             DeferredItemName::Named(name) => match name {
                                 // Retain all sources which we still have a dependency on.
                                 ResolvedItemName::Item { id, .. } => {
-                                    let contains = depends_on.contains(id);
+                                    let contains = resolved_ids.0.contains(id);
                                     if !contains {
                                         dropped_references.insert(reference.clone());
                                     }
@@ -3757,20 +3745,20 @@ impl Coordinator {
 
                 // Ensure we have actually removed the subsource from the source's dependency and
                 // did not in any other way alter the dependencies.
-                let (_, new_depends_on) =
+                let (_, new_resolved_ids) =
                     create_sql_to_stmt_deps(self, session, &plan.source.create_sql)?;
 
-                if let Some(id) = new_depends_on.iter().find(|id| to_drop.contains(id)) {
+                if let Some(id) = new_resolved_ids.0.iter().find(|id| to_drop.contains(id)) {
                     Err(AdapterError::internal(
                         ALTER_SOURCE,
                         format!("failed to remove dropped ID {id} from dependencies"),
                     ))?;
                 }
 
-                if new_depends_on != depends_on {
+                if new_resolved_ids.0 != resolved_ids.0 {
                     Err(AdapterError::internal(
                         ALTER_SOURCE,
-                        format!("expected depends on to be {depends_on:?}, but is actually {new_depends_on:?}"),
+                        format!("expected resolved items to be {resolved_ids:?}, but is actually {new_resolved_ids:?}"),
                     ))?;
                 }
 
@@ -3779,7 +3767,7 @@ impl Coordinator {
                     plan,
                     // Use the same cluster ID.
                     Some(cur_ingestion.instance_id),
-                    depends_on.into_iter().collect(),
+                    resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
                 );

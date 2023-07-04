@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
-use mz_expr::MirScalarExpr;
+use mz_expr::{CollectionPlan, MirScalarExpr};
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_transform::IndexOracle;
 
@@ -79,8 +79,8 @@ impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
             } else {
                 match self.catalog.get_entry(&id).item() {
                     // Unmaterialized view. Search its dependencies.
-                    view @ CatalogItem::View(_) => {
-                        todo.extend(view.uses());
+                    CatalogItem::View(view) => {
+                        todo.extend(view.optimized_expr.0.depends_on());
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)

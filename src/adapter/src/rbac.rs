@@ -20,7 +20,9 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
 };
-use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId};
+use mz_sql::names::{
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SystemObjectId,
+};
 use mz_sql::plan::{
     AbortTransactionPlan, AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -141,7 +143,7 @@ pub fn check_plan(
     session: &Session,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
-    depends_on: &Vec<GlobalId>,
+    resolved_ids: &ResolvedIds,
 ) -> Result<(), AdapterError> {
     let current_role_id = session.current_role_id();
     if catalog.try_get_role(current_role_id).is_none() {
@@ -202,7 +204,7 @@ pub fn check_plan(
         catalog,
         plan,
         target_cluster_id,
-        depends_on,
+        resolved_ids,
         *current_role_id,
     );
     let mut role_memberships = BTreeMap::new();
@@ -507,7 +509,7 @@ fn generate_required_privileges(
     catalog: &impl SessionCatalog,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
-    depends_on: &Vec<GlobalId>,
+    resolved_ids: &ResolvedIds,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     // When adding a new plan, make sure that the plan struct is fully expanded. This helps ensure
@@ -525,7 +527,11 @@ fn generate_required_privileges(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
+            privileges.extend(generate_item_usage_privileges(
+                catalog,
+                resolved_ids,
+                role_id,
+            ));
             privileges
         }
         Plan::CreateDatabase(CreateDatabasePlan {
@@ -587,9 +593,13 @@ fn generate_required_privileges(
             if_not_exists: _,
             timeline: _,
             cluster_config,
-        }) => {
-            generate_required_source_privileges(catalog, name, cluster_config, depends_on, role_id)
-        }
+        }) => generate_required_source_privileges(
+            catalog,
+            name,
+            cluster_config,
+            resolved_ids,
+            role_id,
+        ),
         Plan::CreateSources(plans) => plans
             .iter()
             .flat_map(
@@ -603,19 +613,22 @@ fn generate_required_privileges(
                              timeline: _,
                              cluster_config,
                          },
-                     depends_on,
+                     resolved_ids,
                  }| {
                     // Sub-sources depend on not-yet created sources, so we need to filter those out.
-                    let existing_depends_on = depends_on
-                        .iter()
-                        .filter(|id| catalog.try_get_item(id).is_some())
-                        .cloned()
-                        .collect();
+                    let existing_resolved_ids = ResolvedIds(
+                        resolved_ids
+                            .0
+                            .iter()
+                            .filter(|id| catalog.try_get_item(id).is_some())
+                            .cloned()
+                            .collect(),
+                    );
                     generate_required_source_privileges(
                         catalog,
                         name,
                         cluster_config,
-                        &existing_depends_on,
+                        &existing_resolved_ids,
                         role_id,
                     )
                     .into_iter()
@@ -666,7 +679,11 @@ fn generate_required_privileges(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
+            privileges.extend(generate_item_usage_privileges(
+                catalog,
+                resolved_ids,
+                role_id,
+            ));
             privileges
         }
         Plan::CreateView(CreateViewPlan {
@@ -682,7 +699,11 @@ fn generate_required_privileges(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
+            privileges.extend(generate_item_usage_privileges(
+                catalog,
+                resolved_ids,
+                role_id,
+            ));
             privileges
         }
         Plan::CreateMaterializedView(CreateMaterializedViewPlan {
@@ -705,7 +726,11 @@ fn generate_required_privileges(
                     role_id,
                 ),
             ];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
+            privileges.extend(generate_item_usage_privileges(
+                catalog,
+                resolved_ids,
+                role_id,
+            ));
             privileges
         }
         Plan::CreateIndex(CreateIndexPlan {
@@ -726,7 +751,11 @@ fn generate_required_privileges(
                     role_id,
                 ),
             ];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
+            privileges.extend(generate_item_usage_privileges(
+                catalog,
+                resolved_ids,
+                role_id,
+            ));
             privileges
         }
         Plan::CreateType(CreateTypePlan { name, typ: _ }) => {
@@ -735,7 +764,11 @@ fn generate_required_privileges(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
+            privileges.extend(generate_item_usage_privileges(
+                catalog,
+                resolved_ids,
+                role_id,
+            ));
             privileges
         }
         Plan::DropObjects(DropObjectsPlan {
@@ -791,7 +824,7 @@ fn generate_required_privileges(
             copy_to: _,
         }) => {
             let mut privileges =
-                generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
+                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id);
             if let Some(privilege) =
                 generate_cluster_usage_privileges(source, target_cluster_id, role_id)
             {
@@ -809,7 +842,7 @@ fn generate_required_privileges(
             output: _,
         }) => {
             let mut privileges =
-                generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
+                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -827,7 +860,7 @@ fn generate_required_privileges(
             config: _,
             no_errors: _,
             explainee: _,
-        }) => generate_read_privileges(catalog, depends_on.iter().cloned(), role_id),
+        }) => generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
         Plan::CopyFrom(CopyFromPlan {
             id,
             columns: _,
@@ -885,7 +918,10 @@ fn generate_required_privileges(
                 })
                 .collect();
             privileges.extend(generate_item_usage_privileges_inner(
-                catalog, depends_on, role_id, seen,
+                catalog,
+                resolved_ids,
+                role_id,
+                seen,
             ));
 
             if let Some(privilege) =
@@ -962,7 +998,10 @@ fn generate_required_privileges(
                 })
                 .collect();
             privileges.extend(generate_item_usage_privileges_inner(
-                catalog, depends_on, role_id, seen,
+                catalog,
+                resolved_ids,
+                role_id,
+                seen,
             ));
 
             if let Some(privilege) =
@@ -1179,7 +1218,7 @@ fn generate_required_source_privileges(
     catalog: &impl SessionCatalog,
     name: &QualifiedItemName,
     cluster_config: &SourceSinkClusterConfig,
-    depends_on: &Vec<GlobalId>,
+    resolved_ids: &ResolvedIds,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = vec![(
@@ -1191,7 +1230,11 @@ fn generate_required_source_privileges(
         Some(id) => privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id)),
         None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
     }
-    privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
+    privileges.extend(generate_item_usage_privileges(
+        catalog,
+        resolved_ids,
+        role_id,
+    ));
     privileges
 }
 
@@ -1229,7 +1272,7 @@ fn generate_read_privileges_inner(
             match item.item_type() {
                 CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.uses().iter().cloned(), item.owner_id()));
+                    views.push((item.uses().0.iter().cloned(), item.owner_id()));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1253,7 +1296,7 @@ fn generate_read_privileges_inner(
 
 fn generate_item_usage_privileges<'a>(
     catalog: &'a impl SessionCatalog,
-    ids: &'a Vec<GlobalId>,
+    ids: &'a ResolvedIds,
     role_id: RoleId,
 ) -> impl Iterator<Item = (SystemObjectId, AclMode, RoleId)> + 'a {
     generate_item_usage_privileges_inner(catalog, ids, role_id, BTreeSet::new())
@@ -1261,13 +1304,13 @@ fn generate_item_usage_privileges<'a>(
 
 fn generate_item_usage_privileges_inner<'a>(
     catalog: &'a impl SessionCatalog,
-    ids: &'a Vec<GlobalId>,
+    ids: &'a ResolvedIds,
     role_id: RoleId,
     seen: BTreeSet<GlobalId>,
 ) -> impl Iterator<Item = (SystemObjectId, AclMode, RoleId)> + 'a {
     // Use a `BTreeSet` to remove duplicate IDs.
-    BTreeSet::from_iter(ids.iter())
-        .into_iter()
+    ids.0
+        .iter()
         .filter(move |id| !seen.contains(id))
         .filter_map(move |id| {
             let item = catalog.get_item(id);

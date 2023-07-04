@@ -1767,15 +1767,22 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
     node: N,
-) -> Result<(N::Folded, BTreeSet<GlobalId>), PlanError>
+) -> Result<(N::Folded, ResolvedIds), PlanError>
 where
     N: FoldNode<Raw, Aug>,
 {
     let mut resolver = NameResolver::new(catalog);
     let result = node.fold(&mut resolver);
     resolver.status?;
-    Ok((result, resolver.ids))
+    Ok((result, ResolvedIds(resolver.ids)))
 }
+
+/// A set of IDs resolved by name resolution.
+///
+/// This is a newtype of a `BTreeSet<GlobalId>` that is provided to make it
+/// harder to confuse a set of resolved IDs with other sets of `GlobalId`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ResolvedIds(pub BTreeSet<GlobalId>);
 
 #[derive(Debug)]
 /// An AST visitor that transforms an AST that contains temporary GlobalId references to one where
@@ -1921,13 +1928,13 @@ impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
     }
 }
 
-pub fn visit_dependencies<'ast, N>(node: &'ast N) -> BTreeSet<GlobalId>
+pub fn visit_dependencies<'ast, N>(node: &'ast N) -> ResolvedIds
 where
     N: VisitNode<'ast, Aug> + 'ast,
 {
     let mut visitor = DependencyVisitor::default();
     node.visit(&mut visitor);
-    visitor.ids
+    ResolvedIds(visitor.ids)
 }
 
 // Used when displaying a view's source for human creation. If the name

@@ -59,7 +59,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId,
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -508,17 +509,7 @@ pub struct CreateSourcePlan {
 pub struct CreateSourcePlans {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
-    pub depends_on: Vec<GlobalId>,
-}
-
-impl From<(GlobalId, CreateSourcePlan, Vec<GlobalId>)> for CreateSourcePlans {
-    fn from(plan: (GlobalId, CreateSourcePlan, Vec<GlobalId>)) -> Self {
-        CreateSourcePlans {
-            source_id: plan.0,
-            plan: plan.1,
-            depends_on: plan.2,
-        }
-    }
+    pub resolved_ids: ResolvedIds,
 }
 
 /// Specifies the cluster for a source or a sink.
