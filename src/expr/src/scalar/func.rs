@@ -2567,9 +2567,9 @@ impl BinaryFunc {
             | SubTimeInterval => input1_type.nullable(in_nullable),
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
-            | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
+            | DateTruncTimestamp => ScalarType::Timestamp.nullable(in_nullable),
 
-            DateTruncInterval => ScalarType::Interval.nullable(true),
+            DateTruncInterval => ScalarType::Interval.nullable(in_nullable),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
                 ScalarType::Timestamp.nullable(in_nullable)
@@ -2591,7 +2591,7 @@ impl BinaryFunc {
 
             TimezoneTime { .. } | TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
-            SubTime => ScalarType::Interval.nullable(true),
+            SubTime => ScalarType::Interval.nullable(in_nullable),
 
             MzRenderTypmod | TextConcat => ScalarType::String.nullable(in_nullable),
 
@@ -2630,7 +2630,7 @@ impl BinaryFunc {
 
             ElementListConcat => input2_type.scalar_type.without_modifiers().nullable(true),
 
-            DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
+            DigestString | DigestBytes => ScalarType::Bytes.nullable(in_nullable),
             Position => ScalarType::Int32.nullable(in_nullable),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
@@ -7877,49 +7877,6 @@ mod test {
             .unwrap()
             .try_into()
             .unwrap()
-    }
-
-    // Tests that `UnaryFunc::output_type` are consistent with
-    // `UnaryFunc::introduces_nulls` and `UnaryFunc::propagates_nulls`.
-    // Currently, only unit variants of UnaryFunc are tested because those are
-    // the easiest to construct in bulk.
-    #[mz_ore::test]
-    fn unary_func_introduces_nulls() {
-        // Dummy columns to test the nullability of `UnaryFunc::output_type`.
-        // It is ok that we're feeding these dummy columns into functions that
-        // may not even support this `ScalarType` as an input because we only
-        // care about input and output nullabilities.
-        let dummy_col_nullable_type = ScalarType::Bool.nullable(true);
-        let dummy_col_nonnullable_type = ScalarType::Bool.nullable(false);
-        let mut rti = mz_lowertest::ReflectedTypeInfo::default();
-        UnaryFunc::add_to_reflected_type_info(&mut rti);
-        for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
-            if f_types.is_empty() {
-                let unary_unit_variant: UnaryFunc =
-                    serde_json::from_str(&format!("\"{}\"", variant)).unwrap();
-                let output_on_nullable_input = unary_unit_variant
-                    .output_type(dummy_col_nullable_type.clone())
-                    .nullable;
-                let output_on_nonnullable_input = unary_unit_variant
-                    .output_type(dummy_col_nonnullable_type.clone())
-                    .nullable;
-                if unary_unit_variant.introduces_nulls() {
-                    // The output type should always be nullable no matter the
-                    // input type.
-                    assert!(output_on_nullable_input, "failure on {}", variant);
-                    assert!(output_on_nonnullable_input, "failure on {}", variant)
-                } else {
-                    // The output type will be nonnullable if the input type is
-                    // nonnullable. If the input type is nullable, the output
-                    // type is equal to whether the func propagates nulls.
-                    assert!(!output_on_nonnullable_input, "failure on {}", variant);
-                    assert_eq!(
-                        output_on_nullable_input,
-                        unary_unit_variant.propagates_nulls()
-                    );
-                }
-            }
-        }
     }
 
     proptest! {

@@ -4086,6 +4086,7 @@ mod tests {
     use std::env;
     use std::time::{Duration, Instant};
 
+    use mz_expr::MirScalarExpr;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
@@ -4542,11 +4543,9 @@ mod tests {
                         .return_typ
                         .map(|item| resolve_type_oid(item))
                         .expect("must exist");
-                    let return_ctyp = &mz_pgrepr::Type::from_oid(return_oid).ok().map(|typ| {
-                        ScalarType::try_from(&typ)
-                            .expect("must exist")
-                            .nullable(true)
-                    });
+                    let return_styp = &mz_pgrepr::Type::from_oid(return_oid)
+                        .ok()
+                        .map(|typ| ScalarType::try_from(&typ).expect("must exist"));
 
                     let mut idxs = vec![0; datums.len()];
                     let mut args = Vec::with_capacity(idxs.len());
@@ -4578,15 +4577,64 @@ mod tests {
                         );
 
                         // Execute the function as much as possible, ensuring no panics occur, but
-                        // otherwise ignoring eval errors.
+                        // otherwise ignoring eval errors. We also do various other checks.
                         let start = Instant::now();
                         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
                         if let Ok(hir) = res {
                             if let Ok(mir) = hir.lower_uncorrelated() {
-                                if let Ok(datum) = mir.eval(&[], &arena) {
-                                    if let Some(return_ctyp) = return_ctyp {
-                                        if !datum.is_instance_of(return_ctyp) {
-                                            panic!("{call_name}: expected return type of {return_ctyp:?}, got {datum}");
+                                if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
+                                    if let Some(return_styp) = return_styp {
+                                        let mir_typ = mir.typ(&[]);
+                                        // MIR type inference should be consistent with the type
+                                        // we get from the catalog.
+                                        assert_eq!(mir_typ.scalar_type, *return_styp);
+                                        // The following will check not just that the scalar type
+                                        // is ok, but also catches if the function returned a null
+                                        // but the MIR type inference said "non-nullable".
+                                        if !eval_result_datum.is_instance_of(&mir_typ) {
+                                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
+                                        }
+                                        // Check the consistency of `introduces_nulls` and
+                                        // `propagates_nulls` with `MirScalarExpr::typ`.
+                                        if let Some((introduces_nulls, propagates_nulls)) =
+                                            call_introduces_propagates_nulls(&mir)
+                                        {
+                                            if introduces_nulls {
+                                                // If the function introduces_nulls, then the return
+                                                // type should always be nullable, regardless of
+                                                // the nullability of the input types.
+                                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                            } else {
+                                                let any_input_null =
+                                                    args.iter().any(|arg| arg.is_null());
+                                                if !any_input_null {
+                                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                } else {
+                                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                }
+                                            }
+                                        }
+                                        // Check that `MirScalarExpr::reduce` yields the same result
+                                        // as the real evaluation.
+                                        let mut reduced = mir.clone();
+                                        reduced.reduce(&[]);
+                                        match reduced {
+                                            MirScalarExpr::Literal(reduce_result, ctyp) => {
+                                                match reduce_result {
+                                                    Ok(reduce_result_row) => {
+                                                        let reduce_result_datum = reduce_result_row.unpack_first();
+                                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                        // Let's check that the types also match.
+                                                        // (We are not checking nullability here,
+                                                        // because it's ok when we know a more
+                                                        // precise nullability after actually
+                                                        // evaluating a function than before.)
+                                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                    },
+                                                    Err(..) => {}, // It's ok, we might have given invalid args to the function
+                                                }
+                                            },
+                                            _ => unreachable!("all args are literals, so should have reduced to a literal"),
                                         }
                                     }
                                 }
@@ -4616,6 +4664,37 @@ mod tests {
         }
 
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await
+    }
+
+    /// If the given MirScalarExpr
+    ///  - is a function call, and
+    ///  - all arguments are literals
+    /// then it returns whether the called function (introduces_nulls, propagates_nulls).
+    fn call_introduces_propagates_nulls(mir_func_call: &MirScalarExpr) -> Option<(bool, bool)> {
+        match mir_func_call {
+            MirScalarExpr::CallUnary { func, expr } => {
+                if expr.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                if expr1.is_literal() && expr2.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                if exprs.iter().all(|arg| arg.is_literal()) {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     // Make sure pg views don't use types that only exist in Materialize.
