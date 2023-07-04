@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Set
+from typing import List, Set
 
 from attr import dataclass
 
@@ -218,9 +218,8 @@ class PreExecutionInconsistencyIgnoreFilter:
 
 class PostExecutionInconsistencyIgnoreFilter:
     def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
-        contains_aggregation = (
-            error.query_execution.query_template.contains_aggregations
-        )
+        query_template = error.query_execution.query_template
+        contains_aggregation = query_template.contains_aggregations
 
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
             outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
@@ -239,32 +238,43 @@ class PostExecutionInconsistencyIgnoreFilter:
                 return YesIgnore("#19662")
 
             if (
-                error.query_execution.query_template.where_expression is not None
+                query_template.where_expression is not None
                 and dfr_fails_but_ctf_succeeds
             ):
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return YesIgnore("#17189")
 
         if error.error_type == ValidationErrorType.ERROR_MISMATCH:
-            query_template = error.query_execution.query_template
-
-            FUNCTIONS_TAKING_SHORTCUTS = {"count"}
-
-            def is_function_taking_shortcut(expression: Expression) -> bool:
-                if isinstance(expression, ExpressionWithArgs):
-                    operation = expression.operation
-                    return (
-                        isinstance(operation, DbFunction)
-                        and operation.function_name_in_lower_case
-                        in FUNCTIONS_TAKING_SHORTCUTS
-                    )
-                return False
-
-            for expression in query_template.select_expressions:
-                if contains_aggregation and expression.contains(
-                    is_function_taking_shortcut
-                ):
-                    # see https://github.com/MaterializeInc/materialize/issues/17189
-                    return YesIgnore("#17189")
+            if self._uses_shortcut_optimization(
+                query_template.select_expressions, contains_aggregation
+            ):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return YesIgnore("#17189")
 
         return NoIgnore()
+
+    def _uses_shortcut_optimization(
+        self, expressions: List[Expression], contains_aggregation: bool
+    ) -> bool:
+        if not contains_aggregation:
+            # all current known optimizations causing issues involve aggregations
+            return False
+
+        def is_function_taking_shortcut(expression: Expression) -> bool:
+            functions_taking_shortcuts = {"count"}
+
+            if isinstance(expression, ExpressionWithArgs):
+                operation = expression.operation
+                return (
+                    isinstance(operation, DbFunction)
+                    and operation.function_name_in_lower_case
+                    in functions_taking_shortcuts
+                )
+            return False
+
+        for expression in expressions:
+            if expression.contains(is_function_taking_shortcut):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return True
+
+        return False
