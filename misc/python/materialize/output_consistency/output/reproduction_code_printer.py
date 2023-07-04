@@ -71,7 +71,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             query_template, query_column_selection
         )
         self._print_text(
-            f"All directly or indirectly involved characteristics: {characteristics}"
+            f"All assumed directly or indirectly involved characteristics: {characteristics}"
         )
 
     def __print_setup_code_for_error(
