@@ -171,11 +171,23 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 return Ok(());
             }
 
+            // Determine the slot lsn.
+            let connection_config = connection
+                .connection
+                .config(&*context.secrets_reader)
+                .await?
+                .replication_timeouts(config.params.pg_replication_timeouts.clone());
+            let slot = &connection.publication_details.slot;
+            let replication_client = connection_config.connect_replication().await?;
+            super::ensure_replication_slot(&replication_client, slot).await?;
+            let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
+
             let resume_upper = Antichain::from_iter(
                 subsource_resume_uppers
                     .values()
                     .flat_map(|f| f.elements())
-                    .cloned(),
+                    // Advance any upper as far as the slot_lsn.
+                    .map(|t|std::cmp::max(*t, slot_lsn))
             );
 
             let Some(resume_lsn) = resume_upper.into_option() else {
@@ -185,11 +197,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             upper_cap.downgrade(&resume_lsn);
             trace!(%id, "timely-{worker_id} replication reader started lsn={}", resume_lsn);
 
-            let connection_config = connection
-                .connection
-                .config(&*context.secrets_reader)
-                .await?
-                .replication_timeouts(config.params.pg_replication_timeouts.clone());
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next_mut().await {
