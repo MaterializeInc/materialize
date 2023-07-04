@@ -72,6 +72,7 @@ class AnyLikeOtherOperationParam(OperationParam):
     def _get_previous_arg(self, previous_args: List[Expression]) -> Expression:
         if self.index_of_previous_param >= len(previous_args):
             raise RuntimeError(
-                f"Missing previous arg at index {self.index_of_previous_param}"
+                f"Requested previous arg at index {self.index_of_previous_param}"
+                f" but list only contains {len(previous_args)} args"
             )
         return previous_args[self.index_of_previous_param]
