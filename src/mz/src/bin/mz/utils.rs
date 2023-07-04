@@ -55,6 +55,12 @@ pub(crate) fn run_loading_spinner(message: String) -> ProgressBar {
     progress_bar
 }
 
+// Parse a string into a std::time::Duration
+pub(crate) fn parse_timeout(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
+    let secs = arg.parse::<u64>()?;
+    Ok(std::time::Duration::from_secs(secs))
+}
+
 // Validator function that accepts only ASCII letters, digits, underscores, and dashes
 pub(crate) fn ascii_validator(val: &str) -> Result<(), String> {
     // Iterate over the arg value
