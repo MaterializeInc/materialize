@@ -253,6 +253,11 @@ class PostExecutionInconsistencyIgnoreFilter:
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return YesIgnore("#17189")
 
+            if query_template.where_expression is not None:
+                # The error message may depend on the evaluation order of the where expression.
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return YesIgnore("#17189")
+
         return NoIgnore()
 
     def _uses_shortcut_optimization(
