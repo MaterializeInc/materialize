@@ -130,14 +130,17 @@ known_errors = [
     "unrecognized configuration parameter",
     "numeric field overflow",
     "bigint out of range",
+    "smallint out of range",
     "uint8 out of range",
     "uint4 out of range",
+    "uint2 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
     "not supported for type time",
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
     "is out of range for type numeric: exceeds maximum precision",
+    "CAST does not support casting from integer to ",  # TODO: Improve type system
 ]
 
 
