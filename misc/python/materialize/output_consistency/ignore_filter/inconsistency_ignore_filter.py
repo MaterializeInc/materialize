@@ -240,8 +240,11 @@ class PostExecutionInconsistencyIgnoreFilter:
                 return YesIgnore("#19662")
 
             if (
-                query_template.where_expression is not None
-                and dfr_fails_but_ctf_succeeds
+                dfr_fails_but_ctf_succeeds
+                and query_template.where_expression is not None
+                and self._uses_shortcut_optimization(
+                    [query_template.where_expression], contains_aggregation
+                )
             ):
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return YesIgnore("#17189")
@@ -268,7 +271,7 @@ class PostExecutionInconsistencyIgnoreFilter:
             return False
 
         def is_function_taking_shortcut(expression: Expression) -> bool:
-            functions_taking_shortcuts = {"count"}
+            functions_taking_shortcuts = {"count", "string_agg"}
 
             if isinstance(expression, ExpressionWithArgs):
                 operation = expression.operation
