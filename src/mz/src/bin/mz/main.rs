@@ -213,8 +213,8 @@ mod clap_clippy_hack {
             #[clap(short, long)]
             /// Skips checking that the region is healthy after enabling it
             no_wait_healthy: bool,
-            #[clap(short, long, parse(try_from_str = parse_timeout))]
-            /// Sets a timeout in seconds to wait the region to be healthy
+            #[clap(short, long, parse(try_from_str = parse_timeout), default_value = "360")]
+            /// Sets a timeout in seconds to wait the region to be healthy.
             timeout: std::time::Duration,
         },
         /// Disable a region.
