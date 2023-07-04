@@ -79,11 +79,13 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::time::Duration;
+
 use anyhow::{bail, Context, Result};
+use mz_ore::retry::Retry;
 use once_cell::sync::Lazy;
 use secrets::SecretCommand;
 use serde::Deserialize;
-use tokio::time::Instant;
 use utils::{ascii_validator, new_client};
 
 use mz::api::{
@@ -359,23 +361,27 @@ async fn main() -> Result<()> {
                 .await
                 .with_context(|| "Enabling region.")?;
 
-                let environment = get_region_environment(&client, &valid_profile, &region)
-                    .await
-                    .with_context(|| "Retrieving environment data.")?;
-
                 if !no_wait_healthy {
-                    let start = Instant::now();
+                    Retry::default()
+                        .max_duration(timeout)
+                        .clamp_backoff(Duration::from_secs(1))
+                        .retry_async(|_| async {
+                            let environment =
+                                get_region_environment(&client, &valid_profile, &region)
+                                    .await
+                                    .with_context(|| "Retrieving environment data.")?;
+                            if !environment.resolvable {
+                                bail!(String::from("Timeout expired enabling region."));
+                            }
 
-                    loop {
-                        let now = Instant::now();
-                        let elapsed = now.checked_duration_since(start + timeout);
-
-                        if elapsed.is_some() {
-                            bail!(String::from("Timeout expired enabling region."));
-                        } else if check_environment_health(&valid_profile, &environment)? {
-                            break;
-                        }
-                    }
+                            loop {
+                                if check_environment_health(&valid_profile, &environment)? {
+                                    break Ok(environment);
+                                }
+                            }
+                        })
+                        .await
+                        .with_context(|| "Retrieving environment data.")?;
                 }
 
                 loading_spinner.finish_with_message(format!("{cloud_provider_region} is online"));
