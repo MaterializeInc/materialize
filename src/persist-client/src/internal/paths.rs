@@ -289,6 +289,29 @@ impl std::fmt::Display for BlobKeyPrefix<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use semver::Version;
+
+    fn gen_version() -> impl Strategy<Value = Version> {
+        (0u64..=99, 0u64..=999, 0u64..=99)
+            .prop_map(|(major, minor, patch)| Version::new(major, minor, patch))
+    }
+
+    #[mz_ore::test]
+    fn key_ordering_compatible() {
+        // The WriterKey's ordering should never disagree with the Version ordering.
+        // (Though the writer key might compare equal when the version does not.)
+        proptest!(|(a in gen_version(), b in gen_version())| {
+            let a_key = WriterKey::for_version(&a);
+            let b_key = WriterKey::for_version(&b);
+            if a >= b {
+                assert!(a_key >= b_key);
+            }
+            if a <= b {
+                assert!(a_key <= b_key);
+            }
+        })
+    }
 
     #[mz_ore::test]
     fn partial_blob_key_completion() {
