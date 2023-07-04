@@ -186,7 +186,7 @@ async fn main() -> Result<(), Error> {
     let cx = Context::load(ContextLoadArgs {
         config_file_path: args.config,
         output_format: args.format.into(),
-        // TODO: no_color: env::no_color() || args.no_color,
+        // TODO: no_color: env::no_color() || args.no_color
         no_color: args.no_color,
     })
     .await?;
