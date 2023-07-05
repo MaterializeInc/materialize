@@ -79,26 +79,5 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::path::PathBuf;
-use std::{env, fs};
-
-use anyhow::{Context, Result};
-
-const AST_DEFS_MOD: &str = "src/ast/defs.rs";
-
-fn main() -> Result<()> {
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
-
-    // Generate AST visitors.
-    {
-        let ir = mz_walkabout::load(AST_DEFS_MOD)?;
-        let fold = mz_walkabout::gen_fold(&ir);
-        let visit = mz_walkabout::gen_visit(&ir);
-        let visit_mut = mz_walkabout::gen_visit_mut(&ir);
-        fs::write(out_dir.join("fold.rs"), fold)?;
-        fs::write(out_dir.join("visit.rs"), visit)?;
-        fs::write(out_dir.join("visit_mut.rs"), visit_mut)?;
-    }
-
-    Ok(())
-}
+pub mod keywords;
+pub mod lexer;

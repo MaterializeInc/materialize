@@ -57,6 +57,7 @@ members = [
     "src/service",
     "src/ssh-util",
     "src/sql",
+    "src/sql-lexer",
     "src/sql-parser",
     "src/sqllogictest",
     "src/stash",

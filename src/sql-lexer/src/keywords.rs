@@ -23,8 +23,6 @@ use std::str::FromStr;
 
 use uncased::UncasedStr;
 
-use crate::ast::Ident;
-
 // The `Keyword` type and the keyword constants are automatically generated from
 // the list in keywords.txt by the crate's build script.
 //
@@ -58,10 +56,6 @@ use crate::ast::Ident;
 include!(concat!(env!("OUT_DIR"), "/keywords.rs"));
 
 impl Keyword {
-    pub fn into_ident(self) -> Ident {
-        Ident::new(self.as_str().to_lowercase())
-    }
-
     /// Reports whether this keyword requires quoting when used as an
     /// identifier in any context.
     ///

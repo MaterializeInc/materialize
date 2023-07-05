@@ -4845,6 +4845,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-sql-lexer"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "phf",
+ "phf_codegen",
+ "serde",
+ "uncased",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-sql-parser"
 version = "0.0.0"
 dependencies = [
@@ -4854,9 +4867,9 @@ dependencies = [
  "enum-kinds",
  "itertools",
  "mz-ore",
+ "mz-sql-lexer",
  "mz-walkabout",
  "phf",
- "phf_codegen",
  "serde",
  "tracing",
  "uncased",

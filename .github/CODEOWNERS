@@ -77,6 +77,7 @@
 # The lowering of HirRelationExpr to MirRelationExpr is part of the compute
 # layer, despite being located in the `sql` crate.
 /src/sql/src/plan/lowering.rs       @MaterializeInc/compute
+/src/sql-lexer                      @MaterializeInc/surfaces
 /src/sql-parser                     @MaterializeInc/surfaces
 /src/sqllogictest                   @MaterializeInc/surfaces
 /src/ssh-util                       @MaterializeInc/storage
