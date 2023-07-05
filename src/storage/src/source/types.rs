@@ -487,7 +487,7 @@ pub struct UpsertMetrics {
     pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
     pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_updates: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rocksdb_autospill_in_use: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb: Arc<mz_rocksdb::RocksDBMetrics>,
 }
@@ -507,9 +507,10 @@ impl UpsertMetrics {
             rehydration_updates: base
                 .rehydration_updates
                 .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
-            rocksdb_autospill_in_use: base
-                .rocksdb_autospill_in_use
-                .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
+            rocksdb_autospill_in_use: Arc::new(
+                base.rocksdb_autospill_in_use
+                    .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
+            ),
             shared: base.shared(&source_id),
             rocksdb: base.rocksdb(&source_id),
         }

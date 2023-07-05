@@ -76,7 +76,9 @@ use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
+use mz_ore::metrics::DeleteOnDropGauge;
 use mz_rocksdb::RocksDBConfig;
+use prometheus::core::AtomicU64;
 
 use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
@@ -468,14 +470,22 @@ pub struct AutoSpillBackend {
     backend_type: BackendType,
     rockdsdb_params: RocksDBParams,
     auto_spill_threshold_bytes: usize,
+    rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
 }
 
 impl AutoSpillBackend {
-    pub(crate) fn new(rockdsdb_params: RocksDBParams, auto_spill_threshold_bytes: usize) -> Self {
+    pub(crate) fn new(
+        rockdsdb_params: RocksDBParams,
+        auto_spill_threshold_bytes: usize,
+        rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    ) -> Self {
+        // Initializing the metric to 0, to reflect in memory hash map is being used
+        rocksdb_autospill_in_use.set(0);
         Self {
             backend_type: BackendType::InMemory(InMemoryHashMap::default()),
             rockdsdb_params,
             auto_spill_threshold_bytes,
+            rocksdb_autospill_in_use,
         }
     }
 
@@ -538,6 +548,8 @@ impl UpsertStateBackend for AutoSpillBackend {
                                 // clearing the in memory map after successfully writing to rocksdb
                                 map.clear();
                                 self.backend_type = BackendType::RocksDb(rocksdb_backend);
+                                // Switching metric to 1 for rocksdb
+                                self.rocksdb_autospill_in_use.set(1);
                             }
                             Err(e) => {
                                 tracing::warn!(

@@ -181,6 +181,8 @@ where
 
         let env = instance_context.rocksdb_env.clone();
 
+        let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
+
         if allow_auto_spill {
             upsert_inner(
                 input,
@@ -199,6 +201,7 @@ where
                             metrics: rocksdb_metrics,
                         },
                         spill_threshold,
+                        rocksdb_in_use_metric,
                     )
                 },
             )
