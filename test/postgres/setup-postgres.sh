@@ -18,6 +18,7 @@ ssl_key_file = '/share/secrets/postgres.key'
 ssl_ca_file = '/share/secrets/ca.crt'
 hba_file = '/share/conf/pg_hba.conf'
 wal_level = logical
+fsync = off
 max_wal_senders = 20
 max_replication_slots = 20
 EOCONF
