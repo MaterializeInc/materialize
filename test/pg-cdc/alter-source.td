@@ -200,7 +200,7 @@ contains:cannot drop source table_e: still depended upon by materialized view mv
 
 # TEXT COLUMNS removed from table_f
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-""
+<null>
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress

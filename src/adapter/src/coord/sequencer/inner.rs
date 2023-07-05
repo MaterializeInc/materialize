@@ -3885,11 +3885,13 @@ impl Coordinator {
                 // Remove dropped references from text columns.
                 match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres { options, .. } => {
-                        if let Some(text_cols) = options
-                            .iter_mut()
-                            .find(|option| option.name == PgConfigOptionName::TextColumns)
-                        {
-                            match &mut text_cols.value {
+                        options.retain_mut(|option| {
+                            if option.name != PgConfigOptionName::TextColumns {
+                                return true;
+                            }
+
+                            // We know this is text_cols
+                            match &mut option.value {
                                 Some(WithOptionValue::Sequence(names)) => {
                                     names.retain(|name| match name {
                                         WithOptionValue::UnresolvedItemName(
@@ -3914,10 +3916,13 @@ impl Coordinator {
                                     });
 
                                     names.sort();
+                                    // Only retain this option if there are
+                                    // names left.
+                                    !names.is_empty()
                                 }
-                                _ => {}
+                                _ => true
                             }
-                        }
+                        })
                     }
                     _ => {}
                 }
