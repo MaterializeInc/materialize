@@ -211,24 +211,7 @@ pub fn check_plan(
     role_memberships.insert(*current_role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
 
-    // Altering the default privileges for the PUBLIC role (aka ALL ROLES) will affect all roles
-    // that currently exist and roles that will exist in the future. It's impossible for an exising
-    // role to be a member of a role that doesn't exist yet, so no current role could possibly have
-    // the privileges required to alter default privileges for the PUBLIC role. Therefore we
-    // only superusers can alter default privileges for the PUBLIC role.
-    if let Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
-        privilege_objects, ..
-    }) = &plan
-    {
-        if privilege_objects
-            .iter()
-            .any(|privilege_object| privilege_object.role_id.is_public())
-        {
-            return Err(AdapterError::Unauthorized(UnauthorizedError::Superuser {
-                action: "ALTER DEFAULT PRIVILEGES FOR ALL ROLES".to_string(),
-            }));
-        }
-    }
+    check_superuser_required(plan)?;
 
     Ok(())
 }
@@ -1370,6 +1353,44 @@ fn check_object_privileges(
     }
 
     Ok(())
+}
+
+fn check_superuser_required(plan: &Plan) -> Result<(), UnauthorizedError> {
+    match plan {
+        // Altering the default privileges for the PUBLIC role (aka ALL ROLES) will affect all roles
+        // that currently exist and roles that will exist in the future. It's impossible for an exising
+        // role to be a member of a role that doesn't exist yet, so no current role could possibly have
+        // the privileges required to alter default privileges for the PUBLIC role. Therefore we
+        // only superusers can alter default privileges for the PUBLIC role.
+        Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+            privilege_objects, ..
+        }) if privilege_objects
+            .iter()
+            .any(|privilege_object| privilege_object.role_id.is_public()) =>
+        {
+            Err(UnauthorizedError::Superuser {
+                action: "ALTER DEFAULT PRIVILEGES FOR ALL ROLES".to_string(),
+            })
+        }
+        // To grant/revoke a privilege on some object, generally the grantor/revoker must be the
+        // owner of that object (or have a grant option on that object which isn't implemented in
+        // Materialize yet). There is no owner of the entire system, so it's only reasonable to
+        // restrict granting/revoking system privileges to superusers.
+        Plan::GrantPrivileges(GrantPrivilegesPlan {
+            update_privileges, ..
+        })
+        | Plan::RevokePrivileges(RevokePrivilegesPlan {
+            update_privileges, ..
+        }) if update_privileges
+            .iter()
+            .any(|update_privilege| update_privilege.target_id.is_system()) =>
+        {
+            Err(UnauthorizedError::Superuser {
+                action: "GRANT/REVOKE SYSTEM PRIVILEGES".to_string(),
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {

@@ -2875,6 +2875,24 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+## System
+
+statement error You must be a superuser to GRANT/REVOKE SYSTEM PRIVILEGES
+GRANT CREATEDB ON SYSTEM TO joe
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+statement error You must be a superuser to GRANT/REVOKE SYSTEM PRIVILEGES
+REVOKE CREATEDB ON SYSTEM FROM joe
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe
+----
+COMPLETE 0
+
 # GRANT/REVOKE role
 
 simple conn=mz_system,user=mz_system
