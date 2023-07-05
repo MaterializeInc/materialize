@@ -9,13 +9,12 @@
 
 from copy import deepcopy
 from enum import Enum
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 from materialize.data_ingest.data_type import RecordSize
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.row import Operation, Row
 from materialize.data_ingest.rowlist import RowList
-from materialize.data_ingest.transaction import Transaction
 
 
 class Records(Enum):
@@ -38,7 +37,7 @@ class Target(Enum):
 
 
 class Definition:
-    def generate(self, fields: List[Field]) -> List[Transaction]:
+    def generate(self, fields: List[Field]) -> Iterator[RowList]:
         raise NotImplementedError
 
 
@@ -55,7 +54,7 @@ class Insert(Definition):
             )
         return self.count
 
-    def generate(self, fields: List[Field]) -> List[Transaction]:
+    def generate(self, fields: List[Field]) -> Iterator[RowList]:
         if self.count < 1:
             raise ValueError(
                 f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
@@ -63,7 +62,6 @@ class Insert(Definition):
 
         fields_with_values = deepcopy(fields)
 
-        transactions = []
         for i in range(self.count):
             for field in fields_with_values:
                 if field.is_key:
@@ -71,22 +69,14 @@ class Insert(Definition):
                 else:
                     field.set_random_value(self.record_size)
             self.current_key += 1
-            transactions.append(
-                Transaction(
-                    [
-                        RowList(
-                            [
-                                Row(
-                                    fields=deepcopy(fields_with_values),
-                                    operation=Operation.INSERT,
-                                )
-                            ]
-                        )
-                    ]
-                )
+            yield RowList(
+                [
+                    Row(
+                        fields=deepcopy(fields_with_values),
+                        operation=Operation.INSERT,
+                    )
+                ]
             )
-
-        return transactions
 
 
 class Upsert(Definition):
@@ -95,7 +85,7 @@ class Upsert(Definition):
         self.count = count.value
         self.record_size = record_size
 
-    def generate(self, fields: List[Field]) -> List[Transaction]:
+    def generate(self, fields: List[Field]) -> Iterator[RowList]:
         if self.count < 1:
             raise ValueError(
                 f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
@@ -103,7 +93,6 @@ class Upsert(Definition):
 
         fields_with_values = deepcopy(fields)
 
-        transactions = []
         for i in range(self.count):
             for field in fields_with_values:
                 if field.is_key:
@@ -114,22 +103,14 @@ class Upsert(Definition):
                 else:
                     field.value = field.data_type.random_value(self.record_size)
 
-            transactions.append(
-                Transaction(
-                    [
-                        RowList(
-                            [
-                                Row(
-                                    fields=deepcopy(fields_with_values),
-                                    operation=Operation.UPSERT,
-                                )
-                            ]
-                        )
-                    ]
-                )
+            yield RowList(
+                [
+                    Row(
+                        fields=deepcopy(fields_with_values),
+                        operation=Operation.UPSERT,
+                    )
+                ]
             )
-
-        return transactions
 
 
 class Delete(Definition):
@@ -143,39 +124,23 @@ class Delete(Definition):
         self.record_size = record_size
         self.num = num
 
-    def generate(self, fields: List[Field]) -> List[Transaction]:
-        transactions = []
-
+    def generate(self, fields: List[Field]) -> Iterator[RowList]:
         fields_with_values = [field for field in fields if field.is_key]
 
         if self.number_of_records == Records.ONE:
             for field in fields_with_values:
                 field.value = field.data_type.random_value(self.record_size)
-            transactions.append(
-                Transaction([RowList([Row(fields_with_values, Operation.DELETE)])])
-            )
+            yield RowList([Row(fields_with_values, Operation.DELETE)])
         elif self.number_of_records in (Records.SOME, Records.MANY):
             for i in range(self.number_of_records.value):
                 for field in fields_with_values:
                     field.value = field.data_type.random_value(self.record_size)
-                transactions.append(
-                    Transaction(
-                        [RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])]
-                    )
-                )
+                yield RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])
         elif self.number_of_records == Records.ALL:
             assert self.num is not None
             for i in range(self.num):
                 for field in fields_with_values:
                     field.value = field.data_type.numeric_value(i)
-                transactions.append(
-                    Transaction(
-                        [RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])]
-                    )
-                )
+                yield RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])
         else:
             raise ValueError(f"Unexpected number of records {self.number_of_records}")
-
-        assert transactions
-
-        return transactions

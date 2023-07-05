@@ -47,7 +47,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
-        "--scale-factor", metavar="SCALE_FACTOR", type=int, default=1000
+        "--runtime", default=60, type=int, help="Runtime in seconds per workload"
     )
     parser.add_argument(
         "--workload",
@@ -92,9 +92,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"--- Testing workload {workload_class.__name__}")
         execute_workload(
             executor_classes,
-            workload_class(args.scale_factor),
+            workload_class(),
             conn,
             i,
             ports,
+            args.runtime,
             args.verbose,
         )

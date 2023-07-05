@@ -22,7 +22,6 @@ from materialize.data_ingest.data_type import (
     StringType,
 )
 from materialize.data_ingest.definition import (
-    Definition,
     Delete,
     Insert,
     Keyspace,
@@ -33,55 +32,66 @@ from materialize.data_ingest.definition import (
 from materialize.data_ingest.executor import PgExecutor, PrintExecutor
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
+from materialize.data_ingest.transaction_def import TransactionDef, TransactionSize
 
 
 class Workload:
-    cycle: List[Definition]
-    num_cycles: int
+    cycle: List[TransactionDef]
 
     def generate(self, fields: List[Field]) -> Iterator[Transaction]:
-        for i in range(self.num_cycles):
+        while True:
             cycle = deepcopy(self.cycle)
-            for definition in cycle:
-                for transaction in definition.generate(fields):
+            for transaction_def in cycle:
+                for transaction in transaction_def.generate(fields):
                     yield transaction
 
 
 class SingleSensorUpdating(Workload):
-    def __init__(self, scale_factor: int) -> None:
-        self.num_cycles = 10 * scale_factor
-        self.cycle: List[Definition] = [
-            Upsert(
-                keyspace=Keyspace.SINGLE_VALUE,
-                count=Records.ONE,
-                record_size=RecordSize.SMALL,
+    def __init__(self) -> None:
+        self.cycle = [
+            TransactionDef(
+                [
+                    Upsert(
+                        keyspace=Keyspace.SINGLE_VALUE,
+                        count=Records.ONE,
+                        record_size=RecordSize.SMALL,
+                    )
+                ]
             )
         ]
 
 
 class DeleteDataAtEndOfDay(Workload):
-    def __init__(self, scale_factor: int) -> None:
-        self.num_cycles = scale_factor
+    def __init__(self) -> None:
         insert = Insert(
             count=Records.ONE,
             record_size=RecordSize.SMALL,
         )
-        self.cycle: List[Definition] = [
-            insert,
-            Delete(
-                number_of_records=Records.ALL,
-                record_size=RecordSize.SMALL,
-                num=insert.max_key(),
-            ),
+        insert_phase = TransactionDef(
+            size=TransactionSize.HUGE,
+            operations=[insert],
+        )
+        # Delete all records in a single transaction
+        delete_phase = TransactionDef(
+            [
+                Delete(
+                    number_of_records=Records.ALL,
+                    record_size=RecordSize.SMALL,
+                    num=insert.max_key(),
+                )
+            ]
+        )
+        self.cycle = [
+            insert_phase,
+            delete_phase,
         ]
 
 
-class ProgressivelyEnrichRecords(Workload):
-    def __init__(self, scale_factor: int) -> None:
-        self.num_cycles = scale_factor
-        self.cycle: List[Definition] = [
-            # TODO: Implement
-        ]
+# TODO: Implement
+# class ProgressivelyEnrichRecords(Workload):
+#    def __init__(self) -> None:
+#        self.cycle: List[Definition] = [
+#        ]
 
 
 # TODO: Disruptions in workloads
@@ -93,6 +103,7 @@ def execute_workload(
     conn: pg8000.Connection,
     num: int,
     ports: Dict[str, int],
+    runtime: int,
     verbose: bool,
 ) -> None:
     fields = []
@@ -110,8 +121,15 @@ def execute_workload(
     ]
     pg_executor = PgExecutor(num, conn=None, ports=ports, fields=fields)
 
+    start = time.time()
+
     run_executors = ([PrintExecutor()] if verbose else []) + [pg_executor] + executors
-    for transaction in workload.generate(fields):
+    for i, transaction in enumerate(workload.generate(fields)):
+        duration = time.time() - start
+        if duration > runtime:
+            print(f"Ran {i} transactions in {duration} s")
+            assert i > 0
+            break
         for executor in run_executors:
             executor.run(transaction)
 
