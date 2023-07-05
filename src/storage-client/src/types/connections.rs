@@ -135,12 +135,11 @@ impl ConnectionContext {
     /// (e.g., via a configuration option in a SQL statement). See
     /// [`AwsExternalIdPrefix`] for details.
     pub fn from_cli_args(
-        filter: &tracing_subscriber::filter::EnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
         secrets_reader: Arc<dyn SecretsReader>,
     ) -> ConnectionContext {
         ConnectionContext {
-            librdkafka_log_level: mz_ore::tracing::crate_level(filter, "librdkafka"),
+            // librdkafka_log_level: mz_ore::tracing::crate_level(filter, "librdkafka"),
             aws_external_id_prefix,
             secrets_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -150,7 +149,6 @@ impl ConnectionContext {
     /// Constructs a new connection context for usage in tests.
     pub fn for_tests(secrets_reader: Arc<dyn SecretsReader>) -> ConnectionContext {
         ConnectionContext {
-            librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
             secrets_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
