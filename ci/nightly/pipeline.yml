@@ -71,6 +71,7 @@ steps:
           - { value: sqlancer-query-partitioning }
           - { value: crdb-restarts }
           - { value: pubsub-disruption }
+          - { value: data-ingest }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -712,6 +713,16 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
+
+  - id: data-ingest
+    label: "Data Ingest"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: data-ingest
 
   - wait: ~
     continue_on_failure: true
