@@ -448,7 +448,7 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                        warn!("logic error: fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
                     }
                     continue;
                 }
