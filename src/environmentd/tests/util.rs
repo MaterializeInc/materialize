@@ -278,6 +278,7 @@ impl Listeners {
             }
             Some(data_directory) => (data_directory, None),
         };
+        let scratch_dir = tempfile::tempdir()?;
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let seed = config.seed;
             let cockroach_url = env::var("COCKROACH_URL")
@@ -310,7 +311,7 @@ impl Listeners {
                     command_wrapper: vec![],
                     propagate_crashes: config.propagate_crashes,
                     tcp_proxy: None,
-                    scratch_directory: None,
+                    scratch_directory: scratch_dir.path().to_path_buf(),
                 }))?,
         );
         // Messing with the clock causes persist to expire leases, causing hangs and
@@ -401,7 +402,6 @@ impl Listeners {
                         now: SYSTEM_TIME.clone(),
                         postgres_factory,
                         metrics_registry: metrics_registry.clone(),
-                        scratch_directory_enabled: false,
                         persist_pubsub_url: format!(
                             "http://localhost:{}",
                             persist_pubsub_server_port

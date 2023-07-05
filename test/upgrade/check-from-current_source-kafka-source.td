@@ -39,8 +39,7 @@ a b
 $ set-from-sql var=expected-user
 SELECT user FROM linked_cluster_audit_event_user ORDER BY priority DESC LIMIT 1
 
-# Test that the migrations backfilled a linked cluster for the source && that the
-# backfilled "disk" defaults to true (matching the test setup defaults)
+# Test that the  "disk" option on the linked cluster defaults to true (matching the test setup defaults)
 > SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_kafka_source'
 materialize_public_kafka_source  linked
 > SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id', user

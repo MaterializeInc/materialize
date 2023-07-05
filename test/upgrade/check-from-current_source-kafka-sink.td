@@ -12,9 +12,7 @@
 > SHOW CREATE SINK upgrade_kafka_sink;
 "materialize.public.upgrade_kafka_sink" "CREATE SINK \"materialize\".\"public\".\"upgrade_kafka_sink\" FROM \"materialize\".\"public\".\"static_view\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'upgrade-kafka-sink') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
 
-# Test that the migrations backfilled a linked cluster for the sink && that the
-# backfilled "disk" defaults to true (matching the test setup defaults. in practice
-# we wouldn't want to allocate disk for a sink's linked cluster)
+# Test that the  "disk" option on the linked cluster defaults to true (matching the test setup defaults)
 > SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_upgrade_kafka_sink'
 materialize_public_upgrade_kafka_sink  linked
 > SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id'
