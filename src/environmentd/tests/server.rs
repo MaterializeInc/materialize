@@ -102,13 +102,12 @@ use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
-use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
+use crate::util::{Listeners, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -1481,15 +1480,13 @@ fn test_leader_promotion() {
     }
     let config = config.with_deploy_generation(Some(2));
     {
-        // start with different deploy generation, we need acknowledgement before starting sql port
-        let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
-        let config = config
-            .with_deploy_generation(Some(3))
-            .with_waiting_on_leader_promotion(Some(internal_http_addr_tx));
+        // start with different deploy generation
+        let config = config.with_deploy_generation(Some(3));
         thread::scope(|s| {
-            let server_handle = s.spawn(|| util::start_server(config).unwrap());
+            let listeners = Listeners::new().unwrap();
+            let internal_http_addr = listeners.inner.internal_http_local_addr();
+            let server_handle = s.spawn(|| listeners.serve(config).unwrap());
 
-            let internal_http_addr = internal_http_addr_rx.blocking_recv().unwrap();
             let status_http_url =
                 Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
 
@@ -1548,7 +1545,6 @@ fn test_leader_promotion() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
-    let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
     let config = util::Config::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
@@ -1561,16 +1557,11 @@ fn test_leader_promotion_always_using_deploy_generation() {
     }
     {
         // keep it the same, no need to promote the leader
-        let server = util::start_server(
-            config.with_waiting_on_leader_promotion(Some(internal_http_addr_tx)),
-        )
-        .unwrap();
+        let listeners = Listeners::new().unwrap();
+        let internal_http_addr = listeners.inner.internal_http_local_addr();
+        let server = listeners.serve(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
-
-        let internal_http_addr = internal_http_addr_rx
-            .blocking_recv()
-            .expect("should be populated");
 
         // check that we're the leader and promotion doesn't do anything
         let status_http_url =

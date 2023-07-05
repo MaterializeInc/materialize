@@ -96,7 +96,7 @@ use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsConfig, BUILD_INFO};
+use mz_environmentd::{Listeners, ListenersConfig, TlsConfig, BUILD_INFO};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
 };
@@ -829,56 +829,62 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
 
-    let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
-        sql_listen_addr: args.sql_listen_addr,
-        http_listen_addr: args.http_listen_addr,
-        internal_sql_listen_addr: args.internal_sql_listen_addr,
-        internal_http_listen_addr: args.internal_http_listen_addr,
-        tls,
-        frontegg,
-        cors_allowed_origin,
-        adapter_stash_url: args.adapter_stash_url,
-        controller,
-        secrets_controller,
-        cloud_resource_controller,
-        unsafe_mode: args.unsafe_mode,
-        all_features: args.all_features,
-        metrics_registry,
-        now,
-        environment_id: args.environment_id,
-        cluster_replica_sizes,
-        default_storage_cluster_size: args.default_storage_host_size,
-        bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-        bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        system_parameter_defaults: args
-            .system_parameter_default
-            .into_iter()
-            .map(|kv| (kv.key, kv.value))
-            .collect(),
-        availability_zones: args.availability_zone,
-        connection_context: ConnectionContext::from_cli_args(
-            args.tracing.log_filter.as_ref(),
-            args.aws_external_id_prefix,
-            secrets_reader,
-        ),
-        tracing_handle,
-        storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
-        storage_usage_retention_period: args.storage_usage_retention_period,
-        segment_api_key: args.segment_api_key,
-        egress_ips: args.announce_egress_ip,
-        aws_account_id: args.aws_account_id,
-        aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
-        launchdarkly_sdk_key: args.launchdarkly_sdk_key,
-        launchdarkly_key_map: args
-            .launchdarkly_key_map
-            .into_iter()
-            .map(|kv| (kv.key, kv.value))
-            .collect(),
-        config_sync_loop_interval: args.config_sync_loop_interval,
-        bootstrap_role: args.bootstrap_role,
-        deploy_generation: args.deploy_generation,
-        waiting_on_leader_promotion: None,
-    }))?;
+    let server = runtime.block_on(async {
+        let listeners = Listeners::bind(ListenersConfig {
+            sql_listen_addr: args.sql_listen_addr,
+            http_listen_addr: args.http_listen_addr,
+            internal_sql_listen_addr: args.internal_sql_listen_addr,
+            internal_http_listen_addr: args.internal_http_listen_addr,
+        })
+        .await?;
+        listeners
+            .serve(mz_environmentd::Config {
+                tls,
+                frontegg,
+                cors_allowed_origin,
+                adapter_stash_url: args.adapter_stash_url,
+                controller,
+                secrets_controller,
+                cloud_resource_controller,
+                unsafe_mode: args.unsafe_mode,
+                all_features: args.all_features,
+                metrics_registry,
+                now,
+                environment_id: args.environment_id,
+                cluster_replica_sizes,
+                default_storage_cluster_size: args.default_storage_host_size,
+                bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+                bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
+                system_parameter_defaults: args
+                    .system_parameter_default
+                    .into_iter()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+                availability_zones: args.availability_zone,
+                connection_context: ConnectionContext::from_cli_args(
+                    args.tracing.log_filter.as_ref(),
+                    args.aws_external_id_prefix,
+                    secrets_reader,
+                ),
+                tracing_handle,
+                storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+                storage_usage_retention_period: args.storage_usage_retention_period,
+                segment_api_key: args.segment_api_key,
+                egress_ips: args.announce_egress_ip,
+                aws_account_id: args.aws_account_id,
+                aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
+                launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_key_map: args
+                    .launchdarkly_key_map
+                    .into_iter()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+                config_sync_loop_interval: args.config_sync_loop_interval,
+                bootstrap_role: args.bootstrap_role,
+                deploy_generation: args.deploy_generation,
+            })
+            .await
+    })?;
 
     metrics.start_time_environmentd.set(
         envd_start
