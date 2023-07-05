@@ -38,10 +38,6 @@ class Minio(K8sResource):
         )
 
         self.create_bucket("persist")
-        wait(
-            resource="pod/minio",
-            condition="jsonpath={.status.containerStatuses[0].state.terminated.reason}=Completed",
-        )
 
     def create_bucket(self, bucket: str) -> None:
         self.kubectl(
@@ -60,4 +56,9 @@ class Minio(K8sResource):
                     f"mc mb myminio/{bucket}",
                 ]
             ),
+        )
+
+        wait(
+            resource="pod/minio",
+            condition="jsonpath={.status.containerStatuses[0].state.terminated.reason}=Completed",
         )
