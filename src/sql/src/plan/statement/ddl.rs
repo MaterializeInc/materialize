@@ -2715,7 +2715,7 @@ generate_extracted_config!(
     (Managed, bool),
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
-    (Size, String),
+    (Size, String)
 );
 
 pub fn plan_create_cluster(
