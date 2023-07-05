@@ -238,8 +238,6 @@ pub trait TimestampProvider {
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
         let isolation_level = session.vars().transaction_isolation();
-        let in_immediate_multi_statement_txn = when == &QueryWhen::Immediately
-            && session.transaction().is_in_multi_statement_transaction();
         let timeline = match &timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
             // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
@@ -263,108 +261,82 @@ pub trait TimestampProvider {
             _ => None,
         };
 
-        // For transactions that do not use `AS OF`, get the timestamp context of the
-        // in-progress transaction if one exists.
-        //
-        // If one does not exist, it implies that the query is the first in a multi-statment transaction
-        // or the only one in a single-statement transaction (i.e. a `TransactionStatus::Started` txn).
-        // In either case, we determine a timestamp for the query.
-        //
-        // If the query does use `AS OF`, we disregard the timestamp context of the
-        // in-progress transaction as its explicitly provided by the client.
-        let det = match session.get_transaction_timestamp_context() {
-            Some(timestamp_context @ TimestampContext::TimelineTimestamp(_, _))
-                if in_immediate_multi_statement_txn =>
-            {
-                TimestampDetermination {
-                    timestamp_context,
-                    since,
-                    upper,
-                    largest_not_in_advance_of_upper,
-                    oracle_read_ts: None,
-                }
-            }
-            _ => {
-                // Initialize candidate to the minimum correct time.
-                let mut candidate = Timestamp::minimum();
+        // Initialize candidate to the minimum correct time.
+        let mut candidate = Timestamp::minimum();
 
-                if let Some(timestamp) = when.advance_to_timestamp() {
-                    let ts = Coordinator::evaluate_when(catalog, timestamp, session)?;
-                    candidate.join_assign(&ts);
-                }
+        if let Some(timestamp) = when.advance_to_timestamp() {
+            let ts = Coordinator::evaluate_when(catalog, timestamp, session)?;
+            candidate.join_assign(&ts);
+        }
 
-                if when.advance_to_since() {
-                    candidate.advance_by(since.borrow());
-                }
+        if when.advance_to_since() {
+            candidate.advance_by(since.borrow());
+        }
 
-                // If we've acquired a read timestamp from the timestamp oracle, use it
-                // as the new lower bound for the candidate
-                if let Some(timestamp) = &oracle_read_ts {
-                    candidate.join_assign(timestamp);
-                }
+        // If we've acquired a read timestamp from the timestamp oracle, use it
+        // as the new lower bound for the candidate
+        if let Some(timestamp) = &oracle_read_ts {
+            candidate.join_assign(timestamp);
+        }
 
-                // We advance to the upper in the following scenarios:
-                // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
-                //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
-                //   reading source data that is being written to in the future.
-                // - The isolation level is Strict Serializable but there is no timelines and the `when`
-                //   allows us to advance to upper.
-                // - The `when` requires us to advance to the upper (ex: read-then-write queries).
-                if when.must_advance_to_upper()
-                    || (when.can_advance_to_upper()
-                        && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
-                {
-                    candidate.join_assign(&largest_not_in_advance_of_upper);
-                }
+        // We advance to the upper in the following scenarios:
+        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
+        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
+        //   reading source data that is being written to in the future.
+        // - The isolation level is Strict Serializable but there is no timelines and the `when`
+        //   allows us to advance to upper.
+        // - The `when` requires us to advance to the upper (ex: read-then-write queries).
+        if when.must_advance_to_upper()
+            || (when.can_advance_to_upper()
+                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
+        {
+            candidate.join_assign(&largest_not_in_advance_of_upper);
+        }
 
-                if let Some(real_time_recency_ts) = real_time_recency_ts {
-                    assert!(
-                        session.vars().real_time_recency()
-                            && isolation_level == &IsolationLevel::StrictSerializable,
-                        "real time recency timestamp should only be supplied when real time recency \
+        if let Some(real_time_recency_ts) = real_time_recency_ts {
+            assert!(
+                session.vars().real_time_recency()
+                    && isolation_level == &IsolationLevel::StrictSerializable,
+                "real time recency timestamp should only be supplied when real time recency \
                             is enabled and the isolation level is strict serializable"
-                    );
-                    candidate.join_assign(&real_time_recency_ts);
-                }
+            );
+            candidate.join_assign(&real_time_recency_ts);
+        }
 
-                // If the timestamp is greater or equal to some element in `since` we are
-                // assured that the answer will be correct.
-                //
-                // It's ok for this timestamp to be larger than the current timestamp of
-                // the timestamp oracle. For Strict Serializable queries, the Coord will
-                // linearize the query by holding back the result until the timestamp
-                // oracle catches up.
-                let timestamp = if since.less_equal(&candidate) {
-                    event!(
-                        Level::DEBUG,
-                        conn_id = format!("{}", session.conn_id()),
-                        since = format!("{since:?}"),
-                        largest_not_in_advance_of_upper =
-                            format!("{largest_not_in_advance_of_upper}"),
-                        timestamp = format!("{candidate}")
-                    );
-                    candidate
-                } else {
-                    coord_bail!(self.generate_timestamp_not_valid_error_msg(
-                        id_bundle,
-                        compute_instance,
-                        candidate
-                    ));
-                };
-
-                let timestamp_context =
-                    TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
-
-                TimestampDetermination {
-                    timestamp_context,
-                    since,
-                    upper,
-                    largest_not_in_advance_of_upper,
-                    oracle_read_ts,
-                }
-            }
+        // If the timestamp is greater or equal to some element in `since` we are
+        // assured that the answer will be correct.
+        //
+        // It's ok for this timestamp to be larger than the current timestamp of
+        // the timestamp oracle. For Strict Serializable queries, the Coord will
+        // linearize the query by holding back the result until the timestamp
+        // oracle catches up.
+        let timestamp = if since.less_equal(&candidate) {
+            event!(
+                Level::DEBUG,
+                conn_id = format!("{}", session.conn_id()),
+                since = format!("{since:?}"),
+                largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
+                timestamp = format!("{candidate}")
+            );
+            candidate
+        } else {
+            coord_bail!(self.generate_timestamp_not_valid_error_msg(
+                id_bundle,
+                compute_instance,
+                candidate
+            ));
         };
-        Ok(det)
+
+        let timestamp_context =
+            TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
+
+        Ok(TimestampDetermination {
+            timestamp_context,
+            since,
+            upper,
+            largest_not_in_advance_of_upper,
+            oracle_read_ts,
+        })
     }
 
     /// The smallest common valid read frontier among the specified collections.
@@ -539,7 +511,7 @@ impl Coordinator {
 }
 
 /// Information used when determining the timestamp for a query.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TimestampDetermination<T> {
     /// The chosen timestamp context from `determine_timestamp`.
     pub timestamp_context: TimestampContext<T>,
