@@ -687,17 +687,6 @@ steps:
           composition: sqlancer
           args: [--runtime=600, --oracle=HAVING]
 
-  - id: data-ingest
-    label: "Data Ingest"
-    depends_on: build-x86_64
-    artifact_paths: junit_*.xml
-    timeout_in_minutes: 15
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: data-ingest
-
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
