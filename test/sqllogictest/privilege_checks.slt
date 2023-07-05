@@ -2491,21 +2491,6 @@ COMPLETE 0
 simple conn=joe,user=joe
 ALTER SOURCE s SET (SIZE = '4');
 ----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=child,user=child
-ALTER SOURCE s1 SET (SIZE = '4');
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-ALTER SOURCE s SET (SIZE = '4');
-----
 COMPLETE 0
 
 simple conn=child,user=child
@@ -2524,7 +2509,7 @@ DROP SOURCE s1;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 

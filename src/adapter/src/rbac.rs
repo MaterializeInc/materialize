@@ -1011,25 +1011,6 @@ fn generate_required_privileges(
             }
             privileges
         }
-        Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan { id, options: _ })
-        | Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan { id, options: _ })
-        | Plan::AlterSink(AlterSinkPlan { id, size: _ })
-        | Plan::AlterSource(AlterSourcePlan { id, action: _ })
-        | Plan::AlterItemRename(AlterItemRenamePlan {
-            id,
-            current_full_name: _,
-            to_name: _,
-            object_type: _,
-        })
-        | Plan::AlterSecret(AlterSecretPlan { id, secret_as: _ })
-        | Plan::RotateKeys(RotateKeysPlan { id }) => {
-            let item = catalog.get_item(id);
-            vec![(
-                SystemObjectId::Object(item.name().qualifiers.clone().into()),
-                AclMode::CREATE,
-                role_id,
-            )]
-        }
         Plan::AlterOwner(AlterOwnerPlan {
             id,
             object_type: _,
@@ -1181,6 +1162,21 @@ fn generate_required_privileges(
             rows: _,
         })
         | Plan::AlterNoop(AlterNoopPlan { object_type: _ })
+        | Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan { id: _, options: _ })
+        | Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan { id: _, options: _ })
+        | Plan::AlterSink(AlterSinkPlan { id: _, size: _ })
+        | Plan::AlterSource(AlterSourcePlan { id: _, action: _ })
+        | Plan::AlterItemRename(AlterItemRenamePlan {
+            id: _,
+            current_full_name: _,
+            to_name: _,
+            object_type: _,
+        })
+        | Plan::AlterSecret(AlterSecretPlan {
+            id: _,
+            secret_as: _,
+        })
+        | Plan::RotateKeys(RotateKeysPlan { id: _ })
         | Plan::AlterSystemSet(AlterSystemSetPlan { name: _, value: _ })
         | Plan::AlterSystemReset(AlterSystemResetPlan { name: _ })
         | Plan::AlterSystemResetAll(AlterSystemResetAllPlan {})
