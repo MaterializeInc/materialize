@@ -542,6 +542,14 @@ const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::blob_mem_cache_enabled`].
+const PERSIST_BLOB_MEM_CACHE_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_blob_mem_cache_enabled"),
+    value: &PersistConfig::DEFAULT_BLOB_MEM_CACHE_ENABLED,
+    description: "Enables the in-memory blob cache.",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
@@ -1731,6 +1739,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
+            .with_var(&PERSIST_BLOB_MEM_CACHE_ENABLED)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
@@ -2112,6 +2121,11 @@ impl SystemVars {
     /// Returns the `persist_blob_cache_mem_limit_bytes` configuration parameter.
     pub fn persist_blob_cache_mem_limit_bytes(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
+    }
+
+    /// Returns the `persist_blob_mem_cache_enabled` configuration parameter.
+    pub fn persist_blob_mem_cache_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_BLOB_MEM_CACHE_ENABLED)
     }
 
     /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
@@ -3615,6 +3629,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
 fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
+        || name == PERSIST_BLOB_MEM_CACHE_ENABLED.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()

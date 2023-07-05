@@ -26,6 +26,7 @@ use crate::internal::metrics::Metrics;
 // In-memory cache for [Blob].
 #[derive(Debug)]
 pub struct BlobMemCache {
+    cfg: PersistConfig,
     metrics: Arc<Metrics>,
     cache: Cache<String, SegmentedBytes>,
     blob: Arc<dyn Blob + Send + Sync>,
@@ -59,6 +60,7 @@ impl BlobMemCache {
             })
             .build();
         let blob = BlobMemCache {
+            cfg: cfg.clone(),
             metrics,
             cache,
             blob,
@@ -81,6 +83,10 @@ impl BlobMemCache {
 #[async_trait]
 impl Blob for BlobMemCache {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        if !self.cfg.dynamic.blob_mem_cache_enabled() {
+            return self.blob.get(key).await;
+        }
+
         // First check if the blob is in the cache. If it is, return it. If not,
         // fetch it and put it in the cache.
         //
@@ -118,16 +124,20 @@ impl Blob for BlobMemCache {
 
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let () = self.blob.set(key, value.clone(), atomic).await?;
-        self.cache
-            .insert(key.to_owned(), SegmentedBytes::from(value));
-        self.update_size_metrics();
+        if self.cfg.dynamic.blob_mem_cache_enabled() {
+            self.cache
+                .insert(key.to_owned(), SegmentedBytes::from(value));
+            self.update_size_metrics();
+        }
         Ok(())
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let res = self.blob.delete(key).await;
-        self.cache.invalidate(key);
-        self.update_size_metrics();
+        if self.cfg.dynamic.blob_mem_cache_enabled() {
+            self.cache.invalidate(key);
+            self.update_size_metrics();
+        }
         res
     }
 }

@@ -136,6 +136,7 @@ impl PersistConfig {
                 blob_cache_mem_limit_bytes: AtomicUsize::new(
                     Self::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
                 ),
+                blob_mem_cache_enabled: AtomicBool::new(Self::DEFAULT_BLOB_MEM_CACHE_ENABLED),
                 compaction_heuristic_min_inputs: AtomicUsize::new(8),
                 compaction_heuristic_min_parts: AtomicUsize::new(8),
                 compaction_heuristic_min_updates: AtomicUsize::new(1024),
@@ -260,6 +261,8 @@ impl PersistConfig {
     /// unobjectionable enough to have it for the cases that it does help.
     pub const DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES: usize = 1024 * 1024;
 
+    pub const DEFAULT_BLOB_MEM_CACHE_ENABLED: bool = true;
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
@@ -329,6 +332,7 @@ pub struct DynamicConfig {
     batch_builder_max_outstanding_parts: AtomicUsize,
     blob_target_size: AtomicUsize,
     blob_cache_mem_limit_bytes: AtomicUsize,
+    blob_mem_cache_enabled: AtomicBool,
     compaction_heuristic_min_inputs: AtomicUsize,
     compaction_heuristic_min_parts: AtomicUsize,
     compaction_heuristic_min_updates: AtomicUsize,
@@ -422,6 +426,11 @@ impl DynamicConfig {
     /// mis-use of the system.
     pub fn blob_target_size(&self) -> usize {
         self.blob_target_size.load(Self::LOAD_ORDERING)
+    }
+
+    /// Whether to use the in-memory blob cache.
+    pub fn blob_mem_cache_enabled(&self) -> bool {
+        self.blob_mem_cache_enabled.load(Self::LOAD_ORDERING)
     }
 
     /// Capacity of in-mem blob cache in bytes.
@@ -633,6 +642,8 @@ pub struct PersistParameters {
     pub blob_target_size: Option<usize>,
     /// Configures [`DynamicConfig::blob_cache_mem_limit_bytes`].
     pub blob_cache_mem_limit_bytes: Option<usize>,
+    /// Configures [`DynamicConfig::blob_mem_cache_enabled`].
+    pub blob_mem_cache_enabled: Option<bool>,
     /// Configures [`DynamicConfig::compaction_minimum_timeout`].
     pub compaction_minimum_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_connect_timeout`].
@@ -667,6 +678,7 @@ impl PersistParameters {
         let Self {
             blob_target_size: self_blob_target_size,
             blob_cache_mem_limit_bytes: self_blob_cache_mem_limit_bytes,
+            blob_mem_cache_enabled: self_blob_mem_cache_enabled,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
             consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
@@ -683,6 +695,7 @@ impl PersistParameters {
         let Self {
             blob_target_size: other_blob_target_size,
             blob_cache_mem_limit_bytes: other_blob_cache_mem_limit_bytes,
+            blob_mem_cache_enabled: other_blob_mem_cache_enabled,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
             consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
@@ -701,6 +714,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_blob_cache_mem_limit_bytes {
             *self_blob_cache_mem_limit_bytes = Some(v);
+        }
+        if let Some(v) = other_blob_mem_cache_enabled {
+            *self_blob_mem_cache_enabled = Some(v);
         }
         if let Some(v) = other_compaction_minimum_timeout {
             *self_compaction_minimum_timeout = Some(v);
@@ -749,6 +765,7 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             blob_cache_mem_limit_bytes,
+            blob_mem_cache_enabled,
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
@@ -764,6 +781,7 @@ impl PersistParameters {
         } = self;
         blob_target_size.is_none()
             && blob_cache_mem_limit_bytes.is_none()
+            && blob_mem_cache_enabled.is_none()
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
             && consensus_tcp_user_timeout.is_none()
@@ -788,6 +806,7 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             blob_cache_mem_limit_bytes,
+            blob_mem_cache_enabled,
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
@@ -810,6 +829,11 @@ impl PersistParameters {
             cfg.dynamic
                 .blob_cache_mem_limit_bytes
                 .store(*blob_cache_mem_limit_bytes, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(blob_mem_cache_enabled) = blob_mem_cache_enabled {
+            cfg.dynamic
+                .blob_mem_cache_enabled
+                .store(*blob_mem_cache_enabled, DynamicConfig::STORE_ORDERING);
         }
         if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
             // TODO: Figure out how to represent Durations in DynamicConfig.
@@ -887,6 +911,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         ProtoPersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
             blob_cache_mem_limit_bytes: self.blob_cache_mem_limit_bytes.into_proto(),
+            blob_mem_cache_enabled: self.blob_mem_cache_enabled.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             consensus_tcp_user_timeout: self.consensus_tcp_user_timeout.into_proto(),
@@ -908,6 +933,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         Ok(Self {
             blob_target_size: proto.blob_target_size.into_rust()?,
             blob_cache_mem_limit_bytes: proto.blob_cache_mem_limit_bytes.into_rust()?,
+            blob_mem_cache_enabled: proto.blob_mem_cache_enabled.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             consensus_tcp_user_timeout: proto.consensus_tcp_user_timeout.into_rust()?,
