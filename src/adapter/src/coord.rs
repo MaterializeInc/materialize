@@ -102,7 +102,7 @@ use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::names::Aug;
+use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
@@ -233,7 +233,7 @@ pub struct BackgroundWorkResult<T> {
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
     pub params: Params,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub original_stmt: Statement<Raw>,
     pub otel_ctx: OpenTelemetryContext,
 }
@@ -913,7 +913,7 @@ impl Coordinator {
             .entries()
             .cloned()
             .map(|entry| {
-                let remaining_deps = entry.uses().to_vec();
+                let remaining_deps = entry.uses().0.iter().copied().collect::<Vec<_>>();
                 (entry, remaining_deps)
             })
             .collect();

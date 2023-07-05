@@ -21,7 +21,7 @@
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
-use mz_sql::names::SystemObjectId;
+use mz_sql::names::{ResolvedIds, SystemObjectId};
 use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
@@ -213,7 +213,7 @@ pub fn user_privilege_hack(
     catalog: &impl SessionCatalog,
     session: &Session,
     plan: &Plan,
-    depends_on: &Vec<GlobalId>,
+    resolved_ids: &ResolvedIds,
 ) -> Result<(), AdapterError> {
     if session.user().name != MZ_INTROSPECTION_ROLE.name {
         return Ok(());
@@ -309,7 +309,7 @@ pub fn user_privilege_hack(
         }
     }
 
-    for id in depends_on {
+    for id in &resolved_ids.0 {
         let item = catalog.get_item(id);
         let full_name = catalog.resolve_full_name(item.name());
         if !catalog.is_system_schema(&full_name.schema) {

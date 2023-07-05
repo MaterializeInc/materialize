@@ -376,7 +376,7 @@ impl CatalogState {
 
         if !entry.item().is_temporary() {
             // Populate or clean up the `mz_object_dependencies` table.
-            for dependee in entry.item().uses() {
+            for dependee in &entry.item().uses().0 {
                 updates.push(self.pack_depends_update(id, *dependee, diff))
             }
         }

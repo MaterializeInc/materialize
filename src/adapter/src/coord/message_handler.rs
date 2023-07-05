@@ -20,6 +20,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
@@ -364,7 +365,7 @@ impl Coordinator {
             mut ctx,
             result,
             params,
-            depends_on,
+            resolved_ids,
             original_stmt,
             otel_ctx,
         }: CreateSourceStatementReady,
@@ -379,7 +380,8 @@ impl Coordinator {
         //
         // WARNING: If we support `ALTER CONNECTION`, we'll need to also check
         // for connectors that were altered while we were purifying.
-        if !depends_on
+        if !resolved_ids
+            .0
             .iter()
             .all(|id| self.catalog().try_get_entry(id).is_some())
         {
@@ -397,7 +399,7 @@ impl Coordinator {
 
         // First we'll allocate global ids for each subsource and plan them
         for (transient_id, subsource_stmt) in subsource_stmts {
-            let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
+            let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
             let source_id = match self.catalog_mut().allocate_user_id().await {
                 Ok(id) => id,
                 Err(e) => return ctx.retire(Err(e.into())),
@@ -414,7 +416,11 @@ impl Coordinator {
                 Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push((source_id, plan, depends_on).into());
+            plans.push(CreateSourcePlans {
+                source_id,
+                plan,
+                resolved_ids,
+            });
         }
 
         // Then, we'll rewrite the source statement to point to the newly minted global ids and
@@ -423,7 +429,7 @@ impl Coordinator {
             Ok(ok) => ok,
             Err(e) => return ctx.retire(Err(e.into())),
         };
-        let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
+        let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
         let source_id = match self.catalog_mut().allocate_user_id().await {
             Ok(id) => id,
             Err(e) => return ctx.retire(Err(e.into())),
@@ -436,11 +442,19 @@ impl Coordinator {
                 }
                 Err(e) => return ctx.retire(Err(e)),
             };
-        plans.push((source_id, plan, depends_on).into());
+        plans.push(CreateSourcePlans {
+            source_id,
+            plan,
+            resolved_ids,
+        });
 
         // Finally, sequence all plans in one go
-        self.sequence_plan(ctx, Plan::CreateSources(plans), Vec::new())
-            .await;
+        self.sequence_plan(
+            ctx,
+            Plan::CreateSources(plans),
+            ResolvedIds(BTreeSet::new()),
+        )
+        .await;
     }
 
     #[tracing::instrument(level = "debug", skip(self, ctx))]
@@ -451,7 +465,7 @@ impl Coordinator {
             result,
             params,
             original_stmt,
-            depends_on,
+            resolved_ids,
             otel_ctx,
         }: CreateConnectionValidationReady,
     ) {
@@ -465,7 +479,8 @@ impl Coordinator {
         //
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
-        if !depends_on
+        if !resolved_ids
+            .0
             .iter()
             .all(|id| self.catalog().try_get_entry(id).is_some())
         {
@@ -478,7 +493,7 @@ impl Coordinator {
             Err(e) => return ctx.retire(Err(e)),
         };
 
-        self.sequence_plan(ctx, Plan::CreateConnection(plan), depends_on)
+        self.sequence_plan(ctx, Plan::CreateConnection(plan), resolved_ids)
             .await;
     }
 
@@ -568,8 +583,9 @@ impl Coordinator {
                     ready.ctx.session_mut().grant_write_lock(write_lock_guard);
                     // Write statements never need to track catalog
                     // dependencies.
-                    let depends_on = vec![];
-                    self.sequence_plan(ready.ctx, ready.plan, depends_on).await;
+                    let resolved_ids = ResolvedIds(BTreeSet::new());
+                    self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
+                        .await;
                 }
                 Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
             }

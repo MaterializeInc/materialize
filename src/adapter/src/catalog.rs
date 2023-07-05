@@ -64,7 +64,7 @@ use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -279,7 +279,7 @@ impl CatalogState {
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
-                for id in item.uses() {
+                for id in &item.uses().0 {
                     self.introspection_dependencies_inner(*id, out);
                 }
             }
@@ -475,7 +475,7 @@ impl CatalogState {
         match self.get_entry(&id).item() {
             CatalogItem::Table(_) => true,
             item @ (CatalogItem::View(_) | CatalogItem::MaterializedView(_)) => {
-                item.uses().iter().any(|id| self.uses_tables(*id))
+                item.uses().0.iter().any(|id| self.uses_tables(*id))
             }
             CatalogItem::Index(idx) => self.uses_tables(idx.on),
             CatalogItem::Source(_)
@@ -506,6 +506,7 @@ impl CatalogState {
 
         let unstable_dependencies: Vec<_> = item
             .uses()
+            .0
             .iter()
             .filter(|id| !self.is_stable(**id))
             .map(|id| self.get_entry(id).name().item.clone())
@@ -717,8 +718,7 @@ impl CatalogState {
         session_catalog.system_vars_mut().enable_all_feature_flags();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
-        let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let depends_on = depends_on.into_iter().collect();
+        let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
@@ -731,7 +731,7 @@ impl CatalogState {
                     optimized_expr,
                     desc,
                     conn_id: None,
-                    depends_on,
+                    resolved_ids,
                 })
             }
             _ => bail!("Expected valid CREATE VIEW statement"),
@@ -800,7 +800,7 @@ impl CatalogState {
             owner_id,
             privileges,
         };
-        for u in entry.uses() {
+        for u in &entry.uses().0 {
             match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.used_by.push(entry.id),
                 None => panic!(
@@ -843,7 +843,7 @@ impl CatalogState {
                 id
             );
         }
-        for u in metadata.uses() {
+        for u in &metadata.uses().0 {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id)
             }
@@ -941,7 +941,7 @@ impl CatalogState {
                         &log.variant.index_by(),
                     ),
                     conn_id: None,
-                    depends_on: vec![log_id],
+                    resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
                     cluster_id: id,
                     is_retained_metrics_object: false,
                     custom_logical_compaction_window: None,
@@ -1941,7 +1941,7 @@ pub struct Table {
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<ConnectionId>,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
@@ -2013,7 +2013,7 @@ pub struct Source {
     pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
     pub timeline: Timeline,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
@@ -2031,7 +2031,7 @@ impl Source {
         id: GlobalId,
         plan: CreateSourcePlan,
         cluster_id: Option<ClusterId>,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<Duration>,
         is_retained_metrics_object: bool,
     ) -> Source {
@@ -2066,7 +2066,7 @@ impl Source {
             },
             desc: plan.source.desc,
             timeline: plan.timeline,
-            depends_on,
+            resolved_ids,
             custom_logical_compaction_window,
             is_retained_metrics_object,
         }
@@ -2184,7 +2184,7 @@ pub struct Sink {
     pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
 }
 
@@ -2224,7 +2224,7 @@ pub struct View {
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub conn_id: Option<ConnectionId>,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2232,7 +2232,7 @@ pub struct MaterializedView {
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
 }
 
@@ -2242,7 +2242,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<ConnectionId>,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
     pub custom_logical_compaction_window: Option<Duration>,
     pub is_retained_metrics_object: bool,
@@ -2253,7 +2253,7 @@ pub struct Type {
     pub create_sql: String,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2271,7 +2271,7 @@ pub struct Secret {
 pub struct Connection {
     pub create_sql: String,
     pub connection: mz_storage_client::types::connections::Connection,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
 }
 
 pub struct TransactionResult<R> {
@@ -2350,21 +2350,22 @@ impl CatalogItem {
         }
     }
 
-    /// Collects the identifiers of the dataflows that this item depends
-    /// upon.
-    pub fn uses(&self) -> &[GlobalId] {
+    /// Collects the identifiers of the objects that were encountered when
+    /// resolving names in the item's DDL statement.
+    pub fn uses(&self) -> &ResolvedIds {
+        static EMPTY: Lazy<ResolvedIds> = Lazy::new(|| ResolvedIds(BTreeSet::new()));
         match self {
-            CatalogItem::Func(_) => &[],
-            CatalogItem::Index(idx) => &idx.depends_on,
-            CatalogItem::Sink(sink) => &sink.depends_on,
-            CatalogItem::Source(source) => &source.depends_on,
-            CatalogItem::Log(_) => &[],
-            CatalogItem::Table(table) => &table.depends_on,
-            CatalogItem::Type(typ) => &typ.depends_on,
-            CatalogItem::View(view) => &view.depends_on,
-            CatalogItem::MaterializedView(mview) => &mview.depends_on,
-            CatalogItem::Secret(_) => &[],
-            CatalogItem::Connection(connection) => &connection.depends_on,
+            CatalogItem::Func(_) => &*EMPTY,
+            CatalogItem::Index(idx) => &idx.resolved_ids,
+            CatalogItem::Sink(sink) => &sink.resolved_ids,
+            CatalogItem::Source(source) => &source.resolved_ids,
+            CatalogItem::Log(_) => &*EMPTY,
+            CatalogItem::Table(table) => &table.resolved_ids,
+            CatalogItem::Type(typ) => &typ.resolved_ids,
+            CatalogItem::View(view) => &view.resolved_ids,
+            CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
+            CatalogItem::Secret(_) => &*EMPTY,
+            CatalogItem::Connection(connection) => &connection.resolved_ids,
         }
     }
 
@@ -2764,9 +2765,9 @@ impl CatalogEntry {
         mz_sql::catalog::ObjectType::from(self.item_type()).is_relation()
     }
 
-    /// Collects the identifiers of the dataflows that this dataflow depends
-    /// upon.
-    pub fn uses(&self) -> &[GlobalId] {
+    /// Collects the identifiers of the objects that were encountered when
+    /// resolving names in the item's DDL statement.
+    pub fn uses(&self) -> &ResolvedIds {
         self.item.uses()
     }
 
@@ -3355,7 +3356,7 @@ impl Catalog {
                                 desc: table.desc.clone(),
                                 defaults: vec![Expr::null(); table.desc.arity()],
                                 conn_id: None,
-                                depends_on: vec![],
+                                resolved_ids: ResolvedIds(BTreeSet::new()),
                                 custom_logical_compaction_window: table
                                     .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
@@ -3444,7 +3445,7 @@ impl Catalog {
                                 data_source: DataSourceDesc::Introspection(introspection_type),
                                 desc: coll.desc.clone(),
                                 timeline: Timeline::EpochMilliseconds,
-                                depends_on: vec![],
+                                resolved_ids: ResolvedIds(BTreeSet::new()),
                                 custom_logical_compaction_window: coll
                                     .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
@@ -4005,7 +4006,7 @@ impl Catalog {
                 CatalogItem::Type(Type {
                     create_sql: format!("CREATE TYPE {}", typ.name),
                     details: typ.details.clone(),
-                    depends_on: vec![],
+                    resolved_ids: ResolvedIds(BTreeSet::new()),
                 }),
                 MZ_SYSTEM_ROLE_ID,
                 PrivilegeMap::from_mz_acl_items(vec![
@@ -5973,6 +5974,7 @@ impl Catalog {
                     } else {
                         if let Some(temp_id) =
                             item.uses()
+                                .0
                                 .iter()
                                 .find(|id| match state.try_get_entry(*id) {
                                     Some(entry) => entry.item().is_temporary(),
@@ -7001,11 +7003,12 @@ impl Catalog {
 
             // Ensure any removal from the uses is accompanied by a drop.
             let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
-                drop_ids.iter().chain(to_item.uses()).collect();
+                drop_ids.iter().chain(&to_item.uses().0).collect();
 
             assert!(
                 old_entry
                     .uses()
+                    .0
                     .iter()
                     .all(|id| to_item_uses_and_dropped_ids.contains(id)),
                 "all of the old entries used items must be accompanied by a drop \
@@ -7220,8 +7223,7 @@ impl Catalog {
         session_catalog.system_vars_mut().enable_all_feature_flags();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
-        let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let depends_on = depends_on.into_iter().collect();
+        let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
@@ -7229,7 +7231,7 @@ impl Catalog {
                 desc: table.desc,
                 defaults: table.defaults,
                 conn_id: None,
-                depends_on,
+                resolved_ids,
                 custom_logical_compaction_window,
                 is_retained_metrics_object,
             }),
@@ -7259,7 +7261,7 @@ impl Catalog {
                 },
                 desc: source.desc,
                 timeline,
-                depends_on,
+                resolved_ids,
                 custom_logical_compaction_window,
                 is_retained_metrics_object,
             }),
@@ -7273,7 +7275,7 @@ impl Catalog {
                     optimized_expr,
                     desc,
                     conn_id: None,
-                    depends_on,
+                    resolved_ids,
                 })
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
@@ -7287,7 +7289,7 @@ impl Catalog {
                     create_sql: materialized_view.create_sql,
                     optimized_expr,
                     desc,
-                    depends_on,
+                    resolved_ids,
                     cluster_id: materialized_view.cluster_id,
                 })
             }
@@ -7296,7 +7298,7 @@ impl Catalog {
                 on: index.on,
                 keys: index.keys,
                 conn_id: None,
-                depends_on,
+                resolved_ids,
                 cluster_id: index.cluster_id,
                 custom_logical_compaction_window,
                 is_retained_metrics_object,
@@ -7312,7 +7314,7 @@ impl Catalog {
                 connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,
-                depends_on,
+                resolved_ids,
                 cluster_id: match cluster_config {
                     plan::SourceSinkClusterConfig::Existing { id } => id,
                     plan::SourceSinkClusterConfig::Linked { .. }
@@ -7327,7 +7329,7 @@ impl Catalog {
                     array_id: None,
                     typ: typ.inner,
                 },
-                depends_on,
+                resolved_ids,
             }),
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
@@ -7336,7 +7338,7 @@ impl Catalog {
                 CatalogItem::Connection(Connection {
                     create_sql: connection.create_sql,
                     connection: connection.connection,
-                    depends_on,
+                    resolved_ids,
                 })
             }
             _ => {
@@ -8675,7 +8677,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn uses(&self) -> &[GlobalId] {
+    fn uses(&self) -> &ResolvedIds {
         self.uses()
     }
 
@@ -8716,7 +8718,7 @@ mod tests {
     use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
-        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
+        ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::StatementContext;
     use mz_sql::session::vars::VarInput;
@@ -8997,7 +8999,7 @@ mod tests {
 
         enum SimplifiedItem {
             Table,
-            MaterializedView { depends_on: Vec<String> },
+            MaterializedView { referenced_names: Vec<String> },
             Index { on: String },
         }
 
@@ -9022,13 +9024,13 @@ mod tests {
                             .with_key(vec![0]),
                         defaults: vec![Expr::null(); 1],
                         conn_id: None,
-                        depends_on: vec![],
+                        resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: None,
                         is_retained_metrics_object: false,
                     }),
-                    SimplifiedItem::MaterializedView { depends_on } => {
-                        let table_list = depends_on.iter().join(",");
-                        let depends_on = convert_name_vec_to_id_vec(depends_on, id_mapping);
+                    SimplifiedItem::MaterializedView { referenced_names } => {
+                        let table_list = referenced_names.iter().join(",");
+                        let resolved_ids = convert_name_vec_to_id_vec(referenced_names, id_mapping);
                         CatalogItem::MaterializedView(MaterializedView {
                             create_sql: format!(
                                 "CREATE MATERIALIZED VIEW mv AS SELECT * FROM {table_list}"
@@ -9043,7 +9045,7 @@ mod tests {
                             desc: RelationDesc::empty()
                                 .with_column("a", ScalarType::Int32.nullable(true))
                                 .with_key(vec![0]),
-                            depends_on,
+                            resolved_ids: ResolvedIds(BTreeSet::from_iter(resolved_ids)),
                             cluster_id: ClusterId::User(1),
                         })
                     }
@@ -9054,7 +9056,7 @@ mod tests {
                             on: on_id,
                             keys: Vec::new(),
                             conn_id: None,
-                            depends_on: vec![on_id],
+                            resolved_ids: ResolvedIds(BTreeSet::from_iter([on_id])),
                             cluster_id: ClusterId::User(1),
                             custom_logical_compaction_window: None,
                             is_retained_metrics_object: false,
@@ -9196,7 +9198,7 @@ mod tests {
                         name: "u1".to_string(),
                         namespace: ItemNamespace::User,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s1".to_string()],
+                            referenced_names: vec!["s1".to_string()],
                         },
                     },
                 ],
@@ -9222,14 +9224,14 @@ mod tests {
                         name: "u1".to_string(),
                         namespace: ItemNamespace::User,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s1".to_string()],
+                            referenced_names: vec!["s1".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "u2".to_string(),
                         namespace: ItemNamespace::User,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s1".to_string()],
+                            referenced_names: vec!["s1".to_string()],
                         },
                     },
                 ],
@@ -9260,14 +9262,14 @@ mod tests {
                         name: "u1".to_string(),
                         namespace: ItemNamespace::User,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s2".to_string()],
+                            referenced_names: vec!["s2".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "u2".to_string(),
                         namespace: ItemNamespace::User,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s1".to_string(), "u1".to_string()],
+                            referenced_names: vec!["s1".to_string(), "u1".to_string()],
                         },
                     },
                 ],
@@ -9313,105 +9315,105 @@ mod tests {
                         name: "s349".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s273".to_string()],
+                            referenced_names: vec!["s273".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s421".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s273".to_string()],
+                            referenced_names: vec!["s273".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s295".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s273".to_string()],
+                            referenced_names: vec!["s273".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s296".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s295".to_string()],
+                            referenced_names: vec!["s295".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s320".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s295".to_string()],
+                            referenced_names: vec!["s295".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s340".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s295".to_string()],
+                            referenced_names: vec!["s295".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s318".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s295".to_string()],
+                            referenced_names: vec!["s295".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s323".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s295".to_string(), "s322".to_string()],
+                            referenced_names: vec!["s295".to_string(), "s322".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s330".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s318".to_string(), "s317".to_string()],
+                            referenced_names: vec!["s318".to_string(), "s317".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s321".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s318".to_string()],
+                            referenced_names: vec!["s318".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s315".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s296".to_string()],
+                            referenced_names: vec!["s296".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s354".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s296".to_string()],
+                            referenced_names: vec!["s296".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s327".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s296".to_string()],
+                            referenced_names: vec!["s296".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s339".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s296".to_string()],
+                            referenced_names: vec!["s296".to_string()],
                         },
                     },
                     SimplifiedCatalogEntry {
                         name: "s355".to_string(),
                         namespace: ItemNamespace::System,
                         item: SimplifiedItem::MaterializedView {
-                            depends_on: vec!["s315".to_string()],
+                            referenced_names: vec!["s315".to_string()],
                         },
                     },
                 ],

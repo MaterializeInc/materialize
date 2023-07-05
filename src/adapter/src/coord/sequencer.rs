@@ -18,6 +18,7 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, FetchPlan, Plan,
     PlanKind, RaisePlan, RotateKeysPlan,
@@ -58,7 +59,7 @@ impl Coordinator {
         &mut self,
         mut ctx: ExecuteContext,
         plan: Plan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
@@ -66,9 +67,12 @@ impl Coordinator {
 
         let session_catalog = self.catalog.for_session(ctx.session());
 
-        if let Err(e) =
-            introspection::user_privilege_hack(&session_catalog, ctx.session(), &plan, &depends_on)
-        {
+        if let Err(e) = introspection::user_privilege_hack(
+            &session_catalog,
+            ctx.session(),
+            &plan,
+            &resolved_ids,
+        ) {
             return ctx.retire(Err(e));
         }
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
@@ -91,7 +95,7 @@ impl Coordinator {
             ctx.session(),
             &plan,
             target_cluster_id,
-            &depends_on,
+            &resolved_ids,
         ) {
             return ctx.retire(Err(e));
         }
@@ -100,22 +104,28 @@ impl Coordinator {
             Plan::CreateSource(plan) => {
                 let source_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
                 let result = self
-                    .sequence_create_source(ctx.session_mut(), vec![(source_id, plan, depends_on)])
+                    .sequence_create_source(
+                        ctx.session_mut(),
+                        vec![(source_id, plan, resolved_ids)],
+                    )
                     .await;
                 ctx.retire(result);
             }
             Plan::CreateSources(plans) => {
-                assert!(depends_on.is_empty(), "each plan has separate depends_on");
+                assert!(
+                    resolved_ids.0.is_empty(),
+                    "each plan has separate resolved_ids"
+                );
                 let plans = plans
                     .into_iter()
-                    .map(|plan| (plan.source_id, plan.plan, plan.depends_on))
+                    .map(|plan| (plan.source_id, plan.plan, plan.resolved_ids))
                     .collect();
                 let result = self.sequence_create_source(ctx.session_mut(), plans).await;
                 ctx.retire(result);
             }
             Plan::CreateConnection(plan) => {
                 let result = self
-                    .sequence_create_connection(ctx.session_mut(), plan, depends_on)
+                    .sequence_create_connection(ctx.session_mut(), plan, resolved_ids)
                     .await;
                 ctx.retire(result);
             }
@@ -146,7 +156,7 @@ impl Coordinator {
             }
             Plan::CreateTable(plan) => {
                 let result = self
-                    .sequence_create_table(ctx.session_mut(), plan, depends_on)
+                    .sequence_create_table(ctx.session_mut(), plan, resolved_ids)
                     .await;
                 ctx.retire(result);
             }
@@ -155,29 +165,29 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(ctx, plan, depends_on).await;
+                self.sequence_create_sink(ctx, plan, resolved_ids).await;
             }
             Plan::CreateView(plan) => {
                 let result = self
-                    .sequence_create_view(ctx.session_mut(), plan, depends_on)
+                    .sequence_create_view(ctx.session_mut(), plan, resolved_ids)
                     .await;
                 ctx.retire(result);
             }
             Plan::CreateMaterializedView(plan) => {
                 let result = self
-                    .sequence_create_materialized_view(ctx.session_mut(), plan, depends_on)
+                    .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
                     .await;
                 ctx.retire(result);
             }
             Plan::CreateIndex(plan) => {
                 let result = self
-                    .sequence_create_index(ctx.session_mut(), plan, depends_on)
+                    .sequence_create_index(ctx.session_mut(), plan, resolved_ids)
                     .await;
                 ctx.retire(result);
             }
             Plan::CreateType(plan) => {
                 let result = self
-                    .sequence_create_type(ctx.session(), plan, depends_on)
+                    .sequence_create_type(ctx.session(), plan, resolved_ids)
                     .await;
                 ctx.retire(result);
             }
@@ -258,7 +268,7 @@ impl Coordinator {
             }
             Plan::Subscribe(plan) => {
                 let result = self
-                    .sequence_subscribe(ctx.session_mut(), plan, depends_on, target_cluster)
+                    .sequence_subscribe(ctx.session_mut(), plan, target_cluster)
                     .await;
                 ctx.retire(result);
             }
