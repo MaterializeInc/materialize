@@ -64,7 +64,7 @@
 //! before planning it.
 
 use std::any::Any;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
@@ -231,21 +231,21 @@ pub const DEFAULT_DATABASE_NAME: &str = "materialize";
 pub static DEFAULT_APPLICATION_NAME: Lazy<String> = Lazy::new(|| "".to_string());
 pub static APPLICATION_NAME: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("application_name"),
-    value: &DEFAULT_APPLICATION_NAME,
+    value: Cow::Borrowed(&DEFAULT_APPLICATION_NAME),
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
     internal: false,
 });
 
 pub static CLIENT_ENCODING: ServerVar<ClientEncoding> = ServerVar {
     name: UncasedStr::new("client_encoding"),
-    value: &ClientEncoding::Utf8,
+    value: Cow::Borrowed(&ClientEncoding::Utf8),
     description: "Sets the client's character set encoding (PostgreSQL).",
     internal: false,
 };
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     name: UncasedStr::new("client_min_messages"),
-    value: &ClientSeverity::Notice,
+    value: Cow::Borrowed(&ClientSeverity::Notice),
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
     internal: false,
 };
@@ -254,14 +254,14 @@ pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 pub static DEFAULT_CLUSTER: Lazy<String> = Lazy::new(|| "default".to_string());
 pub static CLUSTER: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: CLUSTER_VAR_NAME,
-    value: &DEFAULT_CLUSTER,
+    value: Cow::Borrowed(&DEFAULT_CLUSTER),
     description: "Sets the current cluster (Materialize).",
     internal: false,
 });
 
 const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     name: UncasedStr::new("cluster_replica"),
-    value: &None,
+    value: Cow::Borrowed(&None),
     description: "Sets a target cluster replica for SELECT queries (Materialize).",
     internal: false,
 };
@@ -270,7 +270,7 @@ pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
 pub static DEFAULT_DATABASE: Lazy<String> = Lazy::new(|| DEFAULT_DATABASE_NAME.to_string());
 pub static DATABASE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: DATABASE_VAR_NAME,
-    value: &DEFAULT_DATABASE,
+    value: Cow::Borrowed(&DEFAULT_DATABASE),
     description: "Sets the current database (CockroachDB).",
     internal: false,
 });
@@ -278,28 +278,28 @@ pub static DATABASE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
 static DATE_STYLE: ServerVar<DateStyle> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("DateStyle"),
-    value: &DEFAULT_DATE_STYLE,
+    value: Cow::Borrowed(&DEFAULT_DATE_STYLE),
     description: "Sets the display format for date and time values (PostgreSQL).",
     internal: false,
 };
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("extra_float_digits"),
-    value: &3,
+    value: Cow::Borrowed(&3),
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     internal: false,
 };
 
 const FAILPOINTS: ServerVar<Failpoints> = ServerVar {
     name: UncasedStr::new("failpoints"),
-    value: &Failpoints,
+    value: Cow::Borrowed(&Failpoints),
     description: "Allows failpoints to be dynamically activated.",
     internal: false,
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("integer_datetimes"),
-    value: &true,
+    value: Cow::Borrowed(&true),
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
     internal: false,
 };
@@ -307,7 +307,7 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
 pub static INTERVAL_STYLE: ServerVar<IntervalStyle> = ServerVar {
     // IntervalStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("IntervalStyle"),
-    value: &IntervalStyle::Postgres,
+    value: Cow::Borrowed(&IntervalStyle::Postgres),
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
 };
@@ -320,7 +320,7 @@ pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
 static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
-    value: &*DEFAULT_SEARCH_PATH,
+    value: Cow::Borrowed(&*DEFAULT_SEARCH_PATH),
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
     internal: false,
@@ -328,7 +328,7 @@ static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
 
 const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("statement_timeout"),
-    value: &Duration::from_secs(10),
+    value: Cow::Borrowed(&Duration::from_secs(10)),
     description:
         "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
         If this value is specified without units, it is taken as milliseconds.",
@@ -337,7 +337,7 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
 
 const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("idle_in_transaction_session_timeout"),
-    value: &Duration::from_secs(60 * 2),
+    value: Cow::Borrowed(&Duration::from_secs(60 * 2)),
     description:
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
          being terminated. If this value is specified without units, it is taken as milliseconds. \
@@ -354,30 +354,31 @@ pub static SERVER_VERSION_VALUE: Lazy<String> = Lazy::new(|| {
 
 pub static SERVER_VERSION: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("server_version"),
-    value: &SERVER_VERSION_VALUE,
+    value: Cow::Borrowed(&SERVER_VERSION_VALUE),
     description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
 });
 
+const DEFAULT_SERVER_VERSION_NUM: i32 = (cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
+    + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
+    + cast::u8_to_i32(SERVER_PATCH_VERSION);
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("server_version_num"),
-    value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
-        + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
-        + cast::u8_to_i32(SERVER_PATCH_VERSION)),
+    value: Cow::Borrowed(&DEFAULT_SERVER_VERSION_NUM),
     description: "Shows the PostgreSQL compatible server version as an integer (PostgreSQL).",
     internal: false,
 };
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("sql_safe_updates"),
-    value: &false,
+    value: Cow::Borrowed(&false),
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
     internal: false,
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("standard_conforming_strings"),
-    value: &true,
+    value: Cow::Borrowed(&true),
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
     internal: false,
 };
@@ -385,7 +386,7 @@ const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
 const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("TimeZone"),
-    value: &TimeZone::UTC,
+    value: Cow::Borrowed(&TimeZone::UTC),
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
     internal: false,
 };
@@ -393,42 +394,42 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
 pub const TRANSACTION_ISOLATION_VAR_NAME: &UncasedStr = UncasedStr::new("transaction_isolation");
 const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     name: TRANSACTION_ISOLATION_VAR_NAME,
-    value: &IsolationLevel::StrictSerializable,
+    value: Cow::Borrowed(&IsolationLevel::StrictSerializable),
     description: "Sets the current transaction's isolation level (PostgreSQL).",
     internal: false,
 };
 
 pub const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_aws_privatelink_connections"),
-    value: &0,
+    value: Cow::Borrowed(&0),
     description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     internal: false
 };
 
 pub const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
-    value: &25,
+    value: Cow::Borrowed(&25),
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_SOURCES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sources"),
-    value: &25,
+    value: Cow::Borrowed(&25),
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_SINKS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sinks"),
-    value: &25,
+    value: Cow::Borrowed(&25),
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_materialized_views"),
-    value: &100,
+    value: Cow::Borrowed(&100),
     description:
         "The maximum number of materialized views in the region, across all schemas (Materialize).",
     internal: false,
@@ -436,14 +437,14 @@ pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
 
 pub const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_clusters"),
-    value: &10,
+    value: Cow::Borrowed(&10),
     description: "The maximum number of clusters in the region (Materialize).",
     internal: false,
 };
 
 pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_replicas_per_cluster"),
-    value: &5,
+    value: Cow::Borrowed(&5),
     description: "The maximum number of replicas of a single cluster (Materialize).",
     internal: false,
 };
@@ -452,7 +453,7 @@ static DEFAULT_MAX_CREDIT_CONSUMPTION_RATE: Lazy<Numeric> = Lazy::new(|| 1024.in
 pub static MAX_CREDIT_CONSUMPTION_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
         name: UncasedStr::new("max_credit_consumption_rate"),
-        value: &DEFAULT_MAX_CREDIT_CONSUMPTION_RATE,
+        value: Cow::Borrowed(&DEFAULT_MAX_CREDIT_CONSUMPTION_RATE),
         description: "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
         internal: false
     }
@@ -460,35 +461,35 @@ pub static MAX_CREDIT_CONSUMPTION_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| 
 
 pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
-    value: &1000,
+    value: Cow::Borrowed(&1000),
     description: "The maximum number of databases in the region (Materialize).",
     internal: false,
 };
 
 pub const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_schemas_per_database"),
-    value: &1000,
+    value: Cow::Borrowed(&1000),
     description: "The maximum number of schemas in a database (Materialize).",
     internal: false,
 };
 
 pub const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_objects_per_schema"),
-    value: &1000,
+    value: Cow::Borrowed(&1000),
     description: "The maximum number of objects in a schema (Materialize).",
     internal: false,
 };
 
 pub const MAX_SECRETS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_secrets"),
-    value: &100,
+    value: Cow::Borrowed(&100),
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_ROLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_roles"),
-    value: &1000,
+    value: Cow::Borrowed(&1000),
     description: "The maximum number of roles in the region (Materialize).",
     internal: false,
 };
@@ -499,7 +500,7 @@ pub const MAX_ROLES: ServerVar<u32> = ServerVar {
 pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_result_size"),
     // 1 GiB
-    value: &1_073_741_824,
+    value: Cow::Borrowed(&1_073_741_824),
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
 };
@@ -512,7 +513,7 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
 pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("metrics_retention"),
     // 30 days
-    value: &Duration::from_secs(30 * 24 * 60 * 60),
+    value: Cow::Borrowed(&Duration::from_secs(30 * 24 * 60 * 60)),
     description: "The time to retain cluster utilization metrics (Materialize).",
     internal: true,
 };
@@ -520,7 +521,7 @@ pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
 static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<Ident>> = Lazy::new(Vec::new);
 static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("allowed_cluster_replica_sizes"),
-    value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
+    value: Cow::Borrowed(&DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES),
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
     internal: false,
 });
@@ -528,7 +529,7 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(||
 /// Controls [`mz_persist_client::cfg::DynamicConfig::blob_target_size`].
 const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_blob_target_size"),
-    value: &PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_BLOB_TARGET_SIZE),
     description: "A target maximum size of persist blob payloads in bytes (Materialize).",
     internal: true,
 };
@@ -536,7 +537,7 @@ const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::blob_cache_mem_limit_bytes`].
 const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_blob_cache_mem_limit_bytes"),
-    value: &PersistConfig::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES),
     description:
         "Capacity of in-mem blob cache in bytes. Only takes effect on restart (Materialize).",
     internal: true,
@@ -545,7 +546,7 @@ const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
-    value: &PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT),
     description: "The minimum amount of time to allow a persist compaction request to run before \
                   timing it out (Materialize).",
     internal: true,
@@ -554,7 +555,7 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_initial_backoff"),
-    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff),
     description: "The initial backoff when polling for new batches from a Listen or Subscribe.",
     internal: true,
 };
@@ -562,7 +563,7 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = S
 /// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_multiplier"),
-    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier),
     description: "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
     internal: true,
 };
@@ -570,7 +571,7 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
 /// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_clamp"),
-    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp),
     description:
         "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
     internal: true,
@@ -579,7 +580,7 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
 /// The default for the `DISK` option in `UPSERT` sources.
 const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("upsert_source_disk_default"),
-    value: &false,
+    value: Cow::Borrowed(&false),
     description: "The default for the `DISK` option in `UPSERT` sources.",
     internal: true,
 };
@@ -630,7 +631,7 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_COMPACTION_STYLE: ServerVar<CompactionStyle> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compaction_style"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_COMPACTION_STYLE,
+        value: Cow::Borrowed(&mz_rocksdb_types::defaults::DEFAULT_COMPACTION_STYLE),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -638,7 +639,9 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        value: Cow::Borrowed(
+            &mz_rocksdb_types::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        ),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -646,7 +649,9 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        value: Cow::Borrowed(
+            &mz_rocksdb_types::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        ),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -654,7 +659,7 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+        value: Cow::Borrowed(&mz_rocksdb_types::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -662,7 +667,7 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_parallelism"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_PARALLELISM,
+        value: Cow::Borrowed(&mz_rocksdb_types::defaults::DEFAULT_PARALLELISM),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -670,7 +675,7 @@ mod upsert_rocksdb {
     };
     pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_COMPRESSION_TYPE,
+        value: Cow::Borrowed(&mz_rocksdb_types::defaults::DEFAULT_COMPRESSION_TYPE),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -678,7 +683,7 @@ mod upsert_rocksdb {
     };
     pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        value: Cow::Borrowed(&mz_rocksdb_types::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -687,7 +692,7 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_BATCH_SIZE: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_batch_size"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_BATCH_SIZE,
+        value: Cow::Borrowed(&mz_rocksdb_types::defaults::DEFAULT_BATCH_SIZE),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Can be changed dynamically (Materialize).",
@@ -696,7 +701,7 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_RETRY_DURATION: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_retry_duration"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_RETRY_DURATION,
+        value: Cow::Borrowed(&mz_rocksdb_types::defaults::DEFAULT_RETRY_DURATION),
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -707,7 +712,7 @@ mod upsert_rocksdb {
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_CONNECT_TIMEOUT,
+    value: Cow::Borrowed(&mz_postgres_util::DEFAULT_REPLICATION_CONNECT_TIMEOUT),
     description: "Sets the timeout applied to socket-level connection attempts for PG \
     replication connections. (Materialize)",
     internal: true,
@@ -717,7 +722,7 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// when connecting to PG via replication.
 const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("pg_replication_keepalives_retries"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
+    value: Cow::Borrowed(&mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_RETRIES),
     description:
         "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
     a connection when connecting to PG via replication. (Materialize)",
@@ -728,7 +733,7 @@ const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
 /// to PG via replication.
 const PG_REPLICATION_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_keepalives_idle"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_IDLE,
+    value: Cow::Borrowed(&mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_IDLE),
     description:
         "Sets the amount of idle time before a keepalive packet is sent on the connection \
     when connecting to PG via replication. (Materialize)",
@@ -738,7 +743,7 @@ const PG_REPLICATION_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
 /// Sets the time interval between TCP keepalive probes when connecting to PG via replication.
 const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_keepalives_interval"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_INTERVAL,
+    value: Cow::Borrowed(&mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_INTERVAL),
     description: "Sets the time interval between TCP keepalive probes when connecting to PG via \
     replication. (Materialize)",
     internal: true,
@@ -747,7 +752,7 @@ const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
 /// Sets the TCP user timeout when connecting to PG via replication.
 const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_tcp_user_timeout"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
+    value: Cow::Borrowed(&mz_postgres_util::DEFAULT_REPLICATION_TCP_USER_TIMEOUT),
     description: "Sets the TCP user timeout when connecting to PG via replication. (Materialize)",
     internal: true,
 };
@@ -757,7 +762,7 @@ const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
 const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("crdb_connect_timeout"),
-    value: &PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT),
     description: "The time to connect to CockroachDB before timing out and retrying.",
     internal: true,
 };
@@ -767,7 +772,7 @@ const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_tcp_user_timeout`].
 const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("crdb_tcp_user_timeout"),
-    value: &PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT),
     description:
         "The TCP timeout for connections to CockroachDB. Specifies the amount of time that \
         transmitted data may remain unacknowledged before the TCP connection is forcibly \
@@ -778,7 +783,7 @@ const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
 const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("dataflow_max_inflight_bytes"),
-    value: &usize::MAX,
+    value: Cow::Borrowed(&usize::MAX),
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
                   dataflows (Materialize).",
     internal: true,
@@ -787,7 +792,7 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_sink_minimum_batch_updates"),
-    value: &PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES),
     description: "In the compute persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
@@ -798,7 +803,7 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
 const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("storage_persist_sink_minimum_batch_updates"),
     // Reasonable default based on our experience in production.
-    value: &1024,
+    value: Cow::Borrowed(&1024),
     description: "In the storage persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
@@ -808,7 +813,7 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
 const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_stats_audit_percent"),
-    value: &PersistConfig::DEFAULT_STATS_AUDIT_PERCENT,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_STATS_AUDIT_PERCENT),
     description: "Percent of filtered data to opt in to correctness auditing (Materialize).",
     internal: true,
 };
@@ -816,7 +821,7 @@ const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
 const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_stats_collection_enabled"),
-    value: &PersistConfig::DEFAULT_STATS_COLLECTION_ENABLED,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_STATS_COLLECTION_ENABLED),
     description: "Whether to calculate and record statistics about the data stored in persist \
                   to be used at read time, see persist_stats_filter_enabled (Materialize).",
     internal: true,
@@ -825,7 +830,7 @@ const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_filter_enabled`].
 const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_stats_filter_enabled"),
-    value: &PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_STATS_FILTER_ENABLED),
     description: "Whether to use recorded statistics about the data stored in persist \
                   to filter at read time, see persist_stats_collection_enabled (Materialize).",
     internal: true,
@@ -834,7 +839,7 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
 const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_pubsub_client_enabled"),
-    value: &PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED),
     description: "Whether to connect to the Persist PubSub service.",
     internal: true,
 };
@@ -842,7 +847,7 @@ const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
 const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_pubsub_push_diff_enabled"),
-    value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
     description: "Whether to push state diffs to Persist PubSub.",
     internal: true,
 };
@@ -850,7 +855,7 @@ const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::rollup_threshold`].
 const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_rollup_threshold"),
-    value: &PersistConfig::DEFAULT_ROLLUP_THRESHOLD,
+    value: Cow::Borrowed(&PersistConfig::DEFAULT_ROLLUP_THRESHOLD),
     description: "The number of seqnos between rollups.",
     internal: true,
 };
@@ -859,7 +864,7 @@ const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("config_has_synced_once"),
-    value: &false,
+    value: Cow::Borrowed(&false),
     description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
     internal: true
 };
@@ -869,7 +874,7 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
 /// be able to alter parameters while LD is broken.
 pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_launchdarkly"),
-    value: &true,
+    value: Cow::Borrowed(&true),
     description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
     internal: true
 };
@@ -879,14 +884,14 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
 /// is additionally gated by a feature flag.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
-    value: &false,
+    value: Cow::Borrowed(&false),
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: false,
 };
 
 static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_timestamp_notice"),
-    value: &false,
+    value: Cow::Borrowed(&false),
     description:
         "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).",
     internal: false
@@ -894,7 +899,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
 
 static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_trace_id_notice"),
-    value: &false,
+    value: Cow::Borrowed(&false),
     description:
         "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize).",
     internal: false
@@ -902,7 +907,7 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
 
 static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
     name: UncasedStr::new("unsafe_mock_audit_event_timestamp"),
-    value: &None,
+    value: Cow::Borrowed(&None),
     description: "Mocked timestamp to use for audit events for testing purposes",
     internal: true,
 };
@@ -910,7 +915,7 @@ static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> 
 pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_ld_rbac_checks"),
     // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: Cow::Borrowed(&false),
     description:
         "LD facing global boolean flag that allows turning RBAC off for everyone (Materialize).",
     internal: true,
@@ -919,7 +924,7 @@ pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
     // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: Cow::Borrowed(&false),
     description: "User facing global boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,
@@ -928,7 +933,7 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_rbac_checks"),
     // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: Cow::Borrowed(&false),
     description: "User facing session boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,
@@ -938,7 +943,7 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_mz_join_core"),
-    value: &false,
+    value: Cow::Borrowed(&false),
     description:
         "Feature flag indicating whether compute rendering should use Materialize's custom linear \
          join implementation rather than the one from Differential Dataflow. (Materialize).",
@@ -947,7 +952,7 @@ const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
 
 pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_default_connection_validation"),
-    value: &true,
+    value: Cow::Borrowed(&true),
     description:
         "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
     internal: true,
@@ -955,7 +960,7 @@ pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
 
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
-    value: &true,
+    value: Cow::Borrowed(&true),
     description:
         "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
     internal: false
@@ -963,7 +968,7 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
 
 pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_connections"),
-    value: &1000,
+    value: Cow::Borrowed(&1000),
     description: "The maximum number of concurrent connections (Materialize).",
     internal: false,
 };
@@ -971,7 +976,7 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
 /// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_source_status_history_entries`].
 const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_source_status_history_entries"),
-    value: &5,
+    value: Cow::Borrowed(&5),
     description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
     internal: true
 };
@@ -979,14 +984,14 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
 const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_sink_status_history_entries"),
-    value: &5,
+    value: Cow::Borrowed(&5),
     description: "On reboot, truncate all but the last n entries per ID in the sink_status_history collection (Materialize).",
     internal: true
 };
 
 const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_storage_shard_finalization"),
-    value: &true,
+    value: Cow::Borrowed(&true),
     description: "Whether to allow the storage client to finalize shards (Materialize).",
     internal: true,
 };
@@ -1005,7 +1010,7 @@ macro_rules! feature_flags {
                 // accessible through their FeatureFlag variant.
                 static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
                     name: UncasedStr::new(stringify!($name)),
-                    value: &false,
+                    value: Cow::Borrowed(&false),
                     description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
                     internal: true                };
 
@@ -2320,17 +2325,26 @@ pub trait SystemVarMut: Var + Send + Sync {
 #[derive(Debug)]
 pub struct ServerVar<V>
 where
-    V: Debug + 'static,
+    V: Debug + Clone + 'static,
 {
     name: &'static UncasedStr,
-    value: &'static V,
+    value: Cow<'static, V>,
     description: &'static str,
     internal: bool,
 }
 
+impl<V> ServerVar<V>
+where
+    V: Debug + Clone + 'static,
+{
+    fn borrow(&self) -> &V {
+        self.value.borrow()
+    }
+}
+
 impl<V> Var for ServerVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + PartialEq + Clone + 'static,
 {
     fn name(&self) -> &'static str {
         self.name.as_str()
@@ -2369,7 +2383,7 @@ where
 #[derive(Debug)]
 struct SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     persisted_value: Option<V::Owned>,
@@ -2381,7 +2395,7 @@ where
 // The derived `Clone` implementation requires `V: Clone`, which is not needed.
 impl<V> Clone for SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     fn clone(&self) -> Self {
@@ -2396,7 +2410,7 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
@@ -2441,14 +2455,14 @@ where
                 self.dynamic_default
                     .as_ref()
                     .map(|v| v.borrow())
-                    .unwrap_or(self.parent.value)
+                    .unwrap_or(self.parent.value.borrow())
             })
     }
 }
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     fn name(&self) -> &'static str {
@@ -2474,7 +2488,7 @@ where
 
 impl<V> SystemVarMut for SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     fn as_var(&self) -> &dyn Var {
@@ -2492,7 +2506,7 @@ where
 
     fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
         let v = V::parse(self, input)?;
-        Ok(self.parent.value == v.borrow())
+        Ok(self.parent.borrow() == v.borrow())
     }
 
     fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
@@ -2585,9 +2599,8 @@ impl FeatureFlag {
 #[derive(Debug)]
 struct SessionVar<V>
 where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
+    V: Value + ToOwned + Debug + PartialEq + Clone + 'static,
 {
-    default_value: &'static V,
     local_value: Option<V::Owned>,
     staged_value: Option<V::Owned>,
     session_value: Option<V::Owned>,
@@ -2654,12 +2667,11 @@ where
 
 impl<V> SessionVar<V>
 where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
+    V: Value + ToOwned + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Send + Sync,
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
-            default_value: parent.value,
             local_value: None,
             staged_value: None,
             session_value: None,
@@ -2701,13 +2713,13 @@ where
             .map(|v| v.borrow())
             .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
-            .unwrap_or(self.parent.value)
+            .unwrap_or(self.parent.value.borrow())
     }
 }
 
 impl<V> Var for SessionVar<V>
 where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
+    V: Value + ToOwned + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Send + Sync,
 {
     fn name(&self) -> &'static str {
@@ -2754,7 +2766,7 @@ pub trait SessionVarMut: Var + Send + Sync {
 
 impl<V> SessionVarMut for SessionVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + PartialEq + Clone + 'static,
     V::Owned: Debug + Send + Sync + PartialEq,
 {
     /// Upcast to Var, for use with `dyn`.
@@ -2784,7 +2796,7 @@ where
 
     /// Reset the stored value to the default.
     fn reset(&mut self, local: bool) {
-        let value = self.default_value.to_owned();
+        let value = self.parent.value.to_owned().into_owned();
         if local {
             self.local_value = Some(value);
         } else {
