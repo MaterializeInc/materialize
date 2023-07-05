@@ -233,7 +233,7 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
     pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
     /// Default value for [`DynamicConfig::pubsub_client_enabled`].
-    pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = false;
+    pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::pubsub_push_diff_enabled`].
     pub const DEFAULT_PUBSUB_PUSH_DIFF_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::rollup_threshold`].
