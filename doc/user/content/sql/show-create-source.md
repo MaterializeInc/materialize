@@ -28,6 +28,14 @@ SHOW CREATE SOURCE market_orders_raw;
  materialize.public.market_orders_raw | CREATE SOURCE "materialize"."public"."market_orders_raw" FROM LOAD GENERATOR COUNTER WITH (SIZE = '3xsmall')
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the source.
+
 ## Related pages
 
 - [`SHOW SOURCES`](../show-sources)

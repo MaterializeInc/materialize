@@ -38,6 +38,14 @@ SHOW CREATE INDEX my_view_idx;
  materialize.public.my_view_idx | CREATE INDEX "my_view_idx" IN CLUSTER "default" ON "materialize"."public"."my_view" ("a", "b")
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the index.
+
 ## Related pages
 
 - [`SHOW INDEXES`](../show-indexes)

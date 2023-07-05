@@ -88,6 +88,17 @@ GRANT ALL ON CLUSTER dev TO joe;
 GRANT CREATEDB ON SYSTEM TO joe;
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- superuser status if the privilege is a system privilege.
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)

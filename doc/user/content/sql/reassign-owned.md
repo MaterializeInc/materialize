@@ -32,6 +32,14 @@ REASSIGN OWNED BY joe TO mike;
 REASSIGN OWNED BY joe, george TO mike;
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Role membership in `old_role` and `new_role`.
+
 ## Related pages
 
 - [ALTER OWNER](../alter-owner)

@@ -66,6 +66,15 @@ You can use either of the following commands:
 DROP SOURCE IF EXISTS my_source;
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped source.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`CREATE SOURCE`](../create-source)

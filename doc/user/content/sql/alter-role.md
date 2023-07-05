@@ -50,6 +50,14 @@ SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 rj  true
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)

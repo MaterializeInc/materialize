@@ -30,6 +30,14 @@ GRANT data_scientist TO joe;
 GRANT data_scientist TO joe, mike;
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the systems.
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)

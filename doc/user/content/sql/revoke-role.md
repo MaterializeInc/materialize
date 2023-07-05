@@ -35,6 +35,14 @@ REVOKE data_scientist FROM joe;
 REVOKE data_scientist FROM joe, mike;
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the systems.
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)

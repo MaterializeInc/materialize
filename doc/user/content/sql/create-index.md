@@ -161,6 +161,17 @@ Take into account that aggregations like `count()` cannot be used as indexed exp
 
 For more details on using indexes to optimize queries, see [Optimization](../../ops/optimization/).
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of `obj_name`.
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the index definition.
+
 ## Related pages
 
 -   [`SHOW INDEXES`](../show-indexes)
