@@ -10,9 +10,9 @@
 import json
 from typing import Any, Dict, List
 
+import confluent_kafka  # type: ignore
 import pg8000
-from confluent_kafka import Producer  # type: ignore
-from confluent_kafka.admin import AdminClient, NewTopic  # type: ignore
+from confluent_kafka.admin import AdminClient  # type: ignore
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient  # type: ignore
 from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
 from confluent_kafka.serialization import (  # type: ignore
@@ -54,7 +54,7 @@ def delivery_report(err: str, msg: Any) -> None:
 
 
 class KafkaExecutor(Executor):
-    producer: Producer
+    producer: confluent_kafka.Producer
     avro_serializer: AvroSerializer
     key_avro_serializer: AvroSerializer
     serialization_context: SerializationContext
@@ -105,7 +105,11 @@ class KafkaExecutor(Executor):
 
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
-            [NewTopic(self.topic, num_partitions=1, replication_factor=1)]
+            [
+                confluent_kafka.admin.NewTopic(
+                    self.topic, num_partitions=1, replication_factor=1
+                )
+            ]
         )
         for topic, f in fs.items():
             f.result()
@@ -136,7 +140,7 @@ class KafkaExecutor(Executor):
             self.topic, MessageField.KEY
         )
 
-        self.producer = Producer(kafka_conf)
+        self.producer = confluent_kafka.Producer(kafka_conf)
 
         conn.autocommit = True
         with conn.cursor() as cur:
