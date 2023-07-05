@@ -9,7 +9,6 @@
 
 import random
 import time
-from copy import deepcopy
 from typing import Any, Dict, Iterator, List
 
 import pg8000
@@ -40,8 +39,7 @@ class Workload:
 
     def generate(self, fields: List[Field]) -> Iterator[Transaction]:
         while True:
-            cycle = deepcopy(self.cycle)
-            for transaction_def in cycle:
+            for transaction_def in self.cycle:
                 for transaction in transaction_def.generate(fields):
                     yield transaction
 
@@ -64,7 +62,7 @@ class SingleSensorUpdating(Workload):
 class DeleteDataAtEndOfDay(Workload):
     def __init__(self) -> None:
         insert = Insert(
-            count=Records.ONE,
+            count=Records.SOME,
             record_size=RecordSize.SMALL,
         )
         insert_phase = TransactionDef(
@@ -98,7 +96,7 @@ class DeleteDataAtEndOfDay(Workload):
 
 
 def execute_workload(
-    executor_classes: Any,
+    executor_classes: List[Any],
     workload: Workload,
     conn: pg8000.Connection,
     num: int,
@@ -117,13 +115,14 @@ def execute_workload(
     print(f"With fields: {fields}")
 
     executors = [
-        executor_class(num, conn, ports, fields) for executor_class in executor_classes
+        executor_class(num, conn, ports, fields)
+        for executor_class in [PgExecutor] + executor_classes
     ]
-    pg_executor = PgExecutor(num, conn=None, ports=ports, fields=fields)
+    pg_executor = executors[0]
 
     start = time.time()
 
-    run_executors = ([PrintExecutor()] if verbose else []) + [pg_executor] + executors
+    run_executors = ([PrintExecutor()] if verbose else []) + executors
     for i, transaction in enumerate(workload.generate(fields)):
         duration = time.time() - start
         if duration > runtime:

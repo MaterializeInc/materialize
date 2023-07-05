@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pg8000
 from confluent_kafka import Producer  # type: ignore
@@ -35,11 +35,6 @@ class Executor:
     def run(self, transaction: Transaction) -> None:
         raise NotImplementedError
 
-    def print_progress(self) -> None:
-        if self.num_transactions % 100 == 0:
-            print(f"{type(self).__name__}: {self.num_transactions}")
-        self.num_transactions += 1
-
     def execute(self, cur: pg8000.Cursor, query: str) -> None:
         try:
             cur.execute(query)
@@ -62,6 +57,8 @@ class KafkaExecutor(Executor):
     producer: Producer
     avro_serializer: AvroSerializer
     key_avro_serializer: AvroSerializer
+    serialization_context: SerializationContext
+    key_serialization_context: SerializationContext
     topic: str
     table: str
     fields: List[Field]
@@ -132,6 +129,13 @@ class KafkaExecutor(Executor):
             f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
         )
 
+        self.serialization_context = SerializationContext(
+            self.topic, MessageField.VALUE
+        )
+        self.key_serialization_context = SerializationContext(
+            self.topic, MessageField.KEY
+        )
+
         self.producer = Producer(kafka_conf)
 
         conn.autocommit = True
@@ -147,7 +151,6 @@ class KafkaExecutor(Executor):
         conn.autocommit = False
 
     def run(self, transaction: Transaction) -> None:
-        self.print_progress()
         for row_list in transaction.row_lists:
             for row in row_list.rows:
                 if (
@@ -162,7 +165,7 @@ class KafkaExecutor(Executor):
                                 for field in row.fields
                                 if field.is_key
                             },
-                            SerializationContext(self.topic, MessageField.KEY),
+                            self.key_serialization_context,
                         ),
                         value=self.avro_serializer(
                             {
@@ -170,7 +173,7 @@ class KafkaExecutor(Executor):
                                 for field in row.fields
                                 if not field.is_key
                             },
-                            SerializationContext(self.topic, MessageField.VALUE),
+                            self.serialization_context,
                         ),
                         on_delivery=delivery_report,
                     )
@@ -183,7 +186,7 @@ class KafkaExecutor(Executor):
                                 for field in row.fields
                                 if field.is_key
                             },
-                            SerializationContext(self.topic, MessageField.KEY),
+                            self.key_serialization_context,
                         ),
                         value=None,
                         on_delivery=delivery_report,
@@ -200,7 +203,7 @@ class PgExecutor(Executor):
     def __init__(
         self,
         num: int,
-        conn: Optional[pg8000.Connection],
+        conn: pg8000.Connection,
         ports: Dict[str, int],
         fields: List[Field],
     ):
@@ -211,7 +214,7 @@ class PgExecutor(Executor):
             password="postgres",
             port=ports["postgres"],
         )
-        self.table = f"cdc{num}" if conn else f"pg{num}"
+        self.table = f"table{num}"
 
         values = [
             f"{field.name} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
@@ -227,40 +230,34 @@ class PgExecutor(Executor):
                     CREATE TABLE {self.table} (
                         {", ".join(values)},
                         PRIMARY KEY ({", ".join(keys)}));
-                    ALTER TABLE {self.table} REPLICA IDENTITY FULL;""",
-            )
-            if conn:
-                self.execute(
-                    cur,
-                    f"""CREATE USER postgres{num} WITH SUPERUSER PASSWORD 'postgres';
+                    ALTER TABLE {self.table} REPLICA IDENTITY FULL;
+                    CREATE USER postgres{num} WITH SUPERUSER PASSWORD 'postgres';
                     ALTER USER postgres{num} WITH replication;
                     DROP PUBLICATION IF EXISTS postgres_source;
                     CREATE PUBLICATION postgres_source FOR ALL TABLES;""",
-                )
+            )
         self.conn.autocommit = False
 
-        if conn:
-            conn.autocommit = True
-            with conn.cursor() as cur:
-                self.execute(cur, f"CREATE SECRET pgpass{num} AS 'postgres'")
-                self.execute(
-                    cur,
-                    f"""CREATE CONNECTION pg{num} FOR POSTGRES
-                        HOST 'postgres',
-                        DATABASE postgres,
-                        USER postgres{num},
-                        PASSWORD SECRET pgpass{num}""",
-                )
-                self.execute(
-                    cur,
-                    f"""CREATE SOURCE postgres_source{num}
-                        FROM POSTGRES CONNECTION pg{num} (PUBLICATION 'postgres_source')
-                        FOR TABLES ({self.table} AS {self.table})""",
-                )
-            conn.autocommit = False
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            self.execute(cur, f"CREATE SECRET pgpass{num} AS 'postgres'")
+            self.execute(
+                cur,
+                f"""CREATE CONNECTION pg{num} FOR POSTGRES
+                    HOST 'postgres',
+                    DATABASE postgres,
+                    USER postgres{num},
+                    PASSWORD SECRET pgpass{num}""",
+            )
+            self.execute(
+                cur,
+                f"""CREATE SOURCE postgres_source{num}
+                    FROM POSTGRES CONNECTION pg{num} (PUBLICATION 'postgres_source')
+                    FOR TABLES ({self.table} AS {self.table})""",
+            )
+        conn.autocommit = False
 
     def run(self, transaction: Transaction) -> None:
-        self.print_progress()
         with self.conn.cursor() as cur:
             for row_list in transaction.row_lists:
                 for row in row_list.rows:

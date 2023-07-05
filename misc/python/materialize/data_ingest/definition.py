@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from copy import deepcopy
+from copy import copy
 from enum import Enum
 from typing import Iterator, List, Optional
 
@@ -60,19 +60,22 @@ class Insert(Definition):
                 f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
             )
 
-        fields_with_values = deepcopy(fields)
-
         for i in range(self.count):
+            fields_with_values = [copy(field) for field in fields]
             for field in fields_with_values:
                 if field.is_key:
                     field.set_numeric_value(self.current_key)
                 else:
                     field.set_random_value(self.record_size)
+
             self.current_key += 1
+            if self.current_key >= self.count:
+                break
+
             yield RowList(
                 [
                     Row(
-                        fields=deepcopy(fields_with_values),
+                        fields=fields_with_values,
                         operation=Operation.INSERT,
                     )
                 ]
@@ -91,9 +94,8 @@ class Upsert(Definition):
                 f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
             )
 
-        fields_with_values = deepcopy(fields)
-
         for i in range(self.count):
+            fields_with_values = [copy(field) for field in fields]
             for field in fields_with_values:
                 if field.is_key:
                     if self.keyspace == Keyspace.SINGLE_VALUE:
@@ -106,7 +108,7 @@ class Upsert(Definition):
             yield RowList(
                 [
                     Row(
-                        fields=deepcopy(fields_with_values),
+                        fields=fields_with_values,
                         operation=Operation.UPSERT,
                     )
                 ]
@@ -125,22 +127,24 @@ class Delete(Definition):
         self.num = num
 
     def generate(self, fields: List[Field]) -> Iterator[RowList]:
-        fields_with_values = [field for field in fields if field.is_key]
 
         if self.number_of_records == Records.ONE:
+            fields_with_values = [copy(field) for field in fields if field.is_key]
             for field in fields_with_values:
                 field.value = field.data_type.random_value(self.record_size)
             yield RowList([Row(fields_with_values, Operation.DELETE)])
         elif self.number_of_records in (Records.SOME, Records.MANY):
             for i in range(self.number_of_records.value):
+                fields_with_values = [copy(field) for field in fields if field.is_key]
                 for field in fields_with_values:
                     field.value = field.data_type.random_value(self.record_size)
-                yield RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])
+                yield RowList([Row(fields_with_values, Operation.DELETE)])
         elif self.number_of_records == Records.ALL:
             assert self.num is not None
             for i in range(self.num):
+                fields_with_values = [copy(field) for field in fields if field.is_key]
                 for field in fields_with_values:
                     field.value = field.data_type.numeric_value(i)
-                yield RowList([Row(deepcopy(fields_with_values), Operation.DELETE)])
+                yield RowList([Row(fields_with_values, Operation.DELETE)])
         else:
             raise ValueError(f"Unexpected number of records {self.number_of_records}")
