@@ -99,7 +99,7 @@ so it is executed.""",
         for step in pipeline["steps"]:
             # Coverage runs are slower
             if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 2
+                step["timeout_in_minutes"] *= 4
             if step.get("coverage") == "skip":
                 step["skip"] = True
             if step.get("id") == "build-x86_64":
