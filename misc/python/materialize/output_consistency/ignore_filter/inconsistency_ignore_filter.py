@@ -271,7 +271,7 @@ class PostExecutionInconsistencyIgnoreFilter:
             expressions, contains_aggregation
         ):
             return True
-        if self._uses_null_shortcut_optimization(expressions):
+        if self._might_use_null_shortcut_optimization(expressions):
             return True
 
         return False
@@ -302,33 +302,18 @@ class PostExecutionInconsistencyIgnoreFilter:
 
         return False
 
-    def _uses_null_shortcut_optimization(self, expressions: List[Expression]) -> bool:
-        def is_eq_null_comparison(expression: Expression) -> bool:
-            if isinstance(expression, ExpressionWithArgs):
-                operation = expression.operation
-                is_eq_comparison = (
-                    isinstance(operation, DbOperation) and operation.pattern == "$ = $"
-                )
-
-                if not is_eq_comparison:
-                    return False
-
-                is_arg0_null = isinstance(
-                    expression.args[0], DataValue
-                ) and expression.args[0].has_any_characteristic(
-                    {ExpressionCharacteristics.NULL}
-                )
-                is_arg1_null = isinstance(
-                    expression.args[1], DataValue
-                ) and expression.args[1].has_any_characteristic(
-                    {ExpressionCharacteristics.NULL}
-                )
-                return is_arg0_null or is_arg1_null
-
-            return False
+    def _might_use_null_shortcut_optimization(
+        self, expressions: List[Expression]
+    ) -> bool:
+        def is_null_expression(expression: Expression) -> bool:
+            return isinstance(
+                expression, DataValue
+            ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL})
 
         for expression in expressions:
-            if expression.contains(is_eq_null_comparison):
+            if expression.contains(is_null_expression):
+                # Constant folding takes shortcuts when it can infer that an expression will be NULL or not
+                # (e.g., `chr(huge_value) = NULL` won't be fully evaluated)
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return True
 
