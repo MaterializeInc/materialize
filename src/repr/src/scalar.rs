@@ -2575,6 +2575,10 @@ impl<'a> ScalarType {
         static INTERVAL: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
                 Datum::Interval(Interval::new(0, 0, 0)),
+                Datum::Interval(Interval::new(1, 1, 1)),
+                Datum::Interval(Interval::new(1, 0, 0)),
+                Datum::Interval(Interval::new(0, 1, 0)),
+                Datum::Interval(Interval::new(0, 0, 1)),
                 Datum::Interval(Interval::new(i32::MIN, i32::MIN, i64::MIN)),
                 Datum::Interval(Interval::new(i32::MAX, i32::MAX, i64::MAX)),
             ])

@@ -4068,6 +4068,13 @@ pub mod BUILTINS {
         })
     }
 
+    pub fn funcs() -> impl Iterator<Item = &'static BuiltinFunc> {
+        BUILTINS_STATIC.iter().filter_map(|b| match b {
+            Builtin::Func(func) => Some(func),
+            _ => None,
+        })
+    }
+
     pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
         BUILTINS_STATIC.iter()
     }
@@ -4077,13 +4084,19 @@ pub mod BUILTINS {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::env;
+    use std::time::{Duration, Instant};
 
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
+    use mz_repr::{Datum, RowArena};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
-    use mz_sql::func::OP_IMPLS;
+    use mz_sql::func::{Func, OP_IMPLS};
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::plan::{
+        CoercibleScalarExpr, ExprContext, HirScalarExpr, PlanContext, QueryContext, QueryLifetime,
+        Scope, StatementContext,
+    };
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
 
@@ -4428,7 +4441,7 @@ mod tests {
                         .map(|item| resolve_type_oid(item))
                         .expect("must have oid");
                     if imp_return_oid != pg_op.oprresult {
-                        println!(
+                        panic!(
                             "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
                             imp.oid,
                             op,
@@ -4441,6 +4454,168 @@ mod tests {
         }
 
         Catalog::with_debug(NOW_ZERO.clone(), inner).await
+    }
+
+    // Execute all builtin functions with all combinations of arguments from interesting datums.
+    #[mz_ore::test(tokio::test)]
+    async fn test_smoketest_all_builtins() {
+        fn inner(catalog: Catalog) {
+            let conn_catalog = catalog.for_system_session();
+
+            let resolve_type_oid = |item: &str| {
+                conn_catalog
+                    .resolve_item(&PartialItemName {
+                        database: None,
+                        schema: Some(PG_CATALOG_SCHEMA.into()),
+                        item: item.to_string(),
+                    })
+                    .unwrap_or_else(|_| panic!("unable to resolve type: {item}"))
+                    .oid()
+            };
+            let pcx = PlanContext::zero();
+            let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "smoketest",
+                scope: &Scope::empty(),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let arena = RowArena::new();
+            // Extracted during planning; always panics when executed.
+            let ignore_names = BTreeSet::from([
+                "avg",
+                "bool_and",
+                "bool_or",
+                "mod",
+                "mz_panic",
+                "mz_sleep",
+                "pow",
+                "stddev_pop",
+                "stddev_samp",
+                "stddev",
+                "var_pop",
+                "var_samp",
+                "variance",
+            ]);
+
+            let fns = BUILTINS::funcs()
+                .map(|func| (&func.name, func.inner))
+                .chain(OP_IMPLS.iter());
+
+            for (name, func) in fns {
+                if ignore_names.contains(name) {
+                    continue;
+                }
+                let Func::Scalar(impls) = func else {
+                    continue;
+                };
+
+                'outer: for imp in impls {
+                    let details = imp.details();
+                    let mut styps = Vec::new();
+                    for item in details.arg_typs.iter() {
+                        let oid = resolve_type_oid(item);
+                        let Ok(pgtyp) = mz_pgrepr::Type::from_oid(oid) else {
+                            continue 'outer;
+                        };
+                        styps.push(ScalarType::try_from(&pgtyp).expect("must exist"));
+                    }
+                    let datums = styps
+                        .iter()
+                        .map(|styp| {
+                            let mut datums = vec![Datum::Null];
+                            datums.extend(styp.interesting_datums());
+                            datums
+                        })
+                        .collect::<Vec<_>>();
+                    // Skip nullary fns.
+                    if datums.is_empty() {
+                        continue;
+                    }
+
+                    let return_oid = details
+                        .return_typ
+                        .map(|item| resolve_type_oid(item))
+                        .expect("must exist");
+                    let return_ctyp = &mz_pgrepr::Type::from_oid(return_oid).ok().map(|typ| {
+                        ScalarType::try_from(&typ)
+                            .expect("must exist")
+                            .nullable(true)
+                    });
+
+                    let mut idxs = vec![0; datums.len()];
+                    let mut args = Vec::with_capacity(idxs.len());
+                    while idxs[0] < datums[0].len() {
+                        args.clear();
+                        for i in 0..(datums.len()) {
+                            args.push(datums[i][idxs[i]]);
+                        }
+
+                        let op = &imp.op;
+                        let scalars = args
+                            .iter()
+                            .enumerate()
+                            .map(|(i, datum)| {
+                                CoercibleScalarExpr::Coerced(HirScalarExpr::literal(
+                                    datum.clone(),
+                                    styps[i].clone(),
+                                ))
+                            })
+                            .collect();
+
+                        let call_name = format!(
+                            "{name}({}) (oid: {})",
+                            args.iter()
+                                .map(|d| d.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            imp.oid
+                        );
+
+                        // Execute the function as much as possible, ensuring no panics occur, but
+                        // otherwise ignoring eval errors.
+                        let start = Instant::now();
+                        let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
+                        if let Ok(hir) = res {
+                            if let Ok(mir) = hir.lower_uncorrelated() {
+                                if let Ok(datum) = mir.eval(&[], &arena) {
+                                    if let Some(return_ctyp) = return_ctyp {
+                                        if !datum.is_instance_of(return_ctyp) {
+                                            panic!("{call_name}: expected return type of {return_ctyp:?}, got {datum}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let elapsed = start.elapsed();
+                        if elapsed > Duration::from_millis(250) {
+                            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
+                        }
+
+                        // Advance to the next datum combination.
+                        for i in (0..datums.len()).rev() {
+                            idxs[i] += 1;
+                            if idxs[i] >= datums[i].len() {
+                                if i == 0 {
+                                    break;
+                                }
+                                idxs[i] = 0;
+                                continue;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await
     }
 
     // Make sure pg views don't use types that only exist in Materialize.

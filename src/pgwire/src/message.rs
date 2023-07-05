@@ -322,6 +322,7 @@ impl ErrorResponse {
             AdapterError::Eval(EvalError::CharacterTooLargeForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
             }
+            AdapterError::Eval(EvalError::LengthTooLarge) => SqlState::PROGRAM_LIMIT_EXCEEDED,
             AdapterError::Eval(EvalError::NullCharacterNotPermitted) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
             }

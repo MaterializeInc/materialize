@@ -130,11 +130,11 @@ async fn test_parameter_type_inference() {
         ("SELECT coalesce($1, 1)", vec![ScalarType::Int32]),
         (
             "SELECT pg_catalog.substr($1, $2)",
-            vec![ScalarType::String, ScalarType::Int64],
+            vec![ScalarType::String, ScalarType::Int32],
         ),
         (
             "SELECT pg_catalog.substring($1, $2)",
-            vec![ScalarType::String, ScalarType::Int64],
+            vec![ScalarType::String, ScalarType::Int32],
         ),
         (
             "SELECT $1 LIKE $2",

@@ -2243,6 +2243,7 @@ pub enum EvalError {
     // The error for ErrorIfNull; this should not be used in other contexts as a generic error
     // printer.
     IfNullError(String),
+    LengthTooLarge,
 }
 
 impl fmt::Display for EvalError {
@@ -2428,6 +2429,7 @@ impl fmt::Display for EvalError {
                 write!(f, "datediff overflow, {unit} of {a}, {b}")
             }
             EvalError::IfNullError(s) => f.write_str(s),
+            EvalError::LengthTooLarge => write!(f, "requested length too large"),
         }
     }
 }
@@ -2677,6 +2679,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 b: b.to_owned(),
             }),
             EvalError::IfNullError(s) => IfNullError(s.clone()),
+            EvalError::LengthTooLarge => LengthTooLarge(()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2793,6 +2796,7 @@ impl RustType<ProtoEvalError> for EvalError {
                     b: v.b,
                 }),
                 IfNullError(v) => Ok(EvalError::IfNullError(v)),
+                LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
