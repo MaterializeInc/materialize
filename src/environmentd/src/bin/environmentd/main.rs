@@ -124,7 +124,7 @@ use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{Var, LOGGING_FILTER};
+use mz_sql::session::vars::{Var, LOGGING_FILTER, OPENTELEMETRY_FILTER};
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
@@ -628,7 +628,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         .entry(LOGGING_FILTER.name().to_string())
         .or_insert(format!("{}", args.tracing.log_filter));
 
-    // WIP: thread default value into configure_tracing
+    system_parameter_defaults
+        .entry(OPENTELEMETRY_FILTER.name().to_string())
+        .or_insert(format!("{}", args.tracing.opentelemetry_filter));
+
     let (tracing_handle, _tracing_guard) =
         runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
             service_name: "environmentd",

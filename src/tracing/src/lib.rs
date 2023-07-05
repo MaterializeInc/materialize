@@ -75,7 +75,7 @@
 
 //! Mz-specific library for interacting with `tracing`.
 
-use proptest::arbitrary::{any, Arbitrary};
+use proptest::arbitrary::Arbitrary;
 use proptest::prelude::{BoxedStrategy, Strategy};
 use serde::{de, Deserialize, Serializer};
 use std::fmt::Formatter;
@@ -155,12 +155,10 @@ impl Arbitrary for CloneableEnvFilter {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // WIP: write a real implementation
-        any::<String>()
-            .prop_filter_map("valid", |x| match CloneableEnvFilter::from_str(&x) {
-                Ok(ok) => Some(ok),
-                Err(_) => None,
-            })
+        // there are much more complex EnvFilters we could try building if that seems
+        // worthwhile to explore
+        proptest::sample::select(vec!["info", "debug", "warn", "error", "off"])
+            .prop_map(|x| CloneableEnvFilter::from_str(x).expect("valid EnvFilter"))
             .boxed()
     }
 }

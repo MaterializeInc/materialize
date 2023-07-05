@@ -1781,9 +1781,7 @@ impl SystemVars {
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
-            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION);
-            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION);
-            .with_var(&ENABLE_MZ_JOIN_CORE)
+            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER);
         vars.refresh_internal_state();
