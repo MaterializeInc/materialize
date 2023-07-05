@@ -1119,17 +1119,18 @@ fn test_ws_passes_options() {
         serde_json::from_str(&msg).unwrap()
     };
     let starting = read_msg();
-    let col_name = read_msg();
+    let columns = read_msg();
     let row_val = read_msg();
 
     if !matches!(starting, WebSocketResponse::CommandStarting(_)) {
         panic!("wrong message!, {starting:?}");
     };
 
-    if let WebSocketResponse::Rows(rows) = col_name {
-        assert_eq!(rows, ["application_name"]);
+    if let WebSocketResponse::Rows(rows) = columns {
+        let names: Vec<&str> = rows.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["application_name"]);
     } else {
-        panic!("wrong message!, {col_name:?}");
+        panic!("wrong message!, {columns:?}");
     };
 
     if let WebSocketResponse::Row(row) = row_val {
@@ -1175,8 +1176,18 @@ struct HttpResponse<R> {
 #[derive(Debug, Deserialize)]
 struct HttpRows {
     rows: Vec<Vec<serde_json::Value>>,
-    col_names: Vec<String>,
+    desc: HttpResponseDesc,
     notices: Vec<Notice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponseDesc {
+    columns: Vec<HttpResponseColumn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponseColumn {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1226,7 +1237,7 @@ fn test_http_options_param() {
     assert!(rows.notices.is_empty());
 
     let row = rows.rows.pop().unwrap().pop().unwrap();
-    let col = rows.col_names.pop().unwrap();
+    let col = rows.desc.columns.pop().unwrap().name;
 
     assert_eq!(col, "application_name");
     assert_eq!(row, "yet_another_client");
@@ -1339,7 +1350,7 @@ fn test_max_connections_on_all_interfaces() {
             );
             assert_eq!(
                 ws.read_message().unwrap(),
-                Message::Text("{\"type\":\"Rows\",\"payload\":[\"?column?\"]}".to_string())
+                Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
             );
             assert_eq!(
                 ws.read_message().unwrap(),

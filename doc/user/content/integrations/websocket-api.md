@@ -206,8 +206,28 @@ The payload is a `string` containing the statement's tag.
 #### `Rows`
 
 A rows-returning statement is executing and some number (possibly 0) of `Row` messages will follow.
-The payload is an array of `string` containing the column names of the row results.
-Either a `CommandComplete` or `Error` message will always follow indicating there are no more rows and the final result of the statement.
+Either a `CommandComplete` or `Error` message will then follow indicating there are no more rows and the final result of the statement.
+The payload has the following structure:
+
+```
+{
+    "columns":
+        [
+            {
+                "name": <column name>,
+                "type_oid": <type oid>,
+                "type_len": <type len>,
+                "type_mod": <type mod>
+            }
+            ...
+        ]
+}
+```
+
+The inner object's various `type_X` fields are lower-level details that can be used to convert the row results from a string to a more specific data type.
+`type_oid` is the OID of the data type.
+`type_len` is the data size type (see `pg_type.typlen`).
+`type_mod` is the type modifier (see `pg_attribute.atttypmod`).
 
 #### `Row`
 
@@ -294,12 +314,23 @@ interface BackendKeyData {
 	secret_key: number; // u32
 }
 
+interface Column {
+    name: string;
+    type_oid: number; // u32
+    type_len: number; // i16
+    type_mod: number; // i32
+}
+
+interface Description {
+	columns: Column[];
+}
+
 type WebSocketResult =
     | { type: "ReadyForQuery"; payload: string }
     | { type: "Notice"; payload: Notice }
     | { type: "CommandComplete"; payload: string }
     | { type: "Error"; payload: Error }
-    | { type: "Rows"; payload: string[] }
+    | { type: "Rows"; payload: Description }
     | { type: "Row"; payload: any[] }
     | { type: "ParameterStatus"; payload: ParameterStatus }
     | { type: "CommandStarting"; payload: CommandStarting }
@@ -314,11 +345,11 @@ type WebSocketResult =
 ```bash
 $ echo '{"query": "select 1,2; values (4), (5)"}' | websocat wss://<MZ host address>/api/experimental/sql
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
-{"type":"Rows","payload":["?column?","?column?"]}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1},{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["1","2"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
-{"type":"Rows","payload":["column1"]}
+{"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["4"]}
 {"type":"Row","payload":["5"]}
 {"type":"CommandComplete","payload":"SELECT 2"}
