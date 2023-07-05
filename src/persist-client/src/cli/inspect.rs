@@ -44,8 +44,11 @@ use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
 
+// BuildInfo with a larger version than any version we expect to see in prod,
+// to ensure that any data read is from a smaller version and does not trigger
+// alerts.
 const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
-    version: "10000000.0.0+test",
+    version: "99.999.99+test",
     sha: "0000000000000000000000000000000000000000",
     time: "",
 };
