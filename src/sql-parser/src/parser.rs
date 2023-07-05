@@ -29,14 +29,14 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_sql_lexer::keywords::*;
+use mz_sql_lexer::lexer::{self, LexerError, Token};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use IsLateral::*;
 use IsOptional::*;
 
 use crate::ast::*;
-use crate::keywords::*;
-use crate::lexer::{self, Token};
 
 // NOTE(benesch): this recursion limit was chosen based on the maximum amount of
 // nesting I've ever seen in a production SQL query (i.e., about a dozen) times
@@ -104,7 +104,10 @@ pub fn parse_statements_with_limit(
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserStatementError> {
-    let tokens = lexer::lex(sql).map_no_statement_parser_err()?;
+    let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
+        error: error.into(),
+        statement: None,
+    })?;
     Parser::new(sql, tokens).parse_statements()
 }
 
@@ -233,6 +236,21 @@ impl Error for ParserStatementError {}
 impl fmt::Display for ParserStatementError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&self.error.to_string())
+    }
+}
+
+impl From<LexerError> for ParserError {
+    fn from(value: LexerError) -> Self {
+        ParserError {
+            message: value.message,
+            pos: value.pos,
+        }
+    }
+}
+
+impl From<Keyword> for Ident {
+    fn from(value: Keyword) -> Ident {
+        Ident::new(value.as_str().to_lowercase())
     }
 }
 
@@ -531,7 +549,7 @@ impl<'a> Parser<'a> {
                     "expected expression, but found reserved keyword".into(),
                 ));
             }
-            Token::Keyword(id) => self.parse_qualified_identifier(id.into_ident()),
+            Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
             Token::Ident(id) => self.parse_qualified_identifier(Ident::new(id)),
             Token::Op(op) if op == "-" => {
                 if let Some(Token::Number(n)) = self.peek_token() {
@@ -890,7 +908,7 @@ impl<'a> Parser<'a> {
     fn parse_extract_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let field = match self.next_token() {
-            Some(Token::Keyword(kw)) => kw.into_ident().into_string(),
+            Some(Token::Keyword(kw)) => Ident::from(kw).into_string(),
             Some(Token::Ident(id)) => Ident::new(id).into_string(),
             Some(Token::String(s)) => s,
             t => self.expected(self.peek_prev_pos(), "extract field token", t)?,
@@ -1240,7 +1258,7 @@ impl<'a> Parser<'a> {
                 // access operator.
                 Some(Token::Keyword(kw)) => Ok(Expr::FieldAccess {
                     expr: Box::new(expr),
-                    field: kw.into_ident(),
+                    field: kw.into(),
                 }),
                 Some(Token::Star) => Ok(Expr::WildcardAccess(Box::new(expr))),
                 unexpected => self.expected(
@@ -1353,7 +1371,7 @@ impl<'a> Parser<'a> {
         let mut namespace = vec![];
         loop {
             match self.next_token() {
-                Some(Token::Keyword(kw)) => namespace.push(kw.into_ident()),
+                Some(Token::Keyword(kw)) => namespace.push(kw.into()),
                 Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
                 Some(Token::Op(op)) => return Ok(Op { namespace, op }),
                 Some(Token::Star) => {
@@ -2366,7 +2384,7 @@ impl<'a> Parser<'a> {
                 KafkaConfigOptionName::EnableIdempotence
             }
             FETCH => {
-                self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
+                self.expect_keywords(&[MESSAGE, MAX, BYTES])?;
                 KafkaConfigOptionName::FetchMessageMaxBytes
             }
             GROUP => {
@@ -4921,7 +4939,7 @@ impl<'a> Parser<'a> {
             // which may start a construct allowed in this position, to be parsed as aliases.
             // (For example, in `FROM t1 JOIN` the `JOIN` will always be parsed as a keyword,
             // not an alias.)
-            Some(Token::Keyword(kw)) if after_as || !is_reserved(kw) => Ok(Some(kw.into_ident())),
+            Some(Token::Keyword(kw)) if after_as || !is_reserved(kw) => Ok(Some(kw.into())),
             Some(Token::Ident(id)) => Ok(Some(Ident::new(id))),
             not_an_ident => {
                 if after_as {
@@ -5063,7 +5081,7 @@ impl<'a> Parser<'a> {
         match self.peek_token() {
             Some(Token::Keyword(kw)) => {
                 self.next_token();
-                Some(kw.into_ident())
+                Some(kw.into())
             }
             Some(Token::Ident(id)) => {
                 self.next_token();
@@ -5080,7 +5098,7 @@ impl<'a> Parser<'a> {
                 let mut ends_with_wildcard = false;
                 while self.consume_token(&Token::Dot) {
                     match self.next_token() {
-                        Some(Token::Keyword(kw)) => id_parts.push(kw.into_ident()),
+                        Some(Token::Keyword(kw)) => id_parts.push(kw.into()),
                         Some(Token::Ident(id)) => id_parts.push(Ident::new(id)),
                         Some(Token::Star) => {
                             ends_with_wildcard = true;

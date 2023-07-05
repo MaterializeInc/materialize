@@ -1,33 +1,27 @@
 [package]
-name = "mz-sql-parser"
-description = "The parser for Materialize's SQL dialect."
+name = "mz-sql-lexer"
+description = "The lexer for Materialize's SQL dialect."
 version = "0.0.0"
-exclude = ["tests/testdata"]
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
-bytesize = "1.1.0"
-enum-kinds = "0.5.1"
-itertools = "0.10.5"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-mz-sql-lexer = { path = "../sql-lexer" }
-phf = { version = "0.11.1", features = ["uncased"] }
-serde = { version = "1.0.152", features = ["derive"] }
-tracing = "0.1.37"
-uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+serde = { version = "1.0.152", features = ["derive"] }
+phf = { version = "0.11.1", features = ["uncased"] }
+uncased = "0.9.7"
 
 [dev-dependencies]
-datadriven = "0.6.0"
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
-unicode-width = "0.1.10"
 
 [build-dependencies]
 anyhow = "1.0.66"
 mz-ore = { path = "../ore", default-features = false }
-mz-walkabout = { path = "../walkabout", default-features = false }
+phf = { version = "0.11.1", features = ["uncased"] }
+phf_codegen = "0.11.1"
+uncased = "0.9.7"
 
 [features]
 default = ["workspace-hack"]
