@@ -38,6 +38,7 @@ differential-dataflow = "0.12.0"
 futures = "0.3.25"
 futures-util = "0.3"
 h2 = "0.3.13"
+moka = { version = "0.9.6", default-features = false, features = ["sync"] }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["bytes_", "test", "tracing_"] }
 mz-persist = { path = "../persist" }
