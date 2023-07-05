@@ -247,7 +247,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         )
     else:
         test_case.add_error_info(
-            message="All changed lines are covered outside of unit tests."
+            message="All changed, covered lines are covered outside of unit tests."
         )
     test_cases.append(test_case)
 
