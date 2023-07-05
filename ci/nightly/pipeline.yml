@@ -72,6 +72,9 @@ steps:
           - { value: crdb-restarts }
           - { value: pubsub-disruption }
           - { value: data-ingest }
+          - { value: parallel-workload-dml }
+          - { value: parallel-workload }
+          - { value: parallel-workload-100-threads }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -723,6 +726,39 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
+
+  - id: parallel-workload-dml
+    label: "Parallel Workload (DML)"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=3000, --complexity=dml]
+
+  - id: parallel-workload
+    label: "Parallel Workload"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=3000]
+
+  - id: parallel-workload-100-threads
+    label: "Parallel Workload (100 threads)"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=3000, --threads=100]
 
   - wait: ~
     continue_on_failure: true
