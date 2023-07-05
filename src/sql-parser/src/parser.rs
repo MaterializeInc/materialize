@@ -3292,19 +3292,20 @@ impl<'a> Parser<'a> {
     fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
             AVAILABILITY,
+            DISK,
             IDLE,
             INTROSPECTION,
             MANAGED,
             REPLICAS,
             REPLICATION,
             SIZE,
-            DISK,
         ])?;
         let name = match option {
             AVAILABILITY => {
                 self.expect_keyword(ZONES)?;
                 ClusterOptionName::AvailabilityZones
             }
+            DISK => ClusterOptionName::Disk,
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ClusterOptionName::IdleArrangementMergeEffort
@@ -3321,7 +3322,6 @@ impl<'a> Parser<'a> {
                 ClusterOptionName::ReplicationFactor
             }
             SIZE => ClusterOptionName::Size,
-            DISK => ClusterOptionName::Disk,
             _ => unreachable!(),
         };
         Ok(name)
@@ -3364,13 +3364,13 @@ impl<'a> Parser<'a> {
             AVAILABILITY,
             COMPUTE,
             COMPUTECTL,
+            DISK,
             IDLE,
             INTROSPECTION,
             SIZE,
             STORAGE,
             STORAGECTL,
             WORKERS,
-            DISK,
         ])? {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
@@ -3384,6 +3384,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ADDRESSES)?;
                 ReplicaOptionName::ComputectlAddresses
             }
+            DISK => ReplicaOptionName::Disk,
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort
@@ -3403,7 +3404,6 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::StoragectlAddresses
             }
             WORKERS => ReplicaOptionName::Workers,
-            DISK => ReplicaOptionName::Disk,
             _ => unreachable!(),
         };
         let value = self.parse_optional_option_value()?;

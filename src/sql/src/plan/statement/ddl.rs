@@ -2708,6 +2708,7 @@ pub fn describe_create_cluster(
 generate_extracted_config!(
     ClusterOption,
     (AvailabilityZones, Vec<String>),
+    (Disk, bool),
     (IdleArrangementMergeEffort, u32),
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalInterval),
@@ -2715,7 +2716,6 @@ generate_extracted_config!(
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
     (Size, String),
-    (Disk, bool)
 );
 
 pub fn plan_create_cluster(
@@ -4313,6 +4313,7 @@ pub fn plan_alter_cluster(
             for option in reset_options {
                 match option {
                     AvailabilityZones => options.availability_zones = Reset,
+                    Disk => options.disk = Reset,
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
                     IdleArrangementMergeEffort => options.idle_arrangement_merge_effort = Reset,
@@ -4320,7 +4321,6 @@ pub fn plan_alter_cluster(
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,
                     Size => options.size = Reset,
-                    Disk => options.disk = Reset,
                 }
             }
         }

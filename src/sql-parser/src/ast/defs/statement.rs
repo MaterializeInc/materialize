@@ -1201,6 +1201,8 @@ impl_display_t!(CreateTypeStatement);
 pub enum ClusterOptionName {
     /// The `AVAILABILITY ZONES [[=] '[' <values> ']' ]` option.
     AvailabilityZones,
+    /// The `DISK` option.
+    Disk,
     /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
@@ -1215,14 +1217,13 @@ pub enum ClusterOptionName {
     ReplicationFactor,
     /// The `SIZE` option.
     Size,
-    /// The `DISK` option.
-    Disk,
 }
 
 impl AstDisplay for ClusterOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ClusterOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
+            ClusterOptionName::Disk => f.write_str("DISK"),
             ClusterOptionName::IdleArrangementMergeEffort => {
                 f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
             }
@@ -1232,7 +1233,6 @@ impl AstDisplay for ClusterOptionName {
             ClusterOptionName::Replicas => f.write_str("REPLICAS"),
             ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
             ClusterOptionName::Size => f.write_str("SIZE"),
-            ClusterOptionName::Disk => f.write_str("DISK"),
         }
     }
 }
