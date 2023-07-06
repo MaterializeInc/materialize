@@ -71,11 +71,10 @@ fn constant_or_unmaterializable(expr: &MirRelationExpr) -> bool {
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
-pub fn auto_run_on_introspection<'a, 's, 'p, 'r>(
+pub fn auto_run_on_introspection<'a, 's, 'p>(
     catalog: &'a Catalog,
     session: &'s Session,
     plan: &'p Plan,
-    resolved_ids: &'r ResolvedIds,
 ) -> TargetCluster {
     let depends_on = match plan {
         Plan::Select(plan) => plan.source.depends_on(),
