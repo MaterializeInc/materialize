@@ -63,37 +63,19 @@ Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.
 
 ### JSON
 
-<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT BYTES</code></p>
+<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
 
-{{< note >}}
-Support for the more ergonomic `FORMAT JSON` is in progress {{% gh 7186 %}}!
-{{</ note >}}
+Materialize can decode JSON messages into a single column named `data` with type
+`jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for the
+supported operations on this type.
 
-Materialize cannot decode JSON directly from an external data source. Instead, you must create a source that reads the data as [raw bytes](#bytes), and handle the conversion to primitive types using [`jsonb`](/sql/types/jsonb) as an intermediate representation.
-
-```sql
--- create raw byte array source
-CREATE SOURCE my_bytea_source
-  FROM ...
-  FORMAT BYTES
-  WITH (SIZE='3xsmall');
-
--- convert from byte array to jsonb
-CREATE VIEW my_jsonb_source AS
-  SELECT
-    CONVERT_FROM(data, 'utf8')::jsonb AS data
-  FROM bytea_source;
-```
-
-{{< note >}}
-Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
-{{</ note >}}
-
-To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/get-started/key-concepts/#materialized-views).
+If your JSON messages have a consistent shape, consider creating a
+[view](/get-started/key-concepts/#views) that extracts the fields of the JSON
+into columns:
 
 ```sql
--- parse jsonb into typed columns
-CREATE MATERIALIZED VIEW my_typed_source AS
+-- extract jsonb into typed columns
+CREATE VIEW my_typed_source AS
   SELECT
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
