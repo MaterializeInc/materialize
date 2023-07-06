@@ -64,11 +64,13 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         if len(self.global_warnings) == 0:
             return []
 
+        unique_global_warnings = set(self.global_warnings)
+
         warning_rows = [
-            f"{len(self.global_warnings)} non-query specific warnings occurred."
+            f"{len(unique_global_warnings)} unique, non-query specific warnings occurred:"
         ]
 
-        for warning in self.global_warnings:
+        for warning in unique_global_warnings:
             warning_rows.append(f"* {warning}")
 
         return warning_rows
