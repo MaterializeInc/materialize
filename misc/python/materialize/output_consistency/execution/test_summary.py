@@ -27,23 +27,32 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         dry_run: bool = False,
         count_executed_query_templates: int = 0,
         count_successful_query_templates: int = 0,
+        count_ignored_error_query_templates: int = 0,
         count_with_warning_query_templates: int = 0,
     ):
         super().__init__()
         self.mode = "LIVE_DATABASE" if not dry_run else "DRY_RUN"
         self.count_executed_query_templates = count_executed_query_templates
         self.count_successful_query_templates = count_successful_query_templates
+        self.count_ignored_error_query_templates = count_ignored_error_query_templates
         self.count_with_warning_query_templates = count_with_warning_query_templates
 
     def all_passed(self) -> bool:
         return (
-            self.count_successful_query_templates == self.count_executed_query_templates
+            self.count_successful_query_templates
+            == self.count_executed_query_templates
+            + self.count_ignored_error_query_templates
         )
 
     def __str__(self) -> str:
+        count_accepted_queries = (
+            self.count_successful_query_templates
+            + self.count_ignored_error_query_templates
+        )
         output_rows = [
-            f"{self.count_successful_query_templates}/{self.count_executed_query_templates} queries passed"
+            f"{count_accepted_queries}/{self.count_executed_query_templates} queries passed"
             f" in mode '{self.mode}'.",
+            f"{self.count_ignored_error_query_templates} queries were ignored after execution.",
             f"{self.count_with_warning_query_templates} queries had warnings.",
         ]
 
