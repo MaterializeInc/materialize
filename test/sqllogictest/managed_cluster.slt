@@ -432,6 +432,15 @@ ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
 statement ok
 DROP CLUSTER foo
 
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1', DISK))
+
+statement ok
+ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
+
+statement ok
+DROP CLUSTER foo
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_managed_clusters = false;
 ----
