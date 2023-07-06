@@ -337,6 +337,9 @@ pub struct Args {
     /// services that request disk.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_EPHEMERAL_VOLUME_CLASS")]
     orchestrator_kubernetes_ephemeral_volume_class: Option<String>,
+    /// The optional fs group for service's pods' `securityContext`.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_FS_GROUP")]
+    orchestrator_kubernetes_service_fs_group: Option<i64>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -718,6 +721,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         ephemeral_volume_storage_class: args
                             .orchestrator_kubernetes_ephemeral_volume_class
                             .clone(),
+                        service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
