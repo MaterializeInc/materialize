@@ -875,6 +875,7 @@ impl<'a> Runner<'a> {
 impl<'a> RunnerInner<'a> {
     pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
@@ -925,7 +926,7 @@ impl<'a> RunnerInner<'a> {
                     .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
-                scratch_directory: None,
+                scratch_directory: scratch_dir.path().to_path_buf(),
             })
             .await?,
         );
@@ -957,7 +958,6 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
-                scratch_directory_enabled: false,
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
             },
             secrets_controller,

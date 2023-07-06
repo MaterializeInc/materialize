@@ -2755,7 +2755,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP, DISK])? {
+        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP])? {
             IGNORE => {
                 self.expect_keyword(KEYS)?;
                 CreateSourceOptionName::IgnoreKeys
@@ -2766,7 +2766,6 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(INTERVAL)?;
                 CreateSourceOptionName::TimestampInterval
             }
-            DISK => CreateSourceOptionName::Disk,
             _ => unreachable!(),
         };
         Ok(name)
@@ -3293,6 +3292,7 @@ impl<'a> Parser<'a> {
     fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
             AVAILABILITY,
+            DISK,
             IDLE,
             INTROSPECTION,
             MANAGED,
@@ -3305,6 +3305,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ZONES)?;
                 ClusterOptionName::AvailabilityZones
             }
+            DISK => ClusterOptionName::Disk,
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ClusterOptionName::IdleArrangementMergeEffort
@@ -3363,6 +3364,7 @@ impl<'a> Parser<'a> {
             AVAILABILITY,
             COMPUTE,
             COMPUTECTL,
+            DISK,
             IDLE,
             INTROSPECTION,
             SIZE,
@@ -3382,6 +3384,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ADDRESSES)?;
                 ReplicaOptionName::ComputectlAddresses
             }
+            DISK => ReplicaOptionName::Disk,
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort

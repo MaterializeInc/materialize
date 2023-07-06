@@ -8,24 +8,55 @@
 # by the Apache License, Version 2.0.
 
 # Test that with `enable_create_source_denylist_with_options` off, if
-# `enable_upsert_source_disk` is on, we can use `WITH(DISK)`.
-# Note that `WITH(DISK)` is not tested in `test/testdrive`, so we use a source
-# type that will show that we allow the with option overall, but fail later on in
-# `plan_create_source`.
+# `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = false
-ALTER SYSTEM SET enable_upsert_source_disk = true
+ALTER SYSTEM SET enable_disk_cluster_replicas = true
+ALTER SYSTEM SET enable_managed_clusters = true
+ALTER SYSTEM SET disk_cluster_replicas_default = false
 
-! CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
-  WITH (DISK)
-contains:ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE not yet supported
+> DROP CLUSTER IF EXISTS c;
 
+# Can set unmanaged cluster replica options directly, mixing and matching disk
+> CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
+
+> SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
+r1 1 true
+r2 1 false
+
+> DROP CLUSTER c;
+
+# Can set on managed clusters
+> CREATE CLUSTER c SIZE '1', REPLICATION FACTOR = 2, DISK;
+
+> SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
+r1 1 true
+r2 1 true
+
+> DROP CLUSTER c;
+
+# Can toggle whether `DISK` defaults true or false
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_upsert_source_disk = false
+ALTER SYSTEM SET disk_cluster_replicas_default = true
 
-! CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
-  WITH (DISK)
-contains:CREATE SOURCE...WITH (DISK..) is not supported
+> CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
+
+> SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
+r1 1 true
+r2 1 true
+
+> DROP CLUSTER c;
+
+# Can disable whether disk-backed replicas are allowed
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_disk_cluster_replicas = false
+
+! CREATE CLUSTER c REPLICAS (dff_3 (size '1', disk))
+contains:`WITH (DISK)` for cluster replicas is not supported
+
+# Cannot set DISK on unmanaged clusters (the option is per replica)
+! CREATE CLUSTER c REPLICAS (dff_3 (size '1')), DISK;
+contains:DISK not supported for unmanaged clusters
 
 # The following test that we don't crash envd with bad parameters, and instead just fallback
 # to safe parameters.

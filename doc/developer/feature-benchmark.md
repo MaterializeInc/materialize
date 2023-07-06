@@ -51,7 +51,7 @@ To use a specific SIZE for sources, sinks and dataflows:
 To benchmark specific product features:
 
 ```
-./mzcompose run default --this-params="enable_upsert_source_disk=false;upsert_source_disk_default=false" --other-params="..."
+./mzcompose run default --this-params="enable_disk_cluster_replicas=false;disk_cluster_replicas_default=false" --other-params="..."
 ```
 
 Make sure to describe the desired state of any relevant flags exhaustively in order to avoid the unwanted

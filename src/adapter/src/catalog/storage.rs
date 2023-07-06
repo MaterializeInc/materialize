@@ -159,6 +159,7 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: bootstrap_args.default_availability_zone.clone(),
             az_user_specified: false,
+            disk: false,
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,

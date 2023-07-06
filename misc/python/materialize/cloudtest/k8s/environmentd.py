@@ -108,6 +108,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 name="MZ_SYSTEM_PARAMETER_DEFAULT",
                 value="enable_envelope_upsert_in_subscribe=true",
             ),
+            V1EnvVar(
+                name="MZ_SYSTEM_PARAMETER_DEFAULT",
+                value="enable_disk_cluster_replicas=true",
+            ),
         ]
 
         if self.coverage_mode:
@@ -138,9 +142,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
 
         args = [
-            "--availability-zone=cloudtest-worker",
-            "--availability-zone=cloudtest-worker2",
-            "--availability-zone=cloudtest-worker3",
+            "--availability-zone=1",
+            "--availability-zone=2",
+            "--availability-zone=3",
             "--aws-account-id=123456789000",
             "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             "--announce-egress-ip=1.2.3.4",
@@ -149,6 +153,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
             "--orchestrator=kubernetes",
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
+            # Kind sets up a basic local-file storage class based on Rancher, named `standard`
+            "--orchestrator-kubernetes-ephemeral-volume-class=standard",
             "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
             "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=adapter",
             "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",

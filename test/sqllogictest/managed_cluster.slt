@@ -410,6 +410,38 @@ statement error db error: ERROR: creating cluster replica would violate max_repl
 CREATE CLUSTER foo SIZE '1', replication factor 9999999;
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_disk_cluster_replicas = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'), r2 (SIZE '1', DISK))
+
+statement error db error: ERROR: Cannot convert unmanaged cluster to managed, non-unique replica DISK options
+ALTER CLUSTER foo SET (MANAGED, SIZE '1')
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'))
+
+statement error db error: ERROR: Cluster replicas with DISK false do not match expected DISK true
+ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1', DISK))
+
+statement ok
+ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
+
+statement ok
+DROP CLUSTER foo
+
+simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_managed_clusters = false;
 ----
 COMPLETE 0

@@ -1694,7 +1694,8 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         )
         .with_column("managed", ScalarType::Bool.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("replication_factor", ScalarType::UInt32.nullable(true)),
+        .with_column("replication_factor", ScalarType::UInt32.nullable(true))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: false,
 });
 
@@ -1731,7 +1732,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("availability_zone", ScalarType::String.nullable(true))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
 });
 

@@ -101,20 +101,6 @@ class MaterializeApplication(Application):
 
         self.images = ["environmentd", "clusterd", "testdrive", "postgres"]
 
-        # Label the kind nodes in a way that mimics production.
-        for node in [
-            "cloudtest-control-plane",
-            "cloudtest-worker",
-            "cloudtest-worker2",
-            "cloudtest-worker3",
-        ]:
-            self.kubectl(
-                "label",
-                "--overwrite",
-                f"node/{node}",
-                f"materialize.cloud/availability-zone={node}",
-            )
-
         super().__init__()
 
     def create(self) -> None:

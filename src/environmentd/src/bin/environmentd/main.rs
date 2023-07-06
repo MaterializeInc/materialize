@@ -330,8 +330,13 @@ pub struct Args {
     /// The init container for services created by the Kubernetes orchestrator.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_INIT_CONTAINER_IMAGE")]
     orchestrator_kubernetes_init_container_image: Option<String>,
-    /// Prefix commands issued by the process orchestrator with the supplied
-    /// value.
+    /// The Kubernetes StorageClass to use for the ephemeral volume attached to
+    /// services that request disk.
+    ///
+    /// If unspecified, the Kubernetes orchestrator will refuse to create
+    /// services that request disk.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_EPHEMERAL_VOLUME_CLASS")]
+    orchestrator_kubernetes_ephemeral_volume_class: Option<String>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -710,6 +715,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),
                         coverage: args.orchestrator_kubernetes_coverage,
+                        ephemeral_volume_storage_class: args
+                            .orchestrator_kubernetes_ephemeral_volume_class
+                            .clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
@@ -722,6 +730,15 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             )
         }
         OrchestratorKind::Process => {
+            if args
+                .orchestrator_kubernetes_ephemeral_volume_class
+                .is_some()
+            {
+                bail!(
+                    "--orchestrator-kubernetes-ephemeral-volume-class is \
+                      not usable with the process orchestrator"
+                );
+            }
             let orchestrator = Arc::new(
                 runtime
                     .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
@@ -747,7 +764,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                     .orchestrator_process_prometheus_service_discovery_directory,
                             },
                         ),
-                        scratch_directory: args.orchestrator_process_scratch_directory.clone(),
+                        scratch_directory: args
+                            .orchestrator_process_scratch_directory
+                            .expect("process orchestrator requires scratch directory"),
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -807,7 +826,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
-        scratch_directory_enabled: args.orchestrator_process_scratch_directory.is_some(),
         persist_pubsub_url: args.persist_pubsub_url,
     };
 

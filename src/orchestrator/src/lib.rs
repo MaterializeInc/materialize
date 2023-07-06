@@ -264,6 +264,11 @@ pub struct ServiceConfig<'a> {
     ///
     /// The orchestrator backend may or may not actually implement anti-affinity functionality.
     pub anti_affinity: Option<Vec<LabelSelector>>,
+
+    /// Whether scratch disk space should be allocated for the service.
+    pub disk: bool,
+    /// The maximum amount of scratch disk space that the service is allowed to consume.
+    pub disk_limit: Option<DiskLimit>,
 }
 
 /// A named port associated with a service.
@@ -383,5 +388,39 @@ impl Serialize for CpuLimit {
         S: serde::Serializer,
     {
         <f64 as Serialize>::serialize(&(self.millicpus as f64 / 1000.0), serializer)
+    }
+}
+
+/// Describes a limit on disk usage.
+#[derive(Copy, Clone, Debug, PartialOrd, Eq, Ord, PartialEq)]
+pub struct DiskLimit(pub ByteSize);
+
+impl DiskLimit {
+    pub const MAX: Self = Self(ByteSize(u64::MAX));
+    pub const ARBITRARY: Self = Self(ByteSize::gib(1));
+}
+
+impl<'de> Deserialize<'de> for DiskLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        <String as Deserialize>::deserialize(deserializer)
+            .and_then(|s| {
+                ByteSize::from_str(&s).map_err(|_e| {
+                    use serde::de::Error;
+                    D::Error::invalid_value(serde::de::Unexpected::Str(&s), &"valid size in bytes")
+                })
+            })
+            .map(DiskLimit)
+    }
+}
+
+impl Serialize for DiskLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        <String as Serialize>::serialize(&self.0.to_string(), serializer)
     }
 }

@@ -23,7 +23,7 @@ $ kafka-create-topic topic=test
 
 > SELECT event_type, object_type, details - 'replica_id', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_kafka_src\"}"  materialize
-create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_kafka_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
+create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_kafka_src\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
 create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"kafka\"}"  materialize
 
 > CREATE SOURCE counter_src
@@ -31,5 +31,5 @@ create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka
 
 > SELECT event_type, object_type, details - 'replica_id', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_counter_src\"}"  materialize
-create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_counter_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
+create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_counter_src\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
 create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"load-generator\"}"  materialize
