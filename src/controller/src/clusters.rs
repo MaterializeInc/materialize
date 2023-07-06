@@ -181,7 +181,7 @@ pub struct ManagedReplicaLocation {
     /// `true` if the AZ was specified by the user and must be respected;
     /// `false` if it was picked arbitrarily by Materialize.
     pub az_user_specified: bool,
-    /// Whether the replica needs and attached disk or not.
+    /// Whether the replica needs scratch disk space.
     pub disk: bool,
 }
 
