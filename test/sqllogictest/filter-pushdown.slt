@@ -31,7 +31,7 @@ CREATE TABLE events (
 );
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT count(*)
 FROM events
 WHERE mz_now() >= insert_ms
@@ -62,7 +62,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear in only one interval of duration `10000`.
@@ -85,7 +85,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear in `6` intervals each of width `10000`.
@@ -108,7 +108,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear inside the interval that begins at
@@ -130,7 +130,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() >= insert_ms + 60000
@@ -152,7 +152,7 @@ EOF
 # function _does_ report pushdown even when the argument list is long.
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE COALESCE(delete_ms, insert_ms) < mz_now();
@@ -168,7 +168,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() < delete_ms + 10000
@@ -199,7 +199,7 @@ CREATE TABLE events_timestamped (
 );
 
 query T multiline
-EXPLAIN WITH(mfp_pushdown)
+EXPLAIN WITH(filter_pushdown)
 SELECT content, inserted_at
 FROM events_timestamped
 WHERE EXTRACT(YEAR FROM inserted_at) = 2021;
