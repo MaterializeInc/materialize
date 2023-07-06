@@ -330,8 +330,11 @@ pub struct Args {
     /// The init container for services created by the Kubernetes orchestrator.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_INIT_CONTAINER_IMAGE")]
     orchestrator_kubernetes_init_container_image: Option<String>,
-    /// The `StorageClass` for an ephemeral volume to be setup in `clusterd` pods.
-    /// No volume is setup if not passed.
+    /// The Kubernetes StorageClass to use for the ephemeral volume attached to
+    /// services that request disk.
+    ///
+    /// If unspecified, the Kubernetes orchestrator will refuse to create
+    /// services that request disk.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_EPHEMERAL_VOLUME_CLASS")]
     orchestrator_kubernetes_ephemeral_volume_class: Option<String>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]

@@ -136,8 +136,11 @@ pub struct KubernetesOrchestratorConfig {
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// Whether to use code coverage mode or not. Always false for production.
     pub coverage: bool,
-    /// Whether to create a ephemeral volume in each pod, using the configured
-    /// `StorageClass`.
+    /// The Kubernetes StorageClass to use for the ephemeral volume attached to
+    /// services that request disk.
+    ///
+    /// If unspecified, the orchestrator will refuse to create services that
+    /// request disk.
     pub ephemeral_volume_storage_class: Option<String>,
 }
 
