@@ -19,7 +19,7 @@ http
 {"query":"select 1; select 2"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]}]}
 
 # Arrays + lists work
 http
@@ -33,7 +33,7 @@ http
 {"query":"select 1; select * from noexist;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"error":{"message":"unknown catalog item 'noexist'","code":"XX000"},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"error":{"message":"unknown catalog item 'noexist'","code":"XX000"},"notices":[]}]}
 
 # CREATEs should work when provided alone.
 http
@@ -99,19 +99,19 @@ http
 {"query":"begin; select 1; commit"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"ok":"COMMIT","notices":[]}]}
 
 http
 {"query":"begin; select 1; commit; select 2;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"ok":"COMMIT","notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]}]}
 
 http
 {"query":"select 1; begin; select 2; commit;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[2]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"ok":"COMMIT","notices":[]}]}
 
 http
 {"query":"begin; select 1/0; commit; select 2;"}
@@ -123,7 +123,7 @@ http
 {"query":"begin; select 1; commit; select 1/0;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"select 1/0; begin; select 2; commit;"}
@@ -135,7 +135,7 @@ http
 {"query":"select 1; begin; select 1/0; commit;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 # Txns w/ writes
 
@@ -265,20 +265,20 @@ http
 {"queries":[{"query":"select 3 as col","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]}]}
 
 # Multiple statements
 http
 {"queries":[{"query":"select 1 as col","params":[]},{"query":"select $1+$2::int as col","params":["1","2"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]},{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"queries":[{"query":"select $1+$2::int as col","params":["1","2"]},{"query":"select 1 as col","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[3]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"col","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]}]}
 
 http
 {"queries":[{"query":"select $1+$2::int as col","params":["1","2"]},{"query":"select $1*$2::int as col","params":["2","3"]}]}
