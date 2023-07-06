@@ -215,6 +215,37 @@ async fn upgrade_check(
     Ok(())
 }
 
+macro_rules! for_collections {
+    ($usage:expr, $macro:ident) => {
+        match $usage {
+            Usage::Catalog => {
+                $macro!(catalog::AUDIT_LOG_COLLECTION);
+                $macro!(catalog::CLUSTER_COLLECTION);
+                $macro!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
+                $macro!(catalog::CLUSTER_REPLICA_COLLECTION);
+                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::DATABASES_COLLECTION);
+                $macro!(catalog::DEFAULT_PRIVILEGES_COLLECTION);
+                $macro!(catalog::ID_ALLOCATOR_COLLECTION);
+                $macro!(catalog::ITEM_COLLECTION);
+                $macro!(catalog::ROLES_COLLECTION);
+                $macro!(catalog::SCHEMAS_COLLECTION);
+                $macro!(catalog::SETTING_COLLECTION);
+                $macro!(catalog::STORAGE_USAGE_COLLECTION);
+                $macro!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
+                $macro!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
+                $macro!(catalog::SYSTEM_PRIVILEGES_COLLECTION);
+                $macro!(catalog::TIMESTAMP_COLLECTION);
+            }
+            Usage::Storage => {
+                $macro!(storage::METADATA_COLLECTION);
+                $macro!(storage::METADATA_EXPORT);
+            }
+        }
+    };
+}
+
 #[derive(Debug)]
 enum Usage {
     Catalog,
@@ -288,28 +319,8 @@ impl Usage {
             };
         }
 
-        match self {
-            Usage::Catalog => {
-                dump_col!(catalog::CONFIG_COLLECTION);
-                dump_col!(catalog::ID_ALLOCATOR_COLLECTION);
-                dump_col!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
-                dump_col!(catalog::CLUSTER_COLLECTION);
-                dump_col!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
-                dump_col!(catalog::CLUSTER_REPLICA_COLLECTION);
-                dump_col!(catalog::DATABASES_COLLECTION);
-                dump_col!(catalog::SCHEMAS_COLLECTION);
-                dump_col!(catalog::ITEM_COLLECTION);
-                dump_col!(catalog::ROLES_COLLECTION);
-                dump_col!(catalog::TIMESTAMP_COLLECTION);
-                dump_col!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
-                dump_col!(catalog::AUDIT_LOG_COLLECTION);
-                dump_col!(catalog::STORAGE_USAGE_COLLECTION);
-            }
-            Usage::Storage => {
-                dump_col!(storage::METADATA_COLLECTION);
-                dump_col!(storage::METADATA_EXPORT);
-            }
-        }
+        for_collections!(self, dump_col);
+
         let data = BTreeMap::from_iter(collections);
         let data_names = BTreeSet::from_iter(data.keys().map(|k| k.to_string()));
         if data_names != self.names() {
@@ -346,29 +357,7 @@ impl Usage {
                 }
             };
         }
-
-        match self {
-            Usage::Catalog => {
-                edit_col!(catalog::CONFIG_COLLECTION);
-                edit_col!(catalog::ID_ALLOCATOR_COLLECTION);
-                edit_col!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
-                edit_col!(catalog::CLUSTER_COLLECTION);
-                edit_col!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
-                edit_col!(catalog::CLUSTER_REPLICA_COLLECTION);
-                edit_col!(catalog::DATABASES_COLLECTION);
-                edit_col!(catalog::SCHEMAS_COLLECTION);
-                edit_col!(catalog::ITEM_COLLECTION);
-                edit_col!(catalog::ROLES_COLLECTION);
-                edit_col!(catalog::TIMESTAMP_COLLECTION);
-                edit_col!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
-                edit_col!(catalog::AUDIT_LOG_COLLECTION);
-                edit_col!(catalog::STORAGE_USAGE_COLLECTION);
-            }
-            Usage::Storage => {
-                edit_col!(storage::METADATA_COLLECTION);
-                edit_col!(storage::METADATA_EXPORT);
-            }
-        }
+        for_collections!(self, edit_col);
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
     }
 
