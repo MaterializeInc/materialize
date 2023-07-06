@@ -862,6 +862,8 @@ impl<'a> Runner<'a> {
                 .await?;
         }
 
+        inner.ensure_fixed_features().await?;
+
         inner.client = connect(inner.server_addr, None).await;
         inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
         inner.clients = BTreeMap::new();
@@ -1029,7 +1031,7 @@ impl<'a> RunnerInner<'a> {
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
         let client = connect(server_addr, None).await;
 
-        Ok(RunnerInner {
+        let inner = RunnerInner {
             server_addr,
             internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
@@ -1044,7 +1046,26 @@ impl<'a> RunnerInner<'a> {
             enable_table_keys: config.enable_table_keys,
             verbosity: config.verbosity,
             stdout: config.stdout,
-        })
+        };
+        inner.ensure_fixed_features().await?;
+
+        Ok(inner)
+    }
+
+    /// Set features that should be enabled regardless of whether reset-server was
+    /// called. These features may be set conditionally depending on the run configuration.
+    async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
+        // If auto_index_selects is on, we should turn on enable_monotonic_oneshot_selects.
+        // TODO(vmarcos): Remove this code when we retire the feature flag.
+        if self.auto_index_selects {
+            self.system_client
+                .execute(
+                    "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
+                    &[],
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn run_record<'r>(

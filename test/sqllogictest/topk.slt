@@ -10,9 +10,10 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
+SHOW enable_monotonic_oneshot_selects
 ----
-COMPLETE 0
+on
+COMPLETE 1
 
 statement ok
 CREATE TABLE cities (
