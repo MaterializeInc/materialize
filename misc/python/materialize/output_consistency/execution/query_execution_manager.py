@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -254,10 +254,13 @@ class QueryExecutionManager:
         query_id: str,
         query_execution: QueryExecution,
         collapsed: bool,
+        status: Optional[str] = None,
         flush: bool = False,
     ) -> None:
+        status = "" if status is None else f" ({status})"
+
         self.output_printer.start_section(
-            f"Test query #{query_id}", collapsed=collapsed
+            f"Test query #{query_id}{status}", collapsed=collapsed
         )
         self.output_printer.print_sql(query_execution.generic_sql)
 
@@ -277,10 +280,20 @@ class QueryExecutionManager:
         ):
             return
 
+        status = (
+            "error"
+            if not validation_outcome.success()
+            else ("warning" if validation_outcome.has_warnings() else "ok")
+        )
+
         if not self.config.verbose_output:
             # In verbose mode, the header has already been printed
             self.print_query_header(
-                query_id, query_execution, collapsed=False, flush=True
+                query_id,
+                query_execution,
+                collapsed=not validation_outcome.success(),
+                status=status,
+                flush=True,
             )
 
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
