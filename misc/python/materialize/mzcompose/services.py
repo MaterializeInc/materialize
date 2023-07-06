@@ -100,8 +100,6 @@ class Materialized(Service):
 
         if system_parameter_defaults is None:
             system_parameter_defaults = {
-                "enable_disk_cluster_replicas": "true",
-                "disk_cluster_replicas_default": "true",
                 "persist_sink_minimum_batch_updates": "128",
                 "enable_multi_worker_storage_persist_sink": "true",
                 "storage_persist_sink_minimum_batch_updates": "100",

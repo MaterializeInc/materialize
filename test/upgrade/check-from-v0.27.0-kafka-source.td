@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ skip-if
-SELECT mz_version_num() >= 6000;
-
 $ set schema={
     "type": "record",
     "name": "cpx",
@@ -42,7 +39,7 @@ a b
 $ set-from-sql var=expected-user
 SELECT user FROM linked_cluster_audit_event_user ORDER BY priority DESC LIMIT 1
 
-# Test that the migrations backfilled a linked cluster for the source && that the migration backfilled "disk" to false.
+# Test that the "disk" option on the linked cluster defaults to false
 > SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_kafka_source'
 materialize_public_kafka_source  linked
 > SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id', user
