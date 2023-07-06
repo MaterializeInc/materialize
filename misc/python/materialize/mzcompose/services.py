@@ -1081,3 +1081,21 @@ class Grafana(Service):
                 ],
             },
         )
+
+
+class Dbt(Service):
+    def __init__(self, name: str = "dbt") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": "dbt-materialize",
+                "environment": [
+                    "TMPDIR=/share/tmp",
+                ],
+                "volumes": [
+                    ".:/workdir",
+                    "secrets:/secrets",
+                    "tmp:/share/tmp",
+                ],
+            },
+        )

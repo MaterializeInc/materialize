@@ -538,6 +538,7 @@ class Composition:
         capture_stderr: bool = False,
         stdin: Optional[str] = None,
         check: bool = True,
+        workdir: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -554,6 +555,7 @@ class Composition:
         return self.invoke(
             "exec",
             *(["--detach"] if detach else []),
+            *(["--workdir", workdir] if workdir else []),
             "-T",
             service,
             *(

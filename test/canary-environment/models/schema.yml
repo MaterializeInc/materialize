@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+version: 2
+
+sources:
+  - name: tpch
+    schema: "{{ target.schema }}"
+    tables:
+      - name: customer
+      - name: lineitem
+      - name: nation
+      - name: orders
+        tests:
+          - makes_progress
+      - name: part
+      - name: partsupp
+      - name: region
+      - name: supplier
+
+models:
+    - name: tpch_q01
+      tests:
+        - makes_progress
+    - name: tpch_q18
+      tests:
+        - makes_progress
