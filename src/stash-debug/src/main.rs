@@ -123,6 +123,10 @@ enum Action {
         key: Vec<u8>,
         value: Vec<u8>,
     },
+    Delete {
+        collection: String,
+        key: Vec<u8>,
+    },
     /// Checks if the specified stash could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
     /// or error message. Exits with 0 if the upgrade would succeed, otherwise
@@ -173,6 +177,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let stash = factory.open(args.postgres_url, None, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
+        Action::Delete { collection, key } => {
+            // delete needs a mutable stash, so reconnect.
+            let stash = factory.open(args.postgres_url, None, tls).await?;
+            delete(stash, usage, collection, key).await
+        }
         Action::UpgradeCheck {
             cluster_replica_sizes,
         } => {
@@ -196,6 +205,16 @@ async fn edit(
 ) -> Result<(), anyhow::Error> {
     let prev = usage.edit(&mut stash, collection, key, value).await?;
     println!("previous value: {:?}", prev);
+    Ok(())
+}
+
+async fn delete(
+    mut stash: Stash,
+    usage: Usage,
+    collection: String,
+    key: Vec<u8>,
+) -> Result<(), anyhow::Error> {
+    usage.delete(&mut stash, collection, key).await?;
     Ok(())
 }
 
@@ -358,6 +377,26 @@ impl Usage {
             };
         }
         for_collections!(self, edit_col);
+        anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
+    }
+
+    async fn delete(
+        &self,
+        stash: &mut Stash,
+        collection: String,
+        key: Vec<u8>,
+    ) -> Result<(), anyhow::Error> {
+        macro_rules! delete_col {
+            ($col:expr) => {
+                if collection == $col.name() {
+                    let key = prost::Message::decode(&key[..])?;
+                    let keys = BTreeSet::from([key]);
+                    $col.delete_keys(stash, keys).await?;
+                    return Ok(());
+                }
+            };
+        }
+        for_collections!(self, delete_col);
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
     }
 
