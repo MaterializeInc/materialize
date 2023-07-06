@@ -1783,6 +1783,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
         mv_since >= t_since
     ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
 
+
 def workflow_test_query_without_default_cluster(c: Composition) -> None:
     """Test queries without a default cluster in Materialize."""
 
