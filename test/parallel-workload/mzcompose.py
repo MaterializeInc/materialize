@@ -37,3 +37,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         args.complexity,
         args.threads,
     )
+    # Check if catalog is corrupted, can Mz come up again?
+    c.down()
+    c.up("cockroach", "materialized")

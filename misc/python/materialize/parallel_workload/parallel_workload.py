@@ -14,12 +14,19 @@ import random
 import sys
 import threading
 import time
-from typing import Optional
+from collections import Counter, defaultdict
+from typing import DefaultDict, Optional, Type
 
 import pg8000
 
-from materialize.parallel_workload.action import ddl_actions, dml_actions
+from materialize.parallel_workload.action import (
+    Action,
+    ddl_action_list,
+    read_action_list,
+    write_action_list,
+)
 from materialize.parallel_workload.database import Database
+from materialize.parallel_workload.execute import initialize_logging
 from materialize.parallel_workload.worker import Worker
 
 SEED_RANGE = 1_000_000
@@ -35,8 +42,9 @@ def run(
     num_threads: Optional[int],
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
-    print(f"Seed: {seed}")
     random.seed(seed)
+
+    initialize_logging()
 
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
@@ -61,20 +69,25 @@ def run(
     threads = []
     for i in range(num_threads):
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        chances = [80, 20] if complexity == "ddl" else [100, 0]
+        weights = [60, 30, 10] if complexity == "ddl" else [60, 30, 0]
+        action_list = worker_rng.choices(
+            [read_action_list, write_action_list, ddl_action_list], weights
+        )[0]
         actions = [
-            (action[0](worker_rng, database), action[1])
-            for action in worker_rng.choices([dml_actions, ddl_actions], chances, k=1)[
-                0
-            ]
+            action_class(worker_rng, database, complexity)
+            for action_class in action_list.action_classes
         ]
-        autocommit = type(actions[0][0]) == ddl_actions[0][0]
-        worker = Worker(worker_rng, actions, end_time, autocommit)
-        print(f"Worker{i}: {', '.join(type(action[0]).__name__ for action in actions)}")
+        worker = Worker(
+            worker_rng, actions, action_list.weights, end_time, action_list.autocommit
+        )
+        thread_name = f"worker_{i}"
+        print(
+            f"{thread_name}: {', '.join(action_class.__name__ for action_class in action_list.action_classes)}"
+        )
         workers.append(worker)
 
         thread = threading.Thread(
-            name=f"worker_{i}",
+            name=thread_name,
             target=worker.run,
             args=(host, port, str(database)),
         )
@@ -88,28 +101,48 @@ def run(
                 if not thread.is_alive():
                     for worker in workers:
                         worker.end_time = time.time()
-                    raise Exception(f"Thread {thread.name} failed, exitting")
+                    raise Exception(f"Thread {thread.name} failed, exiting")
             time.sleep(REPORT_TIME)
             print(
-                "".join(
-                    f"[{worker.num_queries / REPORT_TIME:05.1f}]" for worker in workers
+                "QPS: "
+                + " ".join(
+                    f"{worker.num_queries / REPORT_TIME:05.1f}" for worker in workers
                 )
             )
             for worker in workers:
                 num_queries += worker.num_queries
                 worker.num_queries = 0
     except KeyboardInterrupt:
+        print("Keyboard interrupt, exiting")
         for worker in workers:
             worker.end_time = time.time()
-
-    with conn.cursor() as cur:
-        database.drop(cur)
-    conn.close()
 
     for thread in threads:
         thread.join()
 
-    print(f"Queries executed: {num_queries}")
+    with conn.cursor() as cur:
+        print(f"Dropping database {database}")
+        database.drop(cur)
+    conn.close()
+
+    ignored_errors: DefaultDict[str, Counter[Type[Action]]] = defaultdict(Counter)
+    num_failures = 0
+    for worker in workers:
+        for action_class, counter in worker.ignored_errors.items():
+            ignored_errors[action_class].update(counter)
+    for counter in ignored_errors.values():
+        for count in counter.values():
+            num_failures += count
+
+    failed = 100.0 * num_failures / num_queries if num_queries else 0
+    print(f"Queries executed: {num_queries} ({failed:.0f}% failed)")
+    print("Error statistics:")
+    for error, counter in ignored_errors.items():
+        text = ", ".join(
+            f"{action_class.__name__}: {count}"
+            for action_class, count in counter.items()
+        )
+        print(f"  {error}: {text}")
 
 
 def main() -> int:
@@ -127,11 +160,19 @@ def main() -> int:
     parser.add_argument(
         "--threads",
         type=int,
-        help="Number of thread to run, by default number of SMT threads",
+        help="Number of threads to run, by default number of SMT threads",
     )
 
     args = parser.parse_args()
-    run(args.host, args.port, args.seed, args.runtime, args.complexity, args.threads)
+    print(f"Seed: {args.seed}")
+    run(
+        args.host,
+        args.port,
+        args.seed,
+        args.runtime,
+        args.complexity,
+        args.threads,
+    )
     return 0
 
 

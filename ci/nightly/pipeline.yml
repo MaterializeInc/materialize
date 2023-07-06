@@ -729,7 +729,7 @@ steps:
 
   - id: parallel-workload-dml
     label: "Parallel Workload (DML)"
-    artifact_paths: junit_*.xml
+    artifact_paths: [junit_*.xml, parallel-workload-queries.log]
     timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
@@ -740,7 +740,7 @@ steps:
 
   - id: parallel-workload
     label: "Parallel Workload"
-    artifact_paths: junit_*.xml
+    artifact_paths: [junit_*.xml, parallel-workload-queries.log]
     timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
@@ -751,7 +751,7 @@ steps:
 
   - id: parallel-workload-100-threads
     label: "Parallel Workload (100 threads)"
-    artifact_paths: junit_*.xml
+    artifact_paths: [junit_*.xml, pw-*.log]
     timeout_in_minutes: 60
     agents:
       queue: linux-x86_64

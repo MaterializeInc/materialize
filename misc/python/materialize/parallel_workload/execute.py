@@ -8,82 +8,35 @@
 # by the Apache License, Version 2.0.
 
 import threading
+from typing import Optional, TextIO
 
 import pg8000
 
+log: Optional[TextIO] = None
+lock = threading.Lock()
 
-def execute(cur: pg8000.Cursor, query: str) -> bool:
+
+def initialize_logging() -> None:
+    global log
+    log = open("parallel-workload-queries.log", "w")
+
+
+class QueryError(Exception):
+    msg: str
+    query: str
+
+    def __init__(self, msg: str, query: str):
+        self.msg = msg
+        self.query = query
+
+
+def execute(cur: pg8000.Cursor, query: str) -> None:
     query += ";"
-    name = threading.current_thread().getName()
+    if log:
+        thread_name = threading.current_thread().getName()
+        with lock:
+            print(f"[{thread_name}] {query}", file=log)
     try:
-        try:
-            cur.execute(query)
-        except Exception as e:
-            # TODO: Proper error handling
-            if "in failed transaction block" in str(e):
-                cur.connection.rollback()
-                cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-                cur.execute(query)
-            elif "current transaction is aborted" in str(e):
-                cur.connection.rollback()
-                cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-                cur.execute(query)
-            elif "in the same timedomain" in str(e):
-                cur.connection.commit()
-                cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-                cur.execute(query)
-            elif "transaction in write-only mode" in str(e):
-                cur.connection.commit()
-                cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-                cur.execute(query)
-            elif "transaction in read-only mode" in str(e):
-                cur.connection.commit()
-                cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-                cur.execute(query)
-            elif "writes to a single table" in str(e):
-                cur.connection.commit()
-                cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-                cur.execute(query)
-            else:
-                raise e
+        cur.execute(query)
     except Exception as e:
-        if "in failed transaction block" in str(e):
-            cur.connection.rollback()
-            cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-            return False
-        if "current transaction is aborted" in str(e):
-            cur.connection.rollback()
-            cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-            return False
-        if "in the same timedomain" in str(e):
-            cur.connection.commit()
-            cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-            return False
-        if "transaction in write-only mode" in str(e):
-            cur.connection.commit()
-            cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-            return False
-        if "transaction in read-only mode" in str(e):
-            cur.connection.commit()
-            cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-            return False
-        if "writes to a single table" in str(e):
-            cur.connection.commit()
-            cur.execute("SET TRANSACTION_ISOLATION TO SERIALIZABLE")
-            return False
-        if "unknown catalog item" in str(e):
-            return False
-        if "already exists" in str(e):
-            return False
-        if "does not exist" in str(e):
-            return False
-        if "query could not complete" in str(e):
-            return False
-        if "cached plan must not change result type" in str(e):
-            return False
-        if "violates not-null constraint" in str(e):
-            return False
-        print(f"{name}: Query failed: {query}\nError: {e}")
-        raise e
-
-    return True
+        raise QueryError(str(e), query)

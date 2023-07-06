@@ -9,6 +9,7 @@
 
 import random
 import threading
+from copy import copy
 from typing import List, Optional, Set, Type
 
 import pg8000
@@ -24,31 +25,39 @@ MAX_INITIAL_VIEWS = 10
 class Column:
     column_id: int
     data_type: Type[DataType]
-    table: "Table"
+    db_object: "DBObject"
     nullable: bool
     default: Optional[str]
+    _name: str
 
     def __init__(
         self,
         rng: random.Random,
         column_id: int,
         data_type: Type[DataType],
-        table: "Table",
+        db_object: "DBObject",
     ):
         self.column_id = column_id
         self.data_type = data_type
-        self.table = table
+        self.db_object = db_object
         self.nullable = rng.choice([True, False])
         self.default = rng.choice([None, str(data_type.value(rng))])
+        self._name = f"c{self.column_id}_{self.data_type.name()}"
 
     def __str__(self) -> str:
-        return f"c{self.column_id}_{self.data_type.name()}"
+        return f"{self.db_object}.{self._name}"
+
+    def name(self) -> str:
+        return self._name
+
+    def set_name(self, new_name: str) -> None:
+        self._name = new_name
 
     def value(self, rng: random.Random) -> str:
         return str(self.data_type.value(rng))
 
     def create(self) -> str:
-        result = f"{self} {self.data_type.name()}"
+        result = f"{self.name()} {self.data_type.name()}"
         if self.default:
             result += f" DEFAULT {self.default}"
         if not self.nullable:
@@ -77,40 +86,83 @@ class Table(DBObject):
             return f"t{self.table_id}_{self.rename}"
         return f"t{self.table_id}"
 
-    def create(self, cur: pg8000.Cursor) -> bool:
+    def create(self, cur: pg8000.Cursor) -> None:
         query = f"CREATE TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
-        return execute(cur, query)
+        execute(cur, query)
+        query = f"CREATE DEFAULT INDEX ON {self}"
+        execute(cur, query)
 
 
 class View(DBObject):
     view_id: int
-    table: DBObject
+    base_object: DBObject
+    base_object2: Optional[DBObject]
+    columns: List[Column]
+    source_columns: List[Column]
     materialized: bool
+    join_column: Optional[Column]
+    join_column2: Optional[Column]
 
-    def __init__(self, rng: random.Random, view_id: int, table: DBObject):
+    def __init__(
+        self,
+        rng: random.Random,
+        view_id: int,
+        base_object: DBObject,
+        base_object2: Optional[DBObject],
+    ):
         self.view_id = view_id
-        self.table = table
-        self.columns = [
+        self.base_object = base_object
+        self.base_object2 = base_object2
+        all_columns = base_object.columns + (
+            base_object2.columns if base_object2 else []
+        )
+        self.source_columns = [
             column
-            for column in rng.sample(
-                table.columns, k=rng.randint(1, len(table.columns))
-            )
+            for column in rng.sample(all_columns, k=rng.randint(1, len(all_columns)))
         ]
+        self.columns = [copy(column) for column in self.source_columns]
+        for column in self.columns:
+            column.set_name(f"{column.name()}_{column.db_object}")
+            column.db_object = self
+
         self.materialized = rng.choice([True, False])
+
+        if base_object2:
+            self.join_column = rng.choice(base_object.columns)
+            self.join_column2 = None
+            columns = [
+                c
+                for c in base_object2.columns
+                if c.data_type == self.join_column.data_type
+            ]
+            if columns:
+                self.join_column2 = rng.choice(columns)
 
     def __str__(self) -> str:
         return f"v{self.view_id}"
 
-    def create(self, cur: pg8000.Cursor) -> bool:
+    def create(self, cur: pg8000.Cursor) -> None:
         if self.materialized:
             query = "CREATE MATERIALIZED VIEW"
         else:
             query = "CREATE VIEW"
-        columns = ", ".join(str(column) for column in self.columns)
-        query += f" {self} AS SELECT {columns} FROM {self.table}"
-        return execute(cur, query)
+        columns_str = ", ".join(
+            f"{source_column} AS {column.name()}"
+            for source_column, column in zip(self.source_columns, self.columns)
+        )
+        query += f" {self} AS SELECT {columns_str} FROM {self.base_object}"
+        if self.base_object2:
+            query += f" JOIN {self.base_object2}"
+            if self.join_column2:
+                query += f" ON {self.join_column} = {self.join_column2}"
+            else:
+                query += " ON TRUE"
+
+        execute(cur, query)
+        query = f"CREATE DEFAULT INDEX ON {self}"
+        execute(cur, query)
 
 
 class Database:
@@ -126,8 +178,13 @@ class Database:
         self.tables = [Table(rng, i) for i in range(rng.randint(2, MAX_INITIAL_TABLES))]
         self.views = []
         for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
-            tables_views: List[DBObject] = [*self.tables, *self.views]
-            view = View(rng, i, rng.choice(tables_views))
+            # Only use tables for now since LIMIT 1 and statement_timeout are
+            # not effective yet at preventing long-running queries and OoMs.
+            base_object = rng.choice(self.tables)
+            base_object2: Optional[Table] = rng.choice(self.tables)
+            if rng.choice([True, False]) or base_object2 == base_object:
+                base_object2 = None
+            view = View(rng, i, base_object, base_object2)
             self.views.append(view)
         self.indexes = set()
         self.lock = threading.Lock()
@@ -136,11 +193,11 @@ class Database:
         return f"db_pw_{self.seed}"
 
     def drop(self, cur: pg8000.Cursor) -> None:
-        cur.execute(f"DROP DATABASE IF EXISTS {self}")
+        execute(cur, f"DROP DATABASE IF EXISTS {self}")
 
-    def create(self, cur: pg8000.Cursor) -> bool:
+    def create(self, cur: pg8000.Cursor) -> None:
         self.drop(cur)
-        return execute(cur, f"CREATE DATABASE {self}")
+        execute(cur, f"CREATE DATABASE {self}")
 
     def create_relations(self, cur: pg8000.Cursor) -> None:
         for table in self.tables:
