@@ -222,6 +222,7 @@ pub enum ObjectType {
     Schema,
     Sink,
     Source,
+    System,
     Table,
     Type,
     View,
@@ -242,6 +243,7 @@ impl ObjectType {
             ObjectType::Secret => "Secret",
             ObjectType::Sink => "Sink",
             ObjectType::Source => "Source",
+            ObjectType::System => "System",
             ObjectType::Table => "Table",
             ObjectType::Type => "Type",
             ObjectType::View => "View",
@@ -264,6 +266,7 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for ObjectType {
             ObjectType::Schema => proto::audit_log_event_v1::ObjectType::Schema,
             ObjectType::Sink => proto::audit_log_event_v1::ObjectType::Sink,
             ObjectType::Source => proto::audit_log_event_v1::ObjectType::Source,
+            ObjectType::System => proto::audit_log_event_v1::ObjectType::System,
             ObjectType::Table => proto::audit_log_event_v1::ObjectType::Table,
             ObjectType::Type => proto::audit_log_event_v1::ObjectType::Type,
             ObjectType::View => proto::audit_log_event_v1::ObjectType::View,
@@ -286,6 +289,7 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for ObjectType {
             proto::audit_log_event_v1::ObjectType::Schema => Ok(ObjectType::Schema),
             proto::audit_log_event_v1::ObjectType::Sink => Ok(ObjectType::Sink),
             proto::audit_log_event_v1::ObjectType::Source => Ok(ObjectType::Source),
+            proto::audit_log_event_v1::ObjectType::System => Ok(ObjectType::System),
             proto::audit_log_event_v1::ObjectType::Table => Ok(ObjectType::Table),
             proto::audit_log_event_v1::ObjectType::Type => Ok(ObjectType::Type),
             proto::audit_log_event_v1::ObjectType::View => Ok(ObjectType::View),
@@ -311,6 +315,9 @@ pub enum EventDetails {
     GrantRoleV2(GrantRoleV2),
     RevokeRoleV1(RevokeRoleV1),
     RevokeRoleV2(RevokeRoleV2),
+    UpdatePrivilegeV1(UpdatePrivilegeV1),
+    AlterDefaultPrivilegeV1(AlterDefaultPrivilegeV1),
+    UpdateOwnerV1(UpdateOwnerV1),
     IdFullNameV1(IdFullNameV1),
     RenameClusterV1(RenameClusterV1),
     RenameClusterReplicaV1(RenameClusterReplicaV1),
@@ -761,6 +768,100 @@ impl RustType<proto::audit_log_event_v1::RevokeRoleV2> for RevokeRoleV2 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct UpdatePrivilegeV1 {
+    pub object_id: String,
+    pub grantee_id: String,
+    pub grantor_id: String,
+    pub privileges: String,
+}
+
+impl RustType<proto::audit_log_event_v1::UpdatePrivilegeV1> for UpdatePrivilegeV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::UpdatePrivilegeV1 {
+        proto::audit_log_event_v1::UpdatePrivilegeV1 {
+            object_id: self.object_id.to_string(),
+            grantee_id: self.grantee_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+            privileges: self.privileges.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::UpdatePrivilegeV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(UpdatePrivilegeV1 {
+            object_id: proto.object_id,
+            grantee_id: proto.grantee_id,
+            grantor_id: proto.grantor_id,
+            privileges: proto.privileges,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct AlterDefaultPrivilegeV1 {
+    pub role_id: String,
+    pub database_id: Option<String>,
+    pub schema_id: Option<String>,
+    pub grantee_id: String,
+    pub privileges: String,
+}
+
+impl RustType<proto::audit_log_event_v1::AlterDefaultPrivilegeV1> for AlterDefaultPrivilegeV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterDefaultPrivilegeV1 {
+        proto::audit_log_event_v1::AlterDefaultPrivilegeV1 {
+            role_id: self.role_id.to_string(),
+            database_id: self.database_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            schema_id: self.schema_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            grantee_id: self.grantee_id.to_string(),
+            privileges: self.privileges.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterDefaultPrivilegeV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterDefaultPrivilegeV1 {
+            role_id: proto.role_id,
+            database_id: proto.database_id.map(|id| id.inner),
+            schema_id: proto.schema_id.map(|id| id.inner),
+            grantee_id: proto.grantee_id,
+            privileges: proto.privileges,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct UpdateOwnerV1 {
+    pub object_id: String,
+    pub old_owner_id: String,
+    pub new_owner_id: String,
+}
+
+impl RustType<proto::audit_log_event_v1::UpdateOwnerV1> for UpdateOwnerV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::UpdateOwnerV1 {
+        proto::audit_log_event_v1::UpdateOwnerV1 {
+            object_id: self.object_id.to_string(),
+            old_owner_id: self.old_owner_id.to_string(),
+            new_owner_id: self.new_owner_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::UpdateOwnerV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(UpdateOwnerV1 {
+            object_id: proto.object_id,
+            old_owner_id: proto.old_owner_id,
+            new_owner_id: proto.new_owner_id,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SchemaV1 {
     pub id: String,
     pub name: String,
@@ -837,6 +938,11 @@ impl EventDetails {
             EventDetails::GrantRoleV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RevokeRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RevokeRoleV2(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::UpdatePrivilegeV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::AlterDefaultPrivilegeV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::UpdateOwnerV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
@@ -859,6 +965,11 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::GrantRoleV2(details) => GrantRoleV2(details.into_proto()),
             EventDetails::RevokeRoleV1(details) => RevokeRoleV1(details.into_proto()),
             EventDetails::RevokeRoleV2(details) => RevokeRoleV2(details.into_proto()),
+            EventDetails::UpdatePrivilegeV1(details) => UpdatePrivilegeV1(details.into_proto()),
+            EventDetails::AlterDefaultPrivilegeV1(details) => {
+                AlterDefaultPrivilegeV1(details.into_proto())
+            }
+            EventDetails::UpdateOwnerV1(details) => UpdateOwnerV1(details.into_proto()),
             EventDetails::IdFullNameV1(details) => IdFullNameV1(details.into_proto()),
             EventDetails::RenameClusterV1(details) => RenameClusterV1(details.into_proto()),
             EventDetails::RenameClusterReplicaV1(details) => {
@@ -892,6 +1003,11 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             GrantRoleV2(details) => Ok(EventDetails::GrantRoleV2(details.into_rust()?)),
             RevokeRoleV1(details) => Ok(EventDetails::RevokeRoleV1(details.into_rust()?)),
             RevokeRoleV2(details) => Ok(EventDetails::RevokeRoleV2(details.into_rust()?)),
+            UpdatePrivilegeV1(details) => Ok(EventDetails::UpdatePrivilegeV1(details.into_rust()?)),
+            AlterDefaultPrivilegeV1(details) => {
+                Ok(EventDetails::AlterDefaultPrivilegeV1(details.into_rust()?))
+            }
+            UpdateOwnerV1(details) => Ok(EventDetails::UpdateOwnerV1(details.into_rust()?)),
             IdFullNameV1(details) => Ok(EventDetails::IdFullNameV1(details.into_rust()?)),
             RenameClusterV1(details) => Ok(EventDetails::RenameClusterV1(details.into_rust()?)),
             RenameClusterReplicaV1(details) => {
