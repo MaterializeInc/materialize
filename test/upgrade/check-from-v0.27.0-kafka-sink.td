@@ -17,4 +17,4 @@ materialize_public_upgrade_kafka_sink  linked
   FROM mz_audit_events
   WHERE details->>'name' = 'materialize_public_upgrade_kafka_sink' OR details->>'cluster_name' = 'materialize_public_upgrade_kafka_sink'
 create  cluster          "{\"name\":\"materialize_public_upgrade_kafka_sink\"}"
-create  cluster-replica  "{\"cluster_name\":\"materialize_public_upgrade_kafka_sink\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"
+create  cluster-replica  "{\"cluster_name\":\"materialize_public_upgrade_kafka_sink\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"
