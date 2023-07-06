@@ -1058,9 +1058,9 @@ impl<'a> RunnerInner<'a> {
         Ok(inner)
     }
 
+    /// Set features that should be enabled regardless of whether reset-server was
+    /// called. These features may be set conditionally depending on the run configuration.
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
-        // Here, we set features that should be enabled regardless of whether reset-server was
-        // called. These features may be set conditionally depending on the run configuration.
         // If auto_index_selects is on, we should turn on enable_monotonic_oneshot_selects.
         // TODO(vmarcos): Remove this code when we retire the feature flag.
         if self.auto_index_selects {
