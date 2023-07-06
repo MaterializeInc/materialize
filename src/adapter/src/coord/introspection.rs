@@ -32,6 +32,7 @@ use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::{rbac, AdapterError};
 
+/// Returns whether a scalar expression is either a constant or an unmateriazable function. We err on returning false.
 fn constant_or_unmaterializable_scalar(scalar: &MirScalarExpr) -> bool {
     match scalar {
         mz_expr::MirScalarExpr::Column(_)
@@ -44,6 +45,9 @@ fn constant_or_unmaterializable_scalar(scalar: &MirScalarExpr) -> bool {
     }
 }
 
+/// Returns whether a expression can resolve by returning constants or invoking unmaterializable functions.
+/// We err on returning false. The resulting expression should be very cheap to evaluate:
+/// ideally not creating a dataflow at all when optimized.
 fn constant_or_unmaterializable(expr: &MirRelationExpr) -> bool {
     match expr {
         MirRelationExpr::ArrangeBy { input, keys } => {
@@ -67,10 +71,11 @@ fn constant_or_unmaterializable(expr: &MirRelationExpr) -> bool {
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
-pub fn auto_run_on_introspection<'a, 's, 'p>(
+pub fn auto_run_on_introspection<'a, 's, 'p, 'r>(
     catalog: &'a Catalog,
     session: &'s Session,
     plan: &'p Plan,
+    resolved_ids: &'r ResolvedIds,
 ) -> TargetCluster {
     let depends_on = match plan {
         Plan::Select(plan) => plan.source.depends_on(),
@@ -172,6 +177,10 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
 
     let needs_no_active_cluster =
         matches!(plan, Plan::Select(plan) if constant_or_unmaterializable(&plan.source));
+    mz_ore::soft_assert!(
+        !needs_no_active_cluster || resolved_ids.0.is_empty(),
+        "if we don't need an active cluster there mustn't be resolveable ids"
+    );
 
     if (non_empty && valid_dependencies) || needs_no_active_cluster {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);

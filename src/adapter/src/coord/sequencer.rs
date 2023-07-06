@@ -81,8 +81,12 @@ impl Coordinator {
 
         // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
         // session var is set, then we automatically run the query on the mz_introspection cluster.
-        let target_cluster =
-            introspection::auto_run_on_introspection(&self.catalog, ctx.session(), &plan);
+        let target_cluster = introspection::auto_run_on_introspection(
+            &self.catalog,
+            ctx.session(),
+            &plan,
+            &resolved_ids,
+        );
         let target_cluster_id = self
             .catalog()
             .resolve_target_cluster(target_cluster, ctx.session())
