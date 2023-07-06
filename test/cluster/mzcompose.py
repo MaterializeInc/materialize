@@ -1796,4 +1796,4 @@ def workflow_test_query_without_default_cluster(c: Composition) -> None:
     ):
         c.up("materialized", "postgres")
 
-        c.run("testdrive", "query-without-default-cluster.td")
+        c.run("testdrive", "query-without-default-cluster/query-without-default-cluster.td")

@@ -25,6 +25,9 @@ DROP CLUSTER default CASCADE
 ! SELECT * FROM (VALUES (1), (2)) where column1 > 1
 contains:unknown cluster 'default'
 
+! SELECT generate_series(0, 10)
+contains:unknown cluster 'default'
+
 # to make it easier to run the test again, let's recreate the default cluster
 $ postgres-execute connection=mz_system
 CREATE CLUSTER default REPLICAS ()
