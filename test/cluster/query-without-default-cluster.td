@@ -21,7 +21,7 @@ DROP CLUSTER default CASCADE
 > SELECT 1 from (select mz_now(), now())
 1
 
-# filtering isn't supported today
+# filtering isn't supported as a simple query today
 ! SELECT * FROM (VALUES (1), (2)) where column1 > 1
 contains:unknown cluster 'default'
 
