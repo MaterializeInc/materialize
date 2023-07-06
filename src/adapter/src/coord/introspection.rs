@@ -18,7 +18,7 @@
 //!
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, MirRelationExpr};
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
@@ -31,6 +31,30 @@ use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::{rbac, AdapterError};
+
+fn constant_or_unmaterializable(expr: &MirRelationExpr) -> bool {
+    match expr {
+        MirRelationExpr::ArrangeBy { input, .. } => constant_or_unmaterializable(input),
+        MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => true,
+        MirRelationExpr::Map { input, scalars } => {
+            constant_or_unmaterializable(input)
+                && scalars.iter().all(|e| match e {
+                    mz_expr::MirScalarExpr::Column(_)
+                    | mz_expr::MirScalarExpr::Literal(_, _)
+                    | mz_expr::MirScalarExpr::CallUnmaterializable(_) => true,
+                    mz_expr::MirScalarExpr::CallUnary { .. }
+                    | mz_expr::MirScalarExpr::CallBinary { .. }
+                    | mz_expr::MirScalarExpr::CallVariadic { .. }
+                    | mz_expr::MirScalarExpr::If { .. } => false,
+                })
+        }
+        MirRelationExpr::Let { value, body, .. } => {
+            constant_or_unmaterializable(value) && constant_or_unmaterializable(body)
+        }
+        MirRelationExpr::Project { input, .. } => constant_or_unmaterializable(input),
+        _ => false,
+    }
+}
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -137,7 +161,13 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         system_only && non_replica
     });
 
-    if non_empty && valid_dependencies {
+    let needs_no_active_cluster = match plan {
+        Plan::Select(plan) if constant_or_unmaterializable(&plan.source) => true,
+        _ => false,
+    };
+    tracing::info!("needs_no_active_cluster: {needs_no_active_cluster}; plan: {plan:?}");
+
+    if (non_empty && valid_dependencies) || needs_no_active_cluster {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
