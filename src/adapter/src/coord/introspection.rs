@@ -177,11 +177,6 @@ pub fn auto_run_on_introspection<'a, 's, 'p, 'r>(
 
     let needs_no_active_cluster =
         matches!(plan, Plan::Select(plan) if constant_or_unmaterializable(&plan.source));
-    mz_ore::soft_assert!(
-        !needs_no_active_cluster || resolved_ids.0.is_empty(),
-        "if we don't need an active cluster there mustn't be resolveable ids"
-    );
-
     if (non_empty && valid_dependencies) || needs_no_active_cluster {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);

@@ -1798,5 +1798,5 @@ def workflow_test_query_without_default_cluster(c: Composition) -> None:
 
         c.run(
             "testdrive",
-            "query-without-default-cluster/query-without-default-cluster.td"
+            "query-without-default-cluster/query-without-default-cluster.td",
         )
