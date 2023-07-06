@@ -86,9 +86,9 @@ use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
     EphemeralVolumeSource, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-    PersistentVolumeClaimTemplate, Pod, PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec,
-    ResourceRequirements, Secret, Service as K8sService, ServicePort, ServiceSpec, Volume,
-    VolumeMount,
+    PersistentVolumeClaimTemplate, Pod, PodAffinityTerm, PodAntiAffinity, PodSecurityContext,
+    PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
+    ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -142,6 +142,8 @@ pub struct KubernetesOrchestratorConfig {
     /// If unspecified, the orchestrator will refuse to create services that
     /// request disk.
     pub ephemeral_volume_storage_class: Option<String>,
+    /// The optional fs group for service's pods' `securityContext`.
+    pub service_fs_group: Option<i64>,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -790,6 +792,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let security_context = if let Some(fs_group) = self.config.service_fs_group {
+            Some(PodSecurityContext {
+                fs_group: Some(fs_group),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -828,6 +839,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 }],
                 volumes,
+                security_context,
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),
