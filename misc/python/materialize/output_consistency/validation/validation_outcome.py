@@ -60,7 +60,7 @@ class ValidationOutcome:
             self.count_ignored_errors += 1
             self.add_warning(
                 ValidationWarning(
-                    f"Ignoring {error.error_type} ({error.message}) because of {ignore_verdict.reason}",
+                    f"Ignoring {error.error_type.name} ({error.message}) because of {ignore_verdict.reason}",
                     f"SQL is {error.query_execution.generic_sql}",
                 )
             )
