@@ -355,12 +355,26 @@ http
 400 Bad Request
 each query must contain exactly 1 statement, but "select 1; select 2;" contains 2
 
+# Verify t is empty before executing some inserts.
+http
+{"queries":[{"query":"select count(*) from t","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[0]],"desc":{"columns":[{"name":"count","type_oid":20,"type_len":8,"type_mod":-1}]},"notices":[]}]}
+
 # Rolledback
 http
 {"queries":[{"query":"begin;","params":[]},{"query":"insert into t values (1);","params":[]},{"query":"rollback","params":[]}]}
 ----
 200 OK
 {"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"ROLLBACK","notices":[]}]}
+
+# Rollback prevents insertion.
+http
+{"queries":[{"query":"select count(*) from t","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[0]],"desc":{"columns":[{"name":"count","type_oid":20,"type_len":8,"type_mod":-1}]},"notices":[]}]}
 
 # Implicit txn
 http
@@ -369,12 +383,26 @@ http
 200 OK
 {"results":[{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
+# Implicit transactions are each committed, so the INSERT committed before the SELECT error.
+http
+{"queries":[{"query":"select count(*) from t","params":[]},{"query":"delete from t","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"desc":{"columns":[{"name":"count","type_oid":20,"type_len":8,"type_mod":-1}]},"notices":[]},{"ok":"DELETE 1","notices":[]}]}
+
 # Errors prevent commit + further execution
 http
 {"queries":[{"query":"begin;","params":[]},{"query":"insert into t values (1);","params":[]},{"query":"select 1/0;","params":[]},{"query":"select * from t","params":[]},{"query":"commit","params":[]}]}
 ----
 200 OK
 {"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
+
+# Because of the explicit transaction, the INSERT did not commit.
+http
+{"queries":[{"query":"select count(*) from t","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[0]],"desc":{"columns":[{"name":"count","type_oid":20,"type_len":8,"type_mod":-1}]},"notices":[]}]}
 
 # Requires explicit commit in explicit txn
 http
@@ -402,17 +430,19 @@ http
 200 OK
 {"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
+# The first statement (insert) succeeds and commits because it's an implicit transaction.
 http
 {"queries":[{"query":"insert into t values ($1);","params":["4"]},{"query":"begin;","params":[]},{"query":"select 1/0;","params":[]},{"query":"commit;","params":[]}]}
 ----
 200 OK
 {"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
+# We expect to see the INSERT (4) above.
 http
 {"queries":[{"query":"select * from t","params":[]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 4","rows":[[1],[2],[3],[4]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"queries":[{"query":"subscribe (select * from t)","params":[]}]}

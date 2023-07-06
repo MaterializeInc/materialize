@@ -75,7 +75,7 @@
 
 //! Integration tests for Materialize server.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
@@ -1867,4 +1867,71 @@ fn test_webhook_duplicate_headers() {
         .expect("failed to get count")
         .get(0);
     assert_eq!(cnt, 1);
+}
+
+// Test that websockets observe cancellation and leave the transaction in an idle state.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_github_20262() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (i INT);").unwrap();
+
+    let mut cancel = || {
+        // Wait for the subscription to start.
+        let conn_id = Retry::default()
+            .retry(|_| {
+                let conn_id: String = client
+                    .query_one(
+                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        &[],
+                    )?
+                    .get(0);
+                Ok::<_, postgres::Error>(conn_id)
+            })
+            .unwrap();
+        client
+            .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+            .unwrap();
+    };
+
+    let subscribe: serde_json::Value =
+        serde_json::from_str(r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#).unwrap();
+    let subscribe = subscribe.to_string();
+    let commit: serde_json::Value =
+        serde_json::from_str(r#"{"queries":[{"query":"COMMIT"}]}"#).unwrap();
+    let commit = commit.to_string();
+    let select: serde_json::Value =
+        serde_json::from_str(r#"{"queries":[{"query":"SELECT 1"}]}"#).unwrap();
+    let select = select.to_string();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    ws.write_message(Message::Text(subscribe)).unwrap();
+    cancel();
+    ws.write_message(Message::Text(commit)).unwrap();
+    ws.write_message(Message::Text(select)).unwrap();
+
+    let mut expect = VecDeque::from([
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
+        r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
+        r#"{"type":"Error","payload":{"message":"query canceled","code":"XX000"}}"#,
+        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+        r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#,
+        r#"{"type":"CommandComplete","payload":"COMMIT"}"#,
+        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","severity":"warning"}}"#,
+        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
+        r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
+        r#"{"type":"Row","payload":[1]}"#,
+        r#"{"type":"CommandComplete","payload":"SELECT 1"}"#,
+        r#"{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}"#,
+        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+    ]);
+    while !expect.is_empty() {
+        if let Message::Text(text) = ws.read_message().unwrap() {
+            let next = expect.pop_front().unwrap();
+            assert_eq!(text, next);
+        }
+    }
 }
