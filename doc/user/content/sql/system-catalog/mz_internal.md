@@ -146,28 +146,14 @@ each replica, including the times at which it was created and dropped
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
 
-### `mz_sessions`
+### `mz_kafka_sources`
 
-The `mz_sessions` table contains a row for each active session in the system.
+The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 
-| Field           | Type                           | Meaning                                                                                                                   |
-| --------------- | ------------------------------ | --------                                                                                                                  |
-| `id`            | [`uint4`]                      | The ID of the session.                                                                                                    |
-| `role_id`       | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
-| `connected_at`  | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
-
-### `mz_subscriptions`
-
-The `mz_subscriptions` table describes all active [`SUBSCRIBE`](/sql/subscribe)
-operations in the system.
-
-| Field                    | Type                           | Meaning                                                                                                                    |
-| ------------------------ | ------------------------------ | --------                                                                                                                   |
-| `id`                     | [`text`]                       | The ID of the subscription.                                                                                                |
-| `session_id`             | [`uint4`]                      | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
-| `cluster_id`             | [`text`]                       | The ID of the cluster on which the subscription is running. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
-| `created_at`             | [`timestamp with time zone`]   | The time at which the subscription was created.                                                                            |
-| `referenced_object_ids`  | [`text list`]                  | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
+| Field                  | Type           | Meaning                                                                                                   |
+|------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
+| `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
+| `group_id_base`        | [`text`]       | The prefix of the group ID that Materialize will use when consuming data for the Kafka source.            |
 
 ### `mz_object_dependencies`
 
@@ -200,6 +186,64 @@ system.
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
 
+### `mz_sessions`
+
+The `mz_sessions` table contains a row for each active session in the system.
+
+| Field           | Type                           | Meaning                                                                                                                   |
+| --------------- | ------------------------------ | --------                                                                                                                  |
+| `id`            | [`uint4`]                      | The ID of the session.                                                                                                    |
+| `role_id`       | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
+| `connected_at`  | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
+
+### `mz_sink_statistics`
+
+The `mz_sink_statistics` table contains statistics for each worker thread of
+each sink in the system.
+
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
+
+| Field                  | Type           | Meaning                                                                                                             |
+| ---------------------- | -------------- | --------                                                                                                            |
+| `id`                   | [`text`]       | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                        |
+| `worker_id`            | [`bigint`]     | The ID of the worker thread.                                                                                        |
+| `messages_staged`      | [`bigint`]     | The number of messages staged but possibly not committed to the sink.                                               |
+| `messaged_commited`    | [`bigint`]     | The number of messages committed to the sink.                                                                       |
+| `bytes_staged`         | [`bigint`]     | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
+| `bytes_committed`      | [`bigint`]     | The number of bytes committed to the sink. This counts both keys and values, if applicable.                         |
+
+### `mz_sink_statuses`
+
+The `mz_sink_statuses` view provides the current state for each sink in the
+system, including potential error messages and additional metadata helpful for
+debugging.
+
+| Field                    | Type                            | Meaning                                                                                                          |
+| ------------------------ | ------------------------------- | --------                                                                                                         |
+| `id`                     | [`text`]                        | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                           |
+| `name`                   | [`text`]                        | The name of the sink.                                                                                            |
+| `type`                   | [`text`]                        | The type of the sink.                                                                                            |
+| `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
+| `status`                 | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `error`                  | [`text`]                        | If the sink is in an error state, the error message.                                                             |
+| `details`                | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
+
+### `mz_sink_status_history`
+
+The `mz_sink_status_history` table contains rows describing the
+history of changes to the status of each sink in the system, including potential error
+messages and additional metadata helpful for debugging.
+
+| Field          | Type                            | Meaning                                                                                                          |
+| -------------- | ------------------------------- | --------                                                                                                         |
+| `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
+| `sink_id`      | [`text`]                        | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                           |
+| `status`       | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
+| `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
+
 ### `mz_source_statistics`
 
 The `mz_source_statistics` table contains statistics for each worker thread of
@@ -220,24 +264,6 @@ the system are restarted.
 | `bytes_received`       | [`bigint`]     | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
 | `envelope_state_bytes` | [`bigint`]     | The number of bytes stored in the source envelope state.                                                                       |
 | `envelope_state_count` | [`bigint`]     | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
-
-### `mz_sink_statistics`
-
-The `mz_sink_statistics` table contains statistics for each worker thread of
-each sink in the system.
-
-Materialize does not make any guarantees about the exactness or freshness of
-these statistics. They are occasionally reset to zero as internal components of
-the system are restarted.
-
-| Field                  | Type           | Meaning                                                                                                             |
-| ---------------------- | -------------- | --------                                                                                                            |
-| `id`                   | [`text`]       | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                        |
-| `worker_id`            | [`bigint`]     | The ID of the worker thread.                                                                                        |
-| `messages_staged`      | [`bigint`]     | The number of messages staged but possibly not committed to the sink.                                               |
-| `messaged_commited`    | [`bigint`]     | The number of messages committed to the sink.                                                                       |
-| `bytes_staged`         | [`bigint`]     | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
-| `bytes_committed`      | [`bigint`]     | The number of bytes committed to the sink. This counts both keys and values, if applicable.                         |
 
 ### `mz_source_statuses`
 
@@ -269,35 +295,19 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 
-### `mz_sink_statuses`
+### `mz_subscriptions`
 
-The `mz_sink_statuses` view provides the current state for each sink in the
-system, including potential error messages and additional metadata helpful for
-debugging.
+The `mz_subscriptions` table describes all active [`SUBSCRIBE`](/sql/subscribe)
+operations in the system.
 
-| Field                    | Type                            | Meaning                                                                                                          |
-| ------------------------ | ------------------------------- | --------                                                                                                         |
-| `id`                     | [`text`]                        | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                           |
-| `name`                   | [`text`]                        | The name of the sink.                                                                                            |
-| `type`                   | [`text`]                        | The type of the sink.                                                                                            |
-| `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
-| `status`                 | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
-| `error`                  | [`text`]                        | If the sink is in an error state, the error message.                                                             |
-| `details`                | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
+| Field                    | Type                           | Meaning                                                                                                                    |
+| ------------------------ | ------------------------------ | --------                                                                                                                   |
+| `id`                     | [`text`]                       | The ID of the subscription.                                                                                                |
+| `session_id`             | [`uint4`]                      | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
+| `cluster_id`             | [`text`]                       | The ID of the cluster on which the subscription is running. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
+| `created_at`             | [`timestamp with time zone`]   | The time at which the subscription was created.                                                                            |
+| `referenced_object_ids`  | [`text list`]                  | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
-### `mz_sink_status_history`
-
-The `mz_sink_status_history` table contains rows describing the
-history of changes to the status of each sink in the system, including potential error
-messages and additional metadata helpful for debugging.
-
-| Field          | Type                            | Meaning                                                                                                          |
-| -------------- | ------------------------------- | --------                                                                                                         |
-| `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
-| `sink_id`      | [`text`]                        | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                           |
-| `status`       | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
-| `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
-| `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
 
 ## Replica Introspection Relations
