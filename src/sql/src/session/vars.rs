@@ -1096,7 +1096,7 @@ feature_flags!(
         "monotonic evaluation of one-shot SELECT queries"
     ),
     (enable_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
-    (enable_mfp_pushdown_explain, "`mfp_pushdown` explain"),
+    (enable_mfp_pushdown_explain, "`filter_pushdown` explain"),
     (
         enable_multi_worker_storage_persist_sink,
         "multi-worker storage persist sink"

@@ -84,7 +84,7 @@ impl<'a> ExplainSource<'a> {
         op: &'a MapFilterProject,
         context: &ExplainContext<'a>,
     ) -> ExplainSource<'a> {
-        let pushdown_info = if context.config.mfp_pushdown {
+        let pushdown_info = if context.config.filter_pushdown {
             let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
             let pushdown = op
                 .predicates
