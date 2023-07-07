@@ -311,7 +311,7 @@ async fn get_decoder(
         | DataEncodingInner::Regex(_) => {
             let after_delimiting = match encoding.inner {
                 DataEncodingInner::Regex(RegexEncoding { regex }) => {
-                    PreDelimitedFormat::Regex(regex.0, Default::default())
+                    PreDelimitedFormat::Regex(regex.regex, Default::default())
                 }
                 DataEncodingInner::Protobuf(encoding) => {
                     PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(

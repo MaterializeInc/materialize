@@ -42,7 +42,7 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
-use mz_repr::adt::regex::any_regex;
+use mz_repr::adt::regex::{any_regex, Regex};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::chrono::any_naive_datetime;
 use mz_repr::role_id::RoleId;
@@ -51,7 +51,6 @@ use num::traits::CheckedNeg;
 use proptest::prelude::*;
 use proptest::strategy::*;
 use proptest_derive::Arbitrary;
-use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
@@ -6096,20 +6095,20 @@ fn regexp_match_static<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
-pub fn build_regex(needle: &str, flags: &str) -> Result<regex::Regex, EvalError> {
-    let mut regex = RegexBuilder::new(needle);
+pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
+    let mut case_insensitive = false;
     for f in flags.chars() {
         match f {
             'i' => {
-                regex.case_insensitive(true);
+                case_insensitive = true;
             }
             'c' => {
-                regex.case_insensitive(false);
+                case_insensitive = false;
             }
             _ => return Err(EvalError::InvalidRegexFlag(f)),
         }
     }
-    Ok(regex.build()?)
+    Ok(Regex::new(needle.to_string(), case_insensitive)?)
 }
 
 pub fn hmac_string<'a>(

@@ -128,6 +128,8 @@ pub enum TryFromProtoError {
     InvalidUrl(url::ParseError),
     /// Failed to parse bitflags.
     InvalidBitFlags(String),
+    /// Failed to deserialize a LIKE/ILIKE pattern.
+    LikePatternDeserializationError(String),
 }
 
 impl TryFromProtoError {
@@ -151,16 +153,6 @@ impl From<TryFromIntError> for TryFromProtoError {
 impl From<CharTryFromError> for TryFromProtoError {
     fn from(error: CharTryFromError) -> Self {
         TryFromProtoError::CharTryFromError(error)
-    }
-}
-
-impl RustType<String> for regex::Regex {
-    fn into_proto(&self) -> String {
-        self.as_str().to_string()
-    }
-
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        Ok(regex::Regex::new(&proto)?)
     }
 }
 
@@ -217,6 +209,11 @@ impl std::fmt::Display for TryFromProtoError {
             GlobError(error) => error.fmt(f),
             InvalidUrl(error) => error.fmt(f),
             InvalidBitFlags(error) => error.fmt(f),
+            LikePatternDeserializationError(inner_error) => write!(
+                f,
+                "Protobuf deserialization failed for a LIKE/ILIKE pattern: `{}`",
+                inner_error
+            ),
         }
     }
 }
@@ -249,6 +246,7 @@ impl std::error::Error for TryFromProtoError {
             GlobError(error) => Some(error),
             InvalidUrl(error) => Some(error),
             InvalidBitFlags(_) => None,
+            LikePatternDeserializationError(_) => None,
         }
     }
 }
