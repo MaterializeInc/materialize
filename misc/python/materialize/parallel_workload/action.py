@@ -26,39 +26,46 @@ from materialize.parallel_workload.executor import Executor
 
 class Action:
     rng: random.Random
-    database: Database
-    complexity: str
+    db: Database
 
-    def __init__(self, rng: random.Random, database: Database, complexity: str):
+    def __init__(self, rng: random.Random, db: Database):
         self.rng = rng
-        self.database = database
-        self.complexity = complexity
+        self.db = db
 
     def run(self, exe: Executor) -> None:
         raise NotImplementedError
 
     def errors_to_ignore(self) -> List[str]:
-        if self.complexity == "ddl":
-            return [
-                "query could not complete",
-                "cached plan must not change result type",
-                "violates not-null constraint",
-                "result exceeds max size of",
-                "unknown catalog item",  # Expected, see #20381
-            ]
-        return []
+        result = []
+        if self.db.complexity == "ddl":
+            result.extend(
+                [
+                    "query could not complete",
+                    "cached plan must not change result type",
+                    "violates not-null constraint",
+                    "result exceeds max size of",
+                    "unknown catalog item",  # Expected, see #20381
+                ]
+            )
+        if self.db.scenario == "cancel":
+            result.extend(
+                [
+                    "canceling statement due to user request",
+                ]
+            )
+        return result
 
 
 class SelectAction(Action):
     def errors_to_ignore(self) -> List[str]:
         result = super().errors_to_ignore()
-        if self.complexity in ("dml", "ddl"):
+        if self.db.complexity in ("dml", "ddl"):
             result.extend(
                 [
                     "in the same timedomain",
                 ]
             )
-        if self.complexity == "ddl":
+        if self.db.complexity == "ddl":
             result.extend(
                 [
                     "does not exist",
@@ -67,7 +74,7 @@ class SelectAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
+        tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
         table = self.rng.choice(tables_views)
         column = self.rng.choice(table.columns)
         table2 = self.rng.choice(tables_views)
@@ -98,12 +105,12 @@ class InsertAction(Action):
     def run(self, exe: Executor) -> None:
         table = None
         if exe.insert_table != None:
-            for t in self.database.tables:
+            for t in self.db.tables:
                 if t.table_id == exe.insert_table:
                     table = t
                     break
         if not table:
-            table = self.rng.choice(self.database.tables)
+            table = self.rng.choice(self.db.tables)
 
         column_names = ", ".join(column.name() for column in table.columns)
         column_values = ", ".join(column.value(self.rng) for column in table.columns)
@@ -121,12 +128,12 @@ class UpdateAction(Action):
     def run(self, exe: Executor) -> None:
         table = None
         if exe.insert_table != None:
-            for t in self.database.tables:
+            for t in self.db.tables:
                 if t.table_id == exe.insert_table:
                     table = t
                     break
         if not table:
-            table = self.rng.choice(self.database.tables)
+            table = self.rng.choice(self.db.tables)
 
         column1 = table.columns[0]
         column2 = self.rng.choice(table.columns)
@@ -142,7 +149,7 @@ class DeleteAction(Action):
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
-        table = self.rng.choice(self.database.tables)
+        table = self.rng.choice(self.db.tables)
         column = table.columns[0]
         query = f"DELETE FROM {table} WHERE {column.name()} = {column.value(self.rng, True)}"
         exe.execute(query)
@@ -150,7 +157,7 @@ class DeleteAction(Action):
 
 class CreateIndexAction(Action):
     def run(self, exe: Executor) -> None:
-        tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
+        tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
         table = self.rng.choice(tables_views)
         columns = self.rng.sample(table.columns, len(table.columns))
         columns_str = "_".join(column.name() for column in columns)
@@ -162,31 +169,31 @@ class CreateIndexAction(Action):
         index_str = ", ".join(index_elems)
         query = f"CREATE INDEX {index_name} ON {table} ({index_str})"
         exe.execute(query)
-        with self.database.lock:
-            self.database.indexes.add(index_name)
+        with self.db.lock:
+            self.db.indexes.add(index_name)
 
 
 class DropIndexAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if not self.database.indexes:
+        with self.db.lock:
+            if not self.db.indexes:
                 return
-            index_name = self.rng.choice(list(self.database.indexes))
+            index_name = self.rng.choice(list(self.db.indexes))
             query = f"DROP INDEX {index_name}"
             exe.execute(query)
-            self.database.indexes.remove(index_name)
+            self.db.indexes.remove(index_name)
 
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if len(self.database.tables) > MAX_TABLES:
+        with self.db.lock:
+            if len(self.db.tables) > MAX_TABLES:
                 return
-            table_id = self.database.table_id
-            self.database.table_id += 1
+            table_id = self.db.table_id
+            self.db.table_id += 1
             table = Table(self.rng, table_id)
             table.create(exe)
-            self.database.tables.append(table)
+            self.db.tables.append(table)
 
 
 class DropTableAction(Action):
@@ -196,23 +203,23 @@ class DropTableAction(Action):
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if len(self.database.tables) <= 2:
+        with self.db.lock:
+            if len(self.db.tables) <= 2:
                 return
-            table_id = self.rng.randrange(len(self.database.tables))
-            table = self.database.tables[table_id]
+            table_id = self.rng.randrange(len(self.db.tables))
+            table = self.db.tables[table_id]
             query = f"DROP TABLE {table}"
             # TODO: Cascade
             exe.execute(query)
-            del self.database.tables[table_id]
+            del self.db.tables[table_id]
 
 
 class RenameTableAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if not self.database.tables:
+        with self.db.lock:
+            if not self.db.tables:
                 return
-            table = self.rng.choice(self.database.tables)
+            table = self.rng.choice(self.db.tables)
             old_name = str(table)
             table.rename += 1
             try:
@@ -237,20 +244,20 @@ class CommitRollbackAction(Action):
 
 class CreateViewAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if len(self.database.views) > MAX_VIEWS:
+        with self.db.lock:
+            if len(self.db.views) > MAX_VIEWS:
                 return
-            view_id = self.database.view_id
-            self.database.view_id += 1
+            view_id = self.db.view_id
+            self.db.view_id += 1
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
-            base_object = self.rng.choice(self.database.tables)
-            base_object2: Optional[Table] = self.rng.choice(self.database.tables)
+            base_object = self.rng.choice(self.db.tables)
+            base_object2: Optional[Table] = self.rng.choice(self.db.tables)
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
             view = View(self.rng, view_id, base_object, base_object2)
             view.create(exe)
-            self.database.views.append(view)
+            self.db.views.append(view)
 
 
 class DropViewAction(Action):
@@ -260,30 +267,30 @@ class DropViewAction(Action):
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if not self.database.views:
+        with self.db.lock:
+            if not self.db.views:
                 return
-            view_id = self.rng.randrange(len(self.database.views))
-            view = self.database.views[view_id]
+            view_id = self.rng.randrange(len(self.db.views))
+            view = self.db.views[view_id]
             if view.materialized:
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
                 query = f"DROP VIEW {view}"
             # TODO: Cascade
             exe.execute(query)
-            del self.database.views[view_id]
+            del self.db.views[view_id]
 
 
 class CreateRoleAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if len(self.database.roles) > MAX_ROLES:
+        with self.db.lock:
+            if len(self.db.roles) > MAX_ROLES:
                 return
-            role_id = self.database.role_id
-            self.database.role_id += 1
+            role_id = self.db.role_id
+            self.db.role_id += 1
             role = Role(role_id)
             role.create(exe)
-            self.database.roles.append(role)
+            self.db.roles.append(role)
 
 
 class DropRoleAction(Action):
@@ -293,25 +300,25 @@ class DropRoleAction(Action):
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if not self.database.roles:
+        with self.db.lock:
+            if not self.db.roles:
                 return
-            role_id = self.rng.randrange(len(self.database.roles))
-            role = self.database.roles[role_id]
+            role_id = self.rng.randrange(len(self.db.roles))
+            role = self.db.roles[role_id]
             query = f"DROP ROLE {role}"
             # TODO: Cascade
             exe.execute(query)
-            del self.database.roles[role_id]
+            del self.db.roles[role_id]
 
 
 class GrantPrivilegesAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.database.lock:
-            if not self.database.roles:
+        with self.db.lock:
+            if not self.db.roles:
                 return
-            role = self.rng.choice(self.database.roles)
+            role = self.rng.choice(self.db.roles)
             privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-            tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
+            tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
             table = self.rng.choice(tables_views)
             query = f"GRANT {privilege} ON {table} TO {role}"
             exe.execute(query)
@@ -323,11 +330,10 @@ class CancelAction(Action):
     def __init__(
         self,
         rng: random.Random,
-        database: Database,
-        complexity: str,
+        db: Database,
         worker_pids: List[int],
     ):
-        super().__init__(rng, database, complexity)
+        super().__init__(rng, db)
         self.worker_pids = worker_pids
 
     def run(self, exe: Executor) -> None:

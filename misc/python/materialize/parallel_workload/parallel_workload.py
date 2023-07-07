@@ -57,7 +57,7 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    database = Database(rng, seed)
+    database = Database(rng, seed, complexity, scenario)
     conn = pg8000.connect(host=host, port=port, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -93,7 +93,7 @@ def run(
             weights,
         )[0]
         actions = [
-            action_class(worker_rng, database, complexity)
+            action_class(worker_rng, database)
             for action_class in action_list.action_classes
         ]
         worker = Worker(
@@ -120,7 +120,7 @@ def run(
         worker_pids = [worker.pg_pid for worker in workers]
         worker = Worker(
             worker_rng,
-            [CancelAction(worker_rng, database, complexity, worker_pids)],
+            [CancelAction(worker_rng, database, worker_pids)],
             [1],
             end_time,
             False,

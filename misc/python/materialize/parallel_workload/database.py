@@ -183,6 +183,8 @@ class Role(DBObject):
 
 class Database:
     seed: str
+    complexity: str
+    scenario: str
     tables: List[Table]
     table_id: int
     views: List[View]
@@ -192,8 +194,10 @@ class Database:
     indexes: Set[str]
     lock: threading.Lock
 
-    def __init__(self, rng: random.Random, seed: str):
+    def __init__(self, rng: random.Random, seed: str, complexity: str, scenario: str):
         self.seed = seed
+        self.complexity = complexity
+        self.scenario = scenario
 
         self.tables = [Table(rng, i) for i in range(rng.randint(2, MAX_INITIAL_TABLES))]
         self.table_id = len(self.tables)
