@@ -770,7 +770,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
-          args: [--runtime=3000 --scenario=cancel]
+          args: [--runtime=3000, --scenario=cancel]
 
   - wait: ~
     continue_on_failure: true

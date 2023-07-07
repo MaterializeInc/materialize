@@ -48,7 +48,7 @@ def run(
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity} --scenario={scenario} (--host={host} --port={port}"
+        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity} --scenario={scenario} (--host={host} --port={port})"
     )
 
     end_time = (
