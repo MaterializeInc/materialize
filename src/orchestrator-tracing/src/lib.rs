@@ -117,6 +117,10 @@ use opentelemetry::KeyValue;
 /// orchestrators and does not belong in a foundational crate like `mz_ore`.
 #[derive(Debug, Clone, clap::Parser)]
 pub struct TracingCliArgs {
+    /// This arg has been replaced. Use the `mz_log_filter` system variable or
+    /// `--startup-log-filter` arg instead.
+    #[clap(long, env = "LOG_FILTER", value_name = "FILTER")]
+    pub log_filter: Option<CloneableEnvFilter>,
     /// Which tracing events to log to stderr.
     ///
     /// This value is a comma-separated list of filter directives. Each filter
@@ -144,11 +148,11 @@ pub struct TracingCliArgs {
     /// The default value for this option is "info".
     #[clap(
         long,
-        env = "LOG_FILTER",
+        env = "STARTUP_LOG_FILTER",
         value_name = "FILTER",
         default_value = "info"
     )]
-    pub log_filter: CloneableEnvFilter,
+    pub startup_log_filter: CloneableEnvFilter,
     /// The format to use for stderr log messages.
     #[clap(long, env = "LOG_FORMAT", default_value_t, value_enum)]
     pub log_format: LogFormat,
@@ -191,22 +195,26 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
+    /// This arg has been replaced. Use the `mz_opentelemetry_filter` system
+    /// variable or `--startup-opentelemetry-filter` arg instead.
+    #[clap(long, env = "OPENTELEMETRY_FILTER")]
+    pub opentelemetry_filter: Option<CloneableEnvFilter>,
     /// Which tracing events to export to the OpenTelemetry endpoint specified
     /// by `--opentelemetry-endpoint`.
     ///
     /// The syntax of this option is the same as the syntax of the
-    /// `--log-filter` option.
+    /// `--startup-log-filter` option.
     ///
     /// Requires that the `--opentelemetry-endpoint` option is specified.
     #[clap(
         long,
-        env = "OPENTELEMETRY_FILTER",
+        env = "STARTUP_OPENTELEMETRY_FILTER",
         requires = "opentelemetry-endpoint",
         // tokio_postgres has busy `debug` logging.
         // TODO(guswynn): switch tokio_postgres logging to `trace` upstream
         default_value = "tokio_postgres=info,debug"
     )]
-    pub opentelemetry_filter: CloneableEnvFilter,
+    pub startup_opentelemetry_filter: CloneableEnvFilter,
     /// Additional key-value pairs to send with all opentelemetry traces.
     ///
     /// Requires that the `--opentelemetry-endpoint` option is specified.
@@ -286,7 +294,7 @@ impl TracingCliArgs {
                     },
                     LogFormat::Json => StderrLogFormat::Json,
                 },
-                filter: self.log_filter.clone().into(),
+                filter: self.startup_log_filter.clone().into(),
             },
             opentelemetry: self.opentelemetry_endpoint.clone().map(|endpoint| {
                 OpenTelemetryConfig {
@@ -296,7 +304,7 @@ impl TracingCliArgs {
                         .iter()
                         .map(|header| (header.key.clone(), header.value.clone()))
                         .collect(),
-                    filter: self.opentelemetry_filter.clone().into(),
+                    filter: self.startup_opentelemetry_filter.clone().into(),
                     resource: Resource::new(
                         self.opentelemetry_resource
                             .iter()
@@ -401,12 +409,14 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let tokio_console_listen_addr = listen_addrs.get("tokio-console");
             let mut args = (service_config.args)(listen_addrs);
             let TracingCliArgs {
-                log_filter: _log_filter,
+                log_filter: _,
+                startup_log_filter: _,
                 log_prefix,
                 log_format,
                 opentelemetry_endpoint,
                 opentelemetry_header,
-                opentelemetry_filter,
+                opentelemetry_filter: _,
+                startup_opentelemetry_filter: _,
                 opentelemetry_resource,
                 opentelemetry_enabled,
                 #[cfg(feature = "tokio-console")]
@@ -433,7 +443,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                             .expect("opentelemetry-header had non-ascii value"),
                     ));
                 }
-                args.push(format!("--opentelemetry-filter={opentelemetry_filter}",));
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
