@@ -120,6 +120,14 @@ SHOW VIEWS;
  v2
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the object being renamed.
+
 ## See also
 
 - [`SHOW CREATE VIEW`](/sql/show-create-view)

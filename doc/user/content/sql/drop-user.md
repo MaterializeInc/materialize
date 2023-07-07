@@ -21,6 +21,14 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/
 
 `DROP USER` is an alias for [`DROP ROLE`](../drop-role).
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
+
 ## Related pages
 
 - [ALTER ROLE](../alter-role)

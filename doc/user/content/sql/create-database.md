@@ -49,6 +49,14 @@ materialize
 my_db
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEDB` privileges on the system.
+
 ## Related pages
 
 - [DROP DATABASE](../drop-database)

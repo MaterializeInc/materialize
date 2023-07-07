@@ -43,6 +43,15 @@ ERROR:  cannot drop materialize.public.winning_bids: still depended
 upon by catalog item 'materialize.public.wb_custom_art'
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped materialized view.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`CREATE MATERIALIZED VIEW`](../create-materialized-view)

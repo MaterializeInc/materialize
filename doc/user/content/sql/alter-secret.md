@@ -23,6 +23,14 @@ _value_ | The new value for the secret. The _value_ expression may not reference
 ALTER SECRET upstash_kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the secret being altered.
+
 ## Related pages
 
 - [`ALTER...RENAME`](/sql/alter-rename/)

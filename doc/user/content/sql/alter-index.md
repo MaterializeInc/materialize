@@ -25,6 +25,14 @@ the table's primary index, which was created at the same time as the table
 itself. Only after enabling the primary index can you enable any secondary
 indexes.
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the index.
+
 ## See also
 
 - [`SHOW INDEXES`](/sql/show-indexes)

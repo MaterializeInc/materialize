@@ -242,6 +242,17 @@ Colocating multiple sources onto the same cluster can be more resource efficient
 when you have many low-traffic sources that occasionally need some burst
 capacity.
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the source definition.
+
 ## Related pages
 
 - [Key Concepts](../../get-started/key-concepts/)

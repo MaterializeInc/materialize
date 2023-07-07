@@ -112,4 +112,12 @@ catch up to the last known time that the faster machines had computed.
 CREATE CLUSTER REPLICA c1.r1 SIZE = 'medium';
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing cluster.
+
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html

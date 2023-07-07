@@ -181,6 +181,14 @@ CREATE CLUSTER c1 REPLICAS ();
 You can later add replicas to this unmanaged cluster with [`CREATE CLUSTER
 REPLICA`](../create-cluster-replica).
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATECLUSTER` privileges on the system.
+
 ## See also
 
 - [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
