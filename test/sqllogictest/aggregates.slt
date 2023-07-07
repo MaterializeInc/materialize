@@ -15,10 +15,9 @@ ALTER SYSTEM SET enable_table_keys = true
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-SHOW enable_monotonic_oneshot_selects
+ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
 ----
-on
-COMPLETE 1
+COMPLETE 0
 
 statement ok
 CREATE TABLE t (a int, b int)

@@ -8,10 +8,9 @@
 # by the Apache License, Version 2.0.
 
 simple conn=mz_system,user=mz_system
-SHOW enable_monotonic_oneshot_selects
+ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
 ----
-on
-COMPLETE 1
+COMPLETE 0
 
 query I
 SELECT 42::uint2
