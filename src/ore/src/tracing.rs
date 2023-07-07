@@ -25,7 +25,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
 use http::HeaderMap;
