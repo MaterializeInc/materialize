@@ -2576,11 +2576,21 @@ impl<'a> ScalarType {
             Row::pack_slice(&[
                 Datum::Interval(Interval::new(0, 0, 0)),
                 Datum::Interval(Interval::new(1, 1, 1)),
+                Datum::Interval(Interval::new(-1, -1, -1)),
                 Datum::Interval(Interval::new(1, 0, 0)),
                 Datum::Interval(Interval::new(0, 1, 0)),
                 Datum::Interval(Interval::new(0, 0, 1)),
+                Datum::Interval(Interval::new(-1, 0, 0)),
+                Datum::Interval(Interval::new(0, -1, 0)),
+                Datum::Interval(Interval::new(0, 0, -1)),
                 Datum::Interval(Interval::new(i32::MIN, i32::MIN, i64::MIN)),
                 Datum::Interval(Interval::new(i32::MAX, i32::MAX, i64::MAX)),
+                Datum::Interval(Interval::new(i32::MIN, 0, 0)),
+                Datum::Interval(Interval::new(i32::MAX, 0, 0)),
+                Datum::Interval(Interval::new(0, i32::MIN, 0)),
+                Datum::Interval(Interval::new(0, i32::MAX, 0)),
+                Datum::Interval(Interval::new(0, 0, i64::MIN)),
+                Datum::Interval(Interval::new(0, 0, i64::MAX)),
             ])
         });
         static PGLEGACYCHAR: Lazy<Row> =

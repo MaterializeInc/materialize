@@ -1906,10 +1906,13 @@ fn timezone_interval_timestamp(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'stat
     if interval.months != 0 {
         Err(EvalError::InvalidTimezoneInterval)
     } else {
-        Ok(
-            DateTime::from_utc(b.unwrap_timestamp() - interval.duration_as_chrono(), Utc)
-                .try_into()?,
-        )
+        match b
+            .unwrap_timestamp()
+            .checked_sub_signed(interval.duration_as_chrono())
+        {
+            Some(sub) => Ok(DateTime::from_utc(sub, Utc).try_into()?),
+            None => Err(EvalError::TimestampOutOfRange),
+        }
     }
 }
 
