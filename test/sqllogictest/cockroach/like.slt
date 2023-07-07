@@ -1032,3 +1032,51 @@ query B
 SELECT ('foo' !~~* NULL) IS NULL;
 ----
 true
+
+query T multiline
+EXPLAIN SELECT * FROM mz_functions WHERE name LIKE 'ABS';
+----
+Explained Query:
+  Filter like["ABS"](#3)
+    Get mz_catalog.mz_functions
+
+Source mz_catalog.mz_functions
+  filter=(like["ABS"](#3))
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM mz_functions WHERE name ILIKE 'ABS';
+----
+Explained Query:
+  Filter ilike["ABS"](#3)
+    Get mz_catalog.mz_functions
+
+Source mz_catalog.mz_functions
+  filter=(ilike["ABS"](#3))
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM mz_functions WHERE name NOT ILIKE 'ABS';
+----
+Explained Query:
+  Filter NOT(ilike["ABS"](#3))
+    Get mz_catalog.mz_functions
+
+Source mz_catalog.mz_functions
+  filter=(NOT(ilike["ABS"](#3)))
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM mz_functions WHERE NOT (name ILIKE 'ABS');
+----
+Explained Query:
+  Filter NOT(ilike["ABS"](#3))
+    Get mz_catalog.mz_functions
+
+Source mz_catalog.mz_functions
+  filter=(NOT(ilike["ABS"](#3)))
+
+EOF

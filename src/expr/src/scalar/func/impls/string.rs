@@ -827,7 +827,12 @@ impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
 
 impl fmt::Display for IsLikeMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ~~", self.0.pattern.quoted())
+        write!(
+            f,
+            "{}like[{}]",
+            if self.0.case_insensitive { "i" } else { "" },
+            self.0.pattern.quoted()
+        )
     }
 }
 

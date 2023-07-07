@@ -598,7 +598,7 @@ t3.x != t3.y AND
 ----
 Explained Query:
   Project (#0..=#14, #0, #16..=#29, #0, #31..=#44, #0, #46..=#59, #0, #61..=#74, #0, #76..=#89, #0, #91..=#104, #0, #106..=#119, #0, #121..=#134, #0, #136..=#149, #0, #151..=#153) // { arity: 154 }
-    Filter (#109) IS NULL AND "a%" ~~(#125) AND (#137 = 71) AND (#95 <= 8) AND (#81 > 5) AND (#95 >= 3) AND NOT("b%" ~~(#69)) AND (#39 != #40) AND (#53 != #54) // { arity: 154 }
+    Filter (#109) IS NULL AND like["a%"](#125) AND (#137 = 71) AND (#95 <= 8) AND (#81 > 5) AND (#95 >= 3) AND NOT(like["b%"](#69)) AND (#39 != #40) AND (#53 != #54) // { arity: 154 }
       Join on=(eq(#0, #15, #30, #45, #60, #75, #90, #105, #120, #135, #150)) type=delta // { arity: 154 }
         implementation
           %0:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %1:big[#1]KA » %10:big[#10]KA
@@ -664,7 +664,7 @@ t0.s LIKE 'a%'
 ----
 Explained Query:
   Project (#0..=#14, #0, #16..=#27, #29, #30, #0, #32..=#42) // { arity: 42 }
-    Filter "a%" ~~(#13) // { arity: 43 }
+    Filter like["a%"](#13) // { arity: 43 }
       Join on=(eq(#0, #15, #31)) type=delta // { arity: 43 }
         implementation
           %0:big » %1:big[#1]KAe » %2:big[#2]KA
