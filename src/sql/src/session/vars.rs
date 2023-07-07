@@ -716,18 +716,19 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-pub static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
+static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
-pub static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("mz_log_filter"),
     value: &DEFAULT_LOGGING_FILTER,
     description: "Sets the filter to apply to stderr logging.",
     internal: true,
 });
 
-pub static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
-    Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
-pub static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> = Lazy::new(|| {
+    CloneableEnvFilter::from_str("tokio_postgres=info,debug").expect("valid EnvFilter")
+});
+static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("mz_opentelemetry_filter"),
     value: &DEFAULT_OPENTELEMETRY_FILTER,
     description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",

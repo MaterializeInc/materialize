@@ -166,7 +166,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             # version-gated argument below, using `self._meets_minimum_version`.
         ]
         if self.log_filter:
-            args += [f"--log-filter={self.log_filter}"]
+            args += [f"--system-parameter-default=mz_log_filter={self.log_filter}"]
         if self._meets_minimum_version("0.38.0"):
             args += [
                 "--clusterd-image",
