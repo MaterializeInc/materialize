@@ -233,6 +233,7 @@ class PostExecutionInconsistencyIgnoreFilter:
             ].successful
 
             dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
+            dfr_succeeds_but_ctf_fails = dfr_successful and not ctf_successful
 
             if dfr_fails_but_ctf_succeeds and self._uses_shortcut_optimization(
                 query_template.select_expressions, contains_aggregation
@@ -247,6 +248,15 @@ class PostExecutionInconsistencyIgnoreFilter:
                     [query_template.where_expression], contains_aggregation
                 )
             ):
+                # see https://github.com/MaterializeInc/materialize/issues/17189
+                return YesIgnore("#17189")
+
+            if (
+                dfr_succeeds_but_ctf_fails
+                and query_template.where_expression is not None
+            ):
+                # Constant folding may touch further rows than the selected subset and thereby run into evaluation
+                # errors.
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return YesIgnore("#17189")
 

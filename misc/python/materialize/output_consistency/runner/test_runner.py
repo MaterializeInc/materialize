@@ -104,7 +104,7 @@ class ConsistencyTestRunner:
 
             if expression is None:
                 test_summary.global_warnings.append(
-                    f"Failed to generate an expression for operation {operation}!"
+                    f"Failed to generate an expression for operation: {operation}"
                 )
                 continue
 

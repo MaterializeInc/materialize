@@ -23,6 +23,7 @@ from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+    ALL_ROWS_SELECTION,
     QueryColumnByIndexSelection,
     TableColumnByNameSelection,
 )
@@ -45,6 +46,11 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         else:
             query_column_selection = QueryColumnByIndexSelection({error.col_index})
 
+        # do not restrict the input to selected rows when a where clause is present;
+        # there is no guarantee that the database filters the rows by the specified row indices before evaluating the
+        # rest of the where condition such that the where condition evaluation may fail on rows outside the selection
+        apply_row_filter = error.query_execution.query_template.where_expression is None
+
         table_column_selection = TableColumnByNameSelection(
             self.__get_involved_column_names(query_template, query_column_selection)
         )
@@ -52,11 +58,11 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.start_section("Minimal code for reproduction", collapsed=True)
         self.print_separator_line()
         self.__print_setup_code_for_error(
-            query_template, error.strategy1, table_column_selection
+            query_template, error.strategy1, table_column_selection, apply_row_filter
         )
         self.print_separator_line()
         self.__print_setup_code_for_error(
-            query_template, error.strategy2, table_column_selection
+            query_template, error.strategy2, table_column_selection, apply_row_filter
         )
         self.print_separator_line()
         self.__print_query_of_error(
@@ -79,12 +85,16 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         query_template: QueryTemplate,
         evaluation_strategy: EvaluationStrategy,
         table_column_selection: TableColumnByNameSelection,
+        apply_row_filter: bool,
     ) -> None:
         self._print_text(f"Setup for evaluation strategy '{evaluation_strategy.name}':")
+        row_selection = (
+            query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
+        )
         setup_code_lines = evaluation_strategy.generate_source_for_storage_layout(
             self.input_data,
             query_template.storage_layout,
-            query_template.row_selection,
+            row_selection,
             table_column_selection,
             override_db_object_name=evaluation_strategy.simple_db_object_name,
         )
