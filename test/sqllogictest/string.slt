@@ -904,7 +904,7 @@ SELECT lpad('str', 5, 'đẹp')
 ----
 đẹstr
 
-query error db error: ERROR: requested length too large
+query error requested length too large
 SELECT lpad('', 2147483647)
 
 
@@ -1360,7 +1360,7 @@ SELECT repeat('a', -1)
 ----
 (empty)
 
-query error db error: ERROR: requested length too large
+query error requested length too large
 SELECT repeat('a', 2147483647)
 
 # Check for char cmp validity, which ignores white space
