@@ -120,3 +120,7 @@ query T
 SELECT TIMESTAMPTZ '2020-11-01 01:00:00 America/New_York'
 ----
 2020-11-01 06:00:00+00
+
+# Regression for 20324
+query error db error: ERROR: timestamp out of range
+SELECT pg_catalog.timezone(-INTERVAL '1' MINUTE, TIMESTAMP '95143-12-31 23:59:59' + INTERVAL '167 MILLENNIUM')
