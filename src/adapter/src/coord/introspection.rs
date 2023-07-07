@@ -18,6 +18,7 @@
 //!
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
+use mz_expr::visit::VisitChildren;
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr};
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
@@ -32,41 +33,35 @@ use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::{rbac, AdapterError};
 
-/// Returns whether a scalar expression is either a constant or an unmateriazable function. We err on returning false.
-fn constant_or_unmaterializable_scalar(scalar: &MirScalarExpr) -> bool {
+/// Returns whether a scalar expression can run an expensive function
+fn scalar_can_run_expensive_function(scalar: &MirScalarExpr) -> bool {
     match scalar {
         mz_expr::MirScalarExpr::Column(_)
         | mz_expr::MirScalarExpr::Literal(_, _)
-        | mz_expr::MirScalarExpr::CallUnmaterializable(_) => true,
+        | mz_expr::MirScalarExpr::CallUnmaterializable(_) => false,
         mz_expr::MirScalarExpr::CallUnary { .. }
         | mz_expr::MirScalarExpr::CallBinary { .. }
-        | mz_expr::MirScalarExpr::CallVariadic { .. }
-        | mz_expr::MirScalarExpr::If { .. } => false,
+        | mz_expr::MirScalarExpr::CallVariadic { .. } => true,
+        mz_expr::MirScalarExpr::If { cond, then, els } => {
+            scalar_can_run_expensive_function(cond)
+                || scalar_can_run_expensive_function(then)
+                || scalar_can_run_expensive_function(els)
+        }
     }
 }
 
-/// Returns whether a expression can resolve by returning constants or invoking unmaterializable functions.
-/// We err on returning false. The resulting expression should be very cheap to evaluate:
-/// ideally not creating a dataflow at all when optimized.
-fn constant_or_unmaterializable(expr: &MirRelationExpr) -> bool {
-    match expr {
-        MirRelationExpr::ArrangeBy { input, keys } => {
-            constant_or_unmaterializable(input)
-                && keys
-                    .iter()
-                    .all(|keys| keys.iter().all(constant_or_unmaterializable_scalar))
-        }
-        MirRelationExpr::Constant { .. } | MirRelationExpr::Get { .. } => true,
-        MirRelationExpr::Map { input, scalars } => {
-            constant_or_unmaterializable(input)
-                && scalars.iter().all(constant_or_unmaterializable_scalar)
-        }
-        MirRelationExpr::Let { value, body, .. } => {
-            constant_or_unmaterializable(value) && constant_or_unmaterializable(body)
-        }
-        MirRelationExpr::Project { input, .. } => constant_or_unmaterializable(input),
+/// Returns whether a expression can run an expensive function. We err on returning false.
+/// The goal is to be a heuristic for "this expression is cheap to evaluate:
+/// ideally not creating a dataflow at all when optimized".
+fn expr_can_run_expensive_function(expr: &MirRelationExpr) -> bool {
+    // FlapMap has a table function while all other constructs use MirScalarExpr to run a function
+    let mut result = match expr {
+        MirRelationExpr::FlatMap { .. } => true,
         _ => false,
-    }
+    };
+    expr.visit_scalars(&mut |scalar| result = result || scalar_can_run_expensive_function(scalar));
+    expr.visit_children(|e| result = result || expr_can_run_expensive_function(e));
+    result
 }
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
@@ -76,9 +71,18 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
-    let depends_on = match plan {
-        Plan::Select(plan) => plan.source.depends_on(),
-        Plan::Subscribe(plan) => plan.from.depends_on(),
+    let (depends_on, can_run_expensive_function) = match plan {
+        Plan::Select(plan) => (
+            plan.source.depends_on(),
+            expr_can_run_expensive_function(&plan.source),
+        ),
+        Plan::Subscribe(plan) => (
+            plan.from.depends_on(),
+            match &plan.from {
+                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Query { expr, desc: _ } => expr_can_run_expensive_function(expr),
+            },
+        ),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -160,7 +164,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     // Check to make sure our iterator contains atleast one element, this prevents us
     // from always running empty queries on the mz_introspection cluster.
     let mut depends_on = depends_on.into_iter().peekable();
-    let non_empty = depends_on.peek().is_some();
+    let has_dependencies = depends_on.peek().is_some();
 
     // Make sure we only depend on the system catalog, and nothing we depend on is a
     // per-replica object, that requires being run a specific replica.
@@ -174,9 +178,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         system_only && non_replica
     });
 
-    let needs_no_active_cluster =
-        matches!(plan, Plan::Select(plan) if constant_or_unmaterializable(&plan.source));
-    if (non_empty && valid_dependencies) || needs_no_active_cluster {
+    if (has_dependencies && valid_dependencies)
+        || (!has_dependencies && !can_run_expensive_function)
+    {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
