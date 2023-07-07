@@ -10,10 +10,8 @@
 import random
 from typing import List, Optional, Tuple, Type
 
-import pg8000
-
 from materialize.parallel_workload.database import Database, DBObject, Table, View
-from materialize.parallel_workload.execute import QueryError, execute
+from materialize.parallel_workload.executor import Executor
 
 MAX_TABLES = 20
 MAX_VIEWS = 20
@@ -29,7 +27,7 @@ class Action:
         self.database = database
         self.complexity = complexity
 
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         raise NotImplementedError
 
     def errors_to_ignore(self) -> List[str]:
@@ -39,6 +37,7 @@ class Action:
                 "cached plan must not change result type",
                 "violates not-null constraint",
                 "result exceeds max size of",
+                "unknown catalog item",  # https://github.com/MaterializeInc/materialize/issues/20381
             ]
         return []
 
@@ -52,69 +51,99 @@ class SelectAction(Action):
         if self.complexity == "ddl":
             result.extend(
                 [
-                    "unknown catalog item",
                     "does not exist",
                 ]
             )
         return result
 
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
         table = self.rng.choice(tables_views)
-        column = self.rng.choice(table.columns)
-        table2 = self.rng.choice(tables_views)
-        table_name = str(table)
-        table2_name = str(table2)
-        columns = [c for c in table2.columns if c.data_type == column.data_type]
-        if table_name != table2_name and columns:
-            column2 = self.rng.choice(columns)
-            query = f"SELECT * FROM {table_name} JOIN {table2_name} ON {column} = {column2} LIMIT 1"
-        else:
-            if self.rng.choice([True, False]):
-                expressions = ", ".join(
-                    str(column)
-                    for column in random.sample(
-                        table.columns, k=random.randint(1, len(table.columns))
-                    )
+        # Joins hang too often in clusterd, even with LIMIT 1 and statement_timeout, causing OoM
+        # column = self.rng.choice(table.columns)
+        # table2 = self.rng.choice(tables_views)
+        # table_name = str(table)
+        # table2_name = str(table2)
+        # columns = [c for c in table2.columns if c.data_type == column.data_type]
+        # if table_name != table2_name and columns:
+        #     column2 = self.rng.choice(columns)
+        #     query = f"SELECT * FROM {table_name} JOIN {table2_name} ON {column} = {column2} LIMIT 1"
+        # else:
+        if self.rng.choice([True, False]):
+            expressions = ", ".join(
+                str(column)
+                for column in random.sample(
+                    table.columns, k=random.randint(1, len(table.columns))
                 )
-            else:
-                expressions = "*"
-            query = f"SELECT {expressions} FROM {table}"
-        execute(cur, query)
-        cur.fetchall()
+            )
+        else:
+            expressions = "*"
+        query = f"SELECT {expressions} FROM {table}"
+        exe.execute(query)
+        exe.cur.fetchall()
 
 
 class InsertAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        result = [
-            # TODO: Remember table we used in current transaction in Executor,
-            # then only run queries against it during the current transaction
-            "writes to a single table",
-        ] + super().errors_to_ignore()
-        if self.complexity == "ddl":
-            result.extend(
-                [
-                    "unknown catalog item",
-                ]
-            )
-        return result
+    def run(self, exe: Executor) -> None:
+        table = None
+        if exe.insert_table != None:
+            for t in self.database.tables:
+                if t.table_id == exe.insert_table:
+                    table = t
+                    break
+        if not table:
+            table = self.rng.choice(self.database.tables)
 
-    def run(self, cur: pg8000.Cursor) -> None:
-        table = self.rng.choice(self.database.tables)
         column_names = ", ".join(column.name() for column in table.columns)
         column_values = ", ".join(column.value(self.rng) for column in table.columns)
         query = f"INSERT INTO {table} ({column_names}) VALUES ({column_values})"
-        execute(cur, query)
+        exe.execute(query)
+        exe.insert_table = table.table_id
+
+
+class UpdateAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [
+            "canceling statement due to statement timeout",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        table = None
+        if exe.insert_table != None:
+            for t in self.database.tables:
+                if t.table_id == exe.insert_table:
+                    table = t
+                    break
+        if not table:
+            table = self.rng.choice(self.database.tables)
+
+        column1 = table.columns[0]
+        column2 = self.rng.choice(table.columns)
+        query = f"UPDATE {table} SET {column2.name()} = {column2.value(self.rng, True)} WHERE {column1.name()} = {column1.value(self.rng, True)}"
+        exe.execute(query)
+        exe.insert_table = table.table_id
+
+
+class DeleteAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [
+            "canceling statement due to statement timeout",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        table = self.rng.choice(self.database.tables)
+        column = table.columns[0]
+        query = f"DELETE FROM {table} WHERE {column.name()} = {column.value(self.rng, True)}"
+        exe.execute(query)
 
 
 class CreateIndexAction(Action):
     def errors_to_ignore(self) -> List[str]:
         return [
-            "unknown catalog item",
             "already exists",
         ] + super().errors_to_ignore()
 
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
         table = self.rng.choice(tables_views)
         columns = self.rng.sample(table.columns, len(table.columns))
@@ -126,24 +155,19 @@ class CreateIndexAction(Action):
             index_elems.append(f"{column.name()} {order}")
         index_str = ", ".join(index_elems)
         query = f"CREATE INDEX {index_name} ON {table} ({index_str})"
-        execute(cur, query)
+        exe.execute(query)
         with self.database.lock:
             self.database.indexes.add(index_name)
 
 
 class DropIndexAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [
-            "unknown catalog item",
-        ] + super().errors_to_ignore()
-
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         with self.database.lock:
             if not self.database.indexes:
                 return
             index_name = self.rng.choice(list(self.database.indexes))
             query = f"DROP INDEX {index_name}"
-            execute(cur, query)
+            exe.execute(query)
             self.database.indexes.remove(index_name)
 
 
@@ -153,12 +177,12 @@ class CreateTableAction(Action):
             "already exists",
         ] + super().errors_to_ignore()
 
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         with self.database.lock:
             if len(self.database.tables) > MAX_TABLES:
                 return
             table = Table(self.rng, len(self.database.tables))
-            table.create(cur)
+            table.create(exe)
             self.database.tables.append(table)
 
 
@@ -168,7 +192,7 @@ class DropTableAction(Action):
             "still depended upon by",
         ] + super().errors_to_ignore()
 
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         with self.database.lock:
             if len(self.database.tables) <= 2:
                 return
@@ -176,12 +200,12 @@ class DropTableAction(Action):
             table = self.database.tables[table_id]
             query = f"DROP TABLE {table}"
             # TODO: Cascade
-            execute(cur, query)
+            exe.execute(query)
             del self.database.tables[table_id]
 
 
 class RenameTableAction(Action):
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         with self.database.lock:
             if not self.database.tables:
                 return
@@ -189,31 +213,23 @@ class RenameTableAction(Action):
             old_name = str(table)
             table.rename += 1
             try:
-                execute(cur, f"ALTER TABLE {old_name} RENAME TO {table}")
+                exe.execute(f"ALTER TABLE {old_name} RENAME TO {table}")
             finally:
                 table.rename -= 1
 
 
 class TransactionIsolationAction(Action):
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         level = self.rng.choice(["SERIALIZABLE", "STRICT SERIALIZABLE"])
-        execute(cur, f"SET TRANSACTION_ISOLATION TO '{level}'")
+        exe.set_isolation(level)
 
 
 class CommitRollbackAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [
-            "unknown catalog item",  # https://github.com/MaterializeInc/materialize/issues/20381
-        ]
-
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         if self.rng.choice([True, False]):
-            try:
-                cur.connection.commit()
-            except Exception as e:
-                raise QueryError(str(e), "commit")
+            exe.commit()
         else:
-            cur.connection.rollback()
+            exe.rollback()
 
 
 class CreateViewAction(Action):
@@ -222,7 +238,7 @@ class CreateViewAction(Action):
             "already exists",
         ] + super().errors_to_ignore()
 
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         with self.database.lock:
             if len(self.database.views) > MAX_VIEWS:
                 return
@@ -233,7 +249,7 @@ class CreateViewAction(Action):
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
             view = View(self.rng, len(self.database.views), base_object, base_object2)
-            view.create(cur)
+            view.create(exe)
             self.database.views.append(view)
 
 
@@ -241,10 +257,9 @@ class DropViewAction(Action):
     def errors_to_ignore(self) -> List[str]:
         return [
             "still depended upon by",
-            "unknown catalog item",
         ] + super().errors_to_ignore()
 
-    def run(self, cur: pg8000.Cursor) -> None:
+    def run(self, exe: Executor) -> None:
         with self.database.lock:
             if not self.database.views:
                 return
@@ -255,7 +270,7 @@ class DropViewAction(Action):
             else:
                 query = f"DROP VIEW {view}"
             # TODO: Cascade
-            execute(cur, query)
+            exe.execute(query)
             del self.database.views[view_id]
 
 
@@ -273,13 +288,22 @@ class ActionList:
 
 
 read_action_list = ActionList(
-    [(SelectAction, 90), (CommitRollbackAction, 1)],
+    [(SelectAction, 100), (CommitRollbackAction, 1)],
     autocommit=False,
 )
 
 write_action_list = ActionList(
-    [(InsertAction, 10), (CommitRollbackAction, 1)],
+    [(InsertAction, 100), (CommitRollbackAction, 1)],
     autocommit=False,
+)
+
+dml_nontrans_action_list = ActionList(
+    [
+        (DeleteAction, 10),
+        (UpdateAction, 10)
+        # (TransactionIsolationAction, 1),
+    ],
+    autocommit=True,  # deletes can't be inside of transactions
 )
 
 ddl_action_list = ActionList(

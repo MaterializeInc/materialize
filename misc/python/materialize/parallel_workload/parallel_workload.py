@@ -22,11 +22,12 @@ import pg8000
 from materialize.parallel_workload.action import (
     Action,
     ddl_action_list,
+    dml_nontrans_action_list,
     read_action_list,
     write_action_list,
 )
 from materialize.parallel_workload.database import Database
-from materialize.parallel_workload.execute import initialize_logging
+from materialize.parallel_workload.executor import initialize_logging
 from materialize.parallel_workload.worker import Worker
 
 SEED_RANGE = 1_000_000
@@ -69,9 +70,15 @@ def run(
     threads = []
     for i in range(num_threads):
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        weights = [60, 30, 10] if complexity == "ddl" else [60, 30, 0]
+        weights = [60, 30, 30, 10] if complexity == "ddl" else [60, 30, 30, 0]
         action_list = worker_rng.choices(
-            [read_action_list, write_action_list, ddl_action_list], weights
+            [
+                read_action_list,
+                write_action_list,
+                dml_nontrans_action_list,
+                ddl_action_list,
+            ],
+            weights,
         )[0]
         actions = [
             action_class(worker_rng, database, complexity)

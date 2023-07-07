@@ -17,7 +17,7 @@ class DataType:
         raise NotImplementedError
 
     @staticmethod
-    def value(rng: random.Random) -> Any:
+    def value(rng: random.Random, in_query: bool = False) -> Any:
         raise NotImplementedError
 
 
@@ -27,7 +27,7 @@ class Boolean(DataType):
         return "boolean"
 
     @staticmethod
-    def value(rng: random.Random) -> Any:
+    def value(rng: random.Random, in_query: bool = False) -> Any:
         return rng.choice(["TRUE", "FALSE"])
 
 
@@ -37,7 +37,7 @@ class Smallint(DataType):
         return "smallint"
 
     @staticmethod
-    def value(rng: random.Random) -> Any:
+    def value(rng: random.Random, in_query: bool = False) -> Any:
         if rng.randrange(10) == 0:
             return -32768
         if rng.randrange(10) == 0:
@@ -51,7 +51,7 @@ class Int(DataType):
         return "int"
 
     @staticmethod
-    def value(rng: random.Random) -> Any:
+    def value(rng: random.Random, in_query: bool = False) -> Any:
         if rng.randrange(10) == 0:
             return -2147483648
         if rng.randrange(10) == 0:
@@ -65,7 +65,7 @@ class Bigint(DataType):
         return "bigint"
 
     @staticmethod
-    def value(rng: random.Random) -> Any:
+    def value(rng: random.Random, in_query: bool = False) -> Any:
         if rng.randrange(10) == 0:
             return -9223372036854775808
         if rng.randrange(10) == 0:
@@ -79,8 +79,9 @@ class Text(DataType):
         return "text"
 
     @staticmethod
-    def value(rng: random.Random) -> Any:
-        return rng.randint(-100, 100)
+    def value(rng: random.Random, in_query: bool = False) -> Any:
+        result = rng.randint(-100, 100)
+        return f"'{result}'" if in_query else result
 
 
 DATA_TYPES = DataType.__subclasses__()

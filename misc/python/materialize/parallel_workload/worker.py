@@ -16,7 +16,7 @@ from typing import DefaultDict, List, Type
 import pg8000
 
 from materialize.parallel_workload.action import Action
-from materialize.parallel_workload.execute import QueryError
+from materialize.parallel_workload.executor import Executor, QueryError
 
 
 class Worker:
@@ -50,17 +50,18 @@ class Worker:
         )
         self.conn.autocommit = self.autocommit
         with self.conn.cursor() as cur:
-            cur.execute("SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'")
+            exe = Executor(cur)
+            exe.set_isolation("SERIALIZABLE")
             while time.time() < self.end_time:
                 action = self.rng.choices(self.actions, self.weights)[0]
                 self.num_queries += 1
                 try:
-                    action.run(cur)
+                    action.run(exe)
                 except QueryError as e:
                     for error in action.errors_to_ignore():
                         if error in e.msg:
                             self.ignored_errors[error][type(action)] += 1
-                            cur.connection.rollback()
+                            exe.rollback()
                             break
                     else:
                         thread_name = threading.current_thread().getName()

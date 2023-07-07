@@ -12,10 +12,8 @@ import threading
 from copy import copy
 from typing import List, Optional, Set, Type
 
-import pg8000
-
 from materialize.parallel_workload.data_type import DATA_TYPES, DataType
-from materialize.parallel_workload.execute import execute
+from materialize.parallel_workload.executor import Executor
 
 MAX_COLUMNS = 20
 MAX_INITIAL_TABLES = 10
@@ -53,8 +51,8 @@ class Column:
     def set_name(self, new_name: str) -> None:
         self._name = new_name
 
-    def value(self, rng: random.Random) -> str:
-        return str(self.data_type.value(rng))
+    def value(self, rng: random.Random, in_query: bool = False) -> str:
+        return str(self.data_type.value(rng, in_query))
 
     def create(self) -> str:
         result = f"{self.name()} {self.data_type.name()}"
@@ -86,13 +84,13 @@ class Table(DBObject):
             return f"t{self.table_id}_{self.rename}"
         return f"t{self.table_id}"
 
-    def create(self, cur: pg8000.Cursor) -> None:
+    def create(self, exe: Executor) -> None:
         query = f"CREATE TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
-        execute(cur, query)
+        exe.execute(query)
         query = f"CREATE DEFAULT INDEX ON {self}"
-        execute(cur, query)
+        exe.execute(query)
 
 
 class View(DBObject):
@@ -143,7 +141,7 @@ class View(DBObject):
     def __str__(self) -> str:
         return f"v{self.view_id}"
 
-    def create(self, cur: pg8000.Cursor) -> None:
+    def create(self, exe: Executor) -> None:
         if self.materialized:
             query = "CREATE MATERIALIZED VIEW"
         else:
@@ -160,9 +158,9 @@ class View(DBObject):
             else:
                 query += " ON TRUE"
 
-        execute(cur, query)
+        exe.execute(query)
         query = f"CREATE DEFAULT INDEX ON {self}"
-        execute(cur, query)
+        exe.execute(query)
 
 
 class Database:
@@ -192,16 +190,16 @@ class Database:
     def __str__(self) -> str:
         return f"db_pw_{self.seed}"
 
-    def drop(self, cur: pg8000.Cursor) -> None:
-        execute(cur, f"DROP DATABASE IF EXISTS {self}")
+    def drop(self, exe: Executor) -> None:
+        exe.execute(f"DROP DATABASE IF EXISTS {self}")
 
-    def create(self, cur: pg8000.Cursor) -> None:
-        self.drop(cur)
-        execute(cur, f"CREATE DATABASE {self}")
+    def create(self, exe: Executor) -> None:
+        self.drop(exe)
+        exe.execute(f"CREATE DATABASE {self}")
 
-    def create_relations(self, cur: pg8000.Cursor) -> None:
+    def create_relations(self, exe: Executor) -> None:
         for table in self.tables:
-            table.create(cur)
+            table.create(exe)
 
         for view in self.views:
-            view.create(cur)
+            view.create(exe)
