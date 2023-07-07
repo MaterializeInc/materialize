@@ -64,7 +64,6 @@ def run(
     )
     system_conn.autocommit = True
     with system_conn.cursor() as cur:
-        cur.execute("ALTER SYSTEM SET enable_managed_clusters = true")
         cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
         cur.execute("ALTER SYSTEM SET max_tables = 105")
         cur.execute("ALTER SYSTEM SET max_materialized_views = 105")

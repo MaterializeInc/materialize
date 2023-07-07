@@ -1265,7 +1265,6 @@ feature_flags!(
         enable_within_timestamp_order_by_in_subscribe,
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
-    (enable_managed_clusters, "managed clusters"),
     (
         enable_cardinality_estimates,
         "join planning with cardinality estimates"

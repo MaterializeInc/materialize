@@ -14,12 +14,6 @@ mode cockroach
 # Start from a pristine state
 reset-server
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_managed_clusters = true;
-----
-COMPLETE 0
-
-
 statement ok
 CREATE CLUSTER foo SIZE '1'
 
@@ -440,23 +434,6 @@ ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
 
 statement ok
 DROP CLUSTER foo
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_managed_clusters = false;
-----
-COMPLETE 0
-
-statement error db error: ERROR: managed clusters is not supported
-CREATE CLUSTER foo MANAGED, SIZE '1'
-
-statement ok
-CREATE CLUSTER foo REPLICAS ()
-
-statement error db error: ERROR: managed clusters is not supported
-ALTER CLUSTER foo RESET (MANAGED)
-
-statement error db error: ERROR: managed clusters is not supported
-ALTER CLUSTER foo SET (MANAGED)
 
 # Restore pristine server state
 reset-server
