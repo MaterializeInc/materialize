@@ -901,6 +901,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .collect(),
                 availability_zones: args.availability_zone,
                 connection_context: ConnectionContext::from_cli_args(
+                    &args.tracing.startup_log_filter,
                     args.aws_external_id_prefix,
                     secrets_reader,
                 ),

@@ -317,7 +317,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             tracing_handle: Arc::clone(&tracing_handle),
         },
         SYSTEM_TIME.clone(),
-        ConnectionContext::from_cli_args(args.aws_external_id, secrets_reader),
+        ConnectionContext::from_cli_args(
+            &args.tracing.startup_log_filter,
+            args.aws_external_id,
+            secrets_reader,
+        ),
         StorageInstanceContext::new(args.scratch_directory)?,
     )?;
     info!(
