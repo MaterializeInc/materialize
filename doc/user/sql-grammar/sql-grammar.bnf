@@ -102,7 +102,7 @@ create_sink_kafka ::=
     ('IN CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' kafka_sink_connection
-    ('KEY' '(' key_column ( ',' key_column )* ')')?
+    ('KEY' '(' key_column ( ',' key_column )* ')' 'NOT ENFORCED'?)?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?

@@ -363,7 +363,7 @@ Field            | Type        | Meaning
 `type`           | [`text`]    | The type of the sink: `kafka`.
 `connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
 `size`           | [`text`]    | The size of the sink.
-`envelope_type`  | [`text`]    | The [envelope](/sql/create-sink/#envelopes) of the sink: `upsert`, or `debezium`.
+`envelope_type`  | [`text`]    | The [envelope](/sql/create-sink/kafka/#envelopes) of the sink: `upsert`, or `debezium`.
 `cluster_id`     | [`text`]    | The ID of the cluster maintaining the sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`]    | The role ID of the owner of the sink. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
