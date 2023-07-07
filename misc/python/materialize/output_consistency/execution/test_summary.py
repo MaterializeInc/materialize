@@ -39,8 +39,8 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
 
     def all_passed(self) -> bool:
         return (
-            self.count_successful_query_templates
-            == self.count_executed_query_templates
+            self.count_executed_query_templates
+            == self.count_successful_query_templates
             + self.count_ignored_error_query_templates
         )
 
