@@ -725,9 +725,8 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
     internal: true,
 });
 
-static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> = Lazy::new(|| {
-    CloneableEnvFilter::from_str("tokio_postgres=info,debug").expect("valid EnvFilter")
-});
+static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
+    Lazy::new(|| CloneableEnvFilter::from_str("off").expect("valid EnvFilter"));
 static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("mz_opentelemetry_filter"),
     value: &DEFAULT_OPENTELEMETRY_FILTER,
@@ -3644,6 +3643,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
+        || is_tracing_var(name)
 }
 
 /// Returns whether the named variable is a storage configuration parameter.
@@ -3655,6 +3655,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
+        || is_tracing_var(name)
 }
 
 fn is_upsert_rocksdb_config_var(name: &str) -> bool {

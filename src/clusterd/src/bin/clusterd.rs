@@ -261,6 +261,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         mz_http_util::handle_prometheus(&metrics_registry).await
                     }),
                 )
+                .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
                 .route(
                     "/api/opentelemetry/config",
                     routing::put({

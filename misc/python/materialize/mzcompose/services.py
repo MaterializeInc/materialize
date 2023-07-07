@@ -269,7 +269,7 @@ class Clusterd(Service):
         config.update(
             {
                 "command": command,
-                "ports": [2100, 2101],
+                "ports": [2100, 2101, 6878],
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,
             }

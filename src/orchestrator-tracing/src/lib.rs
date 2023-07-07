@@ -93,7 +93,7 @@ use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics,
 };
-use mz_ore::cli::{DefaultTrue, KeyValueArg};
+use mz_ore::cli::KeyValueArg;
 #[cfg(feature = "tokio-console")]
 use mz_ore::netio::SocketAddr;
 #[cfg(feature = "tokio-console")]
@@ -161,19 +161,6 @@ pub struct TracingCliArgs {
     /// Only respected when `--log-format` is `text`.
     #[clap(long, env = "LOG_PREFIX")]
     pub log_prefix: Option<String>,
-    /// Whether OpenTelemetry tracing is enabled by default.
-    ///
-    /// OpenTelemetry tracing can be dynamically toggled during runtime via the
-    /// internal HTTP server.
-    ///
-    /// Requires that the `--opentelemetry-endpoint` option is specified.
-    #[clap(
-        long,
-        env = "OPENTELEMETRY_ENABLED",
-        default_value_t = DefaultTrue::default(),
-        requires = "opentelemetry-endpoint"
-    )]
-    pub opentelemetry_enabled: DefaultTrue,
     /// Export OpenTelemetry tracing events to the provided endpoint.
     ///
     /// The specified endpoint should speak the OTLP/HTTP protocol. If the
@@ -210,9 +197,7 @@ pub struct TracingCliArgs {
         long,
         env = "STARTUP_OPENTELEMETRY_FILTER",
         requires = "opentelemetry-endpoint",
-        // tokio_postgres has busy `debug` logging.
-        // TODO(guswynn): switch tokio_postgres logging to `trace` upstream
-        default_value = "tokio_postgres=info,debug"
+        default_value = "off"
     )]
     pub startup_opentelemetry_filter: CloneableEnvFilter,
     /// Additional key-value pairs to send with all opentelemetry traces.
@@ -311,7 +296,6 @@ impl TracingCliArgs {
                             .cloned()
                             .map(|kv| KeyValue::new(kv.key, kv.value)),
                     ),
-                    start_enabled: self.opentelemetry_enabled.value,
                 }
             }),
             #[cfg(feature = "tokio-console")]
@@ -418,7 +402,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 opentelemetry_filter: _,
                 startup_opentelemetry_filter: _,
                 opentelemetry_resource,
-                opentelemetry_enabled,
                 #[cfg(feature = "tokio-console")]
                     tokio_console_listen_addr: _,
                 #[cfg(feature = "tokio-console")]
@@ -446,7 +429,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
-                args.push(format!("--opentelemetry-enabled={}", opentelemetry_enabled));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(tokio_console_listen_addr) = tokio_console_listen_addr {

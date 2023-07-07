@@ -445,8 +445,6 @@ impl Coordinator {
             }
             if update_tracing_config {
                 self.update_tracing_config();
-                self.update_compute_config();
-                self.update_storage_config();
             }
         }
         .await;
@@ -664,7 +662,7 @@ impl Coordinator {
     }
 
     fn update_tracing_config(&mut self) {
-        let tracing = self.catalog.tracing_config();
+        let tracing = self.catalog().tracing_config();
         tracing.apply(&self.tracing_handle);
     }
 

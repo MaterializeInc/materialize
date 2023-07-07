@@ -368,7 +368,6 @@ impl Listeners {
                     headers: http::HeaderMap::new(),
                     filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
                     resource: opentelemetry::sdk::resource::Resource::default(),
-                    start_enabled: true,
                 }),
                 #[cfg(feature = "tokio-console")]
                 tokio_console: None,

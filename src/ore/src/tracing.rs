@@ -132,8 +132,6 @@ pub struct OpenTelemetryConfig {
     /// `opentelemetry::sdk::resource::Resource` to include with all
     /// traces.
     pub resource: Resource,
-    /// Whether to startup with the dynamic OpenTelemetry layer enabled
-    pub start_enabled: bool,
 }
 
 /// Configuration of the [Tokio console] integration.
@@ -326,15 +324,12 @@ where
             Directive::from_str("hyper=off").expect("valid directive"),
         ];
 
-        let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
+        let (filter, filter_handle) = reload::Layer::new({
             let mut filter = otel_config.filter;
             for directive in &default_directives {
                 filter = filter.add_directive(directive.clone());
             }
             filter
-        } else {
-            // The default `EnvFilter` has everything disabled.
-            EnvFilter::default()
         });
         let layer = tracing_opentelemetry::layer()
             // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
