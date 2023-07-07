@@ -45,8 +45,8 @@ _sink&lowbar;name_ | A name for the sink. This name is only used within Material
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink. If not specified, the `SIZE` option must be specified.
 _item&lowbar;name_ | The name of the source, table or materialized view you want to send to the sink.
 **CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
-**KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset.
-**NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Key selection](#key-selection) for details.
+**KEY (** _key&lowbar;column_ **)** | An optional list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset.
+**NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Upsert key selection](#upsert-key-selection) for details.
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source.
 **ENVELOPE UPSERT** | The sink emits data with [upsert semantics](#upsert-envelope).
 
@@ -83,9 +83,9 @@ format independently from the value format.
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT AVRO</code></p>
 
 When using the Avro format, the value of each Kafka message is an Avro record
-containing a field for each column of the sink's source relation. The names and
-ordering of the fields in the record match the names and ordering of the columns
-in the relation.
+containing a field for each column of the sink's underlying relation. The names
+and ordering of the fields in the record match the names and ordering of the
+columns in the relation.
 
 If the `KEY` option is specified, the key of each Kafka message is an Avro
 record containing a field for each key column, in the same order and with
@@ -148,9 +148,9 @@ SQL type                     | Avro type
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
 
 When using the JSON format, the value of each Kafka message is a JSON object
-containing a field for each column of the sink's source relation. The names and
-ordering of the fields in the record match the names and ordering of the columns
-in the relation.
+containing a field for each column of the sink's underlying relation. The names
+and ordering of the fields in the record match the names and ordering of the
+columns in the relation.
 
 If the `KEY` option is specified, the key of each Kafka message is a JSON
 object containing a field for each key column, in the same order and with the
@@ -177,8 +177,19 @@ Other                        | Values are cast to [`text`] and then converted to
 
 ## Envelopes
 
-The sink's envelope determines how inserts, updates, and delete events are
+The sink's envelope determines how changes to the sink's underlying relation are
 mapped to Kafka messages.
+
+There are two fundamental types of change events:
+
+  * An **insertion** event is the addition of a new row to the underlying
+    relation.
+  * A **deletion** event is the removal of an existing row from the underlying
+    relation.
+
+When a `KEY` is specified, an insertion event and deletion event that occur at
+the same time are paired together into a single **update** event that contains
+both the old and new value for the given key.
 
 ### Upsert
 
@@ -186,11 +197,14 @@ mapped to Kafka messages.
 
 The upsert envelope:
 
-  * Emits insertion and update events without additional decoration.
-  * Converts deletion events into messages with a `null` value (i.e.,
-    _tombstones_).
-  * Requires that you specify a unique key for the sink's source
-    relation using the `KEY` option.
+  * Requires that you specify a unique key for the sink's underlying relation
+    using the `KEY` option. See [upsert key selection](#upsert-key-selection)
+    for details.
+  * For an insertion event, emits the row without additional decoration.
+  * For an update event, emits the new row without additional decoration. The
+    old row is not emitted.
+  * For a deletion event, emits a message with a `null` value (i.e., a
+    _tombstone_).
 
 Consider using the upsert envelope if:
 
@@ -198,10 +212,90 @@ Consider using the upsert envelope if:
   * You want to enable key-based compaction on the sink's Kafka topic while
     retaining the most recent value for each key.
 
-#### Key selection
+### Debezium
+
+<p style="font-size:14px"><b>Syntax:</b> <code>ENVELOPE DEBEZIUM</code></p>
+
+The Debezium envelope wraps each event in an object containing a `before` and
+`after` field to indicate whether the event was an insertion, deletion, or
+update event:
+
+```json
+// Insertion event.
+{"before": null, "after": {"field1": "val1", ...}}
+
+// Deletion event.
+{"before": {"field1": "val1", ...}, "after": null}
+
+// Update event.
+{"before": {"field1": "oldval1", ...}, "after": {"field1": "newval1", ...}}
+```
+
+Note that the sink will only produce update events if a `KEY` is specified.
+
+Consider using the Debezium envelope if:
+
+  * You have downstream consumers that want update events to contain both the
+    old and new value of the row.
+  * There is no natural `KEY` for the sink.
+
+## Features
+
+### Automatic topic creation
+
+If the specified Kafka topic does not exist, Materialize will attempt to create
+it while processing the `CREATE SINK` statement. Materialize will configure the
+topic with the broker's default number of partitions and replication factor.
+
+To customize the topic configuration, create the sink's topic outside of
+Materialize with the desired configuration (e.g., using the [`kafka-topics.sh`]
+tool) before running `CREATE SINK`.
+
+{{< warning >}}
+{{% kafka-sink-drop %}}
+{{</ warning >}}
+
+### Exactly-once processing
+
+By default, Kafka sinks provide [exactly-once processing guarantees](https://kafka.apache.org/documentation/#semantics), which ensures that messages are not duplicated or dropped in failure scenarios.
+
+To achieve this, Materialize stores some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular [Kafka connection](/sql/create-connection/#kafka). The name of the progress topic can be specified when [creating a connection](/sql/create-connection/#kafka-options); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
+
+#### End-to-end exactly-once processing
+
+Exactly-once semantics are an end-to-end property of a system, but Materialize only controls the initial produce step. To ensure _end-to-end_ exactly-once message delivery, you should ensure that:
+
+- The broker is configured with replication factor greater than 3, with unclean leader election disabled (`unclean.leader.election.enable=false`).
+- All downstream consumers are configured to only read committed data (`isolation.level=read_committed`).
+- The consumers' processing is idempotent, and offsets are only committed when processing is complete.
+
+For more details, see [the Kafka documentation](https://kafka.apache.org/documentation/).
+
+## Required permissions
+
+The access control lists (ACLs) on the Kafka cluster must allow Materialize
+to perform the following operations on the following resources:
+
+Operation type  | Resource type    | Resource name
+----------------|------------------|--------------
+Read, Write     | Topic            | Consult `mz_kafka_connections.sink_progress_topic` for the sink's connection
+Write           | Topic            | The specified `TOPIC` option
+Write           | Transactional ID | `mz-producer-{SINK ID}-*`
+
+When using [automatic topic creation](#automatic-topic-creation), Materialize
+additionally requires access to the following operations:
+
+Operation type   | Resource type    | Resource name
+-----------------|------------------|--------------
+DescribeConfigs  | Cluster          | n/a
+Create           | Topic            | The specified `TOPIC` option
+
+## Troubleshooting
+
+### Upsert key selection
 
 The `KEY` that you specify for an upsert envelope sink must be a unique key of
-the sink's source relation.
+the sink's underlying relation.
 
 Materialize will attempt to validate the uniqueness of the specified key. If
 validation fails, you'll receive an error message like one of the following:
@@ -221,10 +315,10 @@ are known to be unique for the underlying relation:
 ```
 
 The first error message indicates that Materialize could not prove the existence
-of any unique keys for the sink's source relation. The second error message
+of any unique keys for the sink's underlying relation. The second error message
 indicates that Materialize could prove that `col2` and `(col3, col4)` were
-unique keys of the sink's source relation, but could not provide the uniqueness
-of the specified upsert key of `col1`.
+unique keys of the sink's underlying relation, but could not provide the
+uniqueness of the specified upsert key of `col1`.
 
 There are three ways to resolve this error:
 
@@ -280,81 +374,7 @@ There are three ways to resolve this error:
   incorrectly garbage collect records from the topic.
   {{< /warning >}}
 
-### Debezium
 
-<p style="font-size:14px"><b>Syntax:</b> <code>ENVELOPE DEBEZIUM</code></p>
-
-The Debezium envelope wraps each event in an object containing a `before` and
-`after` field to indicate whether the event was an insertion, deletion, or
-update:
-
-```json
-// Insertion event.
-{"before": null, "after": {"field1": "val1", ...}}
-
-// Deletion event.
-{"before": {"field1": "val1", ...}, "after": null}
-
-// Update event.
-{"before": {"field1": "oldval1", ...}, "after": {"field1": "newval1", ...}}
-```
-
-Consider using the Debezium envelope if:
-
-  * You have downstream consumers that want update events to contain both the
-    old and new value of the row.
-  * There is no natural [key](#key-selection) for the sink.
-
-## Features
-
-### Automatic topic creation
-
-If the specified Kafka topic does not exist, Materialize will attempt to create
-it while processing the `CREATE SINK` statement. Materialize will configure the
-topic with the broker's default number of partitions and replication factor.
-
-To customize the topic configuration, create the sink's topic outside of
-Materialize with the desired configuration (e.g., using the [`kafka-topics.sh`]
-tool) before running `CREATE SINK`.
-
-{{< warning >}}
-{{% kafka-sink-drop %}}
-{{</ warning >}}
-
-### Exactly-once processing
-
-By default, Kafka sinks provide [exactly-once processing guarantees](https://kafka.apache.org/documentation/#semantics), which ensures that messages are not duplicated or dropped in failure scenarios.
-
-To achieve this, Materialize stores some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular [Kafka connection](/sql/create-connection/#kafka). The name of the progress topic can be specified when [creating a connection](/sql/create-connection/#kafka-options); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
-
-#### End-to-end exactly-once processing
-
-Exactly-once semantics are an end-to-end property of a system, but Materialize only controls the initial produce step. To ensure _end-to-end_ exactly-once message delivery, you should ensure that:
-
-- The broker is configured with replication factor greater than 3, with unclean leader election disabled (`unclean.leader.election.enable=false`).
-- All downstream consumers are configured to only read committed data (`isolation.level=read_committed`).
-- The consumers' processing is idempotent, and offsets are only committed when processing is complete.
-
-For more details, see [the Kafka documentation](https://kafka.apache.org/documentation/).
-
-## Required permissions
-
-The access control lists (ACLs) on the Kafka cluster must allow Materialize
-to perform the following operations on the following resources:
-
-Operation type  | Resource type    | Resource name
-----------------|------------------|--------------
-Read, Write     | Topic            | Consult `mz_kafka_connections.sink_progress_topic` for the sink's connection
-Write           | Topic            | The specified `TOPIC` option
-Write           | Transactional ID | `mz-producer-{SINK ID}-*`
-
-When using [automatic topic creation](#automatic-topic-creation), Materialize
-additionally requires access to the following operations:
-
-Operation type   | Resource type    | Resource name
------------------|------------------|--------------
-DescribeConfigs  | Cluster          | n/a
-Create           | Topic            | The specified `TOPIC` option
 
 ## Examples
 
