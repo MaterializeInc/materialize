@@ -38,18 +38,21 @@ class Action:
                 "cached plan must not change result type",
                 "violates not-null constraint",
                 "result exceeds max size of",
-                "unknown catalog item",  # https://github.com/MaterializeInc/materialize/issues/20381
+                "unknown catalog item",  # Expected, see #20381
             ]
         return []
 
 
 class SelectAction(Action):
     def errors_to_ignore(self) -> List[str]:
-        result = [
-            "in the same timedomain",
-        ] + super().errors_to_ignore()
-
-        if self.complexity == "ddl":
+        result = super().errors_to_ignore()
+        if self.complexity in ("dml", "ddl"):
+            result.extend(
+                [
+                    "in the same timedomain",
+                ]
+            )
+        elif self.complexity == "ddl":
             result.extend(
                 [
                     "does not exist",

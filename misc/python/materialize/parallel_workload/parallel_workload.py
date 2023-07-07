@@ -74,7 +74,14 @@ def run(
     threads = []
     for i in range(num_threads):
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        weights = [60, 30, 30, 10] if complexity == "ddl" else [60, 30, 30, 0]
+        if complexity == "ddl":
+            weights = [60, 30, 30, 10]
+        elif complexity == "dml":
+            weights = [60, 30, 30, 0]
+        elif complexity == "read":
+            weights = [60, 0, 0, 0]
+        else:
+            raise ValueError(f"Unknown complexity {complexity}")
         action_list = worker_rng.choices(
             [
                 read_action_list,
@@ -125,6 +132,10 @@ def run(
         )
         thread.start()
         threads.append(thread)
+    elif scenario == "regression":
+        pass
+    else:
+        raise ValueError(f"Unknown scenario {scenario}")
 
     num_queries = 0
     try:
@@ -180,7 +191,9 @@ def run(
 def parse_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=str, default=str(int(time.time())))
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
-    parser.add_argument("--complexity", default="ddl", type=str, choices=["dml", "ddl"])
+    parser.add_argument(
+        "--complexity", default="ddl", type=str, choices=["read", "dml", "ddl"]
+    )
     parser.add_argument(
         "--scenario", default="regression", type=str, choices=["regression", "cancel"]
     )
