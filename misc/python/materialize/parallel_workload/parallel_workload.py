@@ -21,6 +21,7 @@ import pg8000
 
 from materialize.parallel_workload.action import (
     Action,
+    CancelAction,
     ddl_action_list,
     dml_nontrans_action_list,
     read_action_list,
@@ -40,10 +41,15 @@ def run(
     seed: str,
     runtime: int,
     complexity: str,
+    scenario: str,
     num_threads: Optional[int],
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
+
+    print(
+        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity} --scenario={scenario} (--host={host} --port={port}"
+    )
 
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
@@ -54,7 +60,7 @@ def run(
     conn = pg8000.connect(host=host, port=port, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        database.create(Executor(cur))
+        database.create(Executor(rng, cur))
     conn.close()
 
     conn = pg8000.connect(
@@ -62,7 +68,7 @@ def run(
     )
     conn.autocommit = True
     with conn.cursor() as cur:
-        database.create_relations(Executor(cur))
+        database.create_relations(Executor(rng, cur))
 
     workers = []
     threads = []
@@ -99,6 +105,27 @@ def run(
         thread.start()
         threads.append(thread)
 
+    if scenario == "cancel":
+        while any(worker.pg_pid == -1 for worker in workers):
+            print("Waiting until workers are ready")
+            time.sleep(1)
+        worker_pids = [worker.pg_pid for worker in workers]
+        worker = Worker(
+            worker_rng,
+            [CancelAction(worker_rng, database, complexity, worker_pids)],
+            [1],
+            end_time,
+            False,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="cancel",
+            target=worker.run,
+            args=(host, port, str(database)),
+        )
+        thread.start()
+        threads.append(thread)
+
     num_queries = 0
     try:
         while time.time() < end_time:
@@ -127,7 +154,7 @@ def run(
 
     with conn.cursor() as cur:
         print(f"Dropping database {database}")
-        database.drop(Executor(cur))
+        database.drop(Executor(rng, cur))
     conn.close()
 
     ignored_errors: DefaultDict[str, Counter[Type[Action]]] = defaultdict(Counter)
@@ -150,6 +177,20 @@ def run(
         print(f"  {error}: {text}")
 
 
+def parse_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--seed", type=str, default=str(int(time.time())))
+    parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
+    parser.add_argument("--complexity", default="ddl", type=str, choices=["dml", "ddl"])
+    parser.add_argument(
+        "--scenario", default="regression", type=str, choices=["regression", "cancel"]
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        help="Number of threads to run, by default number of SMT threads",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="parallel-workload",
@@ -159,23 +200,16 @@ def main() -> int:
 
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
-    parser.add_argument("--seed", type=str, default=str(int(time.time())))
-    parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
-    parser.add_argument("--complexity", default="ddl", type=str, choices=["dml", "ddl"])
-    parser.add_argument(
-        "--threads",
-        type=int,
-        help="Number of threads to run, by default number of SMT threads",
-    )
+    parse_common_args(parser)
 
     args = parser.parse_args()
-    print(f"Seed: {args.seed}")
     run(
         args.host,
         args.port,
         args.seed,
         args.runtime,
         args.complexity,
+        args.scenario,
         args.threads,
     )
     return 0

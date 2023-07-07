@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+import time
 from typing import List, Optional, Tuple, Type
 
 from materialize.parallel_workload.database import Database, DBObject, Table, View
@@ -67,7 +68,7 @@ class SelectAction(Action):
         if table_name != table2_name and columns:
             column2 = self.rng.choice(columns)
             query = f"SELECT * FROM {table_name} JOIN {table2_name} ON {column} = {column2} LIMIT 1"
-            exe.execute(query)
+            exe.execute(query, explainable=True)
             exe.cur.fetchall()
         else:
             if self.rng.choice([True, False]):
@@ -80,7 +81,7 @@ class SelectAction(Action):
             else:
                 expressions = "*"
             query = f"SELECT {expressions} FROM {table} LIMIT 1"
-            exe.execute(query)
+            exe.execute(query, explainable=True)
             exe.cur.fetchall()
 
 
@@ -255,11 +256,6 @@ class CreateViewAction(Action):
 
 
 class DropViewAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [
-            "still depended upon by",
-        ] + super().errors_to_ignore()
-
     def run(self, exe: Executor) -> None:
         with self.database.lock:
             if not self.database.views:
@@ -273,6 +269,25 @@ class DropViewAction(Action):
             # TODO: Cascade
             exe.execute(query)
             del self.database.views[view_id]
+
+
+class CancelAction(Action):
+    worker_pids: List[int]
+
+    def __init__(
+        self,
+        rng: random.Random,
+        database: Database,
+        complexity: str,
+        worker_pids: List[int],
+    ):
+        super().__init__(rng, database, complexity)
+        self.worker_pids = worker_pids
+
+    def run(self, exe: Executor) -> None:
+        pid = self.rng.choice(self.worker_pids)
+        exe.execute(f"SELECT pg_cancel_backend({pid})")
+        time.sleep(self.rng.uniform(0, 10))
 
 
 class ActionList:

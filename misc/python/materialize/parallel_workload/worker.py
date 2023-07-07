@@ -27,6 +27,7 @@ class Worker:
     num_queries: int
     autocommit: bool
     ignored_errors: DefaultDict[str, Counter[Type[Action]]]
+    pg_pid: int
 
     def __init__(
         self,
@@ -43,6 +44,7 @@ class Worker:
         self.num_queries = 0
         self.autocommit = autocommit
         self.ignored_errors = defaultdict(Counter)
+        self.pg_pid = -1
 
     def run(self, host: str, port: int, database: str) -> None:
         self.conn = pg8000.connect(
@@ -50,8 +52,10 @@ class Worker:
         )
         self.conn.autocommit = self.autocommit
         with self.conn.cursor() as cur:
-            exe = Executor(cur)
+            exe = Executor(self.rng, cur)
             exe.set_isolation("SERIALIZABLE")
+            cur.execute("SELECT pg_backend_pid()")
+            self.pg_pid = cur.fetchall()[0][0]
             while time.time() < self.end_time:
                 action = self.rng.choices(self.actions, self.weights)[0]
                 self.num_queries += 1

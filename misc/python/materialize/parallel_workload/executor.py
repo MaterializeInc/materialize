@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import random
 import threading
 from typing import Optional, TextIO
 
@@ -26,10 +27,12 @@ class QueryError(Exception):
 
 
 class Executor:
+    rng: random.Random
     cur: pg8000.Cursor
     insert_table: Optional[int]
 
-    def __init__(self, cur: pg8000.Cursor):
+    def __init__(self, rng: random.Random, cur: pg8000.Cursor):
+        self.rng = rng
         self.cur = cur
         self.insert_table = None
 
@@ -50,7 +53,9 @@ class Executor:
         except Exception as e:
             raise QueryError(str(e), "rollback")
 
-    def execute(self, query: str) -> None:
+    def execute(self, query: str, explainable: bool = False) -> None:
+        if explainable and self.rng.choice([True, False]):
+            query = f"EXPLAIN {query}"
         query += ";"
         thread_name = threading.current_thread().getName()
         with lock:

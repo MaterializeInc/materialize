@@ -7,11 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import time
-
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Cockroach, Materialized
-from materialize.parallel_workload.parallel_workload import run
+from materialize.parallel_workload.parallel_workload import parse_common_args, run
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -20,11 +18,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--seed", type=str, default=str(int(time.time())))
-    parser.add_argument("--runtime", default=3600, type=int)
-    parser.add_argument("--complexity", default="ddl", type=str, choices=["dml", "ddl"])
-    parser.add_argument("--threads", type=int)
-
+    parse_common_args(parser)
     args = parser.parse_args()
 
     print(f"--- Random seed is {args.seed}")
@@ -35,8 +29,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         args.seed,
         args.runtime,
         args.complexity,
+        args.scenario,
         args.threads,
     )
-    # Check if catalog is corrupted, can Mz come up again?
-    c.down()
-    c.up("cockroach", "materialized")
+    # Restart mz
+    c.kill("materialized")
+    c.up("materialized")
+    # Verify that things haven't blown up
+    c.sql("SELECT 1")
