@@ -84,6 +84,7 @@ use std::sync::Arc;
 
 use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
+use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
 pub mod objects;
@@ -122,8 +123,14 @@ pub type Id = i64;
 
 // A common trait for uses of K and V to express in a single place all of the
 // traits required by async_trait and StashCollection.
-pub trait Data: prost::Message + Default + Ord + Send + Sync {}
-impl<T: prost::Message + Default + Ord + Send + Sync> Data for T {}
+pub trait Data:
+    prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>
+{
+}
+impl<T: prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>> Data
+    for T
+{
+}
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
 /// state of the collection is durable.
