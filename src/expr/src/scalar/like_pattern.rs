@@ -90,7 +90,7 @@ pub fn normalize_pattern(pattern: &str, escape: EscapeBehavior) -> Result<String
 }
 
 // This implementation supports a couple of different methods of matching
-// text against a SQL LIKE pattern.
+// text against a SQL LIKE or ILIKE pattern.
 //
 // The most general approach is to convert the LIKE pattern into a
 // regular expression and use the well-tested Regex library to perform the
@@ -100,7 +100,7 @@ pub fn normalize_pattern(pattern: &str, escape: EscapeBehavior) -> Result<String
 // That said, regular expressions aren't that efficient. For most patterns
 // we can do better using built-in string matching.
 
-/// An object that can test whether a string matches a LIKE pattern.
+/// An object that can test whether a string matches a LIKE or ILIKE pattern.
 #[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
 #[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Matcher {

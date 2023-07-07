@@ -3904,7 +3904,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, IsLikeMatch { case_insensitive: true })
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1630;
@@ -3972,7 +3972,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                    .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1056;
