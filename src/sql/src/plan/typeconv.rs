@@ -192,6 +192,50 @@ static STRING_TO_REGTYPE: Lazy<String> = Lazy::new(|| {
         .to_string()
 });
 
+const REG_STRING_CAST_TEMPLATE: &str = "(
+SELECT
+    COALESCE(mz_internal.mz_global_id_to_name(o.id), CAST($1 AS pg_catalog.oid)::pg_catalog.text)
+    AS text
+FROM
+  (
+        SELECT
+          (
+            SELECT DISTINCT id
+            FROM
+              mz_catalog.mz_objects AS o
+                JOIN
+                  mz_internal.mz_object_oid_alias AS a
+                  ON o.type = a.object_type
+            WHERE
+              oid = CAST($1 AS pg_catalog.oid)
+                AND
+              a.oid_alias = '{0}'
+          )
+      )
+      AS o
+)";
+
+static REGCLASS_TO_STRING: Lazy<String> = Lazy::new(|| {
+    SimpleCurlyFormat
+        .format(REG_STRING_CAST_TEMPLATE, ["regclass"])
+        .unwrap()
+        .to_string()
+});
+
+static REGPROC_TO_STRING: Lazy<String> = Lazy::new(|| {
+    SimpleCurlyFormat
+        .format(REG_STRING_CAST_TEMPLATE, ["regproc"])
+        .unwrap()
+        .to_string()
+});
+
+static REGTYPE_TO_STRING: Lazy<String> = Lazy::new(|| {
+    SimpleCurlyFormat
+        .format(REG_STRING_CAST_TEMPLATE, ["regtype"])
+        .unwrap()
+        .to_string()
+});
+
 /// Describes the context of a cast.
 ///
 /// n.b. this type derived `Ord, PartialOrd` and the ordering of these values
@@ -405,33 +449,15 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
 
         // REGCLASS
         (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),
-        (RegClass, String) => Explicit: sql_impl_cast("(
-                SELECT COALESCE(t.name, v.x::pg_catalog.text)
-                FROM (
-                    VALUES ($1::pg_catalog.oid)) AS v(x)
-                    LEFT JOIN mz_catalog.mz_objects AS t
-                    ON t.oid = v.x
-            )"),
+        (RegClass, String) => Explicit: sql_impl_cast(&REGCLASS_TO_STRING),
 
         // REGPROC
         (RegProc, Oid) => Implicit: CastRegProcToOid(func::CastRegProcToOid),
-        (RegProc, String) => Explicit: sql_impl_cast("(
-                SELECT COALESCE(t.name, v.x::pg_catalog.text)
-                FROM (
-                    VALUES ($1::pg_catalog.oid)) AS v(x)
-                    LEFT JOIN mz_catalog.mz_functions AS t
-                    ON t.oid = v.x
-            )"),
+        (RegProc, String) => Explicit: sql_impl_cast(&REGPROC_TO_STRING),
 
         // REGTYPE
         (RegType, Oid) => Implicit: CastRegTypeToOid(func::CastRegTypeToOid),
-        (RegType, String) => Explicit: sql_impl_cast("(
-                SELECT COALESCE(t.name, v.x::pg_catalog.text)
-                FROM (
-                    VALUES ($1::pg_catalog.oid)) AS v(x)
-                    LEFT JOIN mz_catalog.mz_types AS t
-                    ON t.oid = v.x
-            )"),
+        (RegType, String) => Explicit: sql_impl_cast(&REGTYPE_TO_STRING),
 
         // FLOAT32
         (Float32, Int16) => Assignment: CastFloat32ToInt16(func::CastFloat32ToInt16),
