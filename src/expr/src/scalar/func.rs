@@ -4566,7 +4566,8 @@ derive_unary!(
     MzAclItemGrantee,
     MzAclItemPrivileges,
     MzValidatePrivileges,
-    QuoteIdent
+    QuoteIdent,
+    TryParseMonotonicIso8601Timestamp
 );
 
 impl UnaryFunc {
@@ -5323,6 +5324,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MzAclItemPrivileges(_) => MzAclItemPrivileges(()),
             UnaryFunc::MzValidatePrivileges(_) => MzValidatePrivileges(()),
             UnaryFunc::QuoteIdent(_) => QuoteIdent(()),
+            UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => {
+                TryParseMonotonicIso8601Timestamp(())
+            }
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -5746,6 +5750,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MzAclItemPrivileges(_) => Ok(impls::MzAclItemPrivileges.into()),
                 MzValidatePrivileges(_) => Ok(impls::MzValidatePrivileges.into()),
                 QuoteIdent(_) => Ok(impls::QuoteIdent.into()),
+                TryParseMonotonicIso8601Timestamp(_) => {
+                    Ok(impls::TryParseMonotonicIso8601Timestamp.into())
+                }
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))

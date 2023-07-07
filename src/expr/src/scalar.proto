@@ -423,6 +423,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty mz_validate_privileges = 296;
         google.protobuf.Empty quote_ident = 297;
         google.protobuf.Empty cast_string_to_pg_legacy_name = 298;
+        google.protobuf.Empty try_parse_monotonic_iso8601_timestamp = 299;
     }
 }
 
