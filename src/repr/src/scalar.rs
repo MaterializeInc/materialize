@@ -2417,13 +2417,13 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns various interesting datums for a ScalarType (max, min, 0 values,
-    /// etc.).
+    /// Returns various interesting datums for a ScalarType (max, min, 0 values, etc.).
     pub fn interesting_datums(&self) -> impl Iterator<Item = Datum<'static>> {
-        // TODO: Is there a better way than packing everything into Lazys and
-        // Rows? `&[Datum::X(x)]` doesn't seem to work because some Datum
-        // variants need to call non-const functions to construct themselves.
-
+        // TODO: Add datums for the types that have an inner Box'd ScalarType. It'd be best to
+        // re-use this function to dynamically generate interesting datums of the requested type.
+        // But the 'static bound makes this either hard or impossible. We might need to remove that
+        // and return, say, an owned Row. This would require changing lots of dependent test
+        // functions, some of which also hard code a 'static bound.
         static BOOL: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
         static INT16: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2595,6 +2595,7 @@ impl<'a> ScalarType {
                 Datum::String("'"),
                 Datum::String("\""),
                 Datum::String("."),
+                Datum::String(&"x".repeat(100)),
             ])
         });
         static CHAR: Lazy<Row> = Lazy::new(|| {
@@ -2606,21 +2607,11 @@ impl<'a> ScalarType {
             ])
         });
         static JSONB: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[
-                Datum::True,
-                Datum::False,
-                Datum::JsonNull,
-                Datum::String(""),
-                Datum::String(" "),
-                Datum::String("'"),
-                Datum::String("\""),
-                Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(i64::MAX))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(i64::MIN))),
-                // TODO: Add List, Map.
-            ])
+            let mut datums = vec![Datum::True, Datum::False, Datum::JsonNull];
+            datums.extend(STRING.iter());
+            datums.extend(NUMERIC.iter());
+            // TODO: Add List, Map.
+            Row::pack_slice(&datums)
         });
         static UUID: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2631,11 +2622,9 @@ impl<'a> ScalarType {
         static ARRAY: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static LIST: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static RECORD: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static OID: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static OID: Lazy<Row> =
+            Lazy::new(|| Row::pack_slice(&[Datum::UInt32(u32::MIN), Datum::UInt32(u32::MAX)]));
         static MAP: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static REGPROC: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static REGTYPE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static REGCLASS: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static INT2VECTOR: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static MZTIMESTAMP: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2707,9 +2696,9 @@ impl<'a> ScalarType {
             ScalarType::Record { .. } => (*RECORD).iter(),
             ScalarType::Oid => (*OID).iter(),
             ScalarType::Map { .. } => (*MAP).iter(),
-            ScalarType::RegProc => (*REGPROC).iter(),
-            ScalarType::RegType => (*REGTYPE).iter(),
-            ScalarType::RegClass => (*REGCLASS).iter(),
+            ScalarType::RegProc => (*OID).iter(),
+            ScalarType::RegType => (*OID).iter(),
+            ScalarType::RegClass => (*OID).iter(),
             ScalarType::Int2Vector => (*INT2VECTOR).iter(),
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
             ScalarType::Range { .. } => (*RANGE).iter(),
