@@ -316,14 +316,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             tracing_handle: Arc::clone(&tracing_handle),
         },
         SYSTEM_TIME.clone(),
-        ConnectionContext::from_cli_args(
-            args.tracing.log_filter.as_ref(),
-            args.aws_external_id,
-            secrets_reader,
-        ),
-        StorageInstanceContext::new(args.scratch_directory)?,
         ConnectionContext::from_cli_args(args.aws_external_id, secrets_reader),
-        StorageInstanceContext::new(args.scratch_directory).await?,
+        StorageInstanceContext::new(args.scratch_directory)?,
     )?;
     info!(
         "listening for storage controller connections on {}",
