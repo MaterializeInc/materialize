@@ -65,7 +65,7 @@ and return values of statements is outside the scope of this document;
 the interested reader should consult the general Materialize SQL
 documentation.
 
-## Communication Flow 
+## Communication Flow
 
 Once a session has been established, the owner of the adapter client
 gains access to the much richer interface of the [session
