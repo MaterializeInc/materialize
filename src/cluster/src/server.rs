@@ -42,7 +42,7 @@ pub struct ClusterConfig {
     pub metrics_registry: MetricsRegistry,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
-    /// A process-wide handle to tracing configuration.
+    /// A process-global handle to tracing configuration.
     pub tracing_handle: Arc<TracingHandle>,
 }
 
