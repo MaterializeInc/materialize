@@ -9,7 +9,7 @@ menu:
     parent: 'sql-patterns'
 ---
 
-SQL queries are often used to represent "rules" and evaluate which data in a dataset adhere to those rules.
+SQL queries can be used as "rules" to evaluate which data in a dataset meet those rules.
 In Materialize, the results of these queries can be kept automatically up-to-date, enabling use cases like real-time, rules-based alerting.
 However, some organizations have a lot of rules.
 This can lead users to ask questions like "Can Materialize support 100,000 materialized views"?
