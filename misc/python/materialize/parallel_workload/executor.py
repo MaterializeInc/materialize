@@ -12,13 +12,8 @@ from typing import Optional, TextIO
 
 import pg8000
 
-log: Optional[TextIO] = None
+log: TextIO = open("parallel-workload-queries.log", "w")
 lock = threading.Lock()
-
-
-def initialize_logging() -> None:
-    global log
-    log = open("parallel-workload-queries.log", "w")
 
 
 class QueryError(Exception):
@@ -57,10 +52,10 @@ class Executor:
 
     def execute(self, query: str) -> None:
         query += ";"
-        if log:
-            thread_name = threading.current_thread().getName()
-            with lock:
-                print(f"[{thread_name}] {query}", file=log)
+        thread_name = threading.current_thread().getName()
+        with lock:
+            print(f"[{thread_name}] {query}", file=log)
+            log.flush()
         try:
             self.cur.execute(query)
         except Exception as e:

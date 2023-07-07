@@ -27,7 +27,7 @@ from materialize.parallel_workload.action import (
     write_action_list,
 )
 from materialize.parallel_workload.database import Database
-from materialize.parallel_workload.executor import initialize_logging
+from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.worker import Worker
 
 SEED_RANGE = 1_000_000
@@ -45,8 +45,6 @@ def run(
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
 
-    initialize_logging()
-
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
     ).timestamp()
@@ -56,7 +54,7 @@ def run(
     conn = pg8000.connect(host=host, port=port, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        database.create(cur)
+        database.create(Executor(cur))
     conn.close()
 
     conn = pg8000.connect(
@@ -64,7 +62,7 @@ def run(
     )
     conn.autocommit = True
     with conn.cursor() as cur:
-        database.create_relations(cur)
+        database.create_relations(Executor(cur))
 
     workers = []
     threads = []
@@ -129,7 +127,7 @@ def run(
 
     with conn.cursor() as cur:
         print(f"Dropping database {database}")
-        database.drop(cur)
+        database.drop(Executor(cur))
     conn.close()
 
     ignored_errors: DefaultDict[str, Counter[Type[Action]]] = defaultdict(Counter)
