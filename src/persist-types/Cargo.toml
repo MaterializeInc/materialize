@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 # NB: This is meant to be a strong, independent abstraction boundary. Please
 # don't leak in dependencies on other Materialize packages.
 [dependencies]

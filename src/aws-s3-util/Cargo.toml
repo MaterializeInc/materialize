@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 aws-sdk-s3 = { version = "0.26", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-types = "0.55"

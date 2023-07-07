@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 mz-ore = { path = "../ore", default-features = false }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

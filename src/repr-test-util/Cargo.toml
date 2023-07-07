@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 chrono = { version = "0.4.23", default-features = false, features = ["serde", "std"] }
 mz-lowertest = { path = "../lowertest" }

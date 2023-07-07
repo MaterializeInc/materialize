@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 libc = "0.2.138"
 mz-ore = { path = "../ore", default-features = false }

@@ -7,6 +7,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 bytesize = "1.1.0"
 enum-kinds = "0.5.1"

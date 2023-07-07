@@ -6,6 +6,8 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+[lib]
+
 [dependencies]
 anyhow = "1.0.66"
 axum = { version = "0.6.7" }

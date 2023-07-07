@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 jsonwebtoken = "8.2.0"
 mz-frontegg-auth = { path = "../frontegg-auth" }

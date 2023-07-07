@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 mz-ore = { path = "../ore", features = ["async"], default-features = false }
 segment = { version = "0.2.1", features = ["native-tls-vendored"], default-features = false }

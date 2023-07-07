@@ -11,6 +11,8 @@ authors = [
 ]
 repository = "https://github.com/MaterializeInc/materialize"
 
+[lib]
+
 [dependencies]
 anyhow = "1.0.66"
 libc = "0.2.138"

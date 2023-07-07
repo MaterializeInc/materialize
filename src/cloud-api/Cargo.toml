@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
 
 [dependencies]
 anyhow = "1.0.44"

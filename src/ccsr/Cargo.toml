@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 anyhow = "1.0.66"
 native-tls = "0.2.11"

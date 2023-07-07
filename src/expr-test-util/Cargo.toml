@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lib]
+
 [dependencies]
 mz-expr = { path = "../expr" }
 mz-lowertest = { path = "../lowertest" }
