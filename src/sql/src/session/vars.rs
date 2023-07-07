@@ -1078,7 +1078,6 @@ feature_flags!(
         enable_envelope_upsert_in_subscribe,
         "`ENVELOPE UPSERT` can be used in `SUBSCRIBE`"
     ),
-    (enable_format_json, "FORMAT JSON"),
     (enable_index_options, "INDEX OPTIONS"),
     (
         enable_kafka_config_denylist_options,
