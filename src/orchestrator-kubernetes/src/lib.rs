@@ -88,7 +88,7 @@ use k8s_openapi::api::core::v1::{
     EphemeralVolumeSource, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
     PersistentVolumeClaimTemplate, Pod, PodAffinityTerm, PodAntiAffinity, PodSecurityContext,
     PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
-    ServiceSpec, Volume, VolumeMount,
+    ServiceSpec, Toleration, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -114,6 +114,7 @@ pub mod secrets;
 pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
+const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -801,6 +802,27 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let tolerations = Some(vec![
+            // When the node becomes `NotReady` it indicates there is a problem
+            // with the node. By default Kubernetes waits 300s (5 minutes)
+            // before descheduling the pod, but we tune this to 30s for faster
+            // recovery in the case of node failure.
+            Toleration {
+                effect: Some("NoExecute".into()),
+                key: Some("node.kubernetes.io/not-ready".into()),
+                operator: Some("Exists".into()),
+                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
+                value: None,
+            },
+            Toleration {
+                effect: Some("NoExecute".into()),
+                key: Some("node.kubernetes.io/unreachable".into()),
+                operator: Some("Exists".into()),
+                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
+                value: None,
+            },
+        ]);
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -847,6 +869,29 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     pod_anti_affinity: anti_affinity,
                     ..Default::default()
                 }),
+                tolerations,
+                // Setting a 0s termination grace period has the side effect of
+                // automatically starting a new pod when the previous pod is
+                // currently terminating. This enables recovery from a node
+                // failure with no manual intervention. Without this setting,
+                // the StatefulSet controller will refuse to start a new pod
+                // until the failed node is manually removed from the Kubernetes
+                // cluster.
+                //
+                // The Kubernetes documentation strongly advises against this
+                // setting, as StatefulSets attempt to provide "at most once"
+                // semantics [0]--that is, the guarantee that for a given pod in
+                // a StatefulSet there is *at most* one pod with that identity
+                // running in the cluster.
+                //
+                // Materialize services, however, are carefully designed to
+                // *not* rely on this guarantee. In fact, we do not believe that
+                // correct distributed systems can meaningfully rely on
+                // Kubernetes's guarantee--network packets from a pod can be
+                // arbitrarily delayed, long past that pod's termination.
+                //
+                // [0]: https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/#statefulset-considerations
+                termination_grace_period_seconds: Some(0),
                 ..Default::default()
             }),
         };

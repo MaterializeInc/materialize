@@ -98,6 +98,16 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// isolated at the network level, however: services in one namespace can
 /// communicate with services in another namespace with no restrictions.
 ///
+/// Services **must** be tolerant of running as part of a distributed system. In
+/// particular, services **must** be prepared for the possibility that there are
+/// two live processes with the same identity. This can happen, for example,
+/// when the machine hosting a process *appears* to fail, from the perspective
+/// of the orchestrator, and so the orchestrator restarts the process on another
+/// machine, but in fact the original machine is still alive, just on the
+/// opposite side of a network partition. Be sure to design any communication
+/// with other services (e.g., an external database) to correctly handle
+/// competing communication from another incarnation of the service.
+///
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
 pub trait Orchestrator: fmt::Debug + Send + Sync {
