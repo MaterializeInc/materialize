@@ -3123,16 +3123,18 @@ impl Coordinator {
         });
     }
 
-    // ReadThenWrite is a plan whose writes depend on the results of a
-    // read. This works by doing a Peek then queuing a SendDiffs. No writes
-    // or read-then-writes can occur between the Peek and SendDiff otherwise a
-    // serializability violation could occur.
+    /// ReadThenWrite is a plan whose writes depend on the results of a
+    /// read. This works by doing a Peek then queuing a SendDiffs. No writes
+    /// or read-then-writes can occur between the Peek and SendDiff otherwise a
+    /// serializability violation could occur.
     pub(super) async fn sequence_read_then_write(
         &mut self,
         mut ctx: ExecuteContext,
         plan: ReadThenWritePlan,
     ) {
-        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan));
+        let mut dependencies = plan.selection.depends_on();
+        dependencies.insert(plan.id);
+        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), dependencies);
 
         let ReadThenWritePlan {
             id,

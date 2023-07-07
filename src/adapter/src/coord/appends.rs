@@ -9,7 +9,7 @@
 
 //! Logic and types for all appends executed by the [`Coordinator`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +44,7 @@ pub(crate) struct DeferredPlan {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub plan: Plan,
+    pub dependencies: BTreeSet<GlobalId>,
 }
 
 /// Describes what action triggered an update to a builtin table.
@@ -116,7 +117,7 @@ impl PendingWriteTxn {
 /// deferring work.
 #[macro_export]
 macro_rules! guard_write_critical_section {
-    ($coord:expr, $ctx:expr, $plan_to_defer: expr) => {
+    ($coord:expr, $ctx:expr, $plan_to_defer:expr, $dependencies:expr) => {
         if !$ctx.session().has_write_lock() {
             if $coord
                 .try_grant_session_write_lock($ctx.session_mut())
@@ -125,6 +126,7 @@ macro_rules! guard_write_critical_section {
                 $coord.defer_write(Deferred::Plan(DeferredPlan {
                     ctx: $ctx,
                     plan: $plan_to_defer,
+                    dependencies: $dependencies,
                 }));
                 return;
             }

@@ -35,7 +35,7 @@ use crate::coord::{
     PeekStageFinish, PeekValidity, PendingReadTxn, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
+use crate::{catalog, AdapterError, AdapterNotice};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -581,11 +581,19 @@ impl Coordinator {
             match ready {
                 Deferred::Plan(mut ready) => {
                     ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    // Write statements never need to track catalog
-                    // dependencies.
-                    let resolved_ids = ResolvedIds(BTreeSet::new());
-                    self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
-                        .await;
+                    if ready
+                        .dependencies
+                        .into_iter()
+                        .any(|id| self.catalog.try_get_entry(&id).is_none())
+                    {
+                        ready.ctx.retire(Err(AdapterError::ChangedPlan))
+                    } else {
+                        // Write statements never need to track resolved IDs (NOTE: This is not the
+                        // same thing as plan dependencies, which we do need to re-validate).
+                        let resolved_ids = ResolvedIds(BTreeSet::new());
+                        self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
+                            .await;
+                    }
                 }
                 Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
             }
