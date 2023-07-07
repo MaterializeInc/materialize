@@ -59,28 +59,29 @@ class SelectAction(Action):
     def run(self, exe: Executor) -> None:
         tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
         table = self.rng.choice(tables_views)
-        # Joins hang too often in clusterd, even with LIMIT 1 and statement_timeout, causing OoM
-        # column = self.rng.choice(table.columns)
-        # table2 = self.rng.choice(tables_views)
-        # table_name = str(table)
-        # table2_name = str(table2)
-        # columns = [c for c in table2.columns if c.data_type == column.data_type]
-        # if table_name != table2_name and columns:
-        #     column2 = self.rng.choice(columns)
-        #     query = f"SELECT * FROM {table_name} JOIN {table2_name} ON {column} = {column2} LIMIT 1"
-        # else:
-        if self.rng.choice([True, False]):
-            expressions = ", ".join(
-                str(column)
-                for column in random.sample(
-                    table.columns, k=random.randint(1, len(table.columns))
-                )
-            )
+        column = self.rng.choice(table.columns)
+        table2 = self.rng.choice(tables_views)
+        table_name = str(table)
+        table2_name = str(table2)
+        columns = [c for c in table2.columns if c.data_type == column.data_type]
+        if table_name != table2_name and columns:
+            column2 = self.rng.choice(columns)
+            query = f"SELECT * FROM {table_name} JOIN {table2_name} ON {column} = {column2} LIMIT 1"
+            exe.execute(query)
+            exe.cur.fetchall()
         else:
-            expressions = "*"
-        query = f"SELECT {expressions} FROM {table}"
-        exe.execute(query)
-        exe.cur.fetchall()
+            if self.rng.choice([True, False]):
+                expressions = ", ".join(
+                    str(column)
+                    for column in random.sample(
+                        table.columns, k=random.randint(1, len(table.columns))
+                    )
+                )
+            else:
+                expressions = "*"
+            query = f"SELECT {expressions} FROM {table} LIMIT 1"
+            exe.execute(query)
+            exe.cur.fetchall()
 
 
 class InsertAction(Action):
