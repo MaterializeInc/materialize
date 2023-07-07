@@ -1429,6 +1429,21 @@ SELECT 'abc'::char(3) ~~ 'abc'::char(4);
 ----
 true
 
+query B
+SELECT 'abc'::char(3) !~~* 'Abc'::char(4);
+----
+false
+
+query B
+SELECT 'abc'::char(3) NOT ILIKE 'Abc'::char(4);
+----
+false
+
+query B
+SELECT 'abc'::char(3) !~ 'Abc'::char(4);
+----
+true
+
 # Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-893343138
 
 query T
