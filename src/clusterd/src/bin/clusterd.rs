@@ -78,19 +78,20 @@ use std::process;
 use std::sync::Arc;
 
 use anyhow::Context;
+use axum::http::StatusCode;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
+use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
@@ -245,28 +246,26 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .route(
                     "/api/opentelemetry/config",
                     routing::put({
-                        let tracing_handle = Arc::clone(&tracing_handle);
-                        move |payload| async move {
-                            mz_http_util::handle_reload_tracing_filter(
-                                &tracing_handle,
-                                TracingHandle::reload_opentelemetry_filter,
-                                payload,
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                                Use the `mz_opentelemetry_filter` system variable."
+                                    .to_string(),
                             )
-                            .await
                         }
                     }),
                 )
                 .route(
                     "/api/stderr/config",
                     routing::put({
-                        let tracing_handle = Arc::clone(&tracing_handle);
-                        move |payload| async move {
-                            mz_http_util::handle_reload_tracing_filter(
-                                &tracing_handle,
-                                TracingHandle::reload_stderr_log_filter,
-                                payload,
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                                Use the `mz_log_filter` system variable."
+                                    .to_string(),
                             )
-                            .await
                         }
                     }),
                 )
