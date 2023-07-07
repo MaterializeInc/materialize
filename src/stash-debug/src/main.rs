@@ -116,16 +116,17 @@ pub struct Args {
 #[derive(Debug, clap::Subcommand)]
 enum Action {
     Dump {
+        /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
     Edit {
         collection: String,
-        key: Vec<u8>,
-        value: Vec<u8>,
+        key: serde_json::Value,
+        value: serde_json::Value,
     },
     Delete {
         collection: String,
-        key: Vec<u8>,
+        key: serde_json::Value,
     },
     /// Checks if the specified stash could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
@@ -200,8 +201,8 @@ async fn edit(
     mut stash: Stash,
     usage: Usage,
     collection: String,
-    key: Vec<u8>,
-    value: Vec<u8>,
+    key: serde_json::Value,
+    value: serde_json::Value,
 ) -> Result<(), anyhow::Error> {
     let prev = usage.edit(&mut stash, collection, key, value).await?;
     println!("previous value: {:?}", prev);
@@ -212,7 +213,7 @@ async fn delete(
     mut stash: Stash,
     usage: Usage,
     collection: String,
-    key: Vec<u8>,
+    key: serde_json::Value,
 ) -> Result<(), anyhow::Error> {
     usage.delete(&mut stash, collection, key).await?;
     Ok(())
@@ -220,8 +221,7 @@ async fn delete(
 
 async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<(), anyhow::Error> {
     let data = usage.dump(&mut stash).await?;
-    write!(&mut target, "{data:#?}")?;
-    write!(&mut target, "\n")?;
+    writeln!(&mut target, "{data:#?}")?;
     Ok(())
 }
 async fn upgrade_check(
@@ -263,6 +263,38 @@ macro_rules! for_collections {
             }
         }
     };
+}
+
+struct Dumped {
+    key: Box<dyn std::fmt::Debug>,
+    value: Box<dyn std::fmt::Debug>,
+    key_json: UnescapedDebug,
+    value_json: UnescapedDebug,
+    timestamp: mz_stash::Timestamp,
+    diff: mz_stash::Diff,
+}
+
+impl std::fmt::Debug for Dumped {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("")
+            .field("key", &self.key)
+            .field("value", &self.value)
+            .field("key_json", &self.key_json)
+            .field("value_json", &self.value_json)
+            .field("timestamp", &self.timestamp)
+            .field("diff", &self.diff)
+            .finish()
+    }
+}
+
+// We want to auto format things with debug, but also not print \ before the " in JSON values, so
+// implement our own debug that doesn't escape.
+struct UnescapedDebug(String);
+
+impl std::fmt::Debug for UnescapedDebug {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "'{}'", &self.0)
+    }
 }
 
 #[derive(Debug)]
@@ -322,17 +354,29 @@ impl Usage {
         )
     }
 
-    async fn dump(
-        &self,
-        stash: &mut Stash,
-    ) -> Result<BTreeMap<&str, Box<dyn std::fmt::Debug>>, anyhow::Error> {
+    async fn dump(&self, stash: &mut Stash) -> Result<BTreeMap<&str, Vec<Dumped>>, anyhow::Error> {
         let mut collections = Vec::new();
         let collection_names = BTreeSet::from_iter(stash.collections().await?.into_values());
         macro_rules! dump_col {
             ($col:expr) => {
                 // Collections might not yet exist.
                 if collection_names.contains($col.name()) {
-                    let values: Box<dyn std::fmt::Debug> = Box::new($col.iter(stash).await?);
+                    let values = $col.iter(stash).await?;
+                    let values = values
+                        .into_iter()
+                        .map(|((k, v), timestamp, diff)| {
+                            let key_json = serde_json::to_string(&k).expect("must serialize");
+                            let value_json = serde_json::to_string(&v).expect("must serialize");
+                            Dumped {
+                                key: Box::new(k),
+                                value: Box::new(v),
+                                key_json: UnescapedDebug(key_json),
+                                value_json: UnescapedDebug(value_json),
+                                timestamp,
+                                diff,
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     collections.push(($col.name(), values));
                 }
             };
@@ -359,20 +403,21 @@ impl Usage {
         &self,
         stash: &mut Stash,
         collection: String,
-        key: Vec<u8>,
-        value: Vec<u8>,
-    ) -> Result<(), anyhow::Error> {
+        key: serde_json::Value,
+        value: serde_json::Value,
+    ) -> Result<serde_json::Value, anyhow::Error> {
         macro_rules! edit_col {
             ($col:expr) => {
                 if collection == $col.name() {
-                    let key = prost::Message::decode(&key[..])?;
-                    let value = prost::Message::decode(&value[..])?;
-                    let (_prev, _next) = $col
+                    let key = serde_json::from_value(key)?;
+                    let value = serde_json::from_value(value)?;
+                    let (prev, _next) = $col
                         .upsert_key(stash, key, move |_| {
                             Ok::<_, std::convert::Infallible>(value)
                         })
                         .await??;
-                    return Ok(());
+                    let prev = serde_json::to_value(&prev)?;
+                    return Ok(prev);
                 }
             };
         }
@@ -384,12 +429,12 @@ impl Usage {
         &self,
         stash: &mut Stash,
         collection: String,
-        key: Vec<u8>,
+        key: serde_json::Value,
     ) -> Result<(), anyhow::Error> {
         macro_rules! delete_col {
             ($col:expr) => {
                 if collection == $col.name() {
-                    let key = prost::Message::decode(&key[..])?;
+                    let key = serde_json::from_value(key)?;
                     let keys = BTreeSet::from([key]);
                     $col.delete_keys(stash, keys).await?;
                     return Ok(());
