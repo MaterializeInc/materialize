@@ -11,16 +11,15 @@ menu:
 
 SQL queries can be used as "rules" to evaluate which data in a dataset meet those rules.
 Materialize can automatically update these query results for real-time, rules-based alerting.
-However, some organizations have a lot of rules.
-This can lead users to ask questions like "Can Materialize support 100,000 materialized views"?
+Rule execution use cases can have many thousands of rules, so it's not practical to have a separate query for each rule.
 
 Fortunately there is a pattern to address this need without creating zillions of separate views.
 If your rules are simple enough to be expressed as data (i.e. not arbitrary SQL), then you can use lateral joins to implement a rules execution engine.
 
 ## Hands-on Example
 
-Suppose we have a dataset about birds, and we'd like to subscribe to all the birds who satisfy a set of rules.
-Instead of creating a separate view for each rule, we will encode the rules **as data** and use a `LATERAL` join to execute them.
+In this example, we have a dataset about birds. We need to subscribe to all birds in the dataset that satisfy a set of rules.
+Instead of creating separate views for each rule, you can encode the rules **as data** and use a `LATERAL` join to execute them.
 
 A `LATERAL` join is essentially a `for` loop; for each element of one dataset, do something with another dataset.
 In our example, for each rule in a `bird_rules` dataset, we filter the `birds` dataset according to the rule.
@@ -101,7 +100,7 @@ LATERAL (
     --------------|---------|---------|----------|---------------------|------------
     1688673701670      1         2       Penguin     ["Black","White"]       99.5
     ```
-    Notice that the majestic penguin satisfies a rule, and in fact it's rule 2. None of the other birds satisfy any of the rules.
+    Notice that the majestic penguin satisfies rule 2. None of the other birds satisfy any of the rules.
 1. In a separate session, insert a new bird that satisfies rule 3, which requires a bird whose first letter is 'R', with a wingspan greater than or equal to 20 centimeters, and whose colors contain "Red".
     ```sql
     INSERT INTO birds VALUES (11, 'Really big robin', 25.0, '["Red"]');
