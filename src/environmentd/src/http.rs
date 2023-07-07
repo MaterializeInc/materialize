@@ -341,6 +341,7 @@ impl InternalHttpServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put({
+                    // wip: replace with error message
                     let tracing_handle = tracing_handle.clone();
                     move |payload| async move {
                         mz_http_util::handle_reload_tracing_filter(
@@ -355,6 +356,7 @@ impl InternalHttpServer {
             .route(
                 "/api/stderr/config",
                 routing::put({
+                    // wip: replace with error message
                     move |payload| async move {
                         mz_http_util::handle_reload_tracing_filter(
                             &tracing_handle,

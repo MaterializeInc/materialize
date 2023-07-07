@@ -1145,6 +1145,11 @@ impl StorageState {
                 params.persist.apply(self.persist_clients.cfg());
                 params.tracing.apply(self.tracing_handle.as_ref());
 
+                if let Some(log_filter) = &params.tracing.log_filter {
+                    self.connection_context.librdkafka_log_level =
+                        mz_ore::tracing::crate_level(&log_filter.clone().into(), "librdkafka");
+                }
+
                 // This needs to be broadcast by one worker and go through
                 // the internal command fabric, to ensure consistent
                 // ordering of dataflow rendering across all workers.
