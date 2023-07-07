@@ -1631,10 +1631,7 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json => {
-            scx.require_feature_flag(&crate::session::vars::ENABLE_FORMAT_JSON)?;
-            DataEncodingInner::Json
-        }
+        Format::Json => DataEncodingInner::Json,
         Format::Text => DataEncodingInner::Text,
     }))
 }
