@@ -797,5 +797,6 @@ message ProtoEvalError {
         string invalid_date_part = 71;
         ProtoDateDiffOverflow date_diff_overflow = 72;
         string if_null_error = 73;
+        google.protobuf.Empty length_too_large = 74;
     }
 }

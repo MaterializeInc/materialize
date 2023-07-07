@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -862,6 +862,8 @@ impl<'a> Runner<'a> {
                 .await?;
         }
 
+        inner.ensure_fixed_features().await?;
+
         inner.client = connect(inner.server_addr, None).await;
         inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
         inner.clients = BTreeMap::new();
@@ -873,6 +875,7 @@ impl<'a> Runner<'a> {
 impl<'a> RunnerInner<'a> {
     pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
@@ -923,7 +926,7 @@ impl<'a> RunnerInner<'a> {
                     .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
-                scratch_directory: None,
+                scratch_directory: scratch_dir.path().to_path_buf(),
             })
             .await?,
         );
@@ -938,6 +941,7 @@ impl<'a> RunnerInner<'a> {
         let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -954,17 +958,10 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
-                scratch_directory_enabled: false,
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
             },
             secrets_controller,
             cloud_resource_controller: None,
-            // Setting the port to 0 means that the OS will automatically
-            // allocate an available port.
-            sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
@@ -992,7 +989,6 @@ impl<'a> RunnerInner<'a> {
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
-            waiting_on_leader_promotion: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1012,7 +1008,7 @@ impl<'a> RunnerInner<'a> {
                     return;
                 }
             };
-            let server = match runtime.block_on(mz_environmentd::serve(server_config)) {
+            let server = match runtime.block_on(listeners.serve(server_config)) {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
@@ -1035,7 +1031,7 @@ impl<'a> RunnerInner<'a> {
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
         let client = connect(server_addr, None).await;
 
-        Ok(RunnerInner {
+        let inner = RunnerInner {
             server_addr,
             internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
@@ -1050,7 +1046,26 @@ impl<'a> RunnerInner<'a> {
             enable_table_keys: config.enable_table_keys,
             verbosity: config.verbosity,
             stdout: config.stdout,
-        })
+        };
+        inner.ensure_fixed_features().await?;
+
+        Ok(inner)
+    }
+
+    /// Set features that should be enabled regardless of whether reset-server was
+    /// called. These features may be set conditionally depending on the run configuration.
+    async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
+        // If auto_index_selects is on, we should turn on enable_monotonic_oneshot_selects.
+        // TODO(vmarcos): Remove this code when we retire the feature flag.
+        if self.auto_index_selects {
+            self.system_client
+                .execute(
+                    "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
+                    &[],
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn run_record<'r>(

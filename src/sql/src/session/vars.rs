@@ -576,11 +576,11 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// The default for the `DISK` option in `UPSERT` sources.
-const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("upsert_source_disk_default"),
+/// The default for the `DISK` option when creating managed clusters and cluster replicas.
+const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("disk_cluster_replicas_default"),
     value: &false,
-    description: "The default for the `DISK` option in `UPSERT` sources.",
+    description: "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
     internal: true,
 };
 
@@ -1121,8 +1121,8 @@ feature_flags!(
         "depending on unstable objects"
     ),
     (
-        enable_upsert_source_disk,
-        "`WITH (DISK)` for `UPSERT/DEBEZIUM` sources"
+        enable_disk_cluster_replicas,
+        "`WITH (DISK)` for cluster replicas"
     ),
     (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
     (
@@ -1719,7 +1719,7 @@ impl SystemVars {
             .with_var(&MAX_ROLES)
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
-            .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
+            .with_var(&DISK_CLUSTER_REPLICAS_DEFAULT)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
@@ -2061,9 +2061,9 @@ impl SystemVars {
             .collect()
     }
 
-    /// Returns the `upsert_source_disk_default` configuration parameter.
-    pub fn upsert_source_disk_default(&self) -> bool {
-        *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
+    /// Returns the `disk_cluster_replicas_default` configuration parameter.
+    pub fn disk_cluster_replicas_default(&self) -> bool {
+        *self.expect_value(&DISK_CLUSTER_REPLICAS_DEFAULT)
     }
 
     pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb_types::config::CompactionStyle {

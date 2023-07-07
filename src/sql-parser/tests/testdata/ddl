@@ -1019,7 +1019,7 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP or DISK, found identifier "property"
+error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
@@ -1159,14 +1159,14 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Cluster
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS ()
 ----
-error: Expected one of AVAILABILITY or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found WITH
+error: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found WITH
 CREATE CLUSTER cluster WITH REPLICAS ()
                        ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
-error: Expected one of AVAILABILITY or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found identifier "badopt"
+error: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found identifier "badopt"
 CREATE CLUSTER cluster REPLICAS (), BADOPT
                                     ^
 
@@ -1197,6 +1197,13 @@ CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZ
 CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', IDLE ARRANGEMENT MERGE EFFORT = 0))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("0"))) }] }])) }] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE '1', DISK = true))
+----
+CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', DISK = true))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: Disk, value: Some(Value(Boolean(true))) }] }])) }] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (SIZE '1'))
@@ -1253,6 +1260,13 @@ CREATE CLUSTER cluster MANAGED
 CREATE CLUSTER cluster MANAGED
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }] })
+
+parse-statement
+CREATE CLUSTER cluster MANAGED, DISK = true
+----
+CREATE CLUSTER cluster MANAGED, DISK true
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
@@ -1421,6 +1435,13 @@ CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 CREATE CLUSTER REPLICA default.replica SIZE = 'small', AVAILABILITY ZONE = 'a'
 =>
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a', DISK = false
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', AVAILABILITY ZONE = 'a', DISK = false
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }, ReplicaOption { name: Disk, value: Some(Value(Boolean(false))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
@@ -1750,7 +1771,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
-error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP or DISK, found START
+error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP, found START
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
                                                      ^
 
@@ -1982,20 +2003,6 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar WITH (SIZE = 'small')
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedItemName([Ident("foo"), Ident("bar")]))) })
-
-parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') WITH (DISK);
-----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (DISK)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Disk, value: None }], referenced_subsources: None, progress_subsource: None })
-
-parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') WITH (DISK = true);
-----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (DISK = true)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Disk, value: Some(Value(Boolean(true))) }], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 ALTER CLUSTER foo RENAME TO joe

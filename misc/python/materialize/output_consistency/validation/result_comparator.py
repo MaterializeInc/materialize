@@ -54,7 +54,7 @@ class ResultComparator:
 
         self.validate_outcomes_metadata(query_execution, validation_outcome)
 
-        if not validation_outcome.success():
+        if not validation_outcome.verdict().succeeded():
             # do not continue with value comparison if metadata differs
             return validation_outcome
 

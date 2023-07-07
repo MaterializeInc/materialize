@@ -102,13 +102,12 @@ use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
-use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
+use crate::util::{Listeners, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -1120,17 +1119,18 @@ fn test_ws_passes_options() {
         serde_json::from_str(&msg).unwrap()
     };
     let starting = read_msg();
-    let col_name = read_msg();
+    let columns = read_msg();
     let row_val = read_msg();
 
     if !matches!(starting, WebSocketResponse::CommandStarting(_)) {
         panic!("wrong message!, {starting:?}");
     };
 
-    if let WebSocketResponse::Rows(rows) = col_name {
-        assert_eq!(rows, ["application_name"]);
+    if let WebSocketResponse::Rows(rows) = columns {
+        let names: Vec<&str> = rows.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["application_name"]);
     } else {
-        panic!("wrong message!, {col_name:?}");
+        panic!("wrong message!, {columns:?}");
     };
 
     if let WebSocketResponse::Row(row) = row_val {
@@ -1176,8 +1176,18 @@ struct HttpResponse<R> {
 #[derive(Debug, Deserialize)]
 struct HttpRows {
     rows: Vec<Vec<serde_json::Value>>,
-    col_names: Vec<String>,
+    desc: HttpResponseDesc,
     notices: Vec<Notice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponseDesc {
+    columns: Vec<HttpResponseColumn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponseColumn {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1227,7 +1237,7 @@ fn test_http_options_param() {
     assert!(rows.notices.is_empty());
 
     let row = rows.rows.pop().unwrap().pop().unwrap();
-    let col = rows.col_names.pop().unwrap();
+    let col = rows.desc.columns.pop().unwrap().name;
 
     assert_eq!(col, "application_name");
     assert_eq!(row, "yet_another_client");
@@ -1340,7 +1350,7 @@ fn test_max_connections_on_all_interfaces() {
             );
             assert_eq!(
                 ws.read_message().unwrap(),
-                Message::Text("{\"type\":\"Rows\",\"payload\":[\"?column?\"]}".to_string())
+                Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
             );
             assert_eq!(
                 ws.read_message().unwrap(),
@@ -1481,15 +1491,13 @@ fn test_leader_promotion() {
     }
     let config = config.with_deploy_generation(Some(2));
     {
-        // start with different deploy generation, we need acknowledgement before starting sql port
-        let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
-        let config = config
-            .with_deploy_generation(Some(3))
-            .with_waiting_on_leader_promotion(Some(internal_http_addr_tx));
+        // start with different deploy generation
+        let config = config.with_deploy_generation(Some(3));
         thread::scope(|s| {
-            let server_handle = s.spawn(|| util::start_server(config).unwrap());
+            let listeners = Listeners::new().unwrap();
+            let internal_http_addr = listeners.inner.internal_http_local_addr();
+            let server_handle = s.spawn(|| listeners.serve(config).unwrap());
 
-            let internal_http_addr = internal_http_addr_rx.blocking_recv().unwrap();
             let status_http_url =
                 Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
 
@@ -1548,7 +1556,6 @@ fn test_leader_promotion() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
-    let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
     let config = util::Config::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
@@ -1561,16 +1568,11 @@ fn test_leader_promotion_always_using_deploy_generation() {
     }
     {
         // keep it the same, no need to promote the leader
-        let server = util::start_server(
-            config.with_waiting_on_leader_promotion(Some(internal_http_addr_tx)),
-        )
-        .unwrap();
+        let listeners = Listeners::new().unwrap();
+        let internal_http_addr = listeners.inner.internal_http_local_addr();
+        let server = listeners.serve(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
-
-        let internal_http_addr = internal_http_addr_rx
-            .blocking_recv()
-            .expect("should be populated");
 
         // check that we're the leader and promotion doesn't do anything
         let status_http_url =

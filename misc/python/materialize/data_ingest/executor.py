@@ -10,9 +10,9 @@
 import json
 from typing import Any, Dict, List
 
+import confluent_kafka  # type: ignore
 import pg8000
-from confluent_kafka import Producer  # type: ignore
-from confluent_kafka.admin import AdminClient, NewTopic  # type: ignore
+from confluent_kafka.admin import AdminClient  # type: ignore
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient  # type: ignore
 from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
 from confluent_kafka.serialization import (  # type: ignore
@@ -21,7 +21,7 @@ from confluent_kafka.serialization import (  # type: ignore
 )
 
 from materialize.data_ingest.data_type import Backend
-from materialize.data_ingest.field import Field
+from materialize.data_ingest.field import Field, formatted_value
 from materialize.data_ingest.row import Operation
 from materialize.data_ingest.transaction import Transaction
 
@@ -54,7 +54,7 @@ def delivery_report(err: str, msg: Any) -> None:
 
 
 class KafkaExecutor(Executor):
-    producer: Producer
+    producer: confluent_kafka.Producer
     avro_serializer: AvroSerializer
     key_avro_serializer: AvroSerializer
     serialization_context: SerializationContext
@@ -105,7 +105,11 @@ class KafkaExecutor(Executor):
 
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
-            [NewTopic(self.topic, num_partitions=1, replication_factor=1)]
+            [
+                confluent_kafka.admin.NewTopic(
+                    self.topic, num_partitions=1, replication_factor=1
+                )
+            ]
         )
         for topic, f in fs.items():
             f.result()
@@ -136,7 +140,7 @@ class KafkaExecutor(Executor):
             self.topic, MessageField.KEY
         )
 
-        self.producer = Producer(kafka_conf)
+        self.producer = confluent_kafka.Producer(kafka_conf)
 
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -161,16 +165,16 @@ class KafkaExecutor(Executor):
                         topic=self.topic,
                         key=self.key_avro_serializer(
                             {
-                                field.name: field.value
-                                for field in row.fields
+                                field.name: value
+                                for field, value in zip(row.fields, row.values)
                                 if field.is_key
                             },
                             self.key_serialization_context,
                         ),
                         value=self.avro_serializer(
                             {
-                                field.name: field.value
-                                for field in row.fields
+                                field.name: value
+                                for field, value in zip(row.fields, row.values)
                                 if not field.is_key
                             },
                             self.serialization_context,
@@ -182,8 +186,8 @@ class KafkaExecutor(Executor):
                         topic=self.topic,
                         key=self.key_avro_serializer(
                             {
-                                field.name: field.value
-                                for field in row.fields
+                                field.name: value
+                                for field, value in zip(row.fields, row.values)
                                 if field.is_key
                             },
                             self.key_serialization_context,
@@ -263,7 +267,7 @@ class PgExecutor(Executor):
                 for row in row_list.rows:
                     if row.operation == Operation.INSERT:
                         values_str = ", ".join(
-                            str(field.formatted_value()) for field in row.fields
+                            str(formatted_value(value)) for value in row.values
                         )
                         keys_str = ", ".join(
                             field.name for field in row.fields if field.is_key
@@ -276,7 +280,7 @@ class PgExecutor(Executor):
                         )
                     elif row.operation == Operation.UPSERT:
                         values_str = ", ".join(
-                            str(field.formatted_value()) for field in row.fields
+                            str(formatted_value(value)) for value in row.values
                         )
                         keys_str = ", ".join(
                             field.name for field in row.fields if field.is_key
@@ -295,8 +299,8 @@ class PgExecutor(Executor):
                         )
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{field.name} = {field.formatted_value()}"
-                            for field in row.fields
+                            f"{field.name} = {formatted_value(value)}"
+                            for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.execute(

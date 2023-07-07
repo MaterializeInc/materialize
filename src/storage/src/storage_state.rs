@@ -82,7 +82,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::Context;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
@@ -326,17 +325,7 @@ pub struct StorageInstanceContext {
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
-        if let Some(scratch_directory) = &scratch_directory {
-            tokio::fs::create_dir_all(scratch_directory)
-                .await
-                .with_context(|| {
-                    format!(
-                        "creating scratch directory: {}",
-                        scratch_directory.display()
-                    )
-                })?;
-        }
+    pub fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
         Ok(Self {
             scratch_directory,
             rocksdb_env: rocksdb::Env::new()?,

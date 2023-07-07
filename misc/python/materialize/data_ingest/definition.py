@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from copy import copy
 from enum import Enum
 from typing import Iterator, List, Optional
 
@@ -61,21 +60,22 @@ class Insert(Definition):
             )
 
         for i in range(self.count):
-            fields_with_values = [copy(field) for field in fields]
-            for field in fields_with_values:
-                if field.is_key:
-                    field.set_numeric_value(self.current_key)
-                else:
-                    field.set_random_value(self.record_size)
-
-            self.current_key += 1
             if self.current_key >= self.count:
                 break
+
+            values = [
+                field.data_type.numeric_value(self.current_key)
+                if field.is_key
+                else field.data_type.random_value(self.record_size)
+                for field in fields
+            ]
+            self.current_key += 1
 
             yield RowList(
                 [
                     Row(
-                        fields=fields_with_values,
+                        fields=fields,
+                        values=values,
                         operation=Operation.INSERT,
                     )
                 ]
@@ -95,20 +95,18 @@ class Upsert(Definition):
             )
 
         for i in range(self.count):
-            fields_with_values = [copy(field) for field in fields]
-            for field in fields_with_values:
-                if field.is_key:
-                    if self.keyspace == Keyspace.SINGLE_VALUE:
-                        field.value = field.data_type.numeric_value(0)
-                    else:
-                        raise NotImplementedError
-                else:
-                    field.value = field.data_type.random_value(self.record_size)
+            values = [
+                field.data_type.numeric_value(0)
+                if field.is_key
+                else field.data_type.random_value(self.record_size)
+                for field in fields
+            ]
 
             yield RowList(
                 [
                     Row(
-                        fields=fields_with_values,
+                        fields=fields,
+                        values=values,
                         operation=Operation.UPSERT,
                     )
                 ]
@@ -129,22 +127,26 @@ class Delete(Definition):
     def generate(self, fields: List[Field]) -> Iterator[RowList]:
 
         if self.number_of_records == Records.ONE:
-            fields_with_values = [copy(field) for field in fields if field.is_key]
-            for field in fields_with_values:
-                field.value = field.data_type.random_value(self.record_size)
-            yield RowList([Row(fields_with_values, Operation.DELETE)])
+            values = [
+                field.data_type.random_value(self.record_size)
+                for field in fields
+                if field.is_key
+            ]
+            yield RowList([Row(fields, values, Operation.DELETE)])
         elif self.number_of_records in (Records.SOME, Records.MANY):
             for i in range(self.number_of_records.value):
-                fields_with_values = [copy(field) for field in fields if field.is_key]
-                for field in fields_with_values:
-                    field.value = field.data_type.random_value(self.record_size)
-                yield RowList([Row(fields_with_values, Operation.DELETE)])
+                values = [
+                    field.data_type.random_value(self.record_size)
+                    for field in fields
+                    if field.is_key
+                ]
+                yield RowList([Row(fields, values, Operation.DELETE)])
         elif self.number_of_records == Records.ALL:
             assert self.num is not None
             for i in range(self.num):
-                fields_with_values = [copy(field) for field in fields if field.is_key]
-                for field in fields_with_values:
-                    field.value = field.data_type.numeric_value(i)
-                yield RowList([Row(fields_with_values, Operation.DELETE)])
+                values = [
+                    field.data_type.numeric_value(i) for field in fields if field.is_key
+                ]
+                yield RowList([Row(fields, values, Operation.DELETE)])
         else:
             raise ValueError(f"Unexpected number of records {self.number_of_records}")

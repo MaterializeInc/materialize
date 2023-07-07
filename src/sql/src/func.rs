@@ -206,8 +206,8 @@ impl TypeCategory {
 
 /// Builds an expression that evaluates a scalar function on the provided
 /// input expressions.
-struct Operation<R>(
-    Box<
+pub struct Operation<R>(
+    pub  Box<
         dyn Fn(
                 &ExprContext,
                 Vec<CoercibleScalarExpr>,
@@ -218,6 +218,12 @@ struct Operation<R>(
             + Sync,
     >,
 );
+
+impl<R> fmt::Debug for Operation<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Operation").finish()
+    }
+}
 
 impl Operation<HirScalarExpr> {
     /// Builds a unary operation that simply returns its input.
@@ -463,7 +469,7 @@ pub struct FuncImpl<R> {
     pub oid: u32,
     pub params: ParamList,
     pub return_type: ReturnType,
-    op: Operation<R>,
+    pub op: Operation<R>,
 }
 
 /// Describes how each implementation should be represented in the catalog.
@@ -2142,8 +2148,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(RangeAny) => UnaryFunc::RangeLowerInf(func::RangeLowerInf) => Bool, 3853;
         },
         "lpad" => Scalar {
-            params!(String, Int64) => VariadicFunc::PadLeading => String, 879;
-            params!(String, Int64, String) => VariadicFunc::PadLeading => String, 873;
+            params!(String, Int32) => VariadicFunc::PadLeading => String, 879;
+            params!(String, Int32, String) => VariadicFunc::PadLeading => String, 873;
         },
         "ltrim" => Scalar {
             params!(String) => UnaryFunc::TrimLeadingWhitespace(func::TrimLeadingWhitespace) => String, 881;
@@ -2452,7 +2458,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float64) => UnaryFunc::Asinh(func::Asinh) => Float64, 2465;
         },
         "split_part" => Scalar {
-            params!(String, String, Int64) => VariadicFunc::SplitPart => String, 2088;
+            params!(String, String, Int32) => VariadicFunc::SplitPart => String, 2088;
         },
         "stddev" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Float64, 2157;
@@ -2485,12 +2491,12 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, oid::FUNC_STDDEV_SAMP_UINT64_OID;
         },
         "substr" => Scalar {
-            params!(String, Int64) => VariadicFunc::Substr => String, 883;
-            params!(String, Int64, Int64) => VariadicFunc::Substr => String, 877;
+            params!(String, Int32) => VariadicFunc::Substr => String, 883;
+            params!(String, Int32, Int32) => VariadicFunc::Substr => String, 877;
         },
         "substring" => Scalar {
-            params!(String, Int64) => VariadicFunc::Substr => String, 937;
-            params!(String, Int64, Int64) => VariadicFunc::Substr => String, 936;
+            params!(String, Int32) => VariadicFunc::Substr => String, 937;
+            params!(String, Int32, Int32) => VariadicFunc::Substr => String, 936;
         },
         "sqrt" => Scalar {
             params!(Float64) => UnaryFunc::SqrtFloat64(func::SqrtFloat64) => Float64, 1344;

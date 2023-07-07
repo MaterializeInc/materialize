@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -37,6 +37,7 @@ from materialize.output_consistency.selection.selection import (
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
+    ValidationVerdict,
 )
 
 
@@ -99,11 +100,19 @@ class QueryExecutionManager:
 
         for test_outcome in test_outcomes:
             summary_to_update.count_executed_query_templates += 1
+            verdict = test_outcome.verdict()
 
-            if test_outcome.success():
+            if verdict in {
+                ValidationVerdict.SUCCESS,
+                ValidationVerdict.SUCCESS_WITH_WARNINGS,
+            }:
                 summary_to_update.count_successful_query_templates += 1
-            else:
+            elif verdict == ValidationVerdict.IGNORED_FAILURE:
+                summary_to_update.count_ignored_error_query_templates += 1
+            elif verdict == ValidationVerdict.FAILURE:
                 all_comparisons_passed = False
+            else:
+                raise RuntimeError(f"Unexpected verdict: {verdict}")
 
             if test_outcome.has_warnings():
                 summary_to_update.count_with_warning_query_templates += 1
@@ -254,10 +263,13 @@ class QueryExecutionManager:
         query_id: str,
         query_execution: QueryExecution,
         collapsed: bool,
+        status: Optional[str] = None,
         flush: bool = False,
     ) -> None:
+        status = "" if status is None else f" ({status})"
+
         self.output_printer.start_section(
-            f"Test query #{query_id}", collapsed=collapsed
+            f"Test query #{query_id}{status}", collapsed=collapsed
         )
         self.output_printer.print_sql(query_execution.generic_sql)
 
@@ -271,23 +283,28 @@ class QueryExecutionManager:
         validation_outcome: ValidationOutcome,
     ) -> None:
         if (
-            validation_outcome.success()
-            and not validation_outcome.has_warnings()
+            validation_outcome.verdict() == ValidationVerdict.SUCCESS
             and not self.config.verbose_output
         ):
             return
 
+        status = validation_outcome.verdict().name
+
         if not self.config.verbose_output:
             # In verbose mode, the header has already been printed
             self.print_query_header(
-                query_id, query_execution, collapsed=False, flush=True
+                query_id,
+                query_execution,
+                collapsed=validation_outcome.verdict().accepted(),
+                status=status,
+                flush=True,
             )
 
-        result_desc = "PASSED" if validation_outcome.success() else "FAILED"
+        result_desc = "PASSED" if validation_outcome.verdict().accepted() else "FAILED"
         success_reason = (
             f" ({validation_outcome.success_reason})"
             if validation_outcome.success_reason is not None
-            and validation_outcome.success()
+            and validation_outcome.verdict().succeeded()
             else ""
         )
 

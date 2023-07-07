@@ -301,8 +301,8 @@ pub enum SqlResult {
         tag: String,
         /// The result rows.
         rows: Vec<Vec<serde_json::Value>>,
-        /// The name of the columns in the row.
-        col_names: Vec<String>,
+        /// Information about each column.
+        desc: Description,
         // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
@@ -331,12 +331,12 @@ impl SqlResult {
         client: &mut SessionClient,
         tag: String,
         rows: Vec<Vec<serde_json::Value>>,
-        col_names: Vec<String>,
+        desc: RelationDesc,
     ) -> SqlResult {
         SqlResult::Rows {
             tag,
             rows,
-            col_names,
+            desc: Description::from(&desc),
             notices: make_notices(client),
         }
     }
@@ -407,7 +407,7 @@ impl From<anyhow::Error> for SqlError {
 pub enum WebSocketResponse {
     ReadyForQuery(String),
     Notice(Notice),
-    Rows(Vec<String>),
+    Rows(Description),
     Row(Vec<serde_json::Value>),
     CommandStarting(CommandStarting),
     CommandComplete(String),
@@ -430,6 +430,37 @@ impl Notice {
     pub fn message(&self) -> &str {
         &self.message
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Description {
+    pub columns: Vec<Column>,
+}
+
+impl From<&RelationDesc> for Description {
+    fn from(desc: &RelationDesc) -> Self {
+        let columns = desc
+            .iter()
+            .map(|(name, typ)| {
+                let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                Column {
+                    name: name.to_string(),
+                    type_oid: pg_type.oid(),
+                    type_len: pg_type.typlen(),
+                    type_mod: pg_type.typmod(),
+                }
+            })
+            .collect();
+        Description { columns }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Column {
+    pub name: String,
+    pub type_oid: u32,
+    pub type_len: i16,
+    pub type_mod: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -561,10 +592,10 @@ impl ResultSender for WebSocket {
             StatementResult::SqlResult(SqlResult::Rows {
                 tag,
                 rows,
-                col_names,
+                desc,
                 notices,
             }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(col_names)];
+                let mut msgs = vec![WebSocketResponse::Rows(desc)];
                 msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
                 msgs.push(WebSocketResponse::CommandComplete(tag));
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
@@ -589,14 +620,12 @@ impl ResultSender for WebSocket {
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (true, msgs)
             }
-            StatementResult::Subscribe { desc, tag, mut rx } => {
-                send(
-                    self,
-                    WebSocketResponse::Rows(
-                        desc.iter_names().map(|name| name.to_string()).collect(),
-                    ),
-                )
-                .await?;
+            StatementResult::Subscribe {
+                ref desc,
+                tag,
+                mut rx,
+            } => {
+                send(self, WebSocketResponse::Rows(desc.into())).await?;
 
                 let mut datum_vec = mz_repr::DatumVec::new();
                 loop {
@@ -915,10 +944,6 @@ async fn execute_stmt<S: ResultSender>(
             return Ok(SqlResult::err(client, e).into());
         }
     };
-    let col_names = match &desc.relation_desc {
-        Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
-        None => vec![],
-    };
     let tag = res.tag();
 
     Ok(match res {
@@ -1000,16 +1025,21 @@ async fn execute_stmt<S: ResultSender>(
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
             let mut datum_vec = mz_repr::DatumVec::new();
+            let desc = desc.relation_desc.expect("RelationDesc must exist");
+            let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                let types = &desc.relation_desc.as_ref().unwrap().typ().column_types;
                 sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
-            SqlResult::rows(client, tag, sql_rows, col_names).into()
+            SqlResult::rows(client, tag, sql_rows, desc).into()
         }
         ExecuteResponse::Subscribing { rx }  => {
-            StatementResult::Subscribe { tag:"SUBSCRIBE".into(), desc: desc.relation_desc.unwrap(), rx }
+            StatementResult::Subscribe {
+                tag: "SUBSCRIBE".into(),
+                desc: desc.relation_desc.unwrap(),
+                rx,
+            }
         },
         res @ (ExecuteResponse::Fetch { .. }
         | ExecuteResponse::CopyTo { .. }

@@ -71,7 +71,7 @@ impl ListenerHandle {
 /// closed, and the stream of incoming connections terminates.
 pub async fn listen(
     addr: SocketAddr,
-) -> Result<(ListenerHandle, impl ConnectionStream), io::Error> {
+) -> Result<(ListenerHandle, Pin<Box<dyn ConnectionStream>>), io::Error> {
     let listener = TcpListener::bind(addr).await?;
     let local_addr = listener.local_addr()?;
     let (trigger, tripwire) = oneshot::channel();
@@ -82,7 +82,7 @@ pub async fn listen(
     // TODO(benesch): replace `TCPListenerStream`s with `listener.incoming()` if
     // that is restored when the `Stream` trait stabilizes.
     let stream = TcpListenerStream::new(listener).take_until(tripwire);
-    Ok((handle, stream))
+    Ok((handle, Box::pin(stream)))
 }
 
 /// Serves incoming TCP connections from `conns` using `server`.

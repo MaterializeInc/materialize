@@ -103,7 +103,9 @@ class Owners(Check):
 
                 > CREATE ROLE owner_role_01
                 >[version<5900] ALTER ROLE owner_role_01 CREATEDB CREATECLUSTER
-                >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
                 """
             )
             + self._create_objects("owner_role_01", 1, expensive=True)
@@ -124,7 +126,9 @@ class Owners(Check):
 
                     > CREATE ROLE owner_role_02
                     >[version<5900] ALTER ROLE owner_role_02 CREATEDB CREATECLUSTER
-                    >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
+
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
                     """
                 ),
                 self._create_objects("owner_role_01", 3)
@@ -139,7 +143,9 @@ class Owners(Check):
 
                     > CREATE ROLE owner_role_03
                     >[version<5900] ALTER ROLE owner_role_03 CREATEDB CREATECLUSTER
-                    >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
+
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
                     """
                 ),
             ]

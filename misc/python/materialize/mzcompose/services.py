@@ -37,6 +37,7 @@ DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
+    "scratch:/scratch",
 ]
 
 # TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
@@ -84,7 +85,6 @@ class Materialized(Service):
             # are enabled for testing purposes only
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
-            "MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/mzdata/source_data",
             "MZ_BOOTSTRAP_ROLE=materialize",
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             # Please think twice before forwarding additional environment
@@ -100,8 +100,6 @@ class Materialized(Service):
 
         if system_parameter_defaults is None:
             system_parameter_defaults = {
-                "enable_upsert_source_disk": "true",
-                "upsert_source_disk_default": "true",
                 "persist_sink_minimum_batch_updates": "128",
                 "enable_multi_worker_storage_persist_sink": "true",
                 "storage_persist_sink_minimum_batch_updates": "100",
@@ -248,7 +246,6 @@ class Clusterd(Service):
         environment = [
             "CLUSTERD_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
-            "CLUSTERD_SCRATCH_DIRECTORY=/mzdata/source_data",
             *environment_extra,
         ]
 

@@ -28,7 +28,10 @@ class DefaultPrivileges(Check):
             > SET SCHEMA defpriv_schema
             > CREATE ROLE defpriv_role1
             >[version<5900] ALTER ROLE defpriv_role1 CREATEDB CREATECLUSTER
-            >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role1
+
+            $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role1
+
             > CREATE TABLE defpriv_table1 (c int)
             """
             )
@@ -44,7 +47,10 @@ class DefaultPrivileges(Check):
                 > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role1;
                 > CREATE ROLE defpriv_role2
                 >[version<5900] ALTER ROLE defpriv_role2 CREATEDB CREATECLUSTER
-                >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role2
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role2
+
                 > CREATE TABLE defpriv_table2 (c int)
                 """,
                 """
@@ -53,7 +59,10 @@ class DefaultPrivileges(Check):
                 > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role2;
                 > CREATE ROLE defpriv_role3
                 >[version<5900] ALTER ROLE defpriv_role3 CREATEDB CREATECLUSTER
-                >[version>=5900] GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role3
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role3
+
                 > CREATE TABLE defpriv_table3 (c int)
                 """,
             ]

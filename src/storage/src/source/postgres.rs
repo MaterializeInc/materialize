@@ -236,10 +236,6 @@ pub enum TransientError {
     UnknownReplicationMessage,
     #[error("unexpected logical replication message")]
     UnknownLogicalReplicationMessage,
-    #[error("malformed logical replication message")]
-    MalformedReplicationMessage(#[source] std::io::Error),
-    #[error("transaction begun without BEGIN")]
-    UnmatchedTransaction,
     #[error("received replication event outside of transaction")]
     BareTransactionEvent,
     #[error("lsn mismatch between BEGIN and COMMIT")]
@@ -318,9 +314,9 @@ async fn fetch_slot_resume_lsn(client: &Client, slot: &str) -> Result<MzOffset, 
 
         match row.get("confirmed_flush_lsn") {
             // For postgres, `confirmed_flush_lsn` means that the slot is able to produce
-            // all transactions that happen at tx_lsn > confirmed_flush_lsn. Therefore the
-            // upper is confirmed_flush_lsn + 1
-            Some(flush_lsn) => return Ok(MzOffset::from(flush_lsn.parse::<PgLsn>().unwrap()) + 1),
+            // all transactions that happen at tx_lsn >= confirmed_flush_lsn. Therefore this value
+            // already has "upper" semantics.
+            Some(flush_lsn) => return Ok(MzOffset::from(flush_lsn.parse::<PgLsn>().unwrap())),
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes
             None => tokio::time::sleep(Duration::from_millis(500)).await,
         };

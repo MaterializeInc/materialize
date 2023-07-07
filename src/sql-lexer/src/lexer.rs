@@ -32,13 +32,43 @@
 //! ["Lexical Structure"]: https://www.postgresql.org/docs/current/sql-syntax-lexical.html
 //! [backend/parser/scan.l]: https://github.com/postgres/postgres/blob/90851d1d26f54ccb4d7b1bc49449138113d6ec83/src/backend/parser/scan.l
 
+use std::error::Error;
 use std::{char, fmt};
 
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;
+use serde::{Deserialize, Serialize};
 
 use crate::keywords::Keyword;
-use crate::parser::ParserError;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LexerError {
+    /// The error message.
+    pub message: String,
+    /// The byte position with which the error is associated.
+    pub pos: usize,
+}
+
+impl fmt::Display for LexerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl Error for LexerError {}
+
+impl LexerError {
+    /// Constructs an error with the provided message at the provided position.
+    pub(crate) fn new<S>(pos: usize, message: S) -> LexerError
+    where
+        S: Into<String>,
+    {
+        LexerError {
+            pos,
+            message: message.into(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -89,7 +119,7 @@ impl fmt::Display for Token {
 
 macro_rules! bail {
     ($pos:expr, $($fmt:expr),*) => {
-        return Err(ParserError::new($pos, format!($($fmt),*)))
+        return Err(LexerError::new($pos, format!($($fmt),*)))
     }
 }
 
@@ -100,7 +130,7 @@ macro_rules! bail {
 ///
 /// See the module documentation for more information about the lexical
 /// structure of SQL.
-pub fn lex(query: &str) -> Result<Vec<(Token, usize)>, ParserError> {
+pub fn lex(query: &str) -> Result<Vec<(Token, usize)>, LexerError> {
     let buf = &mut LexBuf::new(query);
     let mut tokens = vec![];
     while let Some(ch) = buf.next() {
@@ -152,7 +182,7 @@ fn lex_line_comment(buf: &mut LexBuf) {
     buf.take_while(|ch| ch != '\n');
 }
 
-fn lex_multiline_comment(buf: &mut LexBuf) -> Result<(), ParserError> {
+fn lex_multiline_comment(buf: &mut LexBuf) -> Result<(), LexerError> {
     let pos = buf.pos() - 2;
     let mut nesting = 0;
     while let Some(ch) = buf.next() {
@@ -182,7 +212,7 @@ fn lex_ident(buf: &mut LexBuf) -> Token {
     }
 }
 
-fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, ParserError> {
+fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
     let mut s = String::new();
     let pos = buf.pos() - 1;
     loop {
@@ -197,7 +227,7 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, ParserError> {
     Ok(Token::Ident(s))
 }
 
-fn lex_string(buf: &mut LexBuf) -> Result<String, ParserError> {
+fn lex_string(buf: &mut LexBuf) -> Result<String, LexerError> {
     let mut s = String::new();
     loop {
         let pos = buf.pos() - 1;
@@ -215,13 +245,13 @@ fn lex_string(buf: &mut LexBuf) -> Result<String, ParserError> {
     }
 }
 
-fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
-    fn lex_unicode_escape(buf: &mut LexBuf, n: usize) -> Result<char, ParserError> {
+fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, LexerError> {
+    fn lex_unicode_escape(buf: &mut LexBuf, n: usize) -> Result<char, LexerError> {
         let pos = buf.pos() - 2;
         buf.next_n(n)
             .and_then(|s| u32::from_str_radix(s, 16).ok())
             .and_then(|codepoint| char::try_from(codepoint).ok())
-            .ok_or_else(|| ParserError::new(pos, "invalid unicode escape"))
+            .ok_or_else(|| LexerError::new(pos, "invalid unicode escape"))
     }
 
     // We do not support octal (\o) or hexadecimal (\x) escapes, since it is
@@ -230,16 +260,16 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
     // worth doing right now. We still lex the escapes to produce nice error
     // messages.
 
-    fn lex_octal_escape(buf: &mut LexBuf) -> ParserError {
+    fn lex_octal_escape(buf: &mut LexBuf) -> LexerError {
         let pos = buf.pos() - 2;
         buf.take_while(|ch| matches!(ch, '0'..='7'));
-        ParserError::new(pos, "octal escapes are not supported")
+        LexerError::new(pos, "octal escapes are not supported")
     }
 
-    fn lex_hexadecimal_escape(buf: &mut LexBuf) -> ParserError {
+    fn lex_hexadecimal_escape(buf: &mut LexBuf) -> LexerError {
         let pos = buf.pos() - 2;
         buf.take_while(|ch| matches!(ch, '0'..='9' | 'A'..='F' | 'a'..='f'));
-        ParserError::new(pos, "hexadecimal escapes are not supported")
+        LexerError::new(pos, "hexadecimal escapes are not supported")
     }
 
     let mut s = String::new();
@@ -280,27 +310,27 @@ fn lex_to_adjacent_string(buf: &mut LexBuf) -> bool {
     whitespace.contains(&['\n', '\r'][..]) && buf.consume('\'')
 }
 
-fn lex_dollar_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
+fn lex_dollar_string(buf: &mut LexBuf) -> Result<Token, LexerError> {
     let pos = buf.pos() - 1;
     let tag = format!("${}$", buf.take_while(|ch| ch != '$'));
     let _ = buf.next();
     if let Some(s) = buf.take_to_delimiter(&tag) {
         Ok(Token::String(s.into()))
     } else {
-        Err(ParserError::new(pos, "unterminated dollar-quoted string"))
+        Err(LexerError::new(pos, "unterminated dollar-quoted string"))
     }
 }
 
-fn lex_parameter(buf: &mut LexBuf) -> Result<Token, ParserError> {
+fn lex_parameter(buf: &mut LexBuf) -> Result<Token, LexerError> {
     let pos = buf.pos() - 1;
     let n = buf
         .take_while(|ch| matches!(ch, '0'..='9'))
         .parse()
-        .map_err(|_| ParserError::new(pos, "invalid parameter number"))?;
+        .map_err(|_| LexerError::new(pos, "invalid parameter number"))?;
     Ok(Token::Parameter(n))
 }
 
-fn lex_number(buf: &mut LexBuf) -> Result<Token, ParserError> {
+fn lex_number(buf: &mut LexBuf) -> Result<Token, LexerError> {
     buf.prev();
     let mut s = buf.take_while(|ch| matches!(ch, '0'..='9')).to_owned();
 
@@ -321,7 +351,7 @@ fn lex_number(buf: &mut LexBuf) -> Result<Token, ParserError> {
         };
         let exp = buf.take_while(|ch| matches!(ch, '0'..='9'));
         if require_exp && exp.is_empty() {
-            return Err(ParserError::new(buf.pos() - 1, "missing required exponent"));
+            return Err(LexerError::new(buf.pos() - 1, "missing required exponent"));
         } else if exp.is_empty() {
             // Put back consumed E.
             buf.prev();
@@ -334,7 +364,7 @@ fn lex_number(buf: &mut LexBuf) -> Result<Token, ParserError> {
     Ok(Token::Number(s))
 }
 
-fn lex_op(buf: &mut LexBuf) -> Result<Token, ParserError> {
+fn lex_op(buf: &mut LexBuf) -> Result<Token, LexerError> {
     buf.prev();
     let mut s = String::new();
 

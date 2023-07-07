@@ -82,10 +82,14 @@ pub(crate) mod with_options;
 use crate::plan::with_options::OptionalInterval;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use expr::{
+    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
+    WindowExprType,
+};
 pub use notice::PlanNotice;
 pub use optimize::OptimizerConfig;
-pub use query::{QueryContext, QueryLifetime};
+pub use query::{ExprContext, QueryContext, QueryLifetime};
+pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::PlannedRoleAttributes;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
@@ -455,6 +459,7 @@ pub struct CreateClusterManagedPlan {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub compute: ComputeReplicaConfig,
+    pub disk: bool,
 }
 
 #[derive(Debug)]
@@ -493,6 +498,7 @@ pub enum ReplicaConfig {
         size: String,
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
+        disk: bool,
     },
 }
 
@@ -1212,6 +1218,7 @@ pub struct PlanClusterOption {
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
+    pub disk: AlterOptionParameter<bool>,
 }
 
 impl Default for PlanClusterOption {
@@ -1225,6 +1232,7 @@ impl Default for PlanClusterOption {
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
+            disk: AlterOptionParameter::Unchanged,
         }
     }
 }

@@ -475,7 +475,7 @@ CREATE SOURCE avro_source
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES
+  FORMAT JSON
   WITH (SIZE = '3xsmall');
 ```
 
@@ -485,7 +485,7 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
     (data->>'field3')::float AS field_3
-  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
+  FROM json_source;
 ```
 
 {{< /tab >}}
