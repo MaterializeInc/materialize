@@ -15,7 +15,9 @@ use std::ops::Deref;
 
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
+use proptest::prelude::any;
 use proptest::prop_compose;
+use regex::{Error, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
@@ -43,17 +45,38 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 /// This type also implements [`Serialize`] and [`Deserialize`] via the
 /// [`serde_regex`] crate.
 #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
-pub struct Regex(
+pub struct Regex {
+    pub pattern: String,
+    pub case_insensitive: bool,
     // TODO(benesch): watch for a more efficient binary serialization for
     // [`regex::Regex`] (https://github.com/rust-lang/regex/issues/258). The
     // `serde_regex` crate serializes to a string and is forced to recompile the
     // regex during deserialization.
-    #[serde(with = "serde_regex")] pub regex::Regex,
-);
+    // TODO(ggevay): The serialization based on `as_str()` is actually incorrect, because it's
+    // not capturing `case_insensitive`! I fixed this for the protobuf serialization, but not yet
+    // for the Deserialize/Serialize implementations (which are derived by `serde_regex`).
+    // This is not so urgent to fix, because this is only used by non-essential things AFAIK:
+    // - `MzReflect`
+    // - `EXPLAIN AS JSON` (through `DisplayJson`)
+    #[serde(with = "serde_regex")]
+    pub regex: regex::Regex,
+}
+
+impl Regex {
+    pub fn new(pattern: String, case_insensitive: bool) -> Result<Regex, Error> {
+        let mut regex_builder = RegexBuilder::new(pattern.as_str());
+        regex_builder.case_insensitive(case_insensitive);
+        Ok(Regex {
+            pattern,
+            case_insensitive,
+            regex: regex_builder.build()?,
+        })
+    }
+}
 
 impl PartialEq<Regex> for Regex {
     fn eq(&self, other: &Regex) -> bool {
-        self.0.as_str() == other.0.as_str()
+        self.pattern == other.pattern && self.case_insensitive == other.case_insensitive
     }
 }
 
@@ -67,13 +90,14 @@ impl PartialOrd for Regex {
 
 impl Ord for Regex {
     fn cmp(&self, other: &Regex) -> Ordering {
-        self.0.as_str().cmp(other.0.as_str())
+        (&self.pattern, self.case_insensitive).cmp(&(&other.pattern, other.case_insensitive))
     }
 }
 
 impl Hash for Regex {
     fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.0.as_str().hash(hasher)
+        self.pattern.hash(hasher);
+        self.case_insensitive.hash(hasher);
     }
 }
 
@@ -81,19 +105,20 @@ impl Deref for Regex {
     type Target = regex::Regex;
 
     fn deref(&self) -> &regex::Regex {
-        &self.0
+        &self.regex
     }
 }
 
 impl RustType<ProtoRegex> for Regex {
     fn into_proto(&self) -> ProtoRegex {
         ProtoRegex {
-            regex: self.0.as_str().to_string(),
+            pattern: self.pattern.clone(),
+            case_insensitive: self.case_insensitive,
         }
     }
 
     fn from_proto(proto: ProtoRegex) -> Result<Self, TryFromProtoError> {
-        Ok(Regex(regex::Regex::from_proto(proto.regex)?))
+        Ok(Regex::new(proto.pattern, proto.case_insensitive)?)
     }
 }
 
@@ -109,10 +134,10 @@ const END_SYMBOLS: &str = r"(\$|(\\z))?";
 prop_compose! {
     pub fn any_regex()
                 (b in BEGINNING_SYMBOLS, c in CHARACTERS,
-                 r in REPETITIONS, e in END_SYMBOLS)
+                 r in REPETITIONS, e in END_SYMBOLS, case_insensitive in any::<bool>())
                 -> Regex {
         let string = format!("{}{}{}{}", b, c, r, e);
-        Regex(regex::Regex::new(&string).unwrap())
+        Regex::new(string, case_insensitive).unwrap()
     }
 }
 

@@ -779,14 +779,15 @@ impl MirScalarExpr {
                             }
                         } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
                             if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
-                                let flags = if *case_insensitive { "i" } else { "" };
-                                *e = match func::build_regex(row.unpack_first().unwrap_str(), flags)
-                                {
+                                *e = match Regex::new(
+                                    row.unpack_first().unwrap_str().to_string(),
+                                    *case_insensitive,
+                                ) {
                                     Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
-                                        func::IsRegexpMatch(Regex(regex)),
+                                        func::IsRegexpMatch(regex),
                                     )),
                                     Err(err) => MirScalarExpr::literal(
-                                        Err(err),
+                                        Err(err.into()),
                                         e.typ(column_types).scalar_type,
                                     ),
                                 };
@@ -1121,9 +1122,9 @@ impl MirScalarExpr {
                                 _ => "",
                             };
                             *e = match func::build_regex(needle, flags) {
-                                Ok(regex) => mem::take(exprs).into_first().call_unary(
-                                    UnaryFunc::RegexpMatch(func::RegexpMatch(Regex(regex))),
-                                ),
+                                Ok(regex) => mem::take(exprs)
+                                    .into_first()
+                                    .call_unary(UnaryFunc::RegexpMatch(func::RegexpMatch(regex))),
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
                                     e.typ(column_types).scalar_type,

@@ -13,12 +13,11 @@ use std::str::FromStr;
 use derivative::Derivative;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{Arbitrary, Strategy};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::like_pattern::proto_matcher_impl::ProtoSubpatternVec;
 use crate::scalar::EvalError;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
@@ -129,18 +128,16 @@ impl RustType<ProtoMatcher> for Matcher {
         ProtoMatcher {
             pattern: self.pattern.clone(),
             case_insensitive: self.case_insensitive,
-            matcher_impl: Some(self.matcher_impl.into_proto()),
+            //matcher_impl: Some(self.matcher_impl.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
-        Ok(Matcher {
-            pattern: proto.pattern,
-            case_insensitive: proto.case_insensitive,
-            matcher_impl: proto
-                .matcher_impl
-                .into_rust_if_some("ProtoMatcher::matcher_impl")?,
-        })
+        Ok(
+            compile(proto.pattern.as_str(), proto.case_insensitive).map_err(|eval_err| {
+                TryFromProtoError::LikePatternDeserializationError(eval_err.to_string())
+            })?,
+        )
     }
 }
 
@@ -148,39 +145,6 @@ impl RustType<ProtoMatcher> for Matcher {
 enum MatcherImpl {
     String(Vec<Subpattern>),
     Regex(#[serde(with = "serde_regex")] Regex),
-}
-
-impl RustType<ProtoMatcherImpl> for MatcherImpl {
-    fn into_proto(&self) -> ProtoMatcherImpl {
-        use proto_matcher_impl::Kind::*;
-        ProtoMatcherImpl {
-            kind: Some(match self {
-                MatcherImpl::String(subpatterns) => String(subpatterns.into_proto()),
-                MatcherImpl::Regex(regex) => Regex(regex.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoMatcherImpl) -> Result<Self, TryFromProtoError> {
-        use proto_matcher_impl::Kind::*;
-        match proto.kind {
-            Some(String(subpatterns)) => Ok(MatcherImpl::String(subpatterns.into_rust()?)),
-            Some(Regex(regex)) => Ok(MatcherImpl::Regex(regex.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field("ProtoMatcherImpl::kind")),
-        }
-    }
-}
-
-impl RustType<ProtoSubpatternVec> for Vec<Subpattern> {
-    fn into_proto(&self) -> ProtoSubpatternVec {
-        ProtoSubpatternVec {
-            vec: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSubpatternVec) -> Result<Self, TryFromProtoError> {
-        proto.vec.into_rust()
-    }
 }
 
 /// Builds a Matcher that matches a SQL LIKE pattern.

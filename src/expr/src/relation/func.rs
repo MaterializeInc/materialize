@@ -1898,7 +1898,7 @@ impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
 
 impl AnalyzedRegex {
     pub fn new(s: &str) -> Result<Self, regex::Error> {
-        let r = regex::Regex::new(s)?;
+        let r = ReprRegex::new(s.to_string(), false)?;
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
         let descs: Vec<_> = r
@@ -1917,7 +1917,7 @@ impl AnalyzedRegex {
                 nullable: true,
             })
             .collect();
-        Ok(Self(ReprRegex(r), descs))
+        Ok(Self(r, descs))
     }
     pub fn capture_groups_len(&self) -> usize {
         self.1.len()
@@ -1926,7 +1926,7 @@ impl AnalyzedRegex {
         self.1.iter()
     }
     pub fn inner(&self) -> &Regex {
-        &(self.0).0
+        &(self.0).regex
     }
 }
 
