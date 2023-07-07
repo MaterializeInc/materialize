@@ -11,11 +11,17 @@ import random
 import time
 from typing import List, Optional, Tuple, Type
 
-from materialize.parallel_workload.database import Database, DBObject, Table, View
+from materialize.parallel_workload.database import (
+    MAX_ROLES,
+    MAX_TABLES,
+    MAX_VIEWS,
+    Database,
+    DBObject,
+    Role,
+    Table,
+    View,
+)
 from materialize.parallel_workload.executor import Executor
-
-MAX_TABLES = 20
-MAX_VIEWS = 20
 
 
 class Action:
@@ -52,7 +58,7 @@ class SelectAction(Action):
                     "in the same timedomain",
                 ]
             )
-        elif self.complexity == "ddl":
+        if self.complexity == "ddl":
             result.extend(
                 [
                     "does not exist",
@@ -143,11 +149,6 @@ class DeleteAction(Action):
 
 
 class CreateIndexAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [
-            "already exists",
-        ] + super().errors_to_ignore()
-
     def run(self, exe: Executor) -> None:
         tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
         table = self.rng.choice(tables_views)
@@ -177,16 +178,13 @@ class DropIndexAction(Action):
 
 
 class CreateTableAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [
-            "already exists",
-        ] + super().errors_to_ignore()
-
     def run(self, exe: Executor) -> None:
         with self.database.lock:
             if len(self.database.tables) > MAX_TABLES:
                 return
-            table = Table(self.rng, len(self.database.tables))
+            table_id = self.database.table_id
+            self.database.table_id += 1
+            table = Table(self.rng, table_id)
             table.create(exe)
             self.database.tables.append(table)
 
@@ -238,27 +236,29 @@ class CommitRollbackAction(Action):
 
 
 class CreateViewAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [
-            "already exists",
-        ] + super().errors_to_ignore()
-
     def run(self, exe: Executor) -> None:
         with self.database.lock:
             if len(self.database.views) > MAX_VIEWS:
                 return
+            view_id = self.database.view_id
+            self.database.view_id += 1
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = self.rng.choice(self.database.tables)
             base_object2: Optional[Table] = self.rng.choice(self.database.tables)
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(self.rng, len(self.database.views), base_object, base_object2)
+            view = View(self.rng, view_id, base_object, base_object2)
             view.create(exe)
             self.database.views.append(view)
 
 
 class DropViewAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore()
+
     def run(self, exe: Executor) -> None:
         with self.database.lock:
             if not self.database.views:
@@ -272,6 +272,49 @@ class DropViewAction(Action):
             # TODO: Cascade
             exe.execute(query)
             del self.database.views[view_id]
+
+
+class CreateRoleAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.database.lock:
+            if len(self.database.roles) > MAX_ROLES:
+                return
+            role_id = self.database.role_id
+            self.database.role_id += 1
+            role = Role(role_id)
+            role.create(exe)
+            self.database.roles.append(role)
+
+
+class DropRoleAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [
+            "cannot be dropped because some objects depend on it",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.database.lock:
+            if not self.database.roles:
+                return
+            role_id = self.rng.randrange(len(self.database.roles))
+            role = self.database.roles[role_id]
+            query = f"DROP ROLE {role}"
+            # TODO: Cascade
+            exe.execute(query)
+            del self.database.roles[role_id]
+
+
+class GrantPrivilegesAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.database.lock:
+            if not self.database.roles:
+                return
+            role = self.rng.choice(self.database.roles)
+            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+            tables_views: List[DBObject] = [*self.database.tables, *self.database.views]
+            table = self.rng.choice(tables_views)
+            query = f"GRANT {privilege} ON {table} TO {role}"
+            exe.execute(query)
 
 
 class CancelAction(Action):
@@ -333,6 +376,9 @@ ddl_action_list = ActionList(
         (DropTableAction, 1),
         (CreateViewAction, 8),
         (DropViewAction, 4),
+        (CreateRoleAction, 2),
+        (DropRoleAction, 1),
+        (GrantPrivilegesAction, 2),
         # (RenameTableAction, 1),
         # (TransactionIsolationAction, 1),
     ],

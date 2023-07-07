@@ -16,8 +16,13 @@ from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor
 
 MAX_COLUMNS = 20
+MAX_TABLES = 20
+MAX_VIEWS = 20
+MAX_ROLES = 20
+
 MAX_INITIAL_TABLES = 10
 MAX_INITIAL_VIEWS = 10
+MAX_INITIAL_ROLES = 3
 
 
 class Column:
@@ -163,10 +168,27 @@ class View(DBObject):
         exe.execute(query)
 
 
+class Role(DBObject):
+    role_id: int
+
+    def __init__(self, role_id: int):
+        self.role_id = role_id
+
+    def __str__(self) -> str:
+        return f"r{self.role_id}"
+
+    def create(self, exe: Executor) -> None:
+        exe.execute(f"CREATE ROLE {self}")
+
+
 class Database:
     seed: str
     tables: List[Table]
+    table_id: int
     views: List[View]
+    view_id: int
+    roles: List[Role]
+    role_id: int
     indexes: Set[str]
     lock: threading.Lock
 
@@ -174,6 +196,7 @@ class Database:
         self.seed = seed
 
         self.tables = [Table(rng, i) for i in range(rng.randint(2, MAX_INITIAL_TABLES))]
+        self.table_id = len(self.tables)
         self.views = []
         for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
             # Only use tables for now since LIMIT 1 and statement_timeout are
@@ -184,6 +207,9 @@ class Database:
                 base_object2 = None
             view = View(rng, i, base_object, base_object2)
             self.views.append(view)
+        self.view_id = len(self.views)
+        self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
+        self.role_id = len(self.roles)
         self.indexes = set()
         self.lock = threading.Lock()
 
@@ -203,3 +229,10 @@ class Database:
 
         for view in self.views:
             view.create(exe)
+
+        exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
+        for row in exe.cur.fetchall():
+            exe.execute(f"DROP ROLE {row[0]}")
+
+        for role in self.roles:
+            role.create(exe)

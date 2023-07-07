@@ -28,7 +28,7 @@ from materialize.parallel_workload.action import (
     write_action_list,
 )
 from materialize.parallel_workload.database import Database
-from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.executor import Executor, initialize_logging
 from materialize.parallel_workload.worker import Worker
 
 SEED_RANGE = 1_000_000
@@ -50,6 +50,7 @@ def run(
     print(
         f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity} --scenario={scenario} (--host={host} --port={port})"
     )
+    initialize_logging()
 
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
