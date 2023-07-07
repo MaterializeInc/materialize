@@ -65,6 +65,16 @@ and return values of statements is outside the scope of this document;
 the interested reader should consult the general Materialize SQL
 documentation.
 
+Note that these concepts are not only exposed by the controller
+interface, but also at a higher level, to the end-user, in SQL. For
+example, the user may bind the statement `SELECT * FROM t` to the
+portal `c` by executing the SQL `DECLARE c CURSOR for SELECT * FROM t`,
+and may later execute this portal using the SQL `FETCH FORWARD ALL FROM c`.
+It's important to note that these statements are distinct from the ones
+they reference; for example, the statement `DECLARE c CURSOR for SELECT * FROM t`
+must itself be prepared, bound to a portal (distinct from the portal
+`c`), and executed.
+
 ## Communication Flow
 
 Once a session has been established, the owner of the adapter client
