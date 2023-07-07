@@ -115,17 +115,27 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Action {
+    /// Dumps the stash contents to stdout in a human readable format.
+    /// Includes JSON for each key and value that can be hand edited and
+    /// then passed to the `edit` or `delete` commands.
     Dump {
         /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
+    /// Edits a single item in a collection in the stash.
     Edit {
+        /// The name of the stash collection to edit.
         collection: String,
+        /// The JSON-encoded key that identifies the item to edit.
         key: serde_json::Value,
+        /// The new JSON-encoded value for the item.
         value: serde_json::Value,
     },
+    /// Deletes a single item in a collection in the stash
     Delete {
+        /// The name of the stash collection to edit.
         collection: String,
+        /// The JSON-encoded key that identifies the item to delete.
         key: serde_json::Value,
     },
     /// Checks if the specified stash could be upgraded from its state to the
