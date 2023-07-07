@@ -174,7 +174,7 @@ ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Error","payload":{"message":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block","code":"XX000"}}
+{"type":"Error","payload":{"message":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block","code":"25001"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
@@ -276,7 +276,7 @@ ws-text
 {"type":"Row","payload":["18446744073709551615",1,1]}
 {"type":"CommandComplete","payload":"SUBSCRIBE"}
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Error","payload":{"message":"SUBSCRIBE in transactions must be the only read statement","code":"XX000"}}
+{"type":"Error","payload":{"message":"SUBSCRIBE in transactions must be the only read statement","code":"25000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text rows=2 fixtimestamp=true

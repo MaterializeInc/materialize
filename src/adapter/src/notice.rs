@@ -19,6 +19,7 @@ use mz_sql::ast::NoticeSeverity;
 use mz_sql::catalog::ErrorMessageObjectDescription;
 use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
+use tokio_postgres::error::SqlState;
 
 /// Notices that can occur in the adapter layer.
 ///
@@ -136,6 +137,45 @@ impl AdapterNotice {
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
             AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
             _ => None
+        }
+    }
+
+    /// Reports the error code.
+    pub fn code(&self) -> SqlState {
+        match self {
+            AdapterNotice::DatabaseAlreadyExists { .. } => SqlState::DUPLICATE_DATABASE,
+            AdapterNotice::SchemaAlreadyExists { .. } => SqlState::DUPLICATE_SCHEMA,
+            AdapterNotice::TableAlreadyExists { .. } => SqlState::DUPLICATE_TABLE,
+            AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
+            AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::WARNING,
+            AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
+            AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
+                SqlState::NO_ACTIVE_SQL_TRANSACTION
+            }
+            AdapterNotice::UserRequested { .. } => SqlState::WARNING,
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
+            AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
+            AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
+            AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
+            AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
+            AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
+            AdapterNotice::RbacSystemDisabled => SqlState::WARNING,
+            AdapterNotice::RbacUserDisabled => SqlState::WARNING,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
+            AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
+            AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
+            AdapterNotice::CannotRevoke { .. } => SqlState::WARNING,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::WARNING,
+            AdapterNotice::PlanNotice(plan) => match plan {
+                PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
+                PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
+            },
         }
     }
 }
