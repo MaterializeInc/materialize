@@ -14,7 +14,7 @@ In Materialize, the results of these queries can be kept automatically up-to-dat
 However, some organizations have a lot of rules.
 This can lead users to ask questions like "Can Materialize support 100,000 materialized views"?
 
-Fortunately there is a pattern for addressing this need without creating zillions of separate views.
+Fortunately there is a pattern to address this need without creating zillions of separate views.
 If your rules are simple enough to be expressed as data (i.e. not arbitrary SQL), then you can use lateral joins to implement a rules execution engine.
 
 ## Hands-on Example
@@ -30,10 +30,10 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
 1. Create the `birds` table and insert some birds.
     ```sql
     CREATE TABLE birds (
-    id INT,                           
+    id INT,
     name VARCHAR(50),
     wingspan_cm FLOAT,
-    colors jsonb                            
+    colors jsonb
     );
 
     INSERT INTO birds (id, name, wingspan_cm, colors) VALUES
@@ -64,7 +64,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
     (2, 'P', 'LTE', 100.0, '["Black","White"]'),
     (3, 'R', 'GTE', 20.0, '["Red"]');
     ```
-    Each rule has a unique `id` and encodes filters on wingspan and color, with `'GTE'` meaning "greater than or equal" and `'LTE'` meaning "less than or equal". For more complicated rules with varying schemas, you may consider using the [`jsonb` type](/sql/types/jsonb) and adjusting the logic in the upcoming view to suit your needs.
+    Each rule has a unique `id` and encodes filters on starting letter, wingspan and color. For wingspan_operator `'GTE'` means "greater than or equal" and `'LTE'` means "less than or equal". For more complicated rules with varying schemas, you might consider using the [`jsonb` type](/sql/types/jsonb) and adjust the logic in the upcoming `LATERAL` join to suit your needs.
 
 ### Create the View
 
@@ -86,14 +86,8 @@ LATERAL (
             OR
             (r.wingspan_operator = 'LTE' AND birds.wingspan_cm <= r.wingspan_cm)
         )
-        AND r.colors <@ birds.colors 
+        AND r.colors <@ birds.colors
 ) AS b;
-```
-
-Create an index to trigger incremental computation.
-
-```sql
-CREATE DEFAULT INDEX ON birds_filtered;
 ```
 
 ### Subscribe to Changes
@@ -107,8 +101,8 @@ CREATE DEFAULT INDEX ON birds_filtered;
     --------------|---------|---------|----------|---------------------|------------
     1688673701670      1         2       Penguin     ["Black","White"]       99.5
     ```
-    Notice that only the Penguin satisfies a rule, and in fact it's rule 2.
-1. In a separate session, insert a new bird that satisfies one of the existing rules.
+    Notice that the majestic penguin satisfies a rule, and in fact it's rule 2. None of the other birds satisfy any of the rules.
+1. In a separate session, insert a new bird that satisfies rule 3, which requires a bird whose first letter is 'R', with a wingspan greater than or equal to 20 centimeters, and whose colors contain "Red".
     ```sql
     INSERT INTO birds VALUES (11, 'Really big robin', 25.0, '["Red"]');
     ```
@@ -118,7 +112,7 @@ CREATE DEFAULT INDEX ON birds_filtered;
     --------------|---------|---------|--------------------|-----------|------------
     1688674195279      1         3       Really big robin     ["Red"]        25
     ```
-1. To see what happens, delete rule 3.
+1. For fun, let's delete rule 3 and see what happens.
     ```sql
     DELETE FROM bird_rules WHERE id = 3;
     ```
@@ -128,19 +122,22 @@ CREATE DEFAULT INDEX ON birds_filtered;
     1688674195279     -1         3       Really big robin     ["Red"]        25
     ```
     Notice the bird was removed because the rule no longer exists.
-1. Now let's update an existing bird so that it satisfies a new rule. It turns out our penguin also has some blue coloration.
+1. Now let's update an existing bird so that it satisfies a new rule. It turns out our penguin also has some blue coloration we didn't notice before.
     ```sql
     UPDATE birds SET colors = '["Black","White","Blue"]' WHERE name = 'Penguin';
     ```
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |   name   |      colors              | wingspan_cm
     --------------|---------|---------|----------|--------------------------|------------
-    1688675781416      1         1       Penguin   ["Black","White","Blue"]        99.5
+    1688675781416     -1         2       Penguin   ["Black","White"]               99.5
     1688675781416      1         2       Penguin   ["Black","White","Blue"]        99.5
+    1688675781416      1         1       Penguin   ["Black","White","Blue"]        99.5
     ```
-    Now the penguin satisfies both rules 1 and 2.
+    First there was an update to the row corresponding to the penguin's adherence to rule 2: a diff of -1 to delete the old value with just the black and white colors, and a diff of +1 to add the new value with black, white, and blue colors. Then there was a new record showing that the penguin now also adheres to rule 1.
 
 ### Clean Up
+
+Drop the tables to clean up.
 
 ```sql
 DROP TABLE birds CASCADE;
@@ -149,4 +146,4 @@ DROP TABLE bird_rules CASCADE;
 
 ## Conclusion
 
-The example presented here 
+Rule execution engines can be much more complex than the minimal example presented here, but the underlying principle is the same; define the rules as **data** and use a `LATERAL` join to apply each rule to the dataset. Once you materialize the view, either by creating an index or creating it as a materialized view, the results will be kept up to date automatically as the dataset changes and as the rules change.
