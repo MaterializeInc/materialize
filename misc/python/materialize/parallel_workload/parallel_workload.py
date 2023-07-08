@@ -57,7 +57,7 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    database = Database(rng, seed, complexity, scenario)
+    database = Database(rng, seed, host, port, complexity, scenario)
     conn = pg8000.connect(host=host, port=port, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -114,13 +114,9 @@ def run(
         threads.append(thread)
 
     if scenario == "cancel":
-        while any(worker.pg_pid == -1 for worker in workers):
-            print("Waiting until workers are ready")
-            time.sleep(1)
-        worker_pids = [worker.pg_pid for worker in workers]
         worker = Worker(
             worker_rng,
-            [CancelAction(worker_rng, database, worker_pids)],
+            [CancelAction(worker_rng, database, workers)],
             [1],
             end_time,
             False,

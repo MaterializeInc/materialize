@@ -185,6 +185,8 @@ class Database:
     seed: str
     complexity: str
     scenario: str
+    host: str
+    port: int
     tables: List[Table]
     table_id: int
     views: List[View]
@@ -194,8 +196,18 @@ class Database:
     indexes: Set[str]
     lock: threading.Lock
 
-    def __init__(self, rng: random.Random, seed: str, complexity: str, scenario: str):
+    def __init__(
+        self,
+        rng: random.Random,
+        seed: str,
+        host: str,
+        port: int,
+        complexity: str,
+        scenario: str,
+    ):
         self.seed = seed
+        self.host = host
+        self.port = port
         self.complexity = complexity
         self.scenario = scenario
 

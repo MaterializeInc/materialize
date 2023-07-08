@@ -35,11 +35,13 @@ class QueryError(Exception):
 class Executor:
     rng: random.Random
     cur: pg8000.Cursor
+    pg_pid: int
     insert_table: Optional[int]
 
     def __init__(self, rng: random.Random, cur: pg8000.Cursor):
         self.rng = rng
         self.cur = cur
+        self.pg_pid = -1
         self.insert_table = None
 
     def set_isolation(self, level: str) -> None:

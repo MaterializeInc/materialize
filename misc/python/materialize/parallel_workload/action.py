@@ -9,7 +9,9 @@
 
 import random
 import time
-from typing import List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, List, Optional, Tuple, Type
+
+import pg8000
 
 from materialize.parallel_workload.database import (
     MAX_ROLES,
@@ -22,6 +24,9 @@ from materialize.parallel_workload.database import (
     View,
 )
 from materialize.parallel_workload.executor import Executor
+
+if TYPE_CHECKING:
+    from materialize.parallel_workload.worker import Worker
 
 
 class Action:
@@ -45,6 +50,7 @@ class Action:
                     "violates not-null constraint",
                     "result exceeds max size of",
                     "unknown catalog item",  # Expected, see #20381
+                    "was concurrently dropped",  # role
                 ]
             )
         if self.db.scenario == "cancel":
@@ -156,6 +162,11 @@ class DeleteAction(Action):
 
 
 class CreateIndexAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [
+            "already exists",  # TODO: Investigate
+        ] + super().errors_to_ignore()
+
     def run(self, exe: Executor) -> None:
         tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
         table = self.rng.choice(tables_views)
@@ -297,6 +308,7 @@ class DropRoleAction(Action):
     def errors_to_ignore(self) -> List[str]:
         return [
             "cannot be dropped because some objects depend on it",
+            "current role cannot be dropped",
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
@@ -324,22 +336,62 @@ class GrantPrivilegesAction(Action):
             exe.execute(query)
 
 
+class RevokePrivilegesAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.roles:
+                return
+            role = self.rng.choice(self.db.roles)
+            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+            tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
+            table = self.rng.choice(tables_views)
+            query = f"REVOKE {privilege} ON {table} FROM {role}"
+            exe.execute(query)
+
+
+class ReconnectAction(Action):
+    def run(self, exe: Executor) -> None:
+        autocommit = exe.cur._c.autocommit
+        host = self.db.host
+        port = self.db.port
+
+        with self.db.lock:
+            user = self.rng.choice(["materialize", str(self.rng.choice(self.db.roles))])
+
+            conn = exe.cur._c
+            exe.cur.close()
+            conn.close()
+
+            conn = pg8000.connect(
+                host=host, port=port, user=user, database=str(self.db)
+            )
+
+        conn.autocommit = autocommit
+        cur = conn.cursor()
+        exe.cur = cur
+        exe.set_isolation("SERIALIZABLE")
+        cur.execute("SELECT pg_backend_pid()")
+        exe.pg_pid = cur.fetchall()[0][0]
+
+
 class CancelAction(Action):
-    worker_pids: List[int]
+    workers: List["Worker"]
 
     def __init__(
         self,
         rng: random.Random,
         db: Database,
-        worker_pids: List[int],
+        workers: List["Worker"],
     ):
         super().__init__(rng, db)
-        self.worker_pids = worker_pids
+        self.workers = workers
 
     def run(self, exe: Executor) -> None:
-        pid = self.rng.choice(self.worker_pids)
+        pid = self.rng.choice(
+            [worker.exe.pg_pid for worker in self.workers if worker.exe.pg_pid != -1]  # type: ignore
+        )
         exe.execute(f"SELECT pg_cancel_backend({pid})")
-        time.sleep(self.rng.uniform(0, 10))
+        time.sleep(self.rng.uniform(0, 3))
 
 
 class ActionList:
@@ -356,19 +408,20 @@ class ActionList:
 
 
 read_action_list = ActionList(
-    [(SelectAction, 100), (CommitRollbackAction, 1)],
+    [(SelectAction, 100), (CommitRollbackAction, 1), (ReconnectAction, 1)],
     autocommit=False,
 )
 
 write_action_list = ActionList(
-    [(InsertAction, 100), (CommitRollbackAction, 1)],
+    [(InsertAction, 100), (CommitRollbackAction, 1), (ReconnectAction, 1)],
     autocommit=False,
 )
 
 dml_nontrans_action_list = ActionList(
     [
         (DeleteAction, 10),
-        (UpdateAction, 10)
+        (UpdateAction, 10),
+        (ReconnectAction, 1),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions
@@ -385,6 +438,8 @@ ddl_action_list = ActionList(
         (CreateRoleAction, 2),
         (DropRoleAction, 1),
         (GrantPrivilegesAction, 2),
+        (RevokePrivilegesAction, 2),
+        (ReconnectAction, 1),
         # (RenameTableAction, 1),
         # (TransactionIsolationAction, 1),
     ],
