@@ -46,6 +46,11 @@ tests_without_views_and_replica=(
     test/sqllogictest/timedomain.slt
     test/sqllogictest/transactions.slt
 
+    # depends on unmaterializable functions
+    test/sqllogictest/regclass.slt
+    test/sqllogictest/regproc.slt
+    test/sqllogictest/regtype.slt
+
     # different outputs:
     test/sqllogictest/audit_log.slt # seems expected for audit log to be different
     test/sqllogictest/cluster.slt # different indexes auto-created

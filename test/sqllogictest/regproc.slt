@@ -1,0 +1,193 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Make sure that there are no functions with duplicate OIDs
+query I
+select oid from (select count(*) as cnt, oid from mz_catalog.mz_functions group by oid) where cnt>1
+----
+
+# regproc
+
+query T
+SELECT 1::regproc
+----
+1
+
+query T
+SELECT 1::int4::regproc
+----
+1
+
+query T
+SELECT 1::oid::regproc
+----
+1
+
+query T
+SELECT 1::oid::regproc::oid
+----
+1
+
+query T
+SELECT '1'::regproc
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regproc
+----
+1
+
+query T
+SELECT '1'::regproc::text
+----
+1
+
+query T
+SELECT 'now'::regproc::text
+----
+now
+
+# These overflows their stack in debug mode
+# query T
+# SELECT 'now'::regproc::text::regproc
+# ----
+# 1299
+#
+# query T
+# SELECT 'now'::regproc::text::regproc::text
+# ----
+# now
+#
+# query T
+# SELECT 'pg_catalog.now'::regproc::text::regproc::text
+# ----
+# now
+
+query T
+SELECT 'now'::regproc
+----
+1299
+
+query T
+SELECT 'now'::regproc::oid
+----
+1299
+
+query T
+SELECT NULL::regproc::text
+----
+NULL
+
+query error db error: ERROR: more than one function named "max"
+SELECT 'max'::regproc
+
+query T
+SELECT min(oid::int)::regproc::text FROM mz_objects WHERE name = 'max';
+----
+pg_catalog.max
+
+query error db error: ERROR: function "dne" does not exist
+SELECT 'dne'::regproc
+
+query T
+SELECT 'array_in'::regproc
+----
+750
+
+query B
+SELECT 750 = 'array_in'::regproc
+----
+true
+
+statement ok
+CREATE TABLE text_to_regproc (a text);
+
+statement ok
+INSERT INTO text_to_regproc VALUES (NULL), ('array_in');
+
+query I
+SELECT a::regproc FROM text_to_regproc ORDER BY a
+----
+750
+NULL
+
+# Regression for 9194
+query I
+select 'now'::regproc::oid::regproc
+----
+1299
+
+# Check that we handle functions and types w/ same name
+query T
+SELECT '1178'::regproc::text;
+----
+pg_catalog.date
+
+query T
+SELECT '1082'::regtype::text;
+----
+date
+
+query error db error: ERROR: more than one function named "date"
+SELECT 'date'::regproc::text;
+
+query T
+SELECT 'date'::regtype::text;
+----
+date
+
+statement ok
+CREATE TYPE array_length AS LIST (ELEMENT TYPE = int4);
+
+query T
+SELECT 'array_length'::regproc::text;
+----
+array_length
+
+query T
+SELECT 'array_length'::regtype::text;
+----
+array_length
+
+# Check that we handle functions and classes w/ same name
+statement ok
+CREATE TABLE quote_ident();
+
+query T
+SELECT 'quote_ident'::regclass::text;
+----
+quote_ident
+
+query T
+SELECT 'quote_ident'::regproc::text;
+----
+quote_ident
+
+# ensure that all existing functions can be cast to their respective names (#9199)
+statement OK
+select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
+
+# Regression for 18020
+query B
+SELECT returns_set FROM mz_functions WHERE name in ('generate_series', 'generate_subscripts', 'regexp_extract', 'jsonb_array_elements', 'jsonb_array_elements_text', 'jsonb_each', 'jsonb_each_text', 'jsonb_object_keys');
+----
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true

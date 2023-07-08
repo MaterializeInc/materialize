@@ -3548,6 +3548,9 @@ COMPLETE 0
 
 ## Tables
 
+query error db error: ERROR: relation "t3" does not exist
+SELECT has_table_privilege('t3', 'SELECT')
+
 query B
 SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
@@ -3624,6 +3627,9 @@ simple conn=mz_system,user=mz_system
 REVOKE USAGE ON ALL TYPES FROM PUBLIC
 ----
 COMPLETE 0
+
+query error db error: ERROR: type "ty1" does not exist
+SELECT has_type_privilege('ty1', 'USAGE')
 
 query B
 SELECT has_type_privilege('d1.s1.ty1', 'USAGE')

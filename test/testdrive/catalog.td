@@ -647,6 +647,7 @@ mz_notices
 mz_notices_redacted
 mz_object_fully_qualified_names
 mz_object_lifetimes
+mz_object_oid_alias
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
