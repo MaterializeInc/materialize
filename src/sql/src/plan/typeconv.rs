@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
 use mz_expr::{func, VariadicFunc};
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
@@ -29,6 +30,22 @@ fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
     CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
         let mut out = invoke(ecx.qcx, vec![from_type.clone()]).ok()?;
+        Some(move |e| {
+            out.splice_parameters(&[e], 0);
+            out
+        })
+    })
+}
+
+fn sql_impl_cast_per_context(casts: &[(CastContext, &'static str)]) -> CastTemplate {
+    let casts: BTreeMap<CastContext, _> = casts
+        .iter()
+        .map(|(ccx, expr)| (ccx.clone(), crate::func::sql_impl(expr)))
+        .collect();
+    CastTemplate::new(move |ecx, ccx, from_type, _to_type| {
+        let invoke = &casts[&ccx];
+        let r = invoke(ecx.qcx, vec![from_type.clone()]);
+        let mut out = r.ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);
             out
@@ -89,6 +106,91 @@ impl<const N: usize> From<[UnaryFunc; N]> for CastTemplate {
         })
     }
 }
+
+/// STRING to REG*
+///
+/// A reg* type represents a specific type of object by oid.
+///
+/// Casting from a string to a reg*:
+/// - Accepts a string that looks like an OID and converts the value to the
+///   specified reg* type. This is available in all cases except explicitly
+///   casting text values to regclass (e.g. `SELECT '2'::text::regclass`)
+/// - Resolves non-OID-appearing strings to objects. If this string resolves to
+///   more than one OID (e.g. functions), it errors.
+///
+/// The below code provides a template to accomplish this for various reg*
+/// types. Arguments in order are:
+/// - 0: type catalog name this is casting to
+/// - 1: the category of this reg for the error message
+/// - 2: Whether or not to permit passing through numeric values as OIDs
+const STRING_REG_CAST_TEMPLATE: &str = "
+(SELECT
+CASE
+    WHEN $1 IS NULL THEN NULL
+-- Handle OID-like input, if available via {2}
+    WHEN {2} AND pg_catalog.substring($1, 1, 1) BETWEEN '0' AND '9' THEN
+        $1::pg_catalog.oid::pg_catalog.{0}
+    ELSE (
+    -- String case; look up that the item exists
+        SELECT o.oid
+        FROM mz_unsafe.mz_error_if_null(
+            (
+                -- We need to ensure a distinct here in the case of e.g. functions,
+                -- where multiple items share a GlobalId.
+                SELECT DISTINCT id AS name_id
+                FROM mz_internal.mz_resolve_object_name('{0}', $1)
+            ),
+            -- TODO: Support the correct error code for does not exist (42883).
+            '{1} \"' || $1 || '\" does not exist'
+        ) AS i (name_id),
+        -- Lateral lets us error separately from DNE case
+        LATERAL (
+            SELECT
+                CASE
+            -- Handle too many OIDs
+                WHEN mz_catalog.list_length(mz_catalog.list_agg(oid)) > 1 THEN
+                    mz_unsafe.mz_error_if_null(
+                        NULL::pg_catalog.{0},
+                        'more than one {1} named \"' || $1 || '\"'
+                    )
+            -- Resolve object name's OID if we know there is only one
+                ELSE
+                    CAST(mz_catalog.list_agg(oid)[1] AS pg_catalog.{0})
+                END
+            FROM mz_catalog.mz_objects
+            WHERE id = name_id
+            GROUP BY id
+        ) AS o (oid)
+    )
+END)";
+
+static STRING_TO_REGCLASS_EXPLICIT: Lazy<String> = Lazy::new(|| {
+    SimpleCurlyFormat
+        .format(STRING_REG_CAST_TEMPLATE, ["regclass", "relation", "false"])
+        .unwrap()
+        .to_string()
+});
+
+static STRING_TO_REGCLASS_COERCED: Lazy<String> = Lazy::new(|| {
+    SimpleCurlyFormat
+        .format(STRING_REG_CAST_TEMPLATE, ["regclass", "relation", "true"])
+        .unwrap()
+        .to_string()
+});
+
+static STRING_TO_REGPROC: Lazy<String> = Lazy::new(|| {
+    SimpleCurlyFormat
+        .format(STRING_REG_CAST_TEMPLATE, ["regproc", "function", "true"])
+        .unwrap()
+        .to_string()
+});
+
+static STRING_TO_REGTYPE: Lazy<String> = Lazy::new(|| {
+    SimpleCurlyFormat
+        .format(STRING_REG_CAST_TEMPLATE, ["regtype", "type", "true"])
+        .unwrap()
+        .to_string()
+});
 
 /// Describes the context of a cast.
 ///
@@ -427,53 +529,16 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         // in the corresponding mz_catalog table and expects exactly one object to match it.
         // You can also specify (in postgres) a string that's a valid
         // int4 and it'll happily cast it (without verifying that the int4 matches
-        // an object oid). To support this, use a SQL expression that checks if
-        // the input might be a valid int4 with a regex, otherwise try to lookup in
-        // the table. CASE will return NULL if the subquery returns zero results,
-        // so use mz_error_if_null to coerce that into an error. This is hacky and
-        // incomplete in a few ways, but gets us close enough to making drivers happy.
+        // an object oid).
         // TODO: Support the correct error code for does not exist (42883).
-        // TODO: Support qualified names.
-        // TODO: This should take into account the search path when looking for an object.
-        (String, RegClass) => Explicit: sql_impl_cast("(
-                SELECT
-                    CASE
-                    WHEN $1 IS NULL THEN NULL
-                    WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regclass
-                    ELSE (
-                        mz_unsafe.mz_error_if_null(
-                            (SELECT oid::pg_catalog.regclass FROM mz_catalog.mz_objects WHERE name = $1),
-                            'object \"' || $1 || '\" does not exist'
-                        )
-                    )
-                    END
-            )"),
-        (String, RegProc) => Explicit: sql_impl_cast("(
-                SELECT
-                    CASE
-                    WHEN $1 IS NULL THEN NULL
-                    WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regproc
-                    ELSE (
-                        mz_unsafe.mz_error_if_null(
-                            (SELECT oid::pg_catalog.regproc FROM mz_catalog.mz_functions WHERE name = $1),
-                            'function \"' || $1 || '\" does not exist'
-                        )
-                    )
-                    END
-            )"),
-        (String, RegType) => Explicit: sql_impl_cast("(
-                SELECT
-                    CASE
-                    WHEN $1 IS NULL THEN NULL
-                    WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regtype
-                    ELSE (
-                        mz_unsafe.mz_error_if_null(
-                            (SELECT oid::pg_catalog.regtype FROM mz_catalog.mz_types WHERE name = $1),
-                            'type \"' || $1 || '\" does not exist'
-                        )
-                    )
-                    END
-            )"),
+        (String, RegClass) => Explicit: sql_impl_cast_per_context(
+            &[
+                (CastContext::Explicit, &STRING_TO_REGCLASS_EXPLICIT),
+                (CastContext::Coerced, &STRING_TO_REGCLASS_COERCED)
+            ]
+        ),
+        (String, RegProc) => Explicit: sql_impl_cast(&STRING_TO_REGPROC),
+        (String, RegType) => Explicit: sql_impl_cast(&STRING_TO_REGTYPE),
 
         (String, Float32) => Explicit: CastStringToFloat32(func::CastStringToFloat32),
         (String, Float64) => Explicit: CastStringToFloat64(func::CastStringToFloat64),
