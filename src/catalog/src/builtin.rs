@@ -2991,6 +2991,28 @@ UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, privil
 }
 });
 
+pub static MZ_OBJECT_OID_ALIAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_object_oid_alias",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: Some("object_type, oid_alias"),
+    sql: "SELECT object_type, oid_alias
+    FROM (
+        VALUES
+            (
+                'table'::pg_catalog.text,
+                'regclass'::pg_catalog.text
+            ),
+            ('source', 'regclass'),
+            ('view', 'regclass'),
+            ('materialized-view', 'regclass'),
+            ('index', 'regclass'),
+            ('type', 'regtype'),
+            ('function', 'regproc')
+    )
+    AS _ (object_type, oid_alias);",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_OBJECTS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
     name: "mz_objects",
@@ -6522,6 +6544,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::View(&MZ_RELATIONS),
+        Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
