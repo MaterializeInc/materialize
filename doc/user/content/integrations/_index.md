@@ -202,7 +202,7 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service  | Support level                    | Notes                                                                              |             |
 | -------- | -------------------------------- | ---------------------------------------------------------------------------------- | ----------- |
-| FiveTran | {{< supportLevel researching >}} | Not supported yet {{% gh 5188 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| Fivetran | {{< supportLevel researching >}} | Not supported yet {{% gh 5188 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | Stitch   | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Meltano  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Airbyte  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
