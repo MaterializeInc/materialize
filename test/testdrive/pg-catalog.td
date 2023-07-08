@@ -258,3 +258,45 @@ name                nullable    type
  extversion         false       text
  extconfig          false       oid[]
  extcondition       false       text[]
+
+> SHOW COLUMNS FROM pg_event_trigger
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ evtname            false       text
+ evtevent           false       text
+ evtowner           false       oid
+ evtfoid            false       oid
+ evtenabled         false       char
+ evttags            false       text[]
+
+> SHOW COLUMNS FROM pg_language
+name                nullable    type
+------------------------------------------------------------
+ lanname            false       text
+ oid                false       oid
+ lanowner           false       oid
+ lanispl            false       boolean
+ lanpltrusted       false       boolean
+ lanplcallfoid      false       oid
+ laninline          false       oid
+ lanvalidator       false       oid
+ lanacl             false       text[]
+
+> SHOW COLUMNS FROM pg_shdescription
+name                nullable    type
+------------------------------------------------------------
+ objoid             false       oid
+ classoid           false       oid
+ description        false       text
+
+> SHOW COLUMNS FROM pg_depend
+name                nullable    type
+------------------------------------------------------------
+ classid            true        oid
+ objid              false       oid
+ objsubid           false       integer
+ refclassid         true        oid
+ refobjid           false       oid
+ refobjsubid        false       integer
+ deptype            false       char
