@@ -1,57 +1,104 @@
 ---
-title: "Connect to Materialize with Tableau"
-description: "How to connect to Materialize with Tableau"
+title: "Tableau"
+description: "How to create real-time dashboards with Tableau"
 aliases:
   - /third-party/tableau/
   - /integrations/tableau/
 menu:
   main:
-    parent: "serve"
-    name: "Connect with Tableau"
-    weight: 25
+    parent: "bi-tools"
+    name: "Tableau"
+    weight: 10
 ---
 
-[Tableau](https://www.tableau.com/) is a data visualization platform that provides tools for the interpretation and visualization of data, enabling users to create interactive graphical representations and dashboards from raw data sources.
+You can use [Tableau Cloud](https://www.tableau.com/products/cloud-bi) and
+[Tableau Desktop](https://www.tableau.com/products/desktop) to create real-time
+dashboards based on the data maintained in Materialize.
 
-### Installation and Setup
+## Tableau Cloud
 
-Before starting, there are some necessary steps you need to follow:
+### Database connection details
 
-1. [Sign up for a Tableau account](https://www.tableau.com/products/trial)
-2. [Download the Tableau Desktop](https://www.tableau.com/products/desktop)
-3. [Download the PostgreSQL driver](https://www.tableau.com/support/drivers?edition=pro&lang=en-us&platform=mac&cpu=64&version=2023.2&__full-version=20232.23.0611.2007#postgres)
+To set up a connection from Tableau Cloud to Materialize, use the native
+[PostgreSQL database connector](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm)
+with the following parameters:
 
-    Complete the following steps to install the PostgresSQL driver.
+Field             | Value
+----------------- | ----------------
+Server            | Materialize host name.
+Port              | **6875**
+Database          | **materialize**
+Username          | Materialize user.
+Password          | App-specific password.
 
-    1. Download the Java 8 JDBC driver from https://jdbc.postgresql.org/download/
-    2. Copy the .jar file to the following folder (you may have to create the folder manually).
+If you require SSL/TLS encryption, select the **Require SSL** box. For more
+details, check the [Tableau documentation](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm).
 
-    ```
-    ~/Library/Tableau/Drivers
-    ```
+[//]: # "TODO(morsapaes) Clarify minimum refresh rate and details about live
+connections"
 
-After installation, open Tableau Desktop.
+## Tableau Desktop
 
-### Connect to Materialize
+### Setup
 
-Once you're in the Tableau Desktop interface, follow these steps:
+{{< tabs >}}
+{{< tab "macOS">}}
 
-1. On the left side, find the "Connect to a Server" section
-2. Click on "More" and select "PostgreSQL"
-3. Use the following details to configure the connection:
+To set up a connection from Tableau Desktop to Materialize, you must:
+
+1. Download the [Java 8 JDBC driver for PostgreSQL](https://jdbc.postgresql.org/download/)
+1. Copy the `.jar` file to the following directory (which may have to be created manually):
+
+   `~/Library/Tableau/Drivers`
+
+{{< /tab >}}
+
+{{< tab "Linux">}}
+
+To set up a connection from Tableau Desktop to Materialize, you must:
+
+1. Download the [Java 8 JDBC driver for PostgreSQL](https://jdbc.postgresql.org/download/)
+1. Copy the `.jar` file to the following directory (which may have to be created manually):
+
+   `/opt/tableau/tableau_driver/jdbc`
+
+{{< /tab >}}
+
+{{< tab "Windows">}}
+
+To set up a connection from Tableau Desktop to Materialize, you must:
+
+1. Download the [Java 8 JDBC driver for PostgreSQL](https://jdbc.postgresql.org/download/)
+1. Copy the `.jar` file to the following directory (which may have to be created manually):
+
+   `C:\Program Files\Tableau\Drivers`
+
+{{< /tab >}}
+{{< /tabs >}}
+
+### Database connection details
+
+Once you've set up the required driver, start Tableau and run through the
+following steps:
+
+1. On the left side, find the **Connect to a Server** section
+1. Select **More** and then **PostgreSQL**
+1. Use the following details to configure the connection:
 
     Field          | Value
     -------------- | ----------------------
-    Server         | Materialize host name
+    Server         | Materialize host name.
     Port           | **6875**
     Database       | **materialize**
     Authentication | Username and Password
-    Username       | Materialize user
-    Password       | App-specific password
-    Require SSL    | Checked
+    Username       | Materialize user.
+    Password       | App-specific password.
 
-4. Click the "Sign In" button to connect to Materialize
+    If you require SSL/TLS encryption, select the **Require SSL** box.
 
-By following these steps, you can configure a connection from your Tableau Desktop to Materialize and start creating dashboards based on your data.
+4. Click **Sign In** to connect to Materialize
 
-For more detailed information and troubleshooting, you may want to check out the official [Tableau documentation](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm).
+For more details and troubleshooting, check the [Tableau documentation](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm).
+
+[//]: # "TODO(morsapaes) Clarify minimum refresh rate and details about live
+connections"
