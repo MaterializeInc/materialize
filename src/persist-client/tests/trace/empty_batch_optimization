@@ -26,7 +26,7 @@ ok
 
 spine-batches
 ----
-[0][3][0] 0
+[0-3][0][3][0] 0
 
 # Now insert a non-empty batch to fence off the optimization.
 push-batch
@@ -36,8 +36,8 @@ ok
 
 spine-batches
 ----
-[0][3][0] 0
-[3][4][0] 10 k0
+[0-3][0][3][0] 0
+[3-4][3][4][0] 10 k0
 
 # Insert some more empty batches, they again get merged together.
 push-batch
@@ -49,9 +49,9 @@ ok
 
 spine-batches
 ----
-[0][3][0] 0
-[3][4][0] 10 k0
-[4][7][0] 0
+[0-3][0][3][0] 0
+[3-4][3][4][0] 10 k0
+[4-7][4][7][0] 0
 
 # All this happens without needing/generating an external merge req (compaction)
 take-merge-reqs

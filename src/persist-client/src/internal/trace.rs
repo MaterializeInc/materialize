@@ -47,6 +47,7 @@
 //! [Batch]: differential_dataflow::trace::Batch
 //! [Batch::Merger]: differential_dataflow::trace::Batch::Merger
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -55,16 +56,19 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use mz_persist_types::Codec64;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
-use crate::internal::state::HollowBatch;
+use crate::internal::state::{HollowBatch, ProtoIdSpineBatch, ProtoTrace};
+use crate::internal::state_diff::{apply_diffs_map, StateFieldDiff};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FueledMergeReq<T> {
     pub desc: Description<T>,
-    pub inputs: Vec<Arc<HollowBatch<T>>>,
+    pub inputs: Vec<Arc<IdHollowBatch<T>>>,
 }
 
 #[derive(Debug)]
@@ -118,10 +122,10 @@ impl<T> Trace<T> {
 
     pub fn map_batches<'a, F: FnMut(&'a HollowBatch<T>)>(&'a self, mut f: F) {
         self.spine.map_batches(move |b| match b {
-            SpineBatch::Merged(b) => f(b),
+            SpineBatch::Merged(b) => f(&b.batch),
             SpineBatch::Fueled { parts, .. } => {
                 for b in parts.iter() {
-                    f(b);
+                    f(&b.batch);
                 }
             }
         })
@@ -165,11 +169,12 @@ impl<T: Timestamp + Lattice> Trace<T> {
     pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
         let mut merge_reqs = Vec::new();
         self.spine.insert(
-            SpineBatch::Merged(Arc::new(batch)),
+            batch,
             &mut SpineLog::Enabled {
                 merge_reqs: &mut merge_reqs,
             },
         );
+        debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
         // Spine::roll_up (internally used by insert) clears all batches out of
         // levels below a target by walking up from level 0 and merging each
         // level into the next (providing the necessary fuel). In practice, this
@@ -182,8 +187,8 @@ impl<T: Timestamp + Lattice> Trace<T> {
     /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
     /// account for a surprising amount of cpu in prod. #18368
     pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
-        self.spine
-            .insert(SpineBatch::Merged(Arc::new(batch)), &mut SpineLog::Disabled);
+        self.spine.insert(batch, &mut SpineLog::Disabled);
+        debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
@@ -261,6 +266,297 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
         ret
     }
+
+    #[allow(dead_code)]
+    pub fn describe(&self) -> String {
+        let mut s = Vec::new();
+        for b in self.spine.merging.iter().rev() {
+            match b {
+                MergeState::Vacant
+                | MergeState::Single(None)
+                | MergeState::Double(MergeVariant::Complete(None)) => s.push("_".to_owned()),
+                MergeState::Single(Some(x))
+                | MergeState::Double(MergeVariant::Complete(Some(x))) => s.push(x.describe(false)),
+                MergeState::Double(MergeVariant::InProgress(b0, b1, m)) => s.push(format!(
+                    "f{}/{}({}+{})",
+                    m.remaining_work,
+                    b0.len() + b1.len(),
+                    b0.describe(false),
+                    b1.describe(false),
+                )),
+            }
+        }
+        s.join(" ")
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> Trace<T> {
+    pub fn diff(
+        &self,
+        other: &Trace<T>,
+        batches: &mut Vec<StateFieldDiff<SpineId, ThinSpineBatch<T>>>,
+        levels: &mut Vec<StateFieldDiff<usize, SpineLevel<T>>>,
+    ) {
+        // WIP do this without the Clones and BTreeMaps
+        let self_batches = self.batches_map().collect::<BTreeMap<_, _>>();
+        let other_batches = other.batches_map().collect::<BTreeMap<_, _>>();
+        super::state_diff::diff_field_sorted_iter(
+            self_batches.iter(),
+            other_batches.iter(),
+            batches,
+        );
+
+        // WIP do this without the Clones and BTreeMaps
+        let self_levels = self.levels_map().collect::<BTreeMap<_, _>>();
+        let other_levels = other.levels_map().collect::<BTreeMap<_, _>>();
+        super::state_diff::diff_field_sorted_iter(self_levels.iter(), other_levels.iter(), levels);
+
+        // tracing::info!(
+        //     "diffing trace\n  batches={:?}\n  levels={:?}\n   self_batches={:?}\n  other_batches={:?}\n   self_levels={:?}\n  other_levels={:?}\n  before={}\n   after={}\n",
+        //     batches,
+        //     levels,
+        //     self_batches,
+        //     other_batches,
+        //     self_levels,
+        //     other_levels,
+        //     self.describe(),
+        //     other.describe(),
+        // );
+    }
+
+    fn batches_map(&self) -> impl Iterator<Item = (SpineId, ThinSpineBatch<T>)> + '_ {
+        fn into_proto<T: Timestamp + Lattice + Codec64>(
+            x: &SpineBatch<T>,
+        ) -> Vec<(SpineId, ThinSpineBatch<T>)> {
+            match x {
+                SpineBatch::Merged(x) => vec![(
+                    x.id,
+                    // WIP no clone
+                    ThinSpineBatch::Hollow(x.batch.clone()),
+                )],
+                SpineBatch::Fueled {
+                    id, desc, parts, ..
+                } => {
+                    let mut ret = vec![(
+                        *id,
+                        ThinSpineBatch::Fueled {
+                            since: desc.since().clone(),
+                        },
+                    )];
+                    for part in parts.iter() {
+                        ret.push((part.id.clone(), ThinSpineBatch::Hollow(part.batch.clone())));
+                    }
+                    ret
+                }
+            }
+        }
+        // WIP use arrays/slices instead of vecs
+        self.spine.merging.iter().flat_map(|x| match x {
+            MergeState::Vacant
+            | MergeState::Single(None)
+            | MergeState::Double(MergeVariant::Complete(None)) => vec![],
+            MergeState::Single(Some(x)) | MergeState::Double(MergeVariant::Complete(Some(x))) => {
+                into_proto(x)
+            }
+            MergeState::Double(MergeVariant::InProgress(b0, b1, _m)) => {
+                let mut ret = into_proto(b0);
+                ret.append(&mut into_proto(b1));
+                ret
+            }
+        })
+    }
+
+    fn levels_map(&self) -> impl Iterator<Item = (usize, SpineLevel<T>)> + '_ {
+        self.spine
+            .merging
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, x)| match x {
+                MergeState::Vacant
+                | MergeState::Single(None)
+                | MergeState::Double(MergeVariant::Complete(None)) => None,
+                MergeState::Single(Some(x))
+                | MergeState::Double(MergeVariant::Complete(Some(x))) => {
+                    Some((idx, SpineLevel::Single(x.id())))
+                }
+                MergeState::Double(MergeVariant::InProgress(b0, b1, m)) => {
+                    // WIP remove the since clone
+                    Some((
+                        idx,
+                        SpineLevel::Double(b0.id(), b1.id(), m.remaining_work, m.since.clone()),
+                    ))
+                }
+            })
+    }
+
+    pub fn apply_diffs(
+        &mut self,
+        batches: Vec<StateFieldDiff<SpineId, ThinSpineBatch<T>>>,
+        levels: Vec<StateFieldDiff<usize, SpineLevel<T>>>,
+    ) -> Result<(), String> {
+        // Fast path.
+        if batches.is_empty() && levels.is_empty() {
+            return Ok(());
+        }
+
+        // tracing::info!(
+        //     "updating trace\n  batches={:?}\n  levels={:?}\n  before={}\n",
+        //     batches,
+        //     levels,
+        //     self.describe(),
+        // );
+
+        let mut batches_map = self.batches_map().collect::<BTreeMap<_, _>>();
+        apply_diffs_map("spine_batches", batches.clone(), &mut batches_map)?;
+        let mut levels_map = self.levels_map().collect::<BTreeMap<_, _>>();
+        apply_diffs_map("spine_levels", levels.clone(), &mut levels_map)?;
+
+        let () = self.set_from_maps(batches_map, levels_map)?;
+        self.spine.validate()
+    }
+
+    fn set_from_maps(
+        &mut self,
+        batches: BTreeMap<SpineId, ThinSpineBatch<T>>,
+        levels: BTreeMap<usize, SpineLevel<T>>,
+    ) -> Result<(), String> {
+        // tracing::info!(
+        //     "updating trace\n  batches_map={:?}\n  levels_map={:?}\n  before={}\n",
+        //     batches,
+        //     levels,
+        //     self.describe(),
+        // );
+
+        fn get_spine_batch<T: Debug + Clone + PartialOrder>(
+            by_id: &BTreeMap<SpineId, ThinSpineBatch<T>>,
+            id: SpineId,
+        ) -> Result<SpineBatch<T>, String> {
+            // WIP remove clones
+            let batch = by_id
+                .get(&id)
+                .ok_or_else(|| format!("missing batch {:?}: {:?}", id, by_id))?;
+            let batch = match batch {
+                ThinSpineBatch::Hollow(x) => SpineBatch::Merged(Arc::new(IdHollowBatch {
+                    id,
+                    batch: x.clone(),
+                })),
+                ThinSpineBatch::Fueled { since } => {
+                    let mut parts = Vec::new();
+                    let mut len = 0;
+                    for (id2, x) in by_id.range(SpineId(id.0, id.0)..SpineId(id.1, id.1)) {
+                        if id2 == &id {
+                            // WIP hacks
+                            continue;
+                        }
+                        let x = match get_spine_batch(by_id, id2.clone())? {
+                            SpineBatch::Merged(x) => x,
+                            SpineBatch::Fueled { .. } => todo!("WIP"),
+                        };
+                        len += x.batch.len;
+                        parts.push(x);
+                    }
+                    let lower = parts
+                        .first()
+                        .unwrap_or_else(|| {
+                            panic!("didn't find batches for {:?} in {:?}", id, by_id)
+                        })
+                        .batch
+                        .desc
+                        .lower()
+                        .clone();
+                    let upper = parts.last().expect("WIP").batch.desc.upper().clone();
+                    let desc = Description::new(lower, upper, since.clone());
+                    SpineBatch::Fueled {
+                        id,
+                        desc,
+                        parts,
+                        len,
+                    }
+                }
+            };
+            Ok(batch)
+        }
+
+        let mut merging = Vec::new();
+        // WIP no clone
+        for (idx, x) in levels.clone() {
+            while merging.len() <= idx {
+                merging.push(MergeState::Vacant);
+            }
+            merging[idx] = match x {
+                SpineLevel::Single(x) => MergeState::Single(Some(get_spine_batch(&batches, x)?)),
+                SpineLevel::Double(b0, b1, remaining_work, since) => {
+                    let b0 = get_spine_batch(&batches, b0)?;
+                    let b1 = get_spine_batch(&batches, b1)?;
+                    MergeState::Double(MergeVariant::InProgress(
+                        b0,
+                        b1,
+                        FuelingMerge {
+                            remaining_work,
+                            since,
+                        },
+                    ))
+                }
+            }
+        }
+
+        let before = self.describe();
+        self.spine.merging = merging;
+        // eprintln!(
+        //     "WIP BEFORE RECALCULATE {:?} {:?}",
+        //     self.spine.next_id, self.spine.upper
+        // );
+        self.wip_recalculate_upper();
+        // eprintln!(
+        //     "WIP AFTER RECALCULATE {:?} {:?}",
+        //     self.spine.next_id, self.spine.upper
+        // );
+
+        // tracing::info!(
+        //     "updated trace\n  batches={:?}\n  levels={:?}\n  before={}\n   after={}\n",
+        //     batches,
+        //     levels,
+        //     before,
+        //     self.describe()
+        // );
+        Ok(())
+    }
+
+    pub fn wip_recalculate_upper(&mut self) {
+        for x in self.spine.merging.iter() {
+            let x = match x {
+                MergeState::Vacant
+                | MergeState::Single(None)
+                | MergeState::Double(MergeVariant::Complete(None)) => continue,
+                MergeState::Single(Some(x))
+                | MergeState::Double(MergeVariant::Complete(Some(x))) => x,
+                MergeState::Double(MergeVariant::InProgress(_, x, _)) => x,
+            };
+            match x {
+                SpineBatch::Merged(x) => {
+                    self.spine.upper = x.batch.desc.upper().clone();
+                    self.spine.next_id = x.id.1;
+                }
+                SpineBatch::Fueled { id, desc, .. } => {
+                    self.spine.upper = desc.upper().clone();
+                    self.spine.next_id = id.1;
+                }
+            }
+            break;
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpineLevel<T> {
+    Single(SpineId),
+    Double(SpineId, SpineId, usize, Antichain<T>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ThinSpineBatch<T> {
+    Hollow(HollowBatch<T>),
+    Fueled { since: Antichain<T> },
 }
 
 /// A log of what transitively happened during a Spine operation: e.g.
@@ -272,13 +568,22 @@ enum SpineLog<'a, T> {
     Disabled,
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SpineId(pub usize, pub usize);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IdHollowBatch<T> {
+    pub id: SpineId,
+    pub batch: HollowBatch<T>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum SpineBatch<T> {
-    Merged(Arc<HollowBatch<T>>),
+    Merged(Arc<IdHollowBatch<T>>),
     Fueled {
+        id: SpineId,
         desc: Description<T>,
-        parts: Vec<Arc<HollowBatch<T>>>,
+        parts: Vec<Arc<IdHollowBatch<T>>>,
         // A cached version of parts.iter().map(|x| x.len).sum()
         len: usize,
     },
@@ -319,22 +624,39 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         self.desc().upper()
     }
 
+    fn id(&self) -> SpineId {
+        match self {
+            SpineBatch::Merged(b) => b.id,
+            SpineBatch::Fueled { id, parts, .. } => {
+                debug_assert_eq!(
+                    parts.first().map(|x| x.id.0),
+                    Some(id.0),
+                    "{:?} vs {:?}",
+                    id,
+                    parts
+                );
+                debug_assert_eq!(parts.last().map(|x| x.id.1), Some(id.1));
+                *id
+            }
+        }
+    }
+
     fn desc(&self) -> &Description<T> {
         match self {
-            SpineBatch::Merged(b) => &b.desc,
+            SpineBatch::Merged(b) => &b.batch.desc,
             SpineBatch::Fueled { desc, .. } => desc,
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            SpineBatch::Merged(b) => b.len,
+            SpineBatch::Merged(b) => b.batch.len,
             // NB: This is an upper bound on len, we won't know for sure until
             // we compact it.
             SpineBatch::Fueled { len, parts, .. } => {
                 // Sanity check the cached len value in debug mode, to hopefully
                 // find any bugs with its maintenance.
-                debug_assert_eq!(*len, parts.iter().map(|x| x.len).sum::<usize>());
+                debug_assert_eq!(*len, parts.iter().map(|x| x.batch.len).sum::<usize>());
                 *len
             }
         }
@@ -344,12 +666,20 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         self.len() == 0
     }
 
-    pub fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
-        SpineBatch::Merged(Arc::new(HollowBatch {
-            desc: Description::new(lower, upper, since),
-            parts: vec![],
-            len: 0,
-            runs: vec![],
+    pub fn empty(
+        id: SpineId,
+        lower: Antichain<T>,
+        upper: Antichain<T>,
+        since: Antichain<T>,
+    ) -> Self {
+        SpineBatch::Merged(Arc::new(IdHollowBatch {
+            id,
+            batch: HollowBatch {
+                desc: Description::new(lower, upper, since),
+                parts: vec![],
+                len: 0,
+                runs: vec![],
+            },
         }))
     }
 
@@ -369,6 +699,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         }
     }
 
+    // WIP roundtrip the SpineId through FueledMergeReq/FueledMergeRes?
     fn maybe_replace(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
@@ -392,7 +723,10 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             if res.output.len > self.len() {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
-            *self = SpineBatch::Merged(Arc::new(res.output.clone()));
+            *self = SpineBatch::Merged(Arc::new(IdHollowBatch {
+                id: self.id(),
+                batch: res.output.clone(),
+            }));
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -406,6 +740,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         // are `[0,1),[1,2),[2,3),[3,4)`, we can swap out the middle two parts for res.
         match self {
             SpineBatch::Fueled {
+                id,
                 parts,
                 desc,
                 len: _,
@@ -414,11 +749,11 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 let mut lower = None;
                 let mut upper = None;
                 for (i, batch) in parts.iter().enumerate() {
-                    if batch.desc.lower() == res.output.desc.lower() {
-                        lower = Some(i);
+                    if batch.batch.desc.lower() == res.output.desc.lower() {
+                        lower = Some((i, batch.id.0));
                     }
-                    if batch.desc.upper() == res.output.desc.upper() {
-                        upper = Some(i);
+                    if batch.batch.desc.upper() == res.output.desc.upper() {
+                        upper = Some((i, batch.id.1));
                     }
                     if lower.is_some() && upper.is_some() {
                         break;
@@ -426,14 +761,18 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 }
                 // next, replace parts with the merge res batch if we can
                 match (lower, upper) {
-                    (Some(lower), Some(upper)) => {
+                    (Some((lower, id_lower)), Some((upper, id_upper))) => {
                         let mut new_parts = vec![];
                         new_parts.extend_from_slice(&parts[..lower]);
-                        new_parts.push(Arc::new(res.output.clone()));
+                        new_parts.push(Arc::new(IdHollowBatch {
+                            id: SpineId(id_lower, id_upper),
+                            batch: res.output.clone(),
+                        }));
                         new_parts.extend_from_slice(&parts[upper + 1..]);
                         let new_spine_batch = SpineBatch::Fueled {
+                            id: *id,
                             desc: desc.to_owned(),
-                            len: new_parts.iter().map(|x| x.len).sum(),
+                            len: new_parts.iter().map(|x| x.batch.len).sum(),
                             parts: new_parts,
                         };
                         if new_spine_batch.len() > self.len() {
@@ -446,6 +785,77 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                 }
             }
             _ => ApplyMergeResult::NotAppliedNoMatch,
+        }
+    }
+
+    fn describe(&self, extended: bool) -> String {
+        match (extended, self) {
+            (false, SpineBatch::Merged(x)) => format!(
+                "[{}-{}]{:?}{:?}{}",
+                x.id.0,
+                x.id.1,
+                x.batch.desc.lower().elements(),
+                x.batch.desc.upper().elements(),
+                x.batch.len
+            ),
+            (
+                false,
+                SpineBatch::Fueled {
+                    id,
+                    parts,
+                    desc,
+                    len,
+                },
+            ) => format!(
+                "[{}-{}]{:?}{:?}{}/{}",
+                id.0,
+                id.1,
+                desc.lower().elements(),
+                desc.upper().elements(),
+                parts.len(),
+                len
+            ),
+            (true, SpineBatch::Merged(b)) => format!(
+                "[{}-{}]{:?}{:?}{:?} {}{}",
+                b.id.0,
+                b.id.1,
+                b.batch.desc.lower().elements(),
+                b.batch.desc.upper().elements(),
+                b.batch.desc.since().elements(),
+                b.batch.len,
+                b.batch
+                    .parts
+                    .iter()
+                    .map(|x| format!(" {}", x.key))
+                    .collect::<Vec<_>>()
+                    .join(""),
+            ),
+            (
+                true,
+                SpineBatch::Fueled {
+                    id,
+                    desc,
+                    parts,
+                    len,
+                },
+            ) => {
+                format!(
+                    "[{}-{}]{:?}{:?}{:?} {}/{}{}",
+                    id.0,
+                    id.1,
+                    desc.lower().elements(),
+                    desc.upper().elements(),
+                    desc.since().elements(),
+                    parts.len(),
+                    len,
+                    parts
+                        .iter()
+                        .flat_map(|x| x.batch.parts.iter())
+                        .map(|x| format!(" {}", x.key))
+                        .collect::<Vec<_>>()
+                        .join("")
+                )
+            }
         }
     }
 }
@@ -479,13 +889,15 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         b2: SpineBatch<T>,
         log: &mut SpineLog<'_, T>,
     ) -> SpineBatch<T> {
+        let id = SpineId(b1.id().0, b2.id().1);
+        assert!(id.0 < id.1);
         let lower = b1.desc().lower().clone();
         let upper = b2.desc().upper().clone();
         let since = self.since;
 
         // Special case empty batches.
         if b1.is_empty() && b2.is_empty() {
-            return SpineBatch::empty(lower, upper, since);
+            return SpineBatch::empty(id, lower, upper, since);
         }
 
         let desc = Description::new(lower, upper, since);
@@ -519,6 +931,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         }
 
         SpineBatch::Fueled {
+            id,
             desc,
             len,
             parts: merged_parts,
@@ -611,6 +1024,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
 #[derive(Debug, Clone)]
 struct Spine<T> {
     effort: usize,
+    next_id: usize,
     since: Antichain<T>,
     upper: Antichain<T>,
     merging: Vec<MergeState<T>>,
@@ -640,8 +1054,10 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// `effort` parameter is that multiplier. This value should be at least one
     /// for the merging to happen; a value of zero is not helpful.
     pub fn new() -> Self {
+        // eprintln!("WIP Spine::new ");
         Spine {
             effort: 1,
+            next_id: 0,
             since: Antichain::from_elem(T::minimum()),
             upper: Antichain::from_elem(T::minimum()),
             merging: Vec::new(),
@@ -651,9 +1067,14 @@ impl<T: Timestamp + Lattice> Spine<T> {
     // Ideally, this method acts as insertion of `batch`, even if we are not yet
     // able to begin merging the batch. This means it is a good time to perform
     // amortized work proportional to the size of batch.
-    pub fn insert(&mut self, batch: SpineBatch<T>, log: &mut SpineLog<'_, T>) {
-        assert!(batch.lower() != batch.upper());
-        assert_eq!(batch.lower(), &self.upper);
+    pub fn insert(&mut self, batch: HollowBatch<T>, log: &mut SpineLog<'_, T>) {
+        assert!(batch.desc.lower() != batch.desc.upper());
+        assert_eq!(batch.desc.lower(), &self.upper);
+        let id = self.next_id;
+        self.next_id += 1;
+        let id = SpineId(id, self.next_id);
+        // eprintln!("WIP ASSIGNED {:?} to {:?}", id, batch);
+        let batch = SpineBatch::Merged(Arc::new(IdHollowBatch { id, batch }));
 
         self.upper.clone_from(batch.upper());
 
@@ -1005,6 +1426,69 @@ impl<T: Timestamp + Lattice> Spine<T> {
             }
         }
     }
+
+    fn validate(&self) -> Result<(), String> {
+        let mut id = SpineId(0, 0);
+        let mut frontier = Antichain::from_elem(T::minimum());
+        for x in self.merging.iter().rev() {
+            let batches = match x {
+                MergeState::Vacant
+                | MergeState::Single(None)
+                | MergeState::Double(MergeVariant::Complete(None)) => vec![],
+                MergeState::Single(Some(x))
+                | MergeState::Double(MergeVariant::Complete(Some(x))) => vec![x],
+                MergeState::Double(MergeVariant::InProgress(x0, x1, m)) => {
+                    // WIP this might be too aggressive in the presence of
+                    // compactions?
+                    //
+                    // if m.remaining_work > x0.len() + x1.len() { return
+                    //     Err(format!("too much remaining work: {:?}", x)); }
+                    vec![x0, x1]
+                }
+            };
+            for batch in batches {
+                if batch.id().0 != id.1 {
+                    return Err(format!(
+                        "batch id {:?} does not match the previous id {:?}: {:?}",
+                        batch.id(),
+                        id,
+                        self
+                    ));
+                }
+                id = batch.id();
+                if batch.desc().lower() != &frontier {
+                    return Err(format!(
+                        "batch lower {:?} does not match the previous upper {:?}: {:?}",
+                        batch.desc().lower(),
+                        frontier,
+                        self
+                    ));
+                }
+                frontier.clone_from(batch.desc().upper());
+                if !PartialOrder::less_equal(batch.desc().since(), &self.since) {
+                    return Err(format!(
+                        "since of batch {:?} past the spine since {:?}: {:?}",
+                        batch.desc().since(),
+                        self.since,
+                        self
+                    ));
+                }
+            }
+        }
+        if self.next_id != id.1 {
+            return Err(format!(
+                "spine next_id {:?} does not match the last batch's id {:?}: {:?}",
+                self.next_id, id, self
+            ));
+        }
+        if self.upper != frontier {
+            return Err(format!(
+                "spine upper {:?} does not match the last batch's upper {:?}: {:?}",
+                self.upper, frontier, self
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Describes the state of a layer.
@@ -1190,6 +1674,53 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
     }
 }
 
+impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
+    fn into_proto(&self) -> ProtoTrace {
+        let spine_batches = self
+            .batches_map()
+            .map(|(k, v)| ProtoIdSpineBatch {
+                id: Some(k.into_proto()),
+                batch: Some(v.into_proto()),
+            })
+            .collect();
+        let spine_levels = self
+            .levels_map()
+            .map(|(k, v)| (k.into_proto(), v.into_proto()))
+            .collect();
+        ProtoTrace {
+            since: Some(self.since().into_proto()),
+            spine_batches,
+            spine_levels,
+            deprecated_spine: Vec::new(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        let mut ret = Trace::default();
+        ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
+
+        let mut batches = BTreeMap::new();
+        for x in proto.spine_batches {
+            batches.insert(
+                x.id.into_rust_if_some("WIP")?,
+                x.batch.into_rust_if_some("WIP")?,
+            );
+        }
+        let mut levels = BTreeMap::new();
+        for (k, v) in proto.spine_levels {
+            levels.insert(k.into_rust()?, v.into_rust()?);
+        }
+
+        let () = ret
+            .set_from_maps(batches, levels)
+            .map_err(|err| TryFromProtoError::InvalidPersistState(err))?;
+        ret.spine
+            .validate()
+            .map_err(|err| TryFromProtoError::InvalidPersistState(err))?;
+        Ok(ret)
+    }
+}
+
 #[cfg(test)]
 pub mod datadriven {
     use crate::internal::datadriven::DirectiveArgs;
@@ -1220,38 +1751,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let mut s = String::new();
         datadriven.trace.spine.map_batches(|b| {
-            let b = match b {
-                SpineBatch::Merged(b) => format!(
-                    "{:?}{:?}{:?} {}{}\n",
-                    b.desc.lower().elements(),
-                    b.desc.upper().elements(),
-                    b.desc.since().elements(),
-                    b.len,
-                    b.parts
-                        .iter()
-                        .map(|x| format!(" {}", x.key))
-                        .collect::<Vec<_>>()
-                        .join(""),
-                ),
-                SpineBatch::Fueled { desc, parts, len } => {
-                    assert_eq!(*len, parts.iter().map(|x| x.len).sum::<usize>());
-                    format!(
-                        "{:?}{:?}{:?} {}/{}{}\n",
-                        desc.lower().elements(),
-                        desc.upper().elements(),
-                        desc.since().elements(),
-                        parts.len(),
-                        len,
-                        parts
-                            .iter()
-                            .flat_map(|x| x.parts.iter())
-                            .map(|x| format!(" {}", x.key))
-                            .collect::<Vec<_>>()
-                            .join("")
-                    )
-                }
-            };
-            s.push_str(&b);
+            s.push_str(b.describe(true).as_str());
+            s.push('\n');
         });
         Ok(s)
     }
@@ -1299,7 +1800,7 @@ pub mod datadriven {
                 merge_req
                     .inputs
                     .iter()
-                    .flat_map(|x| x.parts.iter())
+                    .flat_map(|x| x.batch.parts.iter())
                     .map(|x| x.key.0.clone())
                     .collect::<Vec<_>>()
                     .join(" ")

@@ -26,8 +26,8 @@ ok
 
 spine-batches
 ----
-[0][16][0] 8/8 k0-2 k2-4 k4-6 k6-8 k8-10 k10-12 k12-14 k14-16
-[16][18][0] 100 k16-18
+[0-8][0][16][0] 8/8 k0-2 k2-4 k4-6 k6-8 k8-10 k10-12 k12-14 k14-16
+[8-9][16][18][0] 100 k16-18
 
 # cannot apply batch that spans two spine batches exactly
 apply-merge-res
@@ -97,8 +97,8 @@ applied subset
 
 spine-batches
 ----
-[0][16][0] 7/8 k0-4 k4-6 k6-8 k8-10 k10-12 k12-14 k14-16
-[16][18][0] 100 k16-18
+[0-8][0][16][0] 7/8 k0-4 k4-6 k6-8 k8-10 k10-12 k12-14 k14-16
+[8-9][16][18][0] 100 k16-18
 
 # perform a merge res at the end of the fueled merge
 apply-merge-res
@@ -108,8 +108,8 @@ applied subset
 
 spine-batches
 ----
-[0][16][0] 6/8 k0-4 k4-6 k6-8 k8-10 k10-12 k12-16
-[16][18][0] 100 k16-18
+[0-8][0][16][0] 6/8 k0-4 k4-6 k6-8 k8-10 k10-12 k12-16
+[8-9][16][18][0] 100 k16-18
 
 # perform a merge res in the middle of the fueled merge
 apply-merge-res
@@ -119,8 +119,8 @@ applied subset
 
 spine-batches
 ----
-[0][16][0] 5/8 k0-4 k4-6 k6-10 k10-12 k12-16
-[16][18][0] 100 k16-18
+[0-8][0][16][0] 5/8 k0-4 k4-6 k6-10 k10-12 k12-16
+[8-9][16][18][0] 100 k16-18
 
 # replace a single part within the fueled merge
 apply-merge-res
@@ -130,8 +130,8 @@ applied subset
 
 spine-batches
 ----
-[0][16][0] 5/8 k0-4 k4-6-v2 k6-10 k10-12 k12-16
-[16][18][0] 100 k16-18
+[0-8][0][16][0] 5/8 k0-4 k4-6-v2 k6-10 k10-12 k12-16
+[8-9][16][18][0] 100 k16-18
 
 # replace a subset of parts, some of which have already been replaced
 apply-merge-res
@@ -141,8 +141,8 @@ applied subset
 
 spine-batches
 ----
-[0][16][0] 3/8 k0-4 k4-12 k12-16
-[16][18][0] 100 k16-18
+[0-8][0][16][0] 3/8 k0-4 k4-12 k12-16
+[8-9][16][18][0] 100 k16-18
 
 # perform a merge res that replaces an entire spine batch
 apply-merge-res
@@ -152,5 +152,5 @@ applied exact
 
 spine-batches
 ----
-[0][16][0] 8 k0-16
-[16][18][0] 100 k16-18
+[0-8][0][16][0] 8 k0-16
+[8-9][16][18][0] 100 k16-18

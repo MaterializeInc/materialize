@@ -40,14 +40,43 @@ message ProtoHollowBatch {
     repeated string deprecated_keys = 2;
 }
 
+message ProtoSpineId {
+    uint64 lo = 1;
+    uint64 hi = 2;
+}
+
+message ProtoSpineBatch {
+    oneof kind {
+        ProtoHollowBatch merged = 1;
+        ProtoMergeInProgress fueled = 2;
+    }
+}
+
+message ProtoMergeInProgress {
+    ProtoU64Antichain since = 1;
+}
+
+message ProtoSpineLevel {
+    uint64 remaining_work = 1;
+    ProtoU64Antichain since = 2;
+    repeated ProtoSpineId batches = 3;
+}
+
 message ProtoHollowRollup {
     string key = 1;
     optional uint64 encoded_size_bytes = 2;
 }
 
+message ProtoIdSpineBatch {
+    ProtoSpineId id = 1;
+    ProtoSpineBatch batch = 2;
+}
+
 message ProtoTrace {
     ProtoU64Antichain since = 1;
-    repeated ProtoHollowBatch spine = 2;
+    repeated ProtoHollowBatch deprecated_spine = 2;
+    repeated ProtoIdSpineBatch spine_batches = 3;
+    map<uint64, ProtoSpineLevel> spine_levels = 4;
 }
 
 message ProtoLeasedReaderState {

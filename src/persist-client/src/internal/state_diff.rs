@@ -29,7 +29,7 @@ use crate::internal::state::{
     ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
     WriterState,
 };
-use crate::internal::trace::{FueledMergeRes, Trace};
+use crate::internal::trace::{FueledMergeRes, SpineId, SpineLevel, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig};
@@ -77,7 +77,8 @@ pub struct StateDiff<T> {
     pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
     pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState<T>>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
-    pub(crate) spine: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
+    pub(crate) spine_batches: Vec<StateFieldDiff<SpineId, ThinSpineBatch<T>>>,
+    pub(crate) spine_levels: Vec<StateFieldDiff<usize, SpineLevel<T>>>,
 }
 
 impl<T: Timestamp + Codec64> StateDiff<T> {
@@ -101,7 +102,8 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             critical_readers: Vec::default(),
             writers: Vec::default(),
             since: Vec::default(),
-            spine: Vec::default(),
+            spine_batches: Vec::default(),
+            spine_levels: Vec::default(),
         }
     }
 }
@@ -167,22 +169,20 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
-        diff_field_spine(from_trace, to_trace, &mut diffs.spine);
+        from_trace.diff(to_trace, &mut diffs.spine_batches, &mut diffs.spine_levels);
         diffs
     }
 
     pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.spine.iter() {
+        for spine_diff in self.spine_batches.iter() {
             match &spine_diff.val {
-                StateFieldValDiff::Insert(()) => {
-                    f(HollowBlobRef::Batch(&spine_diff.key));
+                StateFieldValDiff::Insert(ThinSpineBatch::Hollow(x))
+                | StateFieldValDiff::Update(_, ThinSpineBatch::Hollow(x)) => {
+                    f(HollowBlobRef::Batch(x));
                 }
-                StateFieldValDiff::Update((), ()) => {
-                    // spine fields are always inserted/deleted, this
-                    // would mean we encountered a malformed diff.
-                    panic!("cannot update spine field")
-                }
-                StateFieldValDiff::Delete(()) => {} // No-op
+                StateFieldValDiff::Insert(ThinSpineBatch::Fueled { .. })
+                | StateFieldValDiff::Update(_, ThinSpineBatch::Fueled { .. })
+                | StateFieldValDiff::Delete(_) => {} // No-op
             }
         }
         for rollups_diff in self.rollups.iter() {
@@ -196,17 +196,15 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 
     pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
-        for spine_diff in self.spine.iter() {
+        for spine_diff in self.spine_batches.iter() {
             match &spine_diff.val {
-                StateFieldValDiff::Insert(()) => {} // No-op
-                StateFieldValDiff::Update((), ()) => {
-                    // spine fields are always inserted/deleted, this
-                    // would mean we encountered a malformed diff.
-                    panic!("cannot update spine field")
+                StateFieldValDiff::Delete(ThinSpineBatch::Hollow(x))
+                | StateFieldValDiff::Update(ThinSpineBatch::Hollow(x), _) => {
+                    f(HollowBlobRef::Batch(x));
                 }
-                StateFieldValDiff::Delete(()) => {
-                    f(HollowBlobRef::Batch(&spine_diff.key));
-                }
+                StateFieldValDiff::Delete(ThinSpineBatch::Fueled { .. })
+                | StateFieldValDiff::Update(ThinSpineBatch::Fueled { .. }, _)
+                | StateFieldValDiff::Insert(_) => {} // No-op
             }
         }
         for rollups_diff in self.rollups.iter() {
@@ -325,7 +323,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
 
     // Intentionally not even pub(crate) because all callers should use
     // [Self::apply_diffs].
-    fn apply_diff(&mut self, metrics: &Metrics, diff: StateDiff<T>) -> Result<(), String> {
+    fn apply_diff(&mut self, _metrics: &Metrics, diff: StateDiff<T>) -> Result<(), String> {
         // Deconstruct diff so we get a compile failure if new fields are added.
         let StateDiff {
             applier_version: diff_applier_version,
@@ -340,7 +338,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             critical_readers: diff_critical_readers,
             writers: diff_writers,
             since: diff_since,
-            spine: diff_spine,
+            spine_batches: diff_spine_batches,
+            spine_levels: diff_spine_levels,
         } = diff;
         if self.seqno == diff_seqno_to {
             return Ok(());
@@ -389,7 +388,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff_spine, trace)?;
+        trace.apply_diffs(diff_spine_batches, diff_spine_levels)?;
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==
@@ -485,8 +484,11 @@ fn force_apply_diff_single<X: PartialEq + Debug>(
     Ok(())
 }
 
-fn diff_field_sorted_iter<'a, K, V, IF, IT>(from: IF, to: IT, diffs: &mut Vec<StateFieldDiff<K, V>>)
-where
+pub(crate) fn diff_field_sorted_iter<'a, K, V, IF, IT>(
+    from: IF,
+    to: IT,
+    diffs: &mut Vec<StateFieldDiff<K, V>>,
+) where
     K: Ord + Clone + 'a,
     V: PartialEq + Clone + 'a,
     IF: IntoIterator<Item = (&'a K, &'a V)>,
@@ -555,7 +557,7 @@ where
     }
 }
 
-fn apply_diffs_map<K: Ord, V: PartialEq + Debug>(
+pub(crate) fn apply_diffs_map<K: Ord, V: PartialEq + Debug>(
     name: &str,
     diffs: Vec<StateFieldDiff<K, V>>,
     map: &mut BTreeMap<K, V>,
@@ -1338,7 +1340,7 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1366,7 +1368,7 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement upper (untouched batch after the split one)
