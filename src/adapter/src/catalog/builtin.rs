@@ -2348,6 +2348,8 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     false AS relhasrules,
     -- MZ doesn't support creating triggers so relhastriggers is filled with false
     false AS relhastriggers,
+    -- MZ doesn't support table inheritance or partitions so relhassubclass is filled with false
+    false AS relhassubclass,
     -- MZ doesn't have row level security so relrowsecurity and relforcerowsecurity is filled with false
     false AS relrowsecurity,
     false AS relforcerowsecurity,
