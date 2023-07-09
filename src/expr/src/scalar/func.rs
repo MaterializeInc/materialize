@@ -4409,6 +4409,7 @@ derive_unary!(
     CastTimestampTzToMzTimestamp,
     CastStringToBool,
     CastStringToPgLegacyChar,
+    CastStringToPgLegacyName,
     CastStringToBytes,
     CastStringToInt16,
     CastStringToInt32,
@@ -4750,6 +4751,9 @@ impl Arbitrary for UnaryFunc {
             CastNumericToString::arbitrary().prop_map_into().boxed(),
             CastStringToBool::arbitrary().prop_map_into().boxed(),
             CastStringToPgLegacyChar::arbitrary()
+                .prop_map_into()
+                .boxed(),
+            CastStringToPgLegacyName::arbitrary()
                 .prop_map_into()
                 .boxed(),
             CastStringToBytes::arbitrary().prop_map_into().boxed(),
@@ -5106,6 +5110,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastNumericToString(_) => CastNumericToString(()),
             UnaryFunc::CastStringToBool(_) => CastStringToBool(()),
             UnaryFunc::CastStringToPgLegacyChar(_) => CastStringToPgLegacyChar(()),
+            UnaryFunc::CastStringToPgLegacyName(_) => CastStringToPgLegacyName(()),
             UnaryFunc::CastStringToBytes(_) => CastStringToBytes(()),
             UnaryFunc::CastStringToInt16(_) => CastStringToInt16(()),
             UnaryFunc::CastStringToInt32(_) => CastStringToInt32(()),
@@ -5473,6 +5478,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastNumericToString(()) => Ok(impls::CastNumericToString.into()),
                 CastStringToBool(()) => Ok(impls::CastStringToBool.into()),
                 CastStringToPgLegacyChar(()) => Ok(impls::CastStringToPgLegacyChar.into()),
+                CastStringToPgLegacyName(()) => Ok(impls::CastStringToPgLegacyName.into()),
                 CastStringToBytes(()) => Ok(impls::CastStringToBytes.into()),
                 CastStringToInt16(()) => Ok(impls::CastStringToInt16.into()),
                 CastStringToInt32(()) => Ok(impls::CastStringToInt32.into()),
@@ -6333,7 +6339,7 @@ where
         TimestampTz => Ok(strconv::format_timestamptz(buf, &d.unwrap_timestamptz())),
         Interval => Ok(strconv::format_interval(buf, d.unwrap_interval())),
         Bytes => Ok(strconv::format_bytes(buf, d.unwrap_bytes())),
-        String | VarChar { .. } => Ok(strconv::format_string(buf, d.unwrap_str())),
+        String | VarChar { .. } | PgLegacyName => Ok(strconv::format_string(buf, d.unwrap_str())),
         Char { length } => Ok(strconv::format_string(
             buf,
             &mz_repr::adt::char::format_str_pad(d.unwrap_str(), *length),

@@ -559,6 +559,28 @@ pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_NAME: BuiltinType<NameReference> = BuiltinType {
+    name: "name",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_NAME_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::PgLegacyName,
+        array_id: None,
+    },
+};
+
+pub const TYPE_NAME_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_name",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_NAME_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_NAME.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
     name: "numeric",
     schema: PG_CATALOG_SCHEMA,
@@ -3872,6 +3894,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_JSONB_ARRAY),
         Builtin::Type(&TYPE_LIST),
         Builtin::Type(&TYPE_MAP),
+        Builtin::Type(&TYPE_NAME),
+        Builtin::Type(&TYPE_NAME_ARRAY),
         Builtin::Type(&TYPE_NUMERIC),
         Builtin::Type(&TYPE_NUMERIC_ARRAY),
         Builtin::Type(&TYPE_OID),

@@ -36,6 +36,7 @@ use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclMode, MzAclItem};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
+use crate::adt::pg_legacy_name::PgLegacyName;
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
@@ -820,7 +821,8 @@ impl<'a> Datum<'a> {
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String)
                     | (Datum::String(_), ScalarType::VarChar { .. })
-                    | (Datum::String(_), ScalarType::Char { .. }) => true,
+                    | (Datum::String(_), ScalarType::Char { .. })
+                    | (Datum::String(_), ScalarType::PgLegacyName) => true,
                     (Datum::String(_), _) => false,
                     (Datum::Uuid(_), ScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
@@ -1226,6 +1228,12 @@ pub enum ScalarType {
     /// PostgreSQL calls this type `"char"`. Note the quotes, which distinguish
     /// it from the type `ScalarType::Char`.
     PgLegacyChar,
+    /// A character type for storing identifiers of no more than 64 characters
+    /// in length.
+    ///
+    /// PostgreSQL uses this type to represent the names of objects in the
+    /// system catalog.
+    PgLegacyName,
     /// The type of [`Datum::Bytes`].
     Bytes,
     /// The type of [`Datum::String`].
@@ -1349,6 +1357,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ScalarType::TimestampTz => TimestampTz(()),
                 ScalarType::Interval => Interval(()),
                 ScalarType::PgLegacyChar => PgLegacyChar(()),
+                ScalarType::PgLegacyName => PgLegacyName(()),
                 ScalarType::Bytes => Bytes(()),
                 ScalarType::String => String(()),
                 ScalarType::Jsonb => Jsonb(()),
@@ -1418,6 +1427,7 @@ impl RustType<ProtoScalarType> for ScalarType {
             TimestampTz(()) => Ok(ScalarType::TimestampTz),
             Interval(()) => Ok(ScalarType::Interval),
             PgLegacyChar(()) => Ok(ScalarType::PgLegacyChar),
+            PgLegacyName(()) => Ok(ScalarType::PgLegacyName),
             Bytes(()) => Ok(ScalarType::Bytes),
             String(()) => Ok(ScalarType::String),
             Jsonb(()) => Ok(ScalarType::Jsonb),
@@ -1790,6 +1800,49 @@ impl<'a, E> DatumType<'a, E> for PgLegacyChar {
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::UInt8(self.0))
+    }
+}
+
+impl<S> AsColumnType for PgLegacyName<S>
+where
+    S: AsRef<str>,
+{
+    fn as_column_type() -> ColumnType {
+        ScalarType::PgLegacyName.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for PgLegacyName<&'a str> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::String(a)) => Ok(PgLegacyName(a)),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(self.0))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for PgLegacyName<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::String(a)) => Ok(PgLegacyName(a.to_owned())),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(temp_storage.push_string(self.0)))
     }
 }
 
@@ -2595,6 +2648,16 @@ impl<'a> ScalarType {
         });
         static PGLEGACYCHAR: Lazy<Row> =
             Lazy::new(|| Row::pack_slice(&[Datum::UInt8(u8::MIN), Datum::UInt8(u8::MAX)]));
+        static PGLEGACYNAME: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::String(""),
+                Datum::String(" "),
+                Datum::String("'"),
+                Datum::String("\""),
+                Datum::String("."),
+                Datum::String(&"x".repeat(64)),
+            ])
+        });
         static BYTES: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[Datum::Bytes(&[]), Datum::Bytes(&[0]), Datum::Bytes(&[255])])
         });
@@ -2695,6 +2758,7 @@ impl<'a> ScalarType {
             ScalarType::TimestampTz => (*TIMESTAMPTZ).iter(),
             ScalarType::Interval => (*INTERVAL).iter(),
             ScalarType::PgLegacyChar => (*PGLEGACYCHAR).iter(),
+            ScalarType::PgLegacyName => (*PGLEGACYNAME).iter(),
             ScalarType::Bytes => (*BYTES).iter(),
             ScalarType::String => (*STRING).iter(),
             ScalarType::Char { .. } => (*CHAR).iter(),
@@ -2801,6 +2865,7 @@ impl<'a> ScalarType {
             | ScalarType::TimestampTz
             | ScalarType::Interval
             | ScalarType::PgLegacyChar
+            | ScalarType::PgLegacyName
             | ScalarType::Bytes
             | ScalarType::String
             | ScalarType::VarChar { .. }

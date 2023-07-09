@@ -19,6 +19,7 @@ use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::pg_legacy_name::NAME_MAX_BYTES;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
@@ -77,6 +78,8 @@ pub enum Value {
     List(Vec<Option<Value>>),
     /// A map of string keys and homogeneous values.
     Map(BTreeMap<String, Option<Value>>),
+    /// An identifier string of no more than 64 characters in length.
+    Name(String),
     /// An arbitrary precision number.
     Numeric(Numeric),
     /// An object identifier.
@@ -147,6 +150,7 @@ impl Value {
             (Datum::String(s), ScalarType::Char { length }) => {
                 Some(Value::BpChar(char::format_str_pad(s, *length)))
             }
+            (Datum::String(s), ScalarType::PgLegacyName) => Some(Value::Name(s.into())),
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
@@ -283,9 +287,10 @@ impl Value {
             Value::Timestamp(ts) => Datum::Timestamp(ts),
             Value::TimestampTz(ts) => Datum::TimestampTz(ts),
             Value::Interval(iv) => Datum::Interval(iv.0),
-            Value::Text(s) => Datum::String(buf.push_string(s)),
+            Value::Text(s) | Value::VarChar(s) | Value::Name(s) => {
+                Datum::String(buf.push_string(s))
+            }
             Value::BpChar(s) => Datum::String(buf.push_string(s.trim_end().into())),
-            Value::VarChar(s) => Datum::String(buf.push_string(s)),
             Value::Uuid(u) => Datum::Uuid(u),
             Value::Numeric(n) => Datum::Numeric(n.0),
             Value::MzTimestamp(t) => Datum::MzTimestamp(t),
@@ -367,7 +372,9 @@ impl Value {
                 Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
             })
             .expect("provided closure never fails"),
-            Value::Text(s) | Value::VarChar(s) | Value::BpChar(s) => strconv::format_string(buf, s),
+            Value::Text(s) | Value::VarChar(s) | Value::BpChar(s) | Value::Name(s) => {
+                strconv::format_string(buf, s)
+            }
             Value::Time(t) => strconv::format_time(buf, *t),
             Value::Timestamp(ts) => strconv::format_timestamp(buf, ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, ts),
@@ -468,6 +475,7 @@ impl Value {
                 // value OIDs to deal with rather than an element OID.
                 Err("binary encoding of map types is not implemented".into())
             }
+            Value::Name(s) => s.to_sql(&PgType::NAME, buf),
             Value::Oid(i) => i.to_sql(&PgType::OID, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
@@ -582,6 +590,7 @@ impl Value {
                 matches!(**value_type, Type::Map { .. }),
                 |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
             )?),
+            Type::Name => Value::Name(strconv::parse_pg_legacy_name(s)),
             Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(s)?)),
             Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
                 Value::Oid(strconv::parse_oid(s)?)
@@ -633,6 +642,13 @@ impl Value {
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
+            Type::Name => {
+                let s = String::from_sql(ty.inner(), raw)?;
+                if s.len() > NAME_MAX_BYTES {
+                    return Err("identifier too long".into());
+                }
+                Ok(Value::Name(s))
+            }
             Type::Numeric { .. } => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
                 u32::from_sql(ty.inner(), raw).map(Value::Oid)

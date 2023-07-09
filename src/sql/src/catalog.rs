@@ -777,6 +777,7 @@ pub enum CatalogType<T: TypeReference> {
     Numeric,
     Oid,
     PgLegacyChar,
+    PgLegacyName,
     Pseudo,
     Range {
         element_reference: T::Reference,
