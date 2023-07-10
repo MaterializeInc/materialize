@@ -86,6 +86,8 @@ For (3), it is highly likely that the total time needed to execute these tests b
 
 In addition to `sqllogictests`, we propose that all `mzcompose` workflows be run with the feature flag `enable_monotonic_oneshot_selects` turned on. The reasoning is simple: If we are ever going to turn this feature on in production, then this will be the new way of running one-shot `SELECT`s in Materialize. The optimization will kick in whenever we use min/max/top-k patterns. Thus, there should not be any test that we cannot run with the optimization enabled.
 
+Finally, monitoring of performance regressions performed by the feature benchmark might be impacted by monotonic one-shot `SELECT`s. This is because the execution strategies with monotonic operators often require significantly less memory and query processing time, and the feature benchmark performs measurements with one-shot `SELECT`s in a number of its `Dataflow` scenarios. To address this risk, we propose to add selected redundant scenarios to the feature benchmark where an indexed view is created instead, and both query processing time and memory requirements are evaluated. Note that for these scenarios, we must be careful to supply data from input sources that do not emit the empty frontier, e.g., tables, so that memory requirements can be more accurately assessed.
+
 ### Alternatives
 
 Note that the proposal above changes the semantics of our runner rather than changing the test corpora. Thus, reuse of existing corpora with low effort is achieved. However, the trade-off is reduced visibility of what all the statements actually run by a test are.
