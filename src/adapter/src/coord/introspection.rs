@@ -18,8 +18,7 @@
 //!
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
-use mz_expr::visit::VisitChildren;
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr};
+use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
@@ -33,37 +32,6 @@ use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::{rbac, AdapterError};
 
-/// Returns whether a scalar expression can run an expensive function
-fn scalar_can_run_expensive_function(scalar: &MirScalarExpr) -> bool {
-    match scalar {
-        mz_expr::MirScalarExpr::Column(_)
-        | mz_expr::MirScalarExpr::Literal(_, _)
-        | mz_expr::MirScalarExpr::CallUnmaterializable(_) => false,
-        mz_expr::MirScalarExpr::CallUnary { .. }
-        | mz_expr::MirScalarExpr::CallBinary { .. }
-        | mz_expr::MirScalarExpr::CallVariadic { .. } => true,
-        mz_expr::MirScalarExpr::If { cond, then, els } => {
-            scalar_can_run_expensive_function(cond)
-                || scalar_can_run_expensive_function(then)
-                || scalar_can_run_expensive_function(els)
-        }
-    }
-}
-
-/// Returns whether a expression can run an expensive function. We err on returning false.
-/// The goal is to be a heuristic for "this expression is cheap to evaluate:
-/// ideally not creating a dataflow at all when optimized".
-fn expr_can_run_expensive_function(expr: &MirRelationExpr) -> bool {
-    // FlapMap has a table function while all other constructs use MirScalarExpr to run a function
-    let mut result = match expr {
-        MirRelationExpr::FlatMap { .. } => true,
-        _ => false,
-    };
-    expr.visit_scalars(&mut |scalar| result = result || scalar_can_run_expensive_function(scalar));
-    expr.visit_children(|e| result = result || expr_can_run_expensive_function(e));
-    result
-}
-
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
 pub fn auto_run_on_introspection<'a, 's, 'p>(
@@ -74,13 +42,13 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     let (depends_on, can_run_expensive_function) = match plan {
         Plan::Select(plan) => (
             plan.source.depends_on(),
-            expr_can_run_expensive_function(&plan.source),
+            plan.source.can_run_expensive_function(),
         ),
         Plan::Subscribe(plan) => (
             plan.from.depends_on(),
             match &plan.from {
                 SubscribeFrom::Id(_) => false,
-                SubscribeFrom::Query { expr, desc: _ } => expr_can_run_expensive_function(expr),
+                SubscribeFrom::Query { expr, desc: _ } => expr.can_run_expensive_function(),
             },
         ),
         Plan::CreateConnection(_)
@@ -161,8 +129,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         return TargetCluster::Active;
     }
 
-    // Check to make sure our iterator contains atleast one element, this prevents us
-    // from always running empty queries on the mz_introspection cluster.
+    // These dependencies are just existing dataflows that are referenced in the plan.
     let mut depends_on = depends_on.into_iter().peekable();
     let has_dependencies = depends_on.peek().is_some();
 
