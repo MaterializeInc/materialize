@@ -5725,11 +5725,21 @@ impl<'a> Parser<'a> {
                 ObjectType::View => ShowObjectType::View,
                 ObjectType::Source => ShowObjectType::Source,
                 ObjectType::Subsource => {
-                    self.expect_keyword(ON)?;
+                    let on_source = if self.parse_one_of_keywords(&[ON]).is_some() {
+                        Some(self.parse_raw_name()?)
+                    } else {
+                        None
+                    };
 
-                    ShowObjectType::Subsource {
-                        on_source: self.parse_raw_name()?,
+                    if from.is_some() && on_source.is_some() {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "Cannot specify both FROM and ON"
+                        );
                     }
+
+                    ShowObjectType::Subsource { on_source }
                 }
                 ObjectType::Sink => ShowObjectType::Sink,
                 ObjectType::Type => ShowObjectType::Type,
