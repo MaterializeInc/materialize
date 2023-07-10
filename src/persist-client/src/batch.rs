@@ -34,7 +34,7 @@ use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
@@ -336,7 +336,7 @@ where
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         shard_id: ShardId,
         version: Version,
         since: Antichain<T>,
@@ -350,7 +350,7 @@ where
             shard_id,
             lower.clone(),
             Arc::clone(&blob),
-            cpu_heavy_runtime,
+            isolated_runtime,
             &batch_write_metrics,
         );
         Self {
@@ -677,7 +677,7 @@ pub(crate) struct BatchParts<T> {
     shard_id: ShardId,
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
-    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    isolated_runtime: Arc<IsolatedRuntime>,
     writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<LazyPartStats>)>)>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
@@ -700,7 +700,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         shard_id: ShardId,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
     ) -> Self {
         BatchParts {
@@ -710,7 +710,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             shard_id,
             lower,
             blob,
-            cpu_heavy_runtime,
+            isolated_runtime,
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
             batch_metrics: batch_metrics.clone(),
@@ -728,7 +728,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let metrics = Arc::clone(&self.metrics);
         let shard_metrics = Arc::clone(&self.shard_metrics);
         let blob = Arc::clone(&self.blob);
-        let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
+        let isolated_runtime = Arc::clone(&self.isolated_runtime);
         let batch_metrics = self.batch_metrics.clone();
         let partial_key = PartialBatchKey::new(&self.cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&self.shard_id);
@@ -748,7 +748,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     index,
                 };
 
-                let (stats, (buf, encode_time)) = cpu_heavy_runtime
+                let (stats, (buf, encode_time)) = isolated_runtime
                     .spawn_named(|| "batch::encode_part", async move {
                         let stats = if stats_collection_enabled {
                             let stats_start = Instant::now();

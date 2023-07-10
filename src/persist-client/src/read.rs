@@ -1157,7 +1157,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::json;
 
-    use crate::async_runtime::CpuHeavyRuntime;
+    use crate::async_runtime::IsolatedRuntime;
     use crate::cache::StateCache;
     use crate::internal::metrics::Metrics;
     use crate::rpc::NoopPubSubSender;
@@ -1411,7 +1411,7 @@ mod tests {
             blob,
             consensus,
             metrics,
-            Arc::new(CpuHeavyRuntime::new()),
+            Arc::new(IsolatedRuntime::new()),
             Arc::new(StateCache::new_no_metrics()),
             pubsub_sender,
         )

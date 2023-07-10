@@ -1369,7 +1369,7 @@ pub mod datadriven {
             datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
-            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            Arc::clone(&datadriven.client.isolated_runtime),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
             since,
@@ -1534,7 +1534,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
-            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            Arc::clone(&datadriven.client.isolated_runtime),
             req,
             schemas,
         )

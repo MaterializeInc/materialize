@@ -32,7 +32,7 @@ use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
 use crate::cfg::MB;
 use crate::fetch::{fetch_batch_part, EncodedPart};
@@ -126,7 +126,7 @@ where
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
         schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
@@ -178,7 +178,7 @@ where
 
                 let cfg = machine.applier.cfg.clone();
                 let blob = Arc::clone(&machine.applier.state_versions.blob);
-                let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
+                let isolated_runtime = Arc::clone(&isolated_runtime);
                 let writer_id = writer_id.clone();
                 let schemas = schemas.clone();
 
@@ -191,7 +191,7 @@ where
                         cfg,
                         blob,
                         metrics,
-                        cpu_heavy_runtime,
+                        isolated_runtime,
                         req,
                         writer_id,
                         schemas,
@@ -270,7 +270,7 @@ where
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
         writer_id: WriterId,
         schemas: Schemas<K, V>,
@@ -305,8 +305,8 @@ where
         let compact_span = debug_span!("compact::consolidate");
         let res = tokio::time::timeout(
             timeout,
-            // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
-            cpu_heavy_runtime
+            // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
+            isolated_runtime
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
@@ -314,7 +314,7 @@ where
                         Arc::clone(&blob),
                         Arc::clone(&metrics),
                         Arc::clone(&machine.applier.shard_metrics),
-                        Arc::clone(&cpu_heavy_runtime),
+                        Arc::clone(&isolated_runtime),
                         req,
                         schemas.clone(),
                     )
@@ -414,7 +414,7 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
         schemas: Schemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
@@ -481,7 +481,7 @@ where
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&shard_metrics),
-                Arc::clone(&cpu_heavy_runtime),
+                Arc::clone(&isolated_runtime),
                 schemas.clone(),
             )
             .await?;
@@ -644,7 +644,7 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         real_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
@@ -690,7 +690,7 @@ where
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),
-            cpu_heavy_runtime,
+            isolated_runtime,
             shard_id.clone(),
             cfg.version.clone(),
             desc.since().clone(),
@@ -1040,7 +1040,7 @@ mod tests {
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id()),
-            Arc::new(CpuHeavyRuntime::new()),
+            Arc::new(IsolatedRuntime::new()),
             req.clone(),
             schemas,
         )
@@ -1124,7 +1124,7 @@ mod tests {
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id()),
-            Arc::new(CpuHeavyRuntime::new()),
+            Arc::new(IsolatedRuntime::new()),
             req.clone(),
             schemas,
         )
