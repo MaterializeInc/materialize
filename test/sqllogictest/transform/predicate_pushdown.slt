@@ -468,8 +468,18 @@ EOF
 # One more for https://github.com/MaterializeInc/materialize/issues/16128
 # https://github.com/MaterializeInc/materialize/pull/16147#issuecomment-1322042176
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement ok
 DROP SCHEMA public CASCADE ;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
 
 statement ok
 CREATE SCHEMA public ;

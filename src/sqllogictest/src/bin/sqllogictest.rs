@@ -81,7 +81,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
-use mz_ore::cli::{self, CliConfig};
+use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use time::Instant;
@@ -136,6 +136,15 @@ struct Args {
     /// Wrapper program to start child processes
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
+    /// An list of NAME=VALUE pairs used to override static defaults
+    /// for system parameters.
+    #[clap(
+        long,
+        env = "SYSTEM_PARAMETER_DEFAULT",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    system_parameter_default: Vec<KeyValueArg<String, String>>,
 }
 
 #[tokio::main]
@@ -143,7 +152,10 @@ async fn main() -> ExitCode {
     mz_ore::panic::set_abort_on_panic();
     mz_ore::test::init_logging_default("warn");
 
-    let args: Args = cli::parse_args(CliConfig::default());
+    let args: Args = cli::parse_args(CliConfig {
+        env_prefix: Some("MZ_"),
+        enable_version_flag: false,
+    });
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
@@ -157,6 +169,12 @@ async fn main() -> ExitCode {
         auto_transactions: args.auto_transactions,
         enable_table_keys: args.enable_table_keys,
         orchestrator_process_wrapper: args.orchestrator_process_wrapper.clone(),
+        system_parameter_defaults: args
+            .system_parameter_default
+            .clone()
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
     };
 
     if args.rewrite_results {

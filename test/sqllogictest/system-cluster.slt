@@ -344,6 +344,11 @@ CREATE VIEW keys AS ( SELECT key FROM bar );
 
 # But creating objects that install resources, should not be allowed.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement error system cluster 'mz_introspection' cannot be modified
 CREATE MATERIALIZED VIEW live_keys AS ( SELECT key FROM bar );
 

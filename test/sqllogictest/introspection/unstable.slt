@@ -14,8 +14,18 @@ mode cockroach
 statement error cannot create view with unstable dependencies
 CREATE VIEW v AS SELECT count(*) FROM mz_internal.mz_active_peeks
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false
+----
+COMPLETE 0
+
 statement error cannot create index with unstable dependencies
 CREATE DEFAULT INDEX ON mz_internal.mz_active_peeks
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks
+----
+COMPLETE 0
 
 # Introspection views are unstable.
 
