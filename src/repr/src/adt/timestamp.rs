@@ -339,6 +339,8 @@ pub trait TimestampLike:
 
 impl TryFrom<Datum<'_>> for NaiveDateTime {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Timestamp(dt) => Ok(dt.t),
@@ -349,6 +351,8 @@ impl TryFrom<Datum<'_>> for NaiveDateTime {
 
 impl TryFrom<Datum<'_>> for DateTime<Utc> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::TimestampTz(dt_tz) => Ok(dt_tz.t),

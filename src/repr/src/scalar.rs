@@ -162,6 +162,8 @@ pub enum Datum<'a> {
 
 impl TryFrom<Datum<'_>> for bool {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::False => Ok(false),
@@ -174,6 +176,7 @@ impl TryFrom<Datum<'_>> for bool {
 impl TryFrom<Datum<'_>> for Option<bool> {
     type Error = ();
 
+    #[inline]
     fn try_from(datum: Datum<'_>) -> Result<Self, Self::Error> {
         match datum {
             Datum::Null => Ok(None),
@@ -186,6 +189,8 @@ impl TryFrom<Datum<'_>> for Option<bool> {
 
 impl TryFrom<Datum<'_>> for f32 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Float32(f) => Ok(*f),
@@ -196,6 +201,8 @@ impl TryFrom<Datum<'_>> for f32 {
 
 impl TryFrom<Datum<'_>> for Option<f32> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -207,6 +214,8 @@ impl TryFrom<Datum<'_>> for Option<f32> {
 
 impl TryFrom<Datum<'_>> for OrderedFloat<f32> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Float32(f) => Ok(f),
@@ -217,6 +226,8 @@ impl TryFrom<Datum<'_>> for OrderedFloat<f32> {
 
 impl TryFrom<Datum<'_>> for Option<OrderedFloat<f32>> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -228,6 +239,8 @@ impl TryFrom<Datum<'_>> for Option<OrderedFloat<f32>> {
 
 impl TryFrom<Datum<'_>> for f64 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Float64(f) => Ok(*f),
@@ -238,6 +251,8 @@ impl TryFrom<Datum<'_>> for f64 {
 
 impl TryFrom<Datum<'_>> for Option<f64> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -249,6 +264,8 @@ impl TryFrom<Datum<'_>> for Option<f64> {
 
 impl TryFrom<Datum<'_>> for OrderedFloat<f64> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Float64(f) => Ok(f),
@@ -259,6 +276,8 @@ impl TryFrom<Datum<'_>> for OrderedFloat<f64> {
 
 impl TryFrom<Datum<'_>> for Option<OrderedFloat<f64>> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -270,6 +289,8 @@ impl TryFrom<Datum<'_>> for Option<OrderedFloat<f64>> {
 
 impl TryFrom<Datum<'_>> for i16 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Int16(i) => Ok(i),
@@ -280,6 +301,8 @@ impl TryFrom<Datum<'_>> for i16 {
 
 impl TryFrom<Datum<'_>> for Option<i16> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -291,6 +314,8 @@ impl TryFrom<Datum<'_>> for Option<i16> {
 
 impl TryFrom<Datum<'_>> for i32 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Int32(i) => Ok(i),
@@ -301,6 +326,8 @@ impl TryFrom<Datum<'_>> for i32 {
 
 impl TryFrom<Datum<'_>> for Option<i32> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -312,6 +339,8 @@ impl TryFrom<Datum<'_>> for Option<i32> {
 
 impl TryFrom<Datum<'_>> for i64 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Int64(i) => Ok(i),
@@ -322,6 +351,8 @@ impl TryFrom<Datum<'_>> for i64 {
 
 impl TryFrom<Datum<'_>> for Option<i64> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -333,6 +364,8 @@ impl TryFrom<Datum<'_>> for Option<i64> {
 
 impl TryFrom<Datum<'_>> for u16 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::UInt16(u) => Ok(u),
@@ -343,6 +376,8 @@ impl TryFrom<Datum<'_>> for u16 {
 
 impl TryFrom<Datum<'_>> for Option<u16> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -354,6 +389,8 @@ impl TryFrom<Datum<'_>> for Option<u16> {
 
 impl TryFrom<Datum<'_>> for u32 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::UInt32(u) => Ok(u),
@@ -364,6 +401,8 @@ impl TryFrom<Datum<'_>> for u32 {
 
 impl TryFrom<Datum<'_>> for Option<u32> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -375,6 +414,8 @@ impl TryFrom<Datum<'_>> for Option<u32> {
 
 impl TryFrom<Datum<'_>> for u64 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::UInt64(u) => Ok(u),
@@ -385,6 +426,8 @@ impl TryFrom<Datum<'_>> for u64 {
 
 impl TryFrom<Datum<'_>> for Option<u64> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -396,6 +439,8 @@ impl TryFrom<Datum<'_>> for Option<u64> {
 
 impl TryFrom<Datum<'_>> for CheckedTimestamp<NaiveDateTime> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Timestamp(dt) => Ok(dt),
@@ -406,6 +451,8 @@ impl TryFrom<Datum<'_>> for CheckedTimestamp<NaiveDateTime> {
 
 impl TryFrom<Datum<'_>> for CheckedTimestamp<DateTime<Utc>> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::TimestampTz(dt_tz) => Ok(dt_tz),
@@ -416,6 +463,8 @@ impl TryFrom<Datum<'_>> for CheckedTimestamp<DateTime<Utc>> {
 
 impl TryFrom<Datum<'_>> for Date {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Date(d) => Ok(d),
@@ -426,6 +475,8 @@ impl TryFrom<Datum<'_>> for Date {
 
 impl TryFrom<Datum<'_>> for OrderedDecimal<Numeric> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Numeric(n) => Ok(n),
@@ -436,6 +487,8 @@ impl TryFrom<Datum<'_>> for OrderedDecimal<Numeric> {
 
 impl TryFrom<Datum<'_>> for Option<OrderedDecimal<Numeric>> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -447,6 +500,8 @@ impl TryFrom<Datum<'_>> for Option<OrderedDecimal<Numeric>> {
 
 impl TryFrom<Datum<'_>> for crate::Timestamp {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::MzTimestamp(n) => Ok(n),
@@ -457,6 +512,8 @@ impl TryFrom<Datum<'_>> for crate::Timestamp {
 
 impl TryFrom<Datum<'_>> for Option<crate::Timestamp> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
