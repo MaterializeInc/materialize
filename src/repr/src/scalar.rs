@@ -1006,6 +1006,7 @@ impl<'a> Datum<'a> {
 }
 
 impl<'a> From<bool> for Datum<'a> {
+    #[inline]
     fn from(b: bool) -> Datum<'a> {
         if b {
             Datum::True
@@ -1016,96 +1017,112 @@ impl<'a> From<bool> for Datum<'a> {
 }
 
 impl<'a> From<i16> for Datum<'a> {
+    #[inline]
     fn from(i: i16) -> Datum<'a> {
         Datum::Int16(i)
     }
 }
 
 impl<'a> From<i32> for Datum<'a> {
+    #[inline]
     fn from(i: i32) -> Datum<'a> {
         Datum::Int32(i)
     }
 }
 
 impl<'a> From<i64> for Datum<'a> {
+    #[inline]
     fn from(i: i64) -> Datum<'a> {
         Datum::Int64(i)
     }
 }
 
 impl<'a> From<u8> for Datum<'a> {
+    #[inline]
     fn from(u: u8) -> Datum<'a> {
         Datum::UInt8(u)
     }
 }
 
 impl<'a> From<u16> for Datum<'a> {
+    #[inline]
     fn from(u: u16) -> Datum<'a> {
         Datum::UInt16(u)
     }
 }
 
 impl<'a> From<u32> for Datum<'a> {
+    #[inline]
     fn from(u: u32) -> Datum<'a> {
         Datum::UInt32(u)
     }
 }
 
 impl<'a> From<u64> for Datum<'a> {
+    #[inline]
     fn from(u: u64) -> Datum<'a> {
         Datum::UInt64(u)
     }
 }
 
 impl<'a> From<OrderedFloat<f32>> for Datum<'a> {
+    #[inline]
     fn from(f: OrderedFloat<f32>) -> Datum<'a> {
         Datum::Float32(f)
     }
 }
 
 impl<'a> From<OrderedFloat<f64>> for Datum<'a> {
+    #[inline]
     fn from(f: OrderedFloat<f64>) -> Datum<'a> {
         Datum::Float64(f)
     }
 }
 
 impl<'a> From<f32> for Datum<'a> {
+    #[inline]
     fn from(f: f32) -> Datum<'a> {
         Datum::Float32(OrderedFloat(f))
     }
 }
 
 impl<'a> From<f64> for Datum<'a> {
+    #[inline]
     fn from(f: f64) -> Datum<'a> {
         Datum::Float64(OrderedFloat(f))
     }
 }
 
 impl<'a> From<i128> for Datum<'a> {
+    #[inline]
     fn from(d: i128) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
 impl<'a> From<u128> for Datum<'a> {
+    #[inline]
     fn from(d: u128) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
 impl<'a> From<Numeric> for Datum<'a> {
+    #[inline]
     fn from(n: Numeric) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(n))
     }
 }
 
 impl<'a> From<OrderedDecimal<Numeric>> for Datum<'a> {
+    #[inline]
     fn from(n: OrderedDecimal<Numeric>) -> Datum<'a> {
         Datum::Numeric(n)
     }
 }
 
 impl<'a> From<chrono::Duration> for Datum<'a> {
+    #[inline]
     fn from(duration: chrono::Duration) -> Datum<'a> {
         let micros = duration.num_microseconds().unwrap_or(0);
         Datum::Interval(Interval::new(0, 0, micros))
@@ -1113,42 +1130,49 @@ impl<'a> From<chrono::Duration> for Datum<'a> {
 }
 
 impl<'a> From<Interval> for Datum<'a> {
+    #[inline]
     fn from(other: Interval) -> Datum<'a> {
         Datum::Interval(other)
     }
 }
 
 impl<'a> From<&'a str> for Datum<'a> {
+    #[inline]
     fn from(s: &'a str) -> Datum<'a> {
         Datum::String(s)
     }
 }
 
 impl<'a> From<&'a [u8]> for Datum<'a> {
+    #[inline]
     fn from(b: &'a [u8]) -> Datum<'a> {
         Datum::Bytes(b)
     }
 }
 
 impl<'a> From<Date> for Datum<'a> {
+    #[inline]
     fn from(d: Date) -> Datum<'a> {
         Datum::Date(d)
     }
 }
 
 impl<'a> From<NaiveTime> for Datum<'a> {
+    #[inline]
     fn from(t: NaiveTime) -> Datum<'a> {
         Datum::Time(t)
     }
 }
 
 impl<'a> From<CheckedTimestamp<NaiveDateTime>> for Datum<'a> {
+    #[inline]
     fn from(dt: CheckedTimestamp<NaiveDateTime>) -> Datum<'a> {
         Datum::Timestamp(dt)
     }
 }
 
 impl<'a> From<CheckedTimestamp<DateTime<Utc>>> for Datum<'a> {
+    #[inline]
     fn from(dt: CheckedTimestamp<DateTime<Utc>>) -> Datum<'a> {
         Datum::TimestampTz(dt)
     }
@@ -1173,17 +1197,20 @@ impl<'a> TryInto<Datum<'a>> for DateTime<Utc> {
 }
 
 impl<'a> From<Uuid> for Datum<'a> {
+    #[inline]
     fn from(uuid: Uuid) -> Datum<'a> {
         Datum::Uuid(uuid)
     }
 }
 impl<'a> From<crate::Timestamp> for Datum<'a> {
+    #[inline]
     fn from(ts: crate::Timestamp) -> Datum<'a> {
         Datum::MzTimestamp(ts)
     }
 }
 
 impl<'a> From<MzAclItem> for Datum<'a> {
+    #[inline]
     fn from(mz_acl_item: MzAclItem) -> Self {
         Datum::MzAclItem(mz_acl_item)
     }
@@ -3396,6 +3423,7 @@ fn arb_numeric() -> BoxedStrategy<Numeric> {
 }
 
 impl<'a> From<&'a PropDatum> for Datum<'a> {
+    #[inline]
     fn from(pd: &'a PropDatum) -> Self {
         use PropDatum::*;
         match pd {
