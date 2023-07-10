@@ -1949,7 +1949,7 @@ pub enum ShowObjectType<T: AstInfo> {
         from: Option<T::DatabaseName>,
     },
     Subsource {
-        on_source: T::ItemName,
+        on_source: Option<T::ItemName>,
     },
 }
 /// `SHOW <object>S`
@@ -2020,8 +2020,10 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         }
 
         if let ShowObjectType::Subsource { on_source } = &self.object_type {
-            f.write_str(" ON ");
-            f.write_node(on_source);
+            if let Some(on_source) = on_source {
+                f.write_str(" ON ");
+                f.write_node(on_source);
+            }
         }
 
         if let Some(filter) = &self.filter {
