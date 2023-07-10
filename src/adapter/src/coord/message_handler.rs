@@ -32,10 +32,10 @@ use crate::coord::appends::Deferred;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message, PeekStage,
-    PeekStageFinish, PeekValidity, PendingReadTxn, RealTimeRecencyContext, SinkConnectionReady,
+    PeekStageFinish, PendingReadTxn, PlanValidity, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterError, AdapterNotice};
+use crate::{catalog, AdapterNotice};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -581,12 +581,8 @@ impl Coordinator {
             match ready {
                 Deferred::Plan(mut ready) => {
                     ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    if ready
-                        .dependencies
-                        .into_iter()
-                        .any(|id| self.catalog.try_get_entry(&id).is_none())
-                    {
-                        ready.ctx.retire(Err(AdapterError::ChangedPlan))
+                    if let Err(e) = ready.validity.check(self.catalog()) {
+                        ready.ctx.retire(Err(e))
                     } else {
                         // Write statements never need to track resolved IDs (NOTE: This is not the
                         // same thing as plan dependencies, which we do need to re-validate).
@@ -705,7 +701,7 @@ impl Coordinator {
         &mut self,
         conn_id: ConnectionId,
         real_time_recency_ts: mz_repr::Timestamp,
-        mut validity: PeekValidity,
+        mut validity: PlanValidity,
     ) {
         let real_time_recency_context =
             match self.pending_real_time_recency_timestamp.remove(&conn_id) {

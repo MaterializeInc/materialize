@@ -209,7 +209,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         real_time_recency_ts: Timestamp,
-        validity: PeekValidity,
+        validity: PlanValidity,
     },
 
     // Like Command::Execute, but its context has already been allocated.
@@ -301,7 +301,7 @@ pub enum PeekStage {
 }
 
 impl PeekStage {
-    fn validity(&mut self) -> Option<&mut PeekValidity> {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Optimize(PeekStageOptimize { validity, .. })
@@ -319,7 +319,7 @@ pub struct PeekStageValidate {
 
 #[derive(Debug)]
 pub struct PeekStageOptimize {
-    validity: PeekValidity,
+    validity: PlanValidity,
     source: MirRelationExpr,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -335,7 +335,7 @@ pub struct PeekStageOptimize {
 
 #[derive(Debug)]
 pub struct PeekStageTimestamp {
-    validity: PeekValidity,
+    validity: PlanValidity,
     dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -353,7 +353,7 @@ pub struct PeekStageTimestamp {
 
 #[derive(Debug)]
 pub struct PeekStageFinish {
-    validity: PeekValidity,
+    validity: PlanValidity,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
     pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
@@ -381,19 +381,19 @@ pub enum TargetCluster {
     Active,
 }
 
-/// A struct to hold information about the validity of peeks and if they should be abandoned after
+/// A struct to hold information about the validity of plans and if they should be abandoned after
 /// doing work off of the Coordinator thread.
 #[derive(Debug)]
-pub struct PeekValidity {
-    /// The most recent revision at which this peek was verified as valid.
+pub struct PlanValidity {
+    /// The most recent revision at which this plan was verified as valid.
     transient_revision: u64,
-    /// Objects on which the peek depends.
+    /// Objects on which the plan depends.
     source_ids: BTreeSet<GlobalId>,
-    cluster_id: ComputeInstanceId,
+    cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
 }
 
-impl PeekValidity {
+impl PlanValidity {
     /// Returns an error if the current catalog no longer has all dependencies.
     fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
         if self.transient_revision == catalog.transient_revision() {
@@ -401,12 +401,15 @@ impl PeekValidity {
         }
         // If the transient revision changed, we have to recheck. If successful, bump the revision
         // so next check uses the above fast path.
-        let Some(cluster) = catalog.try_get_cluster(self.cluster_id) else {
-            return Err(AdapterError::ChangedPlan);
-        };
-        if let Some(replica_id) = self.replica_id {
-            if !cluster.replicas_by_id.contains_key(&replica_id) {
+        if let Some(cluster_id) = self.cluster_id {
+            let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
                 return Err(AdapterError::ChangedPlan);
+            };
+
+            if let Some(replica_id) = self.replica_id {
+                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                    return Err(AdapterError::ChangedPlan);
+                }
             }
         }
         // It is sufficient to check that all the source_ids still exist because we assume:
