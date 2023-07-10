@@ -1128,7 +1128,7 @@ pub mod datadriven {
             )
             .await
             .expect("codecs should match");
-            let gc = GarbageCollector::new(machine.clone());
+            let gc = GarbageCollector::new(machine.clone(), Arc::clone(&client.isolated_runtime));
             MachineState {
                 shard_id,
                 client,

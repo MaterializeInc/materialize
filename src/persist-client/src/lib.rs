@@ -367,7 +367,7 @@ impl PersistClient {
             Arc::clone(&self.pubsub_sender),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
@@ -522,7 +522,7 @@ impl PersistClient {
             Arc::clone(&self.pubsub_sender),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
             .register_critical_reader::<O>(&reader_id, purpose)
@@ -576,7 +576,7 @@ impl PersistClient {
             Arc::clone(&self.pubsub_sender),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
         let writer_id = WriterId::new();
         let schemas = Schemas {
             key: key_schema,
