@@ -46,6 +46,7 @@ ERROR_RE = re.compile(
     | unsupported\ SQL\ type\ in\ testdrive:
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
+    | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     )
     # Emitted by tests employing explicit mz_panic()
     (?!.*forced\ panic)
