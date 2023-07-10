@@ -33,6 +33,15 @@ DROP SINK my_sink;
 DROP SINK
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped sink.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`SHOW SINKS`](../show-sinks)

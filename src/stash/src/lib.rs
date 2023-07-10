@@ -84,6 +84,7 @@ use std::sync::Arc;
 
 use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
+use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
 pub mod objects;
@@ -102,7 +103,7 @@ pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 /// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
 /// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
 /// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 25;
+pub const STASH_VERSION: u64 = 26;
 
 /// The minimum [`Stash`] version number that we support migrating from.
 ///
@@ -122,8 +123,14 @@ pub type Id = i64;
 
 // A common trait for uses of K and V to express in a single place all of the
 // traits required by async_trait and StashCollection.
-pub trait Data: prost::Message + Default + Ord + Send + Sync {}
-impl<T: prost::Message + Default + Ord + Send + Sync> Data for T {}
+pub trait Data:
+    prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>
+{
+}
+impl<T: prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>> Data
+    for T
+{
+}
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
 /// state of the collection is durable.

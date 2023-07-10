@@ -566,6 +566,15 @@ SELECT * FROM mz_ssh_tunnel_connections;
  ...   | ssh-ed25519 AAAA...76RH materialize   | ssh-ed25519 AAAA...hLYV materialize
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all connections and secrets used in the connection definition.
+
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)

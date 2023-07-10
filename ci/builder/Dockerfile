@@ -179,10 +179,6 @@ RUN mkdir rust \
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
-# Install the Antithesis stub instrumentation library.
-
-COPY libvoidstar.so /usr/local/lib/
-
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 

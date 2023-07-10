@@ -90,6 +90,7 @@ use mz_storage_client::types::sinks::{
 use mz_storage_client::types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
+use mz_tracing::params::TracingParameters;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -5128,6 +5129,7 @@ impl Catalog {
                 size,
                 availability_zone,
                 az_user_specified,
+                disk,
             } => {
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
                 let cluster_replica_sizes = &self.state.cluster_replica_sizes;
@@ -5141,6 +5143,7 @@ impl Catalog {
                     availability_zone,
                     size,
                     az_user_specified,
+                    disk,
                 })
             }
         };
@@ -5896,7 +5899,7 @@ impl Catalog {
                         &config.clone().into(),
                         owner_id,
                     )?;
-                    if let ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) =
+                    if let ReplicaLocation::Managed(ManagedReplicaLocation { size, disk, .. }) =
                         &config.location
                     {
                         let details = EventDetails::CreateClusterReplicaV1(
@@ -5906,6 +5909,7 @@ impl Catalog {
                                 replica_id: Some(id.to_string()),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
+                                disk: *disk,
                             },
                         );
                         state.add_to_audit_log(
@@ -7493,6 +7497,7 @@ impl Catalog {
             dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
             enable_mz_join_core: Some(config.enable_mz_join_core()),
             persist: self.persist_config(),
+            tracing: self.tracing_config(),
         }
     }
 
@@ -7544,6 +7549,15 @@ impl Catalog {
                 }
             },
             finalize_shards: self.system_config().enable_storage_shard_finalization(),
+            tracing: self.tracing_config(),
+        }
+    }
+
+    pub fn tracing_config(&self) -> TracingParameters {
+        let config = self.system_config();
+        TracingParameters {
+            log_filter: Some(config.logging_filter()),
+            opentelemetry_filter: Some(config.opentelemetry_filter()),
         }
     }
 
@@ -7806,6 +7820,7 @@ pub struct ClusterVariantManaged {
     pub logging: SerializedReplicaLogging,
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
+    pub disk: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
@@ -7871,6 +7886,7 @@ pub enum SerializedReplicaLocation {
         /// `true` if the AZ was specified by the user and must be respected;
         /// `false` if it was picked arbitrarily by Materialize.
         az_user_specified: bool,
+        disk: bool,
     },
 }
 
@@ -7895,10 +7911,12 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
                 size,
                 availability_zone,
                 az_user_specified,
+                disk,
             }) => SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified,
+                disk,
             },
         }
     }

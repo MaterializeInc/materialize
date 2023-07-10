@@ -172,7 +172,7 @@ pub struct ExplainConfig {
     /// Show the `type` attribute in the explanation.
     pub types: bool,
     /// Show MFP pushdown information.
-    pub mfp_pushdown: bool,
+    pub filter_pushdown: bool,
 }
 
 impl Default for ExplainConfig {
@@ -189,7 +189,7 @@ impl Default for ExplainConfig {
             subtree_size: false,
             timing: false,
             types: false,
-            mfp_pushdown: false,
+            filter_pushdown: false,
         }
     }
 }
@@ -221,7 +221,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             subtree_size: flags.remove("subtree_size"),
             timing: flags.remove("timing"),
             types: flags.remove("types"),
-            mfp_pushdown: flags.remove("mfp_pushdown"),
+            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -620,7 +620,7 @@ mod tests {
             subtree_size: false,
             timing: true,
             types: false,
-            mfp_pushdown: false,
+            filter_pushdown: false,
         };
         let context = ExplainContext {
             env,

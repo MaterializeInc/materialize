@@ -140,6 +140,7 @@ class Composition:
                 "mydata": None,
                 "tmp": None,
                 "secrets": None,
+                "scratch": None,
             }
         )
 

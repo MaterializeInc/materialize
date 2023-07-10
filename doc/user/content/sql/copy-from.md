@@ -79,4 +79,13 @@ COPY t FROM STDIN (FORMAT CSV);
 COPY t FROM STDIN (DELIMITER '|');
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the table.
+- `INSERT` privileges on the table.
+
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html

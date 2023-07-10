@@ -162,6 +162,8 @@ pub enum Datum<'a> {
 
 impl TryFrom<Datum<'_>> for bool {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::False => Ok(false),
@@ -174,6 +176,7 @@ impl TryFrom<Datum<'_>> for bool {
 impl TryFrom<Datum<'_>> for Option<bool> {
     type Error = ();
 
+    #[inline]
     fn try_from(datum: Datum<'_>) -> Result<Self, Self::Error> {
         match datum {
             Datum::Null => Ok(None),
@@ -186,6 +189,8 @@ impl TryFrom<Datum<'_>> for Option<bool> {
 
 impl TryFrom<Datum<'_>> for f32 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Float32(f) => Ok(*f),
@@ -196,6 +201,8 @@ impl TryFrom<Datum<'_>> for f32 {
 
 impl TryFrom<Datum<'_>> for Option<f32> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -205,8 +212,35 @@ impl TryFrom<Datum<'_>> for Option<f32> {
     }
 }
 
+impl TryFrom<Datum<'_>> for OrderedFloat<f32> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Float32(f) => Ok(f),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<OrderedFloat<f32>> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Float32(f) => Ok(Some(f)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<Datum<'_>> for f64 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Float64(f) => Ok(*f),
@@ -217,6 +251,8 @@ impl TryFrom<Datum<'_>> for f64 {
 
 impl TryFrom<Datum<'_>> for Option<f64> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -226,8 +262,35 @@ impl TryFrom<Datum<'_>> for Option<f64> {
     }
 }
 
+impl TryFrom<Datum<'_>> for OrderedFloat<f64> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Float64(f) => Ok(f),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<OrderedFloat<f64>> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Float64(f) => Ok(Some(f)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<Datum<'_>> for i16 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Int16(i) => Ok(i),
@@ -238,6 +301,8 @@ impl TryFrom<Datum<'_>> for i16 {
 
 impl TryFrom<Datum<'_>> for Option<i16> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -249,6 +314,8 @@ impl TryFrom<Datum<'_>> for Option<i16> {
 
 impl TryFrom<Datum<'_>> for i32 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Int32(i) => Ok(i),
@@ -259,6 +326,8 @@ impl TryFrom<Datum<'_>> for i32 {
 
 impl TryFrom<Datum<'_>> for Option<i32> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -270,6 +339,8 @@ impl TryFrom<Datum<'_>> for Option<i32> {
 
 impl TryFrom<Datum<'_>> for i64 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Int64(i) => Ok(i),
@@ -280,6 +351,8 @@ impl TryFrom<Datum<'_>> for i64 {
 
 impl TryFrom<Datum<'_>> for Option<i64> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -291,6 +364,8 @@ impl TryFrom<Datum<'_>> for Option<i64> {
 
 impl TryFrom<Datum<'_>> for u16 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::UInt16(u) => Ok(u),
@@ -301,6 +376,8 @@ impl TryFrom<Datum<'_>> for u16 {
 
 impl TryFrom<Datum<'_>> for Option<u16> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -312,6 +389,8 @@ impl TryFrom<Datum<'_>> for Option<u16> {
 
 impl TryFrom<Datum<'_>> for u32 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::UInt32(u) => Ok(u),
@@ -322,6 +401,8 @@ impl TryFrom<Datum<'_>> for u32 {
 
 impl TryFrom<Datum<'_>> for Option<u32> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -333,6 +414,8 @@ impl TryFrom<Datum<'_>> for Option<u32> {
 
 impl TryFrom<Datum<'_>> for u64 {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::UInt64(u) => Ok(u),
@@ -343,6 +426,8 @@ impl TryFrom<Datum<'_>> for u64 {
 
 impl TryFrom<Datum<'_>> for Option<u64> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
@@ -354,6 +439,8 @@ impl TryFrom<Datum<'_>> for Option<u64> {
 
 impl TryFrom<Datum<'_>> for CheckedTimestamp<NaiveDateTime> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Timestamp(dt) => Ok(dt),
@@ -364,6 +451,8 @@ impl TryFrom<Datum<'_>> for CheckedTimestamp<NaiveDateTime> {
 
 impl TryFrom<Datum<'_>> for CheckedTimestamp<DateTime<Utc>> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::TimestampTz(dt_tz) => Ok(dt_tz),
@@ -374,6 +463,8 @@ impl TryFrom<Datum<'_>> for CheckedTimestamp<DateTime<Utc>> {
 
 impl TryFrom<Datum<'_>> for Date {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Date(d) => Ok(d),
@@ -384,6 +475,8 @@ impl TryFrom<Datum<'_>> for Date {
 
 impl TryFrom<Datum<'_>> for OrderedDecimal<Numeric> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Numeric(n) => Ok(n),
@@ -394,10 +487,37 @@ impl TryFrom<Datum<'_>> for OrderedDecimal<Numeric> {
 
 impl TryFrom<Datum<'_>> for Option<OrderedDecimal<Numeric>> {
     type Error = ();
+
+    #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
             Datum::Numeric(n) => Ok(Some(n)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for crate::Timestamp {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::MzTimestamp(n) => Ok(n),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<crate::Timestamp> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::MzTimestamp(n) => Ok(Some(n)),
             _ => Err(()),
         }
     }
@@ -886,6 +1006,7 @@ impl<'a> Datum<'a> {
 }
 
 impl<'a> From<bool> for Datum<'a> {
+    #[inline]
     fn from(b: bool) -> Datum<'a> {
         if b {
             Datum::True
@@ -896,96 +1017,112 @@ impl<'a> From<bool> for Datum<'a> {
 }
 
 impl<'a> From<i16> for Datum<'a> {
+    #[inline]
     fn from(i: i16) -> Datum<'a> {
         Datum::Int16(i)
     }
 }
 
 impl<'a> From<i32> for Datum<'a> {
+    #[inline]
     fn from(i: i32) -> Datum<'a> {
         Datum::Int32(i)
     }
 }
 
 impl<'a> From<i64> for Datum<'a> {
+    #[inline]
     fn from(i: i64) -> Datum<'a> {
         Datum::Int64(i)
     }
 }
 
 impl<'a> From<u8> for Datum<'a> {
+    #[inline]
     fn from(u: u8) -> Datum<'a> {
         Datum::UInt8(u)
     }
 }
 
 impl<'a> From<u16> for Datum<'a> {
+    #[inline]
     fn from(u: u16) -> Datum<'a> {
         Datum::UInt16(u)
     }
 }
 
 impl<'a> From<u32> for Datum<'a> {
+    #[inline]
     fn from(u: u32) -> Datum<'a> {
         Datum::UInt32(u)
     }
 }
 
 impl<'a> From<u64> for Datum<'a> {
+    #[inline]
     fn from(u: u64) -> Datum<'a> {
         Datum::UInt64(u)
     }
 }
 
 impl<'a> From<OrderedFloat<f32>> for Datum<'a> {
+    #[inline]
     fn from(f: OrderedFloat<f32>) -> Datum<'a> {
         Datum::Float32(f)
     }
 }
 
 impl<'a> From<OrderedFloat<f64>> for Datum<'a> {
+    #[inline]
     fn from(f: OrderedFloat<f64>) -> Datum<'a> {
         Datum::Float64(f)
     }
 }
 
 impl<'a> From<f32> for Datum<'a> {
+    #[inline]
     fn from(f: f32) -> Datum<'a> {
         Datum::Float32(OrderedFloat(f))
     }
 }
 
 impl<'a> From<f64> for Datum<'a> {
+    #[inline]
     fn from(f: f64) -> Datum<'a> {
         Datum::Float64(OrderedFloat(f))
     }
 }
 
 impl<'a> From<i128> for Datum<'a> {
+    #[inline]
     fn from(d: i128) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
 impl<'a> From<u128> for Datum<'a> {
+    #[inline]
     fn from(d: u128) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
 impl<'a> From<Numeric> for Datum<'a> {
+    #[inline]
     fn from(n: Numeric) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(n))
     }
 }
 
 impl<'a> From<OrderedDecimal<Numeric>> for Datum<'a> {
+    #[inline]
     fn from(n: OrderedDecimal<Numeric>) -> Datum<'a> {
         Datum::Numeric(n)
     }
 }
 
 impl<'a> From<chrono::Duration> for Datum<'a> {
+    #[inline]
     fn from(duration: chrono::Duration) -> Datum<'a> {
         let micros = duration.num_microseconds().unwrap_or(0);
         Datum::Interval(Interval::new(0, 0, micros))
@@ -993,42 +1130,49 @@ impl<'a> From<chrono::Duration> for Datum<'a> {
 }
 
 impl<'a> From<Interval> for Datum<'a> {
+    #[inline]
     fn from(other: Interval) -> Datum<'a> {
         Datum::Interval(other)
     }
 }
 
 impl<'a> From<&'a str> for Datum<'a> {
+    #[inline]
     fn from(s: &'a str) -> Datum<'a> {
         Datum::String(s)
     }
 }
 
 impl<'a> From<&'a [u8]> for Datum<'a> {
+    #[inline]
     fn from(b: &'a [u8]) -> Datum<'a> {
         Datum::Bytes(b)
     }
 }
 
 impl<'a> From<Date> for Datum<'a> {
+    #[inline]
     fn from(d: Date) -> Datum<'a> {
         Datum::Date(d)
     }
 }
 
 impl<'a> From<NaiveTime> for Datum<'a> {
+    #[inline]
     fn from(t: NaiveTime) -> Datum<'a> {
         Datum::Time(t)
     }
 }
 
 impl<'a> From<CheckedTimestamp<NaiveDateTime>> for Datum<'a> {
+    #[inline]
     fn from(dt: CheckedTimestamp<NaiveDateTime>) -> Datum<'a> {
         Datum::Timestamp(dt)
     }
 }
 
 impl<'a> From<CheckedTimestamp<DateTime<Utc>>> for Datum<'a> {
+    #[inline]
     fn from(dt: CheckedTimestamp<DateTime<Utc>>) -> Datum<'a> {
         Datum::TimestampTz(dt)
     }
@@ -1037,6 +1181,7 @@ impl<'a> From<CheckedTimestamp<DateTime<Utc>>> for Datum<'a> {
 impl<'a> TryInto<Datum<'a>> for NaiveDateTime {
     type Error = TimestampError;
 
+    #[inline]
     fn try_into(self) -> Result<Datum<'a>, Self::Error> {
         let t = CheckedTimestamp::from_timestamplike(self)?;
         Ok(t.into())
@@ -1046,6 +1191,7 @@ impl<'a> TryInto<Datum<'a>> for NaiveDateTime {
 impl<'a> TryInto<Datum<'a>> for DateTime<Utc> {
     type Error = TimestampError;
 
+    #[inline]
     fn try_into(self) -> Result<Datum<'a>, Self::Error> {
         let t = CheckedTimestamp::from_timestamplike(self)?;
         Ok(t.into())
@@ -1053,17 +1199,20 @@ impl<'a> TryInto<Datum<'a>> for DateTime<Utc> {
 }
 
 impl<'a> From<Uuid> for Datum<'a> {
+    #[inline]
     fn from(uuid: Uuid) -> Datum<'a> {
         Datum::Uuid(uuid)
     }
 }
 impl<'a> From<crate::Timestamp> for Datum<'a> {
+    #[inline]
     fn from(ts: crate::Timestamp) -> Datum<'a> {
         Datum::MzTimestamp(ts)
     }
 }
 
 impl<'a> From<MzAclItem> for Datum<'a> {
+    #[inline]
     fn from(mz_acl_item: MzAclItem) -> Self {
         Datum::MzAclItem(mz_acl_item)
     }
@@ -2417,13 +2566,13 @@ impl<'a> ScalarType {
         }
     }
 
-    /// Returns various interesting datums for a ScalarType (max, min, 0 values,
-    /// etc.).
+    /// Returns various interesting datums for a ScalarType (max, min, 0 values, etc.).
     pub fn interesting_datums(&self) -> impl Iterator<Item = Datum<'static>> {
-        // TODO: Is there a better way than packing everything into Lazys and
-        // Rows? `&[Datum::X(x)]` doesn't seem to work because some Datum
-        // variants need to call non-const functions to construct themselves.
-
+        // TODO: Add datums for the types that have an inner Box'd ScalarType. It'd be best to
+        // re-use this function to dynamically generate interesting datums of the requested type.
+        // But the 'static bound makes this either hard or impossible. We might need to remove that
+        // and return, say, an owned Row. This would require changing lots of dependent test
+        // functions, some of which also hard code a 'static bound.
         static BOOL: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
         static INT16: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2576,11 +2725,21 @@ impl<'a> ScalarType {
             Row::pack_slice(&[
                 Datum::Interval(Interval::new(0, 0, 0)),
                 Datum::Interval(Interval::new(1, 1, 1)),
+                Datum::Interval(Interval::new(-1, -1, -1)),
                 Datum::Interval(Interval::new(1, 0, 0)),
                 Datum::Interval(Interval::new(0, 1, 0)),
                 Datum::Interval(Interval::new(0, 0, 1)),
+                Datum::Interval(Interval::new(-1, 0, 0)),
+                Datum::Interval(Interval::new(0, -1, 0)),
+                Datum::Interval(Interval::new(0, 0, -1)),
                 Datum::Interval(Interval::new(i32::MIN, i32::MIN, i64::MIN)),
                 Datum::Interval(Interval::new(i32::MAX, i32::MAX, i64::MAX)),
+                Datum::Interval(Interval::new(i32::MIN, 0, 0)),
+                Datum::Interval(Interval::new(i32::MAX, 0, 0)),
+                Datum::Interval(Interval::new(0, i32::MIN, 0)),
+                Datum::Interval(Interval::new(0, i32::MAX, 0)),
+                Datum::Interval(Interval::new(0, 0, i64::MIN)),
+                Datum::Interval(Interval::new(0, 0, i64::MAX)),
             ])
         });
         static PGLEGACYCHAR: Lazy<Row> =
@@ -2595,6 +2754,7 @@ impl<'a> ScalarType {
                 Datum::String("'"),
                 Datum::String("\""),
                 Datum::String("."),
+                Datum::String(&"x".repeat(100)),
             ])
         });
         static CHAR: Lazy<Row> = Lazy::new(|| {
@@ -2606,21 +2766,11 @@ impl<'a> ScalarType {
             ])
         });
         static JSONB: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[
-                Datum::True,
-                Datum::False,
-                Datum::JsonNull,
-                Datum::String(""),
-                Datum::String(" "),
-                Datum::String("'"),
-                Datum::String("\""),
-                Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(i64::MAX))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(i64::MIN))),
-                // TODO: Add List, Map.
-            ])
+            let mut datums = vec![Datum::True, Datum::False, Datum::JsonNull];
+            datums.extend(STRING.iter());
+            datums.extend(NUMERIC.iter());
+            // TODO: Add List, Map.
+            Row::pack_slice(&datums)
         });
         static UUID: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2631,11 +2781,9 @@ impl<'a> ScalarType {
         static ARRAY: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static LIST: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static RECORD: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static OID: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static OID: Lazy<Row> =
+            Lazy::new(|| Row::pack_slice(&[Datum::UInt32(u32::MIN), Datum::UInt32(u32::MAX)]));
         static MAP: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static REGPROC: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static REGTYPE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
-        static REGCLASS: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static INT2VECTOR: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
         static MZTIMESTAMP: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2707,9 +2855,9 @@ impl<'a> ScalarType {
             ScalarType::Record { .. } => (*RECORD).iter(),
             ScalarType::Oid => (*OID).iter(),
             ScalarType::Map { .. } => (*MAP).iter(),
-            ScalarType::RegProc => (*REGPROC).iter(),
-            ScalarType::RegType => (*REGTYPE).iter(),
-            ScalarType::RegClass => (*REGCLASS).iter(),
+            ScalarType::RegProc => (*OID).iter(),
+            ScalarType::RegType => (*OID).iter(),
+            ScalarType::RegClass => (*OID).iter(),
             ScalarType::Int2Vector => (*INT2VECTOR).iter(),
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
             ScalarType::Range { .. } => (*RANGE).iter(),
@@ -3277,6 +3425,7 @@ fn arb_numeric() -> BoxedStrategy<Numeric> {
 }
 
 impl<'a> From<&'a PropDatum> for Datum<'a> {
+    #[inline]
     fn from(pd: &'a PropDatum) -> Self {
         use PropDatum::*;
         match pd {

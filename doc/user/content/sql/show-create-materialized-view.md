@@ -27,6 +27,14 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
  materialize.public.winning_bids | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "default" AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "end_time" < "mz_catalog"."mz_now"()
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the materialized view.
+
 ## Related pages
 
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)

@@ -40,9 +40,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::storage::stash::{
-    DEPLOY_GENERATION, SYSTEM_PRIVILEGES_COLLECTION, USER_VERSION,
-};
+use crate::catalog::storage::stash::{DEPLOY_GENERATION, USER_VERSION};
 use crate::catalog::{
     self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
@@ -53,12 +51,12 @@ use crate::coord::timeline;
 pub mod objects;
 pub mod stash;
 
-use crate::catalog::storage::stash::DEFAULT_PRIVILEGES_COLLECTION;
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION, ID_ALLOCATOR_COLLECTION,
-    ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION, SETTING_COLLECTION,
-    STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION,
+    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
+    DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
+    SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
+    SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
     TIMESTAMP_COLLECTION,
 };
 
@@ -159,6 +157,7 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: bootstrap_args.default_availability_zone.clone(),
             az_user_specified: false,
+            disk: false,
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,
@@ -2110,6 +2109,7 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     CLUSTER_REPLICA_COLLECTION.name(),
     CONFIG_COLLECTION.name(),
     DATABASES_COLLECTION.name(),
+    DEFAULT_PRIVILEGES_COLLECTION.name(),
     ID_ALLOCATOR_COLLECTION.name(),
     ITEM_COLLECTION.name(),
     ROLES_COLLECTION.name(),
@@ -2118,9 +2118,8 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     STORAGE_USAGE_COLLECTION.name(),
     SYSTEM_CONFIGURATION_COLLECTION.name(),
     SYSTEM_GID_MAPPING_COLLECTION.name(),
-    TIMESTAMP_COLLECTION.name(),
-    DEFAULT_PRIVILEGES_COLLECTION.name(),
     SYSTEM_PRIVILEGES_COLLECTION.name(),
+    TIMESTAMP_COLLECTION.name(),
 ];
 
 #[cfg(test)]

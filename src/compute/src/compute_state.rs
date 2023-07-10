@@ -23,7 +23,7 @@ use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, Subsc
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
@@ -87,6 +87,8 @@ pub struct ComputeState {
     pub linear_join_impl: LinearJoinImpl,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
 }
 
 impl ComputeState {
@@ -153,6 +155,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             dataflow_max_inflight_bytes,
             enable_mz_join_core,
             persist,
+            tracing,
         } = params;
 
         if let Some(v) = max_result_size {
@@ -168,7 +171,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             };
         }
 
-        persist.apply(self.compute_state.persist_clients.cfg())
+        persist.apply(self.compute_state.persist_clients.cfg());
+        tracing.apply(self.compute_state.tracing_handle.as_ref());
     }
 
     fn handle_create_dataflows(

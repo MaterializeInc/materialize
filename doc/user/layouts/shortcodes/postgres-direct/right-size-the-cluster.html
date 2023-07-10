@@ -1,16 +1,12 @@
-After the snapshotting phase, Materialize starts ingesting change events from the PostgreSQL replication stream. For this work, Materialize generally performs well with an `xsmall` replica, so you can resize the replica in your ingestion cluster accordingly.
+After the snapshotting phase, Materialize starts ingesting change events from the PostgreSQL replication stream. For this work, Materialize generally performs well with an `xsmall` replica, so you can resize the cluster accordingly.
 
-1. Still in the `psql` shell connected to Materialize, remove the `medium` replica from the ingestion cluster:
-
-    ```sql
-    DROP CLUSTER REPLICA ingest_postgres.r1;
-    ```
-
-1. Add an `xsmall` replica to the ingestion cluster:
+1. Still in the `psql` shell connected to Materialize, use the [`ALTER CLUSTER`](/sql/alter-cluster/) command to downsize the cluster to `xsmall`:
 
     ```sql
-    CREATE CLUSTER REPLICA ingest_postgres.r1 SIZE 'xsmall';
+    ALTER CLUSTER ingest_postgres SET (SIZE 'xsmall');
     ```
+
+    Behind the scenes, this command adds a new `xsmall` replica and removes the `medium` replica.
 
 1. Use the [`SHOW CLUSTER REPLICAS`](/sql/show-cluster-replicas/) command to check the status of the new replica:
 

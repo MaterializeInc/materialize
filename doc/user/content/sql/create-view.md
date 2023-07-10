@@ -60,6 +60,16 @@ AS
     GROUP BY region.id;
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of existing `view_name` if `OR REPLACE` is specified.
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the view definition.
+
 ## Related pages
 
 - [`SHOW VIEWS`](../show-views)

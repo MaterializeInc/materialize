@@ -55,6 +55,14 @@ SELECT name FROM mz_roles;
  mz_introspection
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
+
 ## Related pages
 
 - [ALTER ROLE](../alter-role)

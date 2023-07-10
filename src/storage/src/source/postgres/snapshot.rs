@@ -382,6 +382,14 @@ async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), Transien
         .unwrap();
     let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
 
+    // When creating a replication slot postgres returns the LSN of its consistent point, which is
+    // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
+    // phase to the replication phase. `START_REPLICATION` includes all transactions that commit at
+    // LSNs *greater than or equal* to the passed LSN. Therefore the snapshot phase must happen at
+    // the greatest LSN that is not beyond the consistent point. That LSN is `consistent_point - 1`
+    let consistent_point = u64::from(consistent_point)
+        .checked_sub(1)
+        .expect("consistent point is always non-zero");
     Ok((snapshot, MzOffset::from(consistent_point)))
 }
 

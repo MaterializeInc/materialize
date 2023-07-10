@@ -57,3 +57,8 @@ class Minio(K8sResource):
                 ]
             ),
         )
+
+        wait(
+            resource="pod/minio",
+            condition="jsonpath={.status.containerStatuses[0].state.terminated.reason}=Completed",
+        )

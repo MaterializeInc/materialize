@@ -183,6 +183,8 @@ meaning that on a given physical replica, objects in the cluster are in
 contention for the same physical resources. To achieve the performance you need,
 this might require setting up more than one cluster.
 
+See the [`CREATE CLUSTER`](/sql/create-cluster/) documentation for more details.
+
 ### Cluster deployment options
 
 When building your Materialize deployment, you can change its performance

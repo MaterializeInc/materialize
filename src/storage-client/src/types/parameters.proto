@@ -9,6 +9,7 @@
 
 syntax = "proto3";
 
+import "tracing/src/params.proto";
 import "proto/src/proto.proto";
 import "persist-client/src/cfg.proto";
 import "rocksdb-types/src/config.proto";
@@ -23,6 +24,7 @@ message ProtoStorageParameters {
     mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;
     uint64 keep_n_sink_status_history_entries = 7;
+    mz_tracing.params.ProtoTracingParameters tracing = 8;
 }
 
 

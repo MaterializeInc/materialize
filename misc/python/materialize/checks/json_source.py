@@ -18,15 +18,12 @@ class JsonSource(Check):
     """Test CREATE SOURCE ... FORMAT JSON"""
 
     def _can_run(self) -> bool:
-        return self.base_version >= MzVersion.parse("0.53.0-dev")
+        return self.base_version >= MzVersion.parse("0.60.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
-                $[version>=5300] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_format_json = true
-
                 $ kafka-create-topic topic=format-json partitions=1
 
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json

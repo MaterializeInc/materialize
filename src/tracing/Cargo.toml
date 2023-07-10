@@ -1,0 +1,27 @@
+[package]
+name = "mz-tracing"
+description = "A tracing library for Materialize."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1.0.66"
+mz-ore = { path = "../ore" }
+mz-proto = { path = "../proto" }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+proptest = { version = "1.0.0", default-features = false, features = ["std"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+serde = { version = "1.0.152", features = ["derive"] }
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.16", default-features = false, features = ["env-filter", "fmt"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[build-dependencies]
+prost-build = "0.11.2"
+protobuf-src = "1.1.0"
+tonic-build = "0.8.2"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

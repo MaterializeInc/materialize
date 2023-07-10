@@ -102,6 +102,7 @@ impl Coordinator {
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut peeks_to_drop = vec![];
+        let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
@@ -185,6 +186,7 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_tracing_config |= vars::is_tracing_var(name);
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
@@ -193,6 +195,7 @@ impl Coordinator {
                     // Assume they all need to be updated.
                     // We could see if the config's have actually changed, but
                     // this is simpler.
+                    update_tracing_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
                     update_metrics_retention = true;
@@ -440,6 +443,9 @@ impl Coordinator {
             if update_metrics_retention {
                 self.update_metrics_retention();
             }
+            if update_tracing_config {
+                self.update_tracing_config();
+            }
         }
         .await;
 
@@ -653,6 +659,11 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .expect("unable to drop temporary items for conn_id");
+    }
+
+    fn update_tracing_config(&mut self) {
+        let tracing = self.catalog().tracing_config();
+        tracing.apply(&self.tracing_handle);
     }
 
     fn update_compute_config(&mut self) {

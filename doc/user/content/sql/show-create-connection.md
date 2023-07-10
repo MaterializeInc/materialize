@@ -28,6 +28,14 @@ SHOW CREATE CONNECTION kafka_connection;
  kafka_connection | CREATE CONNECTION "materialize"."public"."kafka_connection" TO KAFKA (BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092', SASL MECHANISMS = 'PLAIN', SASL USERNAME = SECRET sasl_username, SASL PASSWORD = SECRET sasl_password)
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the connection.
+
 ## Related pages
 
 - [`SHOW CONNECTIONS`](../show-sources)

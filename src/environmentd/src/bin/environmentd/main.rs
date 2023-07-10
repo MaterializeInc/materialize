@@ -110,10 +110,10 @@ use mz_orchestrator_process::{
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
-use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -128,7 +128,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 use uuid::Uuid;
@@ -330,8 +330,16 @@ pub struct Args {
     /// The init container for services created by the Kubernetes orchestrator.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_INIT_CONTAINER_IMAGE")]
     orchestrator_kubernetes_init_container_image: Option<String>,
-    /// Prefix commands issued by the process orchestrator with the supplied
-    /// value.
+    /// The Kubernetes StorageClass to use for the ephemeral volume attached to
+    /// services that request disk.
+    ///
+    /// If unspecified, the Kubernetes orchestrator will refuse to create
+    /// services that request disk.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_EPHEMERAL_VOLUME_CLASS")]
+    orchestrator_kubernetes_ephemeral_volume_class: Option<String>,
+    /// The optional fs group for service's pods' `securityContext`.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_FS_GROUP")]
+    orchestrator_kubernetes_service_fs_group: Option<i64>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -608,11 +616,28 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
+
     let (tracing_handle, _tracing_guard) =
         runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
         }))?;
+
+    if args.tracing.log_filter.is_some() {
+        halt!(
+            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
+             `log_filter` system variable. In the rare case the filter is needed before the \
+             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
+        )
+    }
+    if args.tracing.opentelemetry_filter.is_some() {
+        halt!(
+            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
+            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
+            is needed before the process has access to the system variable, use \
+            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
+        )
+    }
 
     let span = tracing::info_span!("environmentd::run").entered();
 
@@ -710,6 +735,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),
                         coverage: args.orchestrator_kubernetes_coverage,
+                        ephemeral_volume_storage_class: args
+                            .orchestrator_kubernetes_ephemeral_volume_class
+                            .clone(),
+                        service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
@@ -722,6 +751,15 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             )
         }
         OrchestratorKind::Process => {
+            if args
+                .orchestrator_kubernetes_ephemeral_volume_class
+                .is_some()
+            {
+                bail!(
+                    "--orchestrator-kubernetes-ephemeral-volume-class is \
+                      not usable with the process orchestrator"
+                );
+            }
             let orchestrator = Arc::new(
                 runtime
                     .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
@@ -747,7 +785,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                     .orchestrator_process_prometheus_service_discovery_directory,
                             },
                         ),
-                        scratch_directory: args.orchestrator_process_scratch_directory.clone(),
+                        scratch_directory: args
+                            .orchestrator_process_scratch_directory
+                            .expect("process orchestrator requires scratch directory"),
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -807,7 +847,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
-        scratch_directory_enabled: args.orchestrator_process_scratch_directory.is_some(),
         persist_pubsub_url: args.persist_pubsub_url,
     };
 
@@ -862,7 +901,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .collect(),
                 availability_zones: args.availability_zone,
                 connection_context: ConnectionContext::from_cli_args(
-                    args.tracing.log_filter.as_ref(),
+                    &args.tracing.startup_log_filter,
                     args.aws_external_id_prefix,
                     secrets_reader,
                 ),

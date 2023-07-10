@@ -54,7 +54,7 @@ http
 {"query":"create view v1 as select 1; create view v2 as select 1"}
 ----
 200 OK
-{"results":[{"error":{"message":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block","code":"XX000"},"notices":[]}]}
+{"results":[{"error":{"message":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block","code":"25001"},"notices":[]}]}
 
 # Syntax errors fail the request.
 http
@@ -425,4 +425,4 @@ http
 {"query":"CREATE MATERIALIZED VIEW _now AS SELECT now()"}
 ----
 200 OK
-{"results":[{"error":{"message":"cannot materialize call to current_timestamp","code":"XX000","detail":"See: https://materialize.com/docs/sql/functions/now_and_mz_now/","hint":"Try using `mz_now()` here instead."},"notices":[]}]}
+{"results":[{"error":{"message":"cannot materialize call to current_timestamp","code":"0A000","detail":"See: https://materialize.com/docs/sql/functions/now_and_mz_now/","hint":"Try using `mz_now()` here instead."},"notices":[]}]}

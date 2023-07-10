@@ -44,6 +44,14 @@ public
 my_schema
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing database.
+
 ## Related pages
 
 - [DROP DATABASE](../drop-database)

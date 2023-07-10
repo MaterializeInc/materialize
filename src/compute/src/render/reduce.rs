@@ -441,13 +441,13 @@ where
                     // output.
                     output.push((Row::default(), 1));
                 },
-                move |_key, input: &[(_, Diff)], output| {
-                    for (row, count) in input.iter() {
+                move |key, input: &[(_, Diff)], output| {
+                    for (_, count) in input.iter() {
                         if count.is_positive() {
                             continue;
                         }
                         let message = "Non-positive multiplicity in DistinctBy";
-                        error_logger.log(message, &format!("row={row:?}, count={count}"));
+                        error_logger.log(message, &format!("row={key:?}, count={count}"));
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
                     }

@@ -44,6 +44,14 @@ DROP DATABASE my_db RESTRICT;
 DROP DATABASE IF EXISTS my_db;
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped database.
+
 ## Related pages
 
 - [DROP OWNED](../drop-owned)

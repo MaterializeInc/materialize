@@ -86,6 +86,17 @@ WHERE end_time < mz_now();
 things like querying materialized views from different clusters, indexed vs.
 non-indexed, and so on."
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of existing `view_name` if `OR REPLACE` is specified.
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the materialized view definition.
+
 ## Related pages
 
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)

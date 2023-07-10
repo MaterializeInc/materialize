@@ -93,7 +93,7 @@ use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
@@ -449,6 +449,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub tracing_handle: TracingHandle,
 }
 
 /// Soft-state metadata about a compute replica
@@ -820,6 +821,9 @@ pub struct Coordinator {
 
     /// Coordinator metrics.
     metrics: Metrics,
+
+    /// Tracing handle.
+    tracing_handle: TracingHandle,
 }
 
 impl Coordinator {
@@ -1459,6 +1463,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
+        self.catalog.tracing_config().apply(&self.tracing_handle);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1595,6 +1600,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_frontend,
         active_connection_count,
+        tracing_handle,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
@@ -1720,6 +1726,7 @@ pub async fn serve(
                 storage_usage_collection_interval,
                 segment_client,
                 metrics,
+                tracing_handle,
             };
             let bootstrap = handle.block_on(async {
                 coord

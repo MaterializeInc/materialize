@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import List
+from typing import Any, List
 
 from materialize.data_ingest.field import Field
 
@@ -21,11 +21,13 @@ class Operation(Enum):
 
 class Row:
     fields: List[Field]
+    values: List[Any]
     operation: Operation
 
-    def __init__(self, fields: List[Field], operation: Operation):
+    def __init__(self, fields: List[Field], values: List[Any], operation: Operation):
         self.fields = fields
+        self.values = values
         self.operation = operation
 
     def __repr__(self) -> str:
-        return f"Row({self.fields}, {self.operation})"
+        return f"Row({self.fields}, {self.values}, {self.operation})"

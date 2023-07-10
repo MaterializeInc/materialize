@@ -19,7 +19,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: Expected one of AVAILABILITY or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found EOF
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found EOF
 CREATE CLUSTER foo
 
 statement ok

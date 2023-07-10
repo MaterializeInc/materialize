@@ -42,6 +42,7 @@ mz-service = { path = "../service" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-stash = { path = "../stash" }
 mz-timely-util = { path = "../timely-util" }
+mz-tracing = { path = "../tracing" }
 openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}
 prometheus = { version = "0.13.3", default-features = false }

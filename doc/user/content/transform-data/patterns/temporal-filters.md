@@ -262,3 +262,42 @@ GROUP BY 1;
 
 For this case, querying and aggregating is relatively effortless;
 if the aggregation query were expensive, creating a materialized view doing the aggregation would make more sense.
+
+## Temporal filter pushdown
+
+{{< alpha />}}
+
+In the example above, all of the temporal queries we’ve written only return results based on recently-added events: for example, our sliding window query will only return events that were inserted within the last `INTERVAL_MS`. This is a very common pattern; it’s much more likely we’re interested in the last five minutes of data than in five minutes of data from a year ago!
+
+Materialize can "push down" filters that match this pattern all the way down to its storage layer, skipping over old data that’s not relevant to the query. For `SELECT` statements, this can substantially improve query latency. Temporal filters of materialized views can reduce the time it takes to start serving results after being created or after the cluster is restarted.
+
+For this optimization to apply to your query or view, two things need to be true:
+
+- The columns filtered should correlate with the insertion or update time of the row.
+
+  In the examples above, the values `insert_ms` and `delete_ms` in each event correlate with the time the event was inserted. Filters that reference these columns should reduce query latency.
+
+  However, the values in our `content` column are not
+  correlated with insertion time in any way, and filters
+  against `content` will probably not be pushed down.
+- Temporal filters that consist of arithmetic, date math, and comparisons are eligible for pushdown, including all the examples in this page.
+
+  However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](../../../sql/explain/#output-modifiers) to `EXPLAIN`.
+
+  For example:
+
+  ```sql
+  EXPLAIN WITH(filter_pushdown)
+  SELECT count(*)
+  FROM events
+  WHERE mz_now() >= insert_ms
+  AND mz_now() < delete_ms;
+  ----
+  Explained Query:
+  [...]
+  Source materialize.public.events
+    filter=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
+    pushdown=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
+  ```
+
+  Both of the filters in our query appear in the `pushdown=` list at the bottom of the output, so our filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.

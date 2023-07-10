@@ -21,7 +21,7 @@ from confluent_kafka.serialization import (  # type: ignore
 )
 
 from materialize.data_ingest.data_type import Backend
-from materialize.data_ingest.field import Field
+from materialize.data_ingest.field import Field, formatted_value
 from materialize.data_ingest.row import Operation
 from materialize.data_ingest.transaction import Transaction
 
@@ -165,16 +165,16 @@ class KafkaExecutor(Executor):
                         topic=self.topic,
                         key=self.key_avro_serializer(
                             {
-                                field.name: field.value
-                                for field in row.fields
+                                field.name: value
+                                for field, value in zip(row.fields, row.values)
                                 if field.is_key
                             },
                             self.key_serialization_context,
                         ),
                         value=self.avro_serializer(
                             {
-                                field.name: field.value
-                                for field in row.fields
+                                field.name: value
+                                for field, value in zip(row.fields, row.values)
                                 if not field.is_key
                             },
                             self.serialization_context,
@@ -186,8 +186,8 @@ class KafkaExecutor(Executor):
                         topic=self.topic,
                         key=self.key_avro_serializer(
                             {
-                                field.name: field.value
-                                for field in row.fields
+                                field.name: value
+                                for field, value in zip(row.fields, row.values)
                                 if field.is_key
                             },
                             self.key_serialization_context,
@@ -267,7 +267,7 @@ class PgExecutor(Executor):
                 for row in row_list.rows:
                     if row.operation == Operation.INSERT:
                         values_str = ", ".join(
-                            str(field.formatted_value()) for field in row.fields
+                            str(formatted_value(value)) for value in row.values
                         )
                         keys_str = ", ".join(
                             field.name for field in row.fields if field.is_key
@@ -280,7 +280,7 @@ class PgExecutor(Executor):
                         )
                     elif row.operation == Operation.UPSERT:
                         values_str = ", ".join(
-                            str(field.formatted_value()) for field in row.fields
+                            str(formatted_value(value)) for value in row.values
                         )
                         keys_str = ", ".join(
                             field.name for field in row.fields if field.is_key
@@ -299,8 +299,8 @@ class PgExecutor(Executor):
                         )
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{field.name} = {field.formatted_value()}"
-                            for field in row.fields
+                            f"{field.name} = {formatted_value(value)}"
+                            for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.execute(

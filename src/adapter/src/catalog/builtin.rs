@@ -1694,7 +1694,8 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         )
         .with_column("managed", ScalarType::Bool.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("replication_factor", ScalarType::UInt32.nullable(true)),
+        .with_column("replication_factor", ScalarType::UInt32.nullable(true))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: false,
 });
 
@@ -1731,7 +1732,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("availability_zone", ScalarType::String.nullable(true))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
 });
 
@@ -2371,6 +2373,58 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
+pub const PG_DEPEND: BuiltinView = BuiltinView {
+    name: "pg_depend",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_depend AS
+WITH class_objects AS (
+    SELECT
+        CASE
+            WHEN type = 'table' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'source' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'view' THEN 'pg_views'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'materialized-view' THEN 'pg_matviews'::pg_catalog.regclass::pg_catalog.oid
+        END classid,
+        id,
+        oid,
+        schema_id
+    FROM mz_catalog.mz_relations
+    UNION ALL
+    SELECT
+        'pg_index'::pg_catalog.regclass::pg_catalog.oid AS classid,
+        i.id,
+        i.oid,
+        r.schema_id
+    FROM mz_catalog.mz_indexes i
+    JOIN mz_catalog.mz_relations r ON i.on_id = r.id
+),
+
+current_objects AS (
+    SELECT class_objects.*
+    FROM class_objects
+    JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
+    LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    -- This filter is tricky, as it filters out not just objects outside the
+    -- database, but *dependencies* on objects outside this database. It's not
+    -- clear that this is the right choice, but because PostgreSQL doesn't
+    -- support cross-database references, it's not clear that the other choice
+    -- is better.
+    WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
+)
+
+SELECT
+    objects.classid::pg_catalog.oid,
+    objects.oid::pg_catalog.oid AS objid,
+    0::pg_catalog.int4 AS objsubid,
+    dependents.classid::pg_catalog.oid AS refclassid,
+    dependents.oid::pg_catalog.oid AS refobjid,
+    0::pg_catalog.int4 AS refobjsubid,
+    'n'::pg_catalog.char AS deptype
+FROM mz_internal.mz_object_dependencies
+JOIN current_objects objects ON object_id = objects.id
+JOIN current_objects dependents ON referenced_object_id = dependents.id",
+};
+
 pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
@@ -2649,6 +2703,46 @@ FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
 JOIN mz_roles grantor ON membership.grantor = grantor.id",
+};
+
+pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
+    name: "pg_event_trigger",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_event_trigger AS SELECT
+        NULL::pg_catalog.oid AS oid,
+        NULL::pg_catalog.text AS evtname,
+        NULL::pg_catalog.text AS evtevent,
+        NULL::pg_catalog.oid AS evtowner,
+        NULL::pg_catalog.oid AS evtfoid,
+        NULL::pg_catalog.char AS evtenabled,
+        NULL::pg_catalog.text[] AS evttags
+    WHERE false",
+};
+
+pub const PG_LANGUAGE: BuiltinView = BuiltinView {
+    name: "pg_language",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_language AS SELECT
+        NULL::pg_catalog.oid  AS oid,
+        NULL::pg_catalog.text AS lanname,
+        NULL::pg_catalog.oid  AS lanowner,
+        NULL::pg_catalog.bool AS lanispl,
+        NULL::pg_catalog.bool AS lanpltrusted,
+        NULL::pg_catalog.oid  AS lanplcallfoid,
+        NULL::pg_catalog.oid  AS laninline,
+        NULL::pg_catalog.oid  AS lanvalidator,
+        NULL::pg_catalog.text[] AS lanacl
+    WHERE false",
+};
+
+pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
+    name: "pg_shdescription",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_shdescription AS SELECT
+        NULL::pg_catalog.oid AS objoid,
+        NULL::pg_catalog.oid AS classoid,
+        NULL::pg_catalog.text AS description
+    WHERE false",
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3966,6 +4060,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
+        Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
         Builtin::View(&PG_DESCRIPTION),
@@ -3994,6 +4089,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TRIGGER),
         Builtin::View(&PG_REWRITE),
         Builtin::View(&PG_EXTENSION),
+        Builtin::View(&PG_EVENT_TRIGGER),
+        Builtin::View(&PG_LANGUAGE),
+        Builtin::View(&PG_SHDESCRIPTION),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
@@ -4086,6 +4184,7 @@ mod tests {
     use std::env;
     use std::time::{Duration, Instant};
 
+    use mz_expr::MirScalarExpr;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
@@ -4542,11 +4641,9 @@ mod tests {
                         .return_typ
                         .map(|item| resolve_type_oid(item))
                         .expect("must exist");
-                    let return_ctyp = &mz_pgrepr::Type::from_oid(return_oid).ok().map(|typ| {
-                        ScalarType::try_from(&typ)
-                            .expect("must exist")
-                            .nullable(true)
-                    });
+                    let return_styp = &mz_pgrepr::Type::from_oid(return_oid)
+                        .ok()
+                        .map(|typ| ScalarType::try_from(&typ).expect("must exist"));
 
                     let mut idxs = vec![0; datums.len()];
                     let mut args = Vec::with_capacity(idxs.len());
@@ -4578,15 +4675,64 @@ mod tests {
                         );
 
                         // Execute the function as much as possible, ensuring no panics occur, but
-                        // otherwise ignoring eval errors.
+                        // otherwise ignoring eval errors. We also do various other checks.
                         let start = Instant::now();
                         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
                         if let Ok(hir) = res {
                             if let Ok(mir) = hir.lower_uncorrelated() {
-                                if let Ok(datum) = mir.eval(&[], &arena) {
-                                    if let Some(return_ctyp) = return_ctyp {
-                                        if !datum.is_instance_of(return_ctyp) {
-                                            panic!("{call_name}: expected return type of {return_ctyp:?}, got {datum}");
+                                if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
+                                    if let Some(return_styp) = return_styp {
+                                        let mir_typ = mir.typ(&[]);
+                                        // MIR type inference should be consistent with the type
+                                        // we get from the catalog.
+                                        assert_eq!(mir_typ.scalar_type, *return_styp);
+                                        // The following will check not just that the scalar type
+                                        // is ok, but also catches if the function returned a null
+                                        // but the MIR type inference said "non-nullable".
+                                        if !eval_result_datum.is_instance_of(&mir_typ) {
+                                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
+                                        }
+                                        // Check the consistency of `introduces_nulls` and
+                                        // `propagates_nulls` with `MirScalarExpr::typ`.
+                                        if let Some((introduces_nulls, propagates_nulls)) =
+                                            call_introduces_propagates_nulls(&mir)
+                                        {
+                                            if introduces_nulls {
+                                                // If the function introduces_nulls, then the return
+                                                // type should always be nullable, regardless of
+                                                // the nullability of the input types.
+                                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                            } else {
+                                                let any_input_null =
+                                                    args.iter().any(|arg| arg.is_null());
+                                                if !any_input_null {
+                                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                } else {
+                                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                }
+                                            }
+                                        }
+                                        // Check that `MirScalarExpr::reduce` yields the same result
+                                        // as the real evaluation.
+                                        let mut reduced = mir.clone();
+                                        reduced.reduce(&[]);
+                                        match reduced {
+                                            MirScalarExpr::Literal(reduce_result, ctyp) => {
+                                                match reduce_result {
+                                                    Ok(reduce_result_row) => {
+                                                        let reduce_result_datum = reduce_result_row.unpack_first();
+                                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                        // Let's check that the types also match.
+                                                        // (We are not checking nullability here,
+                                                        // because it's ok when we know a more
+                                                        // precise nullability after actually
+                                                        // evaluating a function than before.)
+                                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                    },
+                                                    Err(..) => {}, // It's ok, we might have given invalid args to the function
+                                                }
+                                            },
+                                            _ => unreachable!("all args are literals, so should have reduced to a literal"),
                                         }
                                     }
                                 }
@@ -4616,6 +4762,37 @@ mod tests {
         }
 
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await
+    }
+
+    /// If the given MirScalarExpr
+    ///  - is a function call, and
+    ///  - all arguments are literals
+    /// then it returns whether the called function (introduces_nulls, propagates_nulls).
+    fn call_introduces_propagates_nulls(mir_func_call: &MirScalarExpr) -> Option<(bool, bool)> {
+        match mir_func_call {
+            MirScalarExpr::CallUnary { func, expr } => {
+                if expr.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                if expr1.is_literal() && expr2.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                if exprs.iter().all(|arg| arg.is_literal()) {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     // Make sure pg views don't use types that only exist in Materialize.

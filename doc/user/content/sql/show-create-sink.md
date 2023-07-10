@@ -38,6 +38,14 @@ SHOW CREATE SINK my_view_sink;
  materialize.public.my_view_sink | CREATE SINK "materialize"."public"."my_view_sink" FROM "materialize"."public"."my_view" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" (TOPIC 'my_view_sink') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection ENVELOPE DEBEZIUM WITH (SIZE = '3xsmall')
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the sink.
+
 ## Related pages
 
 - [`SHOW SINKS`](../show-sinks)

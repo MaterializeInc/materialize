@@ -389,7 +389,10 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff_spine, trace)?;
+        if !diff_spine.is_empty() {
+            apply_diffs_spine(metrics, diff_spine, trace)?;
+            debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+        }
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==
@@ -1338,7 +1341,7 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1366,7 +1369,7 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

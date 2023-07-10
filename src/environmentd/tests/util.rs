@@ -141,6 +141,7 @@ pub struct Config {
     enable_tracing: bool,
     bootstrap_role: Option<String>,
     deploy_generation: Option<u64>,
+    system_parameter_defaults: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -161,6 +162,7 @@ impl Default for Config {
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
+            system_parameter_defaults: BTreeMap::new(),
         }
     }
 }
@@ -250,6 +252,11 @@ impl Config {
         self.deploy_generation = deploy_generation;
         self
     }
+
+    pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
+        self.system_parameter_defaults.insert(param, value);
+        self
+    }
 }
 
 pub struct Listeners {
@@ -278,6 +285,7 @@ impl Listeners {
             }
             Some(data_directory) => (data_directory, None),
         };
+        let scratch_dir = tempfile::tempdir()?;
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let seed = config.seed;
             let cockroach_url = env::var("COCKROACH_URL")
@@ -310,7 +318,7 @@ impl Listeners {
                     command_wrapper: vec![],
                     propagate_crashes: config.propagate_crashes,
                     tcp_proxy: None,
-                    scratch_directory: None,
+                    scratch_directory: scratch_dir.path().to_path_buf(),
                 }))?,
         );
         // Messing with the clock causes persist to expire leases, causing hangs and
@@ -367,7 +375,6 @@ impl Listeners {
                     headers: http::HeaderMap::new(),
                     filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
                     resource: opentelemetry::sdk::resource::Resource::default(),
-                    start_enabled: true,
                 }),
                 #[cfg(feature = "tokio-console")]
                 tokio_console: None,
@@ -401,7 +408,6 @@ impl Listeners {
                         now: SYSTEM_TIME.clone(),
                         postgres_factory,
                         metrics_registry: metrics_registry.clone(),
-                        scratch_directory_enabled: false,
                         persist_pubsub_url: format!(
                             "http://localhost:{}",
                             persist_pubsub_server_port
@@ -421,7 +427,7 @@ impl Listeners {
                     default_storage_cluster_size: None,
                     bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                     bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-                    system_parameter_defaults: Default::default(),
+                    system_parameter_defaults: config.system_parameter_defaults,
                     availability_zones: Default::default(),
                     connection_context,
                     tracing_handle,

@@ -371,8 +371,7 @@ impl From<AdapterError> for SqlError {
     fn from(err: AdapterError) -> Self {
         SqlError {
             message: err.to_string(),
-            // TODO: Move codes out of pgwire so they can be shared here.
-            code: SqlState::INTERNAL_ERROR.code().to_string(),
+            code: err.code().code().to_string(),
             detail: err.detail(),
             hint: err.hint(),
         }

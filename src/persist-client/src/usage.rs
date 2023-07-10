@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use tracing::{error, info};
 
 use crate::cfg::PersistConfig;
-use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
+use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, WriterKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::StateVersions;
 use crate::write::WriterId;
@@ -141,7 +141,7 @@ struct BlobUsage {
 
 #[derive(Clone, Debug, Default)]
 struct ShardBlobUsage {
-    by_writer: BTreeMap<WriterId, u64>,
+    by_writer: BTreeMap<WriterKey, u64>,
     rollup_bytes: u64,
 }
 
@@ -492,6 +492,9 @@ impl StorageUsageClient {
             current_state_bytes,
             referenced_other_bytes,
             referenced_batches_bytes: &referenced_batches_bytes,
+            // In the future, this is likely to include a "grace period" so recent but non-current
+            // versions are also considered live
+            minimum_version: WriterKey::for_version(&self.cfg.build_version),
             live_writers,
             blob_usage,
         });
@@ -544,7 +547,8 @@ struct ShardUsageCumulativeMaybeRacy<'a, T> {
     current_state_batches_bytes: u64,
     current_state_bytes: u64,
     referenced_other_bytes: u64,
-    referenced_batches_bytes: &'a BTreeMap<WriterId, u64>,
+    referenced_batches_bytes: &'a BTreeMap<WriterKey, u64>,
+    minimum_version: WriterKey,
     live_writers: &'a BTreeMap<WriterId, T>,
     blob_usage: &'a ShardBlobUsage,
 }
@@ -553,16 +557,21 @@ impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsa
     fn from(x: ShardUsageCumulativeMaybeRacy<'_, T>) -> Self {
         let mut not_leaked_bytes = 0;
         let mut total_bytes = 0;
-        for (writer_id, bytes) in x.blob_usage.by_writer.iter() {
+        for (writer_key, bytes) in x.blob_usage.by_writer.iter() {
             total_bytes += *bytes;
-            if x.live_writers.contains_key(writer_id) {
+            let writer_key_is_live = match writer_key {
+                WriterKey::Id(writer_id) => x.live_writers.contains_key(writer_id),
+                version @ WriterKey::Version(_) => *version >= x.minimum_version,
+            };
+            if writer_key_is_live {
                 not_leaked_bytes += *bytes;
             } else {
                 // This writer is no longer live, so it can never again link
                 // anything into state. As a result, we know that anything it
                 // hasn't linked into state is now leaked and eligible for
                 // reclamation by a (future) leaked blob detector.
-                let writer_referenced = x.referenced_batches_bytes.get(writer_id).map_or(0, |x| *x);
+                let writer_referenced =
+                    x.referenced_batches_bytes.get(writer_key).map_or(0, |x| *x);
                 // It's possible, due to races, that a writer has more
                 // referenced batches in state than we saw for that writer in
                 // blob. Cap it at the number of bytes we saw in blob, otherwise
@@ -722,6 +731,7 @@ mod tests {
     use crate::cfg::PersistParameters;
     use bytes::Bytes;
     use mz_persist::location::{Atomicity, SeqNo};
+    use semver::Version;
     use timely::progress::Antichain;
 
     use crate::internal::paths::{PartialRollupKey, RollupId};
@@ -740,6 +750,7 @@ mod tests {
         ];
 
         let client = new_test_client().await;
+        let build_version = client.cfg.build_version.clone();
         let shard_id_one = ShardId::new();
         let shard_id_two = ShardId::new();
 
@@ -754,14 +765,14 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id_two)
             .await;
         write.expect_append(&data[1..3], vec![0], vec![4]).await;
-        let writer_one = write.writer_id.clone();
+        let writer_one = WriterKey::Id(write.writer_id.clone());
 
         // write one row into shard 2 from writer 2
         let (mut write, _) = client
             .expect_open::<String, String, u64, i64>(shard_id_two)
             .await;
         write.expect_append(&data[4..], vec![0], vec![5]).await;
-        let writer_two = write.writer_id.clone();
+        let writer_two = WriterKey::Id(write.writer_id.clone());
 
         let usage = StorageUsageClient::open(client);
 
@@ -781,6 +792,13 @@ mod tests {
             .size(BlobKeyPrefix::Writer(&shard_id_two, &writer_two))
             .await
             .expect("must have shard size");
+        let versioned_size = usage
+            .size(BlobKeyPrefix::Writer(
+                &shard_id_two,
+                &WriterKey::for_version(&build_version),
+            ))
+            .await
+            .expect("must have shard size");
         let rollups_size = usage
             .size(BlobKeyPrefix::Rollups(&shard_id_two))
             .await
@@ -795,7 +813,7 @@ mod tests {
         assert!(shard_one_size < shard_two_size);
         assert_eq!(
             shard_two_size,
-            writer_one_size + writer_two_size + rollups_size
+            writer_one_size + writer_two_size + versioned_size + rollups_size
         );
         assert_eq!(all_size, shard_one_size + shard_two_size);
 
@@ -838,7 +856,7 @@ mod tests {
         ];
 
         let shard_id = ShardId::new();
-        let client = new_test_client().await;
+        let mut client = new_test_client().await;
 
         let (mut write0, _) = client
             .expect_open::<String, String, u64, i64>(shard_id)
@@ -870,6 +888,7 @@ mod tests {
         let maintenance = write0.machine.add_rollup_for_current_seqno().await;
         maintenance.perform(&write0.machine, &write0.gc).await;
 
+        client.cfg.build_version.minor += 1;
         let usage = StorageUsageClient::open(client);
         let shard_usage_audit = usage.shard_usage_audit(shard_id).await;
         let shard_usage_referenced = usage.shard_usage_referenced(shard_id).await;
@@ -965,7 +984,7 @@ mod tests {
             let referenced_batches_bytes = self
                 .referenced_batches_bytes
                 .iter()
-                .map(|(id, b)| (writer_id(*id), *b))
+                .map(|(id, b)| (WriterKey::Id(writer_id(*id)), *b))
                 .collect();
             let live_writers = self
                 .live_writers
@@ -976,7 +995,7 @@ mod tests {
                 by_writer: self
                     .blob_usage_by_writer
                     .iter()
-                    .map(|(id, b)| (writer_id(*id), *b))
+                    .map(|(id, b)| (WriterKey::Id(writer_id(*id)), *b))
                     .collect(),
                 rollup_bytes: self.blob_usage_rollups,
             };
@@ -985,6 +1004,7 @@ mod tests {
                 current_state_bytes: self.current_state_bytes,
                 referenced_other_bytes: self.referenced_other_bytes,
                 referenced_batches_bytes: &referenced_batches_bytes,
+                minimum_version: WriterKey::for_version(&Version::new(0, 0, 1)),
                 live_writers: &live_writers,
                 blob_usage: &blob_usage,
             };

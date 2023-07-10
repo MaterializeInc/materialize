@@ -193,5 +193,5 @@ true
 1 hour 30 minutes
 true
 
-query error db error: ERROR: timestamp out of range
+query error timestamp out of range
 select timezone('1 day'::interval, '1-12-31'::timestamptz+'262142 years'::interval)

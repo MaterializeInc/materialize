@@ -93,7 +93,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 2  create  database  {"id":"u1","name":"materialize"}  NULL
 3  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
 4  create  cluster  {"id":"u1","name":"default"}  NULL
-5  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_id":"1","replica_name":"r1"}  NULL
+5  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","disk":false,"logical_size":"1","replica_id":"1","replica_name":"r1"}  NULL
 6  create  database  {"id":"u2","name":"test"}  materialize
 7  create  schema  {"database_name":"test","id":"u6","name":"public"}  materialize
 8  create  schema  {"database_name":"test","id":"u7","name":"sc1"}  materialize
@@ -105,7 +105,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 14  create  role  {"id":"u2","name":"foo"}  materialize
 15  drop  role  {"id":"u2","name":"foo"}  materialize
 16  create  cluster  {"id":"u2","name":"foo"}  materialize
-17  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_id":"4","replica_name":"r"}  materialize
+17  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","disk":false,"logical_size":"1","replica_id":"4","replica_name":"r"}  materialize
 18  create  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
 19  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
 20  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
@@ -118,10 +118,10 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 27  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
 28  create  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public","size":null,"type":"progress"}  materialize
 29  create  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
-30  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","logical_size":"1","replica_id":"5","replica_name":"linked"}  materialize
+30  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","disk":false,"logical_size":"1","replica_id":"5","replica_name":"linked"}  materialize
 31  create  source  {"database":"materialize","id":"u8","item":"s","schema":"public","size":"1","type":"load-generator"}  materialize
 32  drop  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","replica_id":"5","replica_name":"linked"}  materialize
-33  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","logical_size":"2","replica_id":"6","replica_name":"linked"}  materialize
+33  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","disk":false,"logical_size":"2","replica_id":"6","replica_name":"linked"}  materialize
 34  alter  source  {"database":"materialize","id":"u8","item":"s","new_size":"2","old_size":"1","schema":"public"}  materialize
 35  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
 36  drop  source  {"database":"materialize","id":"u8","item":"s","schema":"public"}  materialize
@@ -134,7 +134,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 43  create  source  {"database":"materialize","id":"u13","item":"users","schema":"public","size":null,"type":"subsource"}  materialize
 44  create  source  {"database":"materialize","id":"u14","item":"multiplex_progress","schema":"public","size":null,"type":"progress"}  materialize
 45  create  cluster  {"id":"u4","name":"materialize_public_multiplex"}  materialize
-46  create  cluster-replica  {"cluster_id":"u4","cluster_name":"materialize_public_multiplex","logical_size":"1","replica_id":"7","replica_name":"linked"}  materialize
+46  create  cluster-replica  {"cluster_id":"u4","cluster_name":"materialize_public_multiplex","disk":false,"logical_size":"1","replica_id":"7","replica_name":"linked"}  materialize
 47  create  source  {"database":"materialize","id":"u15","item":"multiplex","schema":"public","size":"1","type":"load-generator"}  materialize
 48  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"4"}  materialize
 49  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize

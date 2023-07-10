@@ -87,6 +87,7 @@ use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -242,6 +243,7 @@ where
                         rocksdb::Env::new().unwrap(),
                     ),
                     Arc::clone(&persist_clients),
+                    Arc::new(TracingHandle::disabled()),
                 )
             };
 

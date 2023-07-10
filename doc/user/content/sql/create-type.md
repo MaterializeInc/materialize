@@ -142,6 +142,15 @@ custom_nested_row_type
 ("(1,a)",2.3)
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the type definition.
+
 ## Related pages
 
 * [`DROP TYPE`](../drop-type)
