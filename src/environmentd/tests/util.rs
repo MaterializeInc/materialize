@@ -141,6 +141,7 @@ pub struct Config {
     enable_tracing: bool,
     bootstrap_role: Option<String>,
     deploy_generation: Option<u64>,
+    system_parameter_defaults: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -161,6 +162,7 @@ impl Default for Config {
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
+            system_parameter_defaults: BTreeMap::new(),
         }
     }
 }
@@ -236,8 +238,8 @@ impl Config {
         self
     }
 
-    pub fn with_enable_tracing(mut self, enable_tracing: bool) -> Self {
-        self.enable_tracing = enable_tracing;
+    pub fn enable_tracing(mut self, tracing: bool) -> Self {
+        self.enable_tracing = tracing;
         self
     }
 
@@ -248,6 +250,11 @@ impl Config {
 
     pub fn with_deploy_generation(mut self, deploy_generation: Option<u64>) -> Self {
         self.deploy_generation = deploy_generation;
+        self
+    }
+
+    pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
+        self.system_parameter_defaults.insert(param, value);
         self
     }
 }
@@ -420,7 +427,7 @@ impl Listeners {
                     default_storage_cluster_size: None,
                     bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                     bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-                    system_parameter_defaults: Default::default(),
+                    system_parameter_defaults: config.system_parameter_defaults,
                     availability_zones: Default::default(),
                     connection_context,
                     tracing_handle,
