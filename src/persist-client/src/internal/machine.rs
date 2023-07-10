@@ -31,6 +31,7 @@ use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
@@ -56,6 +57,7 @@ use crate::{PersistConfig, ShardId};
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
     pub(crate) applier: Applier<K, V, T, D>,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
 }
 
 // Impl Clone regardless of the type params.
@@ -63,6 +65,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             applier: self.applier.clone(),
+            isolated_runtime: Arc::clone(&self.isolated_runtime),
         }
     }
 }
@@ -81,6 +84,7 @@ where
         state_versions: Arc<StateVersions>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> Result<Self, Box<CodecMismatch>> {
         let applier = Applier::new(
             cfg,
@@ -91,7 +95,10 @@ where
             pubsub_sender,
         )
         .await?;
-        Ok(Machine { applier })
+        Ok(Machine {
+            applier,
+            isolated_runtime,
+        })
     }
 
     pub fn shard_id(&self) -> ShardId {
@@ -1125,6 +1132,7 @@ pub mod datadriven {
                 Arc::clone(&state_versions),
                 Arc::clone(&client.shared_states),
                 Arc::new(NoopPubSubSender),
+                Arc::clone(&client.isolated_runtime),
             )
             .await
             .expect("codecs should match");

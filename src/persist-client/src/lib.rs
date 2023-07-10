@@ -365,6 +365,7 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -520,6 +521,7 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -574,6 +576,7 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));

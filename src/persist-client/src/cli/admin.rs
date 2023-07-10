@@ -438,6 +438,7 @@ async fn make_machine(
         state_versions,
         Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
         Arc::new(NoopPubSubSender),
+        Arc::new(IsolatedRuntime::new()),
     )
     .await?;
 
