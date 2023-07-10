@@ -197,8 +197,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     let cap = cap.retain_for_output(0);
                     for req in data.drain(..) {
                         assert!(
-                            resume_lsn <= req.snapshot_lsn,
-                            "slot compacted past snapshot point. snapshot_lsn={} resume_lsn={resume_lsn}", req.snapshot_lsn
+                            resume_lsn <= req.snapshot_lsn + 1,
+                            "slot compacted past snapshot point. snapshot consistent point={} resume_lsn={resume_lsn}", req.snapshot_lsn + 1
                         );
                         rewinds.insert(req.oid, (cap.clone(), req));
                     }
