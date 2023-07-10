@@ -66,6 +66,7 @@
 //! Also, we don't need any ordering for the values fetched, so using std HashMap.
 #![allow(clippy::disallowed_types)]
 
+use std::collections::hash_map::Drain;
 use std::collections::HashMap;
 use std::num::Wrapping;
 use std::path::PathBuf;
@@ -382,9 +383,10 @@ pub struct InMemoryHashMap {
 }
 
 impl InMemoryHashMap {
-    fn clear(&mut self) {
-        self.state.clear();
+    fn drain(&mut self) -> Drain<'_, UpsertKey, StateValue> {
+        // clearing the total_size when draining
         self.total_size = 0;
+        self.state.drain()
     }
 }
 
@@ -520,47 +522,35 @@ impl UpsertStateBackend for AutoSpillBackend {
     {
         match &mut self.backend_type {
             BackendType::InMemory(map) => {
-                let mut result = map.multi_put(puts).await;
-                if let Ok(result_status) = &mut result {
-                    let in_memory_size: usize = map
-                        .total_size
-                        .try_into()
-                        .expect("unexpected error while casting");
-                    if in_memory_size > self.auto_spill_threshold_bytes {
-                        let mut rocksdb_backend =
-                            AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
+                let mut put_stats = map.multi_put(puts).await?;
+                let in_memory_size: usize = map
+                    .total_size
+                    .try_into()
+                    .expect("unexpected error while casting");
+                if in_memory_size > self.auto_spill_threshold_bytes {
+                    let mut rocksdb_backend =
+                        AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
 
-                        let new_puts = map.state.iter().map(|(k, v)| {
-                            (
-                                k.clone(),
-                                PutValue {
-                                    value: Some(v.clone()),
-                                    previous_persisted_size: None,
-                                },
-                            )
-                        });
+                    let new_puts = map.drain().map(|(k, v)| {
+                        (
+                            k,
+                            PutValue {
+                                value: Some(v),
+                                previous_persisted_size: None,
+                            },
+                        )
+                    });
 
-                        match rocksdb_backend.multi_put(new_puts).await {
-                            Ok(puts_stats) => {
-                                // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
-                                result_status.size_diff += puts_stats.size_diff;
-                                result_status.size_diff -= map.total_size;
-                                // clearing the in memory map after successfully writing to rocksdb
-                                map.clear();
-                                self.backend_type = BackendType::RocksDb(rocksdb_backend);
-                                // Switching metric to 1 for rocksdb
-                                self.rocksdb_autospill_in_use.set(1);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "error spilling to disk {}",
-                                    e.display_with_causes()
-                                );
-                            }
-                        }
-                    }
+                    let rocksdb_stats = rocksdb_backend.multi_put(new_puts).await?;
+                    // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
+                    put_stats.size_diff += rocksdb_stats.size_diff;
+                    put_stats.size_diff -= map.total_size;
+                    // Setting backend to rocksdb
+                    self.backend_type = BackendType::RocksDb(rocksdb_backend);
+                    // Switching metric to 1 for rocksdb
+                    self.rocksdb_autospill_in_use.set(1);
                 }
-                result
+                Ok(put_stats)
             }
             BackendType::RocksDb(rocks_db) => rocks_db.multi_put(puts).await,
         }
