@@ -39,9 +39,18 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
-    let depends_on = match plan {
-        Plan::Select(plan) => plan.source.depends_on(),
-        Plan::Subscribe(plan) => plan.from.depends_on(),
+    let (depends_on, could_run_expensive_function) = match plan {
+        Plan::Select(plan) => (
+            plan.source.depends_on(),
+            plan.source.could_run_expensive_function(),
+        ),
+        Plan::Subscribe(plan) => (
+            plan.from.depends_on(),
+            match &plan.from {
+                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
+            },
+        ),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -121,10 +130,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         return TargetCluster::Active;
     }
 
-    // Check to make sure our iterator contains atleast one element, this prevents us
-    // from always running empty queries on the mz_introspection cluster.
+    // These dependencies are just existing dataflows that are referenced in the plan.
     let mut depends_on = depends_on.into_iter().peekable();
-    let non_empty = depends_on.peek().is_some();
+    let has_dependencies = depends_on.peek().is_some();
 
     // Make sure we only depend on the system catalog, and nothing we depend on is a
     // per-replica object, that requires being run a specific replica.
@@ -138,7 +146,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         system_only && non_replica
     });
 
-    if non_empty && valid_dependencies {
+    if (has_dependencies && valid_dependencies)
+        || (!has_dependencies && !could_run_expensive_function)
+    {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 

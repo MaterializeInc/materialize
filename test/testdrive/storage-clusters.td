@@ -22,7 +22,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 
 # Querying a cluster with no replicas does not succeed.
 > SET cluster = storage
-! SELECT 1
+! SELECT generate_series(1, 1)
 contains:CLUSTER "storage" has no replicas available to service request
 
 # Specifying `IN CLUSTER` and `SIZE` simultaneously is banned.
@@ -42,7 +42,7 @@ contains:cannot create this kind of item in a cluster that contains sources or s
 contains:cannot create this kind of item in a cluster that contains sources or sinks
 
 # Executing queries on a storage cluster is banned.
-! SELECT 1
+! SELECT generate_series(1, 1)
 contains:cannot execute queries on cluster containing sources or sinks
 
 # Only one replica of a storage cluster is permitted.
@@ -54,10 +54,10 @@ contains:cannot create more than one replica of a cluster containing sources or 
 # source has been dropped.
 > DROP SOURCE loadgen;
 > CREATE INDEX idx IN CLUSTER storage ON t (a)
-> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT 1
+> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT generate_series(1, 1)
 
 # As is running queries.
-> SELECT 1
+> SELECT generate_series(1, 1)
 1
 
 # Recreating the source is banned.

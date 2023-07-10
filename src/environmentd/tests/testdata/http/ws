@@ -26,6 +26,7 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":25,"type_len":-1,"type_mod":-1}]}}
 {"type":"Row","payload":[null]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-binary
@@ -35,6 +36,7 @@ ws-binary
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":25,"type_len":-1,"type_mod":-1}]}}
 {"type":"Row","payload":["binary"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -44,6 +46,7 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1},{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1,2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":25,"type_len":-1,"type_mod":-1}]}}
 {"type":"Row","payload":["a"]}
@@ -76,6 +79,7 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -85,10 +89,12 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -123,6 +129,7 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"int4","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -145,6 +152,7 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"int4","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[null]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 # Test that transactions are preserved across requests.
@@ -158,6 +166,7 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"T"}
 
 # Session parameters should get reset when the transaction is rolled back.
@@ -202,6 +211,7 @@ ws-text
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 # Session variables local to a transaction should get reset
@@ -277,6 +287,7 @@ ws-text
 {"type":"CommandComplete","payload":"SUBSCRIBE"}
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Error","payload":{"message":"SUBSCRIBE in transactions must be the only read statement","code":"25000"}}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text rows=2 fixtimestamp=true

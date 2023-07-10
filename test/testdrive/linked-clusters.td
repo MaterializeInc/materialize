@@ -109,7 +109,7 @@ contains:cannot modify linked cluster "materialize_public_lg1"
   FORMAT JSON ENVELOPE DEBEZIUM
 contains:cannot modify linked cluster "materialize_public_lg1"
 > SET cluster = materialize_public_lg2
-! SELECT 1
+! SELECT generate_series(0, 10)
 contains:cannot execute queries on cluster containing sources or sinks
 ! SUBSCRIBE v
 contains:cannot execute queries on cluster containing sources or sinks

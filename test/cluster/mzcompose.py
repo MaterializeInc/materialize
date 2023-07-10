@@ -77,6 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-compute-reconciliation-no-errors",
         "test-mz-subscriptions",
         "test-mv-source-sink",
+        "test-query-without-default-cluster",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -1781,3 +1782,21 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     assert (
         mv_since >= t_since
     ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
+
+
+def workflow_test_query_without_default_cluster(c: Composition) -> None:
+    """Test queries without a default cluster in Materialize."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Postgres(),
+        Materialized(),
+    ):
+        c.up("materialized", "postgres")
+
+        c.run(
+            "testdrive",
+            "query-without-default-cluster/query-without-default-cluster.td",
+        )

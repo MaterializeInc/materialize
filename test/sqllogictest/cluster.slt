@@ -528,7 +528,7 @@ statement ok
 SET cluster = empty
 
 query error CLUSTER "empty" has no replicas available to service request
-SELECT 1;
+SELECT generate_series(1, 1);
 
 
 # Phillip's tests

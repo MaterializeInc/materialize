@@ -2897,8 +2897,14 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .execute("SET client_min_messages = debug", &[])
         .unwrap();
 
-    // Queries with no dependencies should not get run on the introspection cluster
+    // Simple queries with no dependencies should get run on the introspection cluster
     let _row = client.query_one("SELECT 1;", &[]).unwrap();
+    assert_introspection_notice(true);
+
+    // Not "simple" queries with no dependencies shouldn't get run on the introspection cluster
+    let _row = client
+        .query_one("SELECT generate_series(1, 1);", &[])
+        .unwrap();
     assert_introspection_notice(false);
 
     // Queries that only depend on system tables, __should__ get run on the introspection cluster
