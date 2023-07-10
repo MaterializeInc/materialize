@@ -631,7 +631,6 @@ impl PersistClient {
                 gc.clone(),
             )
         });
-        let heartbeat_ts = (self.cfg.now)();
         let upper = machine.applier.clone_upper();
         let writer = WriteHandle::new(
             self.cfg.clone(),
@@ -645,7 +644,6 @@ impl PersistClient {
             &diagnostics.handle_purpose,
             schemas,
             upper,
-            heartbeat_ts,
         )
         .await;
         Ok(writer)
@@ -718,14 +716,13 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::task::Context;
     use std::time::Duration;
 
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
-    use mz_ore::now::NowFn;
+
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
@@ -1645,37 +1642,6 @@ mod tests {
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
         assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn writer_heartbeat() {
-        let data = vec![
-            (("1".to_owned(), "one".to_owned()), 1, 1),
-            (("2".to_owned(), "two".to_owned()), 2, 1),
-            (("3".to_owned(), "three".to_owned()), 3, 1),
-        ];
-
-        let shard_id = ShardId::new();
-        let now = Arc::new(AtomicU64::new(0));
-        let now_clone = Arc::clone(&now);
-        let mut cache = new_test_client_cache();
-        cache.cfg.now = NowFn::from(move || now_clone.load(Ordering::SeqCst));
-        let (mut write, _) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
-            .await
-            .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
-
-        let lease_duration_ms = u64::try_from(write.cfg.writer_lease_duration.as_millis()).unwrap();
-
-        // performing a compare_and_append should heartbeat the writer
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.expect_compare_and_append(&data[0..1], 0, 2).await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
     }
 
     #[mz_ore::test]
