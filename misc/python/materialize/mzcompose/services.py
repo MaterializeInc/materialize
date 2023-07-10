@@ -759,6 +759,7 @@ class Minio(Service):
                 "command": [command],
                 "image": image,
                 "ports": [9000, 9001],
+                "environment": ["MINIO_STORAGE_CLASS_STANDARD=EC:0"],
                 "healthcheck": {
                     "test": [
                         "CMD",
