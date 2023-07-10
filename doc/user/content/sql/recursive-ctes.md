@@ -34,10 +34,29 @@ Field | Use
 
 Within a recursive CTEs block, any `cte_ident` alias can be referenced in all `recursive_cte_binding` definitions that live under the same block, as well as in the final `select_stmt` for that block.
 
-Semantically, a recursive CTE block will initialize all of its bindings to the empty collection and sequentially update them in a loop until either:
+A `WITH MUTUALLY RECURSIVE` block with a general form
 
-1. a fixpoint is reached (i.e., if the collections stop changing across loop iterations), or
-2. some early exit criteria are satisfied.
+```sql
+WITH MUTUALLY RECURSIVE
+  -- A sequence of bindings, all in scope for all definitions.
+  $R_1(...) AS ( $sql_cte_1 ),
+  ...
+  $R_n(...) AS ( $sql_cte_n )
+  -- Compute the result from the final values of all bindings.
+  $sql_body
+```
+
+is evaluated as if it was performing the following steps:
+
+1. Initially, bind `$R_1, ..., $R_n` to the empty collection.
+1. Repeat in a loop:
+   1. Update `$R_1` using the current values bound to `$R_1, ..., $R_n` in `$sql_cte_1`.
+   1. Update `$R_2` using the current values bound to `$R_1, ..., $R_n` in `$sql_cte_2`. Note that this includes the new value of `$R_1` bound above.
+   1. ...
+   1. Update `$R_n` using the current values bound to `$R_1, ..., $R_n` in `$sql_cte_n`. Note that this includes the new values of `$R_1, ..., $R_{n-1}` bound above.
+1. Exit the loop when one of the following conditions is met:
+   1. The values bound to all CTEs have stopped changing.
+   1. The optional early exit condition to `RETURN` or `ERROR AT ITERATION $i` was set and we have reached iteration `$i`.
 
 Note that Materialize's ability to [efficiently handle incremental changes to your inputs](https://materialize.com/guides/incremental-computation/) extends across loop iterations.
 For each iteration, Materialize performs work resulting only from the input changes for this iteration and feeds back the resulting output changes to the next iteration.
