@@ -95,8 +95,8 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, Coordinator, ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
-    PeekStageTimestamp, PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn,
-    PendingTxnResponse, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
+    PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, PendingTxnResponse,
+    PlanValidity, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
     DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
@@ -1866,10 +1866,10 @@ impl Coordinator {
 
         check_no_invalid_log_reads(catalog, cluster, &source_ids, &mut target_replica)?;
 
-        let validity = PeekValidity {
+        let validity = PlanValidity {
             transient_revision: catalog.transient_revision(),
             source_ids: source_ids.clone(),
-            cluster_id: cluster.id(),
+            cluster_id: Some(cluster.id()),
             replica_id: target_replica,
         };
 
@@ -2744,10 +2744,10 @@ impl Coordinator {
         );
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
-                let validity = PeekValidity {
+                let validity = PlanValidity {
                     transient_revision: self.catalog().transient_revision(),
                     source_ids,
-                    cluster_id,
+                    cluster_id: Some(cluster_id),
                     replica_id: None,
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -3123,16 +3123,18 @@ impl Coordinator {
         });
     }
 
-    // ReadThenWrite is a plan whose writes depend on the results of a
-    // read. This works by doing a Peek then queuing a SendDiffs. No writes
-    // or read-then-writes can occur between the Peek and SendDiff otherwise a
-    // serializability violation could occur.
+    /// ReadThenWrite is a plan whose writes depend on the results of a
+    /// read. This works by doing a Peek then queuing a SendDiffs. No writes
+    /// or read-then-writes can occur between the Peek and SendDiff otherwise a
+    /// serializability violation could occur.
     pub(super) async fn sequence_read_then_write(
         &mut self,
         mut ctx: ExecuteContext,
         plan: ReadThenWritePlan,
     ) {
-        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan));
+        let mut source_ids = plan.selection.depends_on();
+        source_ids.insert(plan.id);
+        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);
 
         let ReadThenWritePlan {
             id,

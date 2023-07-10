@@ -24,7 +24,7 @@ use tracing::warn;
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::{Coordinator, Message, PendingTxn};
+use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::session::{Session, WriteOp};
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::ExecuteContext;
@@ -44,6 +44,7 @@ pub(crate) struct DeferredPlan {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub plan: Plan,
+    pub validity: PlanValidity,
 }
 
 /// Describes what action triggered an update to a builtin table.
@@ -116,7 +117,7 @@ impl PendingWriteTxn {
 /// deferring work.
 #[macro_export]
 macro_rules! guard_write_critical_section {
-    ($coord:expr, $ctx:expr, $plan_to_defer: expr) => {
+    ($coord:expr, $ctx:expr, $plan_to_defer:expr, $source_ids:expr) => {
         if !$ctx.session().has_write_lock() {
             if $coord
                 .try_grant_session_write_lock($ctx.session_mut())
@@ -125,6 +126,12 @@ macro_rules! guard_write_critical_section {
                 $coord.defer_write(Deferred::Plan(DeferredPlan {
                     ctx: $ctx,
                     plan: $plan_to_defer,
+                    validity: PlanValidity {
+                        transient_revision: $coord.catalog().transient_revision(),
+                        source_ids: $source_ids,
+                        cluster_id: None,
+                        replica_id: None,
+                    },
                 }));
                 return;
             }
