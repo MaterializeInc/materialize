@@ -40,7 +40,7 @@ def workflow_with_otel(c: Composition) -> None:
 
     # update the stderr config
     c.sql(
-        "ALTER SYSTEM SET mz_log_filter = 'debug'",
+        "ALTER SYSTEM SET log_filter = 'debug'",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -50,7 +50,7 @@ def workflow_with_otel(c: Composition) -> None:
 
     # update the otel config
     c.sql(
-        "ALTER SYSTEM SET mz_opentelemetry_filter = 'trace'",
+        "ALTER SYSTEM SET opentelemetry_filter = 'trace'",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -60,7 +60,7 @@ def workflow_with_otel(c: Composition) -> None:
 
     # revert the otel config and make sure we go back
     c.sql(
-        "ALTER SYSTEM SET mz_opentelemetry_filter = 'off'",
+        "ALTER SYSTEM SET opentelemetry_filter = 'off'",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -70,7 +70,7 @@ def workflow_with_otel(c: Composition) -> None:
 
     # make sure we can go allll the way back
     c.sql(
-        "ALTER SYSTEM SET mz_log_filter = 'info'",
+        "ALTER SYSTEM SET log_filter = 'info'",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -90,7 +90,7 @@ def workflow_without_otel(c: Composition) -> None:
 
         # update the stderr config
         c.sql(
-            "ALTER SYSTEM SET mz_log_filter = 'debug'",
+            "ALTER SYSTEM SET log_filter = 'debug'",
             user="mz_system",
             port=6877,
             print_statement=False,
@@ -100,7 +100,7 @@ def workflow_without_otel(c: Composition) -> None:
 
         # make sure we can go back to normal
         c.sql(
-            "ALTER SYSTEM SET mz_log_filter = 'info'",
+            "ALTER SYSTEM SET log_filter = 'info'",
             user="mz_system",
             port=6877,
             print_statement=False,
@@ -132,7 +132,7 @@ def workflow_clusterd(c: Composition) -> None:
     )
 
     c.sql(
-        "ALTER SYSTEM SET mz_log_filter = 'debug'",
+        "ALTER SYSTEM SET log_filter = 'debug'",
         user="mz_system",
         port=6877,
         print_statement=False,

@@ -719,7 +719,7 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
 static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
 static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
-    name: UncasedStr::new("mz_log_filter"),
+    name: UncasedStr::new("log_filter"),
     value: &DEFAULT_LOGGING_FILTER,
     description: "Sets the filter to apply to stderr logging.",
     internal: true,
@@ -728,7 +728,7 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
 static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("off").expect("valid EnvFilter"));
 static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
-    name: UncasedStr::new("mz_opentelemetry_filter"),
+    name: UncasedStr::new("opentelemetry_filter"),
     value: &DEFAULT_OPENTELEMETRY_FILTER,
     description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
     internal: true,

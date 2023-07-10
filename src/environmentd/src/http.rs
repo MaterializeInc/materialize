@@ -343,7 +343,7 @@ impl InternalHttpServer {
                         (
                             StatusCode::BAD_REQUEST,
                             "This endpoint has been replaced. \
-                            Use the `mz_opentelemetry_filter` system variable."
+                            Use the `opentelemetry_filter` system variable."
                                 .to_string(),
                         )
                     }
@@ -356,7 +356,7 @@ impl InternalHttpServer {
                         (
                             StatusCode::BAD_REQUEST,
                             "This endpoint has been replaced. \
-                            Use the `mz_log_filter` system variable."
+                            Use the `log_filter` system variable."
                                 .to_string(),
                         )
                     }

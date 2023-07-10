@@ -205,14 +205,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     if args.tracing.log_filter.is_some() {
         halt!(
             "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
-             `mz_log_filter` system variable. In the rare case the filter is needed before the \
+             `log_filter` system variable. In the rare case the filter is needed before the \
              process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
         )
     }
     if args.tracing.opentelemetry_filter.is_some() {
         halt!(
             "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
-            configured by the `mz_opentelemetry_filter` system variable. In the rare case the filter \
+            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
             is needed before the process has access to the system variable, use \
             `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
         )
@@ -269,7 +269,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             (
                                 StatusCode::BAD_REQUEST,
                                 "This endpoint has been replaced. \
-                                Use the `mz_opentelemetry_filter` system variable."
+                                Use the `opentelemetry_filter` system variable."
                                     .to_string(),
                             )
                         }
@@ -282,7 +282,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             (
                                 StatusCode::BAD_REQUEST,
                                 "This endpoint has been replaced. \
-                                Use the `mz_log_filter` system variable."
+                                Use the `log_filter` system variable."
                                     .to_string(),
                             )
                         }

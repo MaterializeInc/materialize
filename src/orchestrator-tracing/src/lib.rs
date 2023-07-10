@@ -117,7 +117,7 @@ use opentelemetry::KeyValue;
 /// orchestrators and does not belong in a foundational crate like `mz_ore`.
 #[derive(Debug, Clone, clap::Parser)]
 pub struct TracingCliArgs {
-    /// This arg has been replaced. Use the `mz_log_filter` system variable or
+    /// This arg has been replaced. Use the `log_filter` system variable or
     /// `--startup-log-filter` arg instead.
     #[clap(long, env = "LOG_FILTER", value_name = "FILTER")]
     pub log_filter: Option<CloneableEnvFilter>,
@@ -182,7 +182,7 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
-    /// This arg has been replaced. Use the `mz_opentelemetry_filter` system
+    /// This arg has been replaced. Use the `opentelemetry_filter` system
     /// variable or `--startup-opentelemetry-filter` arg instead.
     #[clap(long, env = "OPENTELEMETRY_FILTER")]
     pub opentelemetry_filter: Option<CloneableEnvFilter>,

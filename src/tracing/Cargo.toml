@@ -1,6 +1,6 @@
 [package]
 name = "mz-tracing"
-description = "A tracing library for Mz."
+description = "A tracing library for Materialize."
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
