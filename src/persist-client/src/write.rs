@@ -16,7 +16,6 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
@@ -25,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, warn, Instrument};
 use uuid::Uuid;
 
@@ -140,10 +138,7 @@ where
     pub(crate) schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
-    pub(crate) last_heartbeat: EpochMillis,
     explicitly_expired: bool,
-
-    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -168,7 +163,6 @@ where
         purpose: &str,
         schemas: Schemas<K, V>,
         upper: Antichain<T>,
-        last_heartbeat: EpochMillis,
     ) -> Self {
         let debug_state = HandleDebugState {
             hostname: cfg.hostname.to_owned(),
@@ -186,9 +180,7 @@ where
             debug_state,
             schemas,
             upper,
-            last_heartbeat,
             explicitly_expired: false,
-            heartbeat_task: None,
         }
     }
 
@@ -234,9 +226,8 @@ where
     /// this shard, promising that no more data is ever incoming.
     ///
     /// `updates` may be empty, which allows for downgrading `upper` to
-    /// communicate progress. It is possible to heartbeat a writer lease by
-    /// calling this with `upper` equal to `self.upper()` and an empty `updates`
-    /// (making the call a no-op).
+    /// communicate progress. It is possible to call this with `upper` equal to
+    /// `self.upper()` and an empty `updates` (making the call a no-op).
     ///
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
@@ -488,7 +479,6 @@ where
         let maintenance = match res {
             Ok(Ok((_seqno, maintenance))) => {
                 self.upper = desc.upper().clone();
-                self.last_heartbeat = heartbeat_timestamp;
                 for batch in batches.iter_mut() {
                     batch.mark_consumed();
                 }
@@ -699,9 +689,6 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_task) = self.heartbeat_task.take() {
-            heartbeat_task.abort();
-        }
         if self.explicitly_expired {
             return;
         }
