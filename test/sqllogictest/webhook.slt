@@ -1,0 +1,99 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+# We shouldn't be able to create a webhook source unless the feature is enabled.
+statement error creating or pushing data to webhook sources is not supported
+CREATE SOURCE webhook_bytes FROM WEBHOOK
+    BODY FORMAT BYTES
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_webhook_sources = true
+----
+COMPLETE 0
+
+#
+# Happy Path, valid WEBHOOK sources
+#
+
+statement ok
+CREATE SOURCE webhook_bytes FROM WEBHOOK
+    BODY FORMAT BYTES
+
+query TTT
+SHOW COLUMNS FROM webhook_bytes
+----
+body false bytea
+
+statement ok
+CREATE SOURCE webhook_bytes_include_headers FROM WEBHOOK
+    BODY FORMAT BYTES
+    INCLUDE HEADERS
+
+query TTT
+SHOW COLUMNS FROM webhook_bytes_include_headers
+----
+body false bytea
+headers false map
+
+statement ok
+CREATE SOURCE webhook_json FROM WEBHOOK
+    BODY FORMAT JSON
+
+query TTT
+SHOW COLUMNS FROM webhook_json
+----
+body false jsonb
+
+statement ok
+CREATE SOURCE webhook_json_include_headers FROM WEBHOOK
+    BODY FORMAT JSON
+    INCLUDE HEADERS
+
+query TTT
+SHOW COLUMNS FROM webhook_json_include_headers
+----
+body false jsonb
+headers false map
+
+statement ok
+CREATE SOURCE webhook_text FROM WEBHOOK
+    BODY FORMAT TEXT
+
+query TTT
+SHOW COLUMNS FROM webhook_text
+----
+body false text
+
+statement ok
+CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
+    BODY FORMAT TEXT
+    INCLUDE HEADERS
+
+query TTT
+SHOW COLUMNS FROM webhook_text_include_headers
+----
+body false text
+headers false map
+
+# Should fail because a source with this name already exists.
+statement error source "materialize.public.webhook_text_include_headers" already exists
+CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
+    BODY FORMAT TEXT
+    INCLUDE HEADERS
+
+# Should succeed since we're specifying "if not exists".
+statement ok
+CREATE SOURCE IF NOT EXISTS webhook_text_include_headers FROM WEBHOOK
+    BODY FORMAT TEXT
+    INCLUDE HEADERS

@@ -987,6 +987,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
         | ExecuteResponse::ValidatedConnection
+        | ExecuteResponse::CreatedWebhookSource
         | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), Vec::default()).into(),
         ExecuteResponse::TransactionCommitted { params } | ExecuteResponse::TransactionRolledBack { params }=> {
             let notify_set: mz_ore::collections::HashSet<String> = client

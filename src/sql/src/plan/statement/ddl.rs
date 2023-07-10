@@ -71,10 +71,11 @@ use crate::ast::{
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
     CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
-    CsrSeedProtobuf, CsvColumns, DbzMode, DropObjectsStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
+    CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
+    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
     KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
@@ -111,10 +112,10 @@ use crate::plan::{
     CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
-    ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
-    View,
+    CreateViewPlan, CreateWebhookSourcePlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
+    FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
+    Source, SourceSinkClusterConfig, Table, Type, View,
 };
 use crate::session::vars;
 
@@ -345,6 +346,13 @@ pub fn plan_create_table(
     }))
 }
 
+pub fn describe_create_webhook_source(
+    _: &StatementContext,
+    _: CreateWebhookSourceStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn describe_create_source(
     _: &StatementContext,
     _: CreateSourceStatement<Aug>,
@@ -373,6 +381,84 @@ generate_extracted_config!(
     (Publication, String),
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
+
+pub fn plan_create_webhook_source(
+    scx: &StatementContext,
+    stmt: CreateWebhookSourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    // Make sure the LaunchDarkly flag is enabled.
+    scx.require_feature_flag(&vars::ENABLE_WEBHOOK_SOURCES)?;
+
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
+
+    let CreateWebhookSourceStatement {
+        name,
+        if_not_exists,
+        body_format,
+        include_headers,
+    } = stmt;
+
+    let body_scalar_type = match body_format {
+        Format::Bytes => ScalarType::Bytes,
+        Format::Json => ScalarType::Jsonb,
+        Format::Text => ScalarType::String,
+        // TODO(parkmycar): Make an issue to support more types, or change this to NeverSupported.
+        ty => {
+            return Err(PlanError::Unsupported {
+                feature: format!("{ty} is not a valid BODY FORMAT for a WEBHOOK source"),
+                issue_no: None,
+            })
+        }
+    };
+
+    let mut column_ty = vec![
+        // Always include the body of the request as the first column.
+        ColumnType {
+            scalar_type: body_scalar_type,
+            nullable: false,
+        },
+    ];
+    let mut column_names = vec!["body"];
+
+    if include_headers {
+        // Optionally include the headers of the request as a second column.
+        column_ty.push(ColumnType {
+            scalar_type: ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            },
+            nullable: false,
+        });
+        column_names.push("headers");
+    }
+
+    let typ = RelationType::new(column_ty);
+    let desc = RelationDesc::new(typ, column_names);
+
+    // Check for an object in the catalog with this same name
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    // Note(parkmycar): We don't currently support specifying a timeline for Webhook sources. As
+    // such, we always use a default of EpochMilliseconds.
+    let timeline = Timeline::EpochMilliseconds;
+
+    Ok(Plan::CreateWebhookSource(CreateWebhookSourcePlan {
+        name,
+        if_not_exists,
+        desc,
+        create_sql,
+        timeline,
+    }))
+}
 
 pub fn plan_create_source(
     scx: &StatementContext,

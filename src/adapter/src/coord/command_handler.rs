@@ -22,7 +22,7 @@ use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
-use mz_sql::names::ResolvedIds;
+use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
@@ -33,10 +33,11 @@ use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::catalog::CatalogItem;
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    Canceled, Command, ExecuteResponse, GetVariablesResponse, Response, StartupMessage,
-    StartupResponse,
+    AppendWebhookResponse, Canceled, Command, ExecuteResponse, GetVariablesResponse, Response,
+    StartupMessage, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -76,6 +77,10 @@ impl Coordinator {
             Command::CopyRows { tx, session, .. } => send(tx, session, e),
             Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
             Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::AppendWebhook { tx, .. } => {
+                // We don't care if our listener went away.
+                let _ = tx.send(Err(e));
+            }
             Command::Terminate { tx, session, .. } => {
                 if let Some(tx) = tx {
                     send(tx, session, e)
@@ -185,6 +190,16 @@ impl Coordinator {
                     ResolvedIds(BTreeSet::new()),
                 )
                 .await;
+            }
+
+            Command::AppendWebhook {
+                database,
+                schema,
+                name,
+                conn_id,
+                tx,
+            } => {
+                self.handle_append_webhook(database, schema, name, conn_id, tx);
             }
 
             Command::GetSystemVars { session, tx } => {
@@ -527,6 +542,7 @@ impl Coordinator {
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
+                    | Statement::CreateWebhookSource(_)
                     | Statement::CreateSource(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
@@ -806,5 +822,74 @@ impl Coordinator {
         self.cancel_pending_peeks(session.conn_id());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
+    }
+
+    fn handle_append_webhook(
+        &mut self,
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<Option<AppendWebhookResponse>, AdapterError>>,
+    ) {
+        // Make sure the feature is enabled before doing anything else.
+        if !self.catalog().system_config().enable_webhook_sources() {
+            // We don't care if the listener went away.
+            let _ = tx.send(Err(AdapterError::Unsupported("enable_webhook_sources")));
+            return;
+        }
+
+        /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
+        ///
+        /// Returns a struct that can be used to append data to the underlying storate collection, and the
+        /// types we should cast the request to.
+        fn resolve(
+            coord: &Coordinator,
+            database: String,
+            schema: String,
+            name: String,
+            conn_id: ConnectionId,
+        ) -> Option<AppendWebhookResponse> {
+            // Resolve our collection.
+            let name = PartialItemName {
+                database: Some(database),
+                schema: Some(schema),
+                item: name,
+            };
+            let entry = coord
+                .catalog()
+                .resolve_entry(None, &vec![], &name, &conn_id)
+                .ok()?;
+
+            let (body_ty, header_ty) = match entry.item() {
+                CatalogItem::Source(source) if source.is_webhook() => {
+                    // All Webhook sources should have at most 2 columns.
+                    mz_ore::soft_assert!(source.desc.arity() <= 2);
+
+                    let body = source
+                        .desc
+                        .get_by_name(&"body".into())
+                        .map(|(_idx, ty)| ty.clone())?;
+                    let header = source
+                        .desc
+                        .get_by_name(&"headers".into())
+                        .map(|(_idx, ty)| ty.clone());
+
+                    (body, header)
+                }
+                _ => return None,
+            };
+
+            // Get a channel so we can queue updates to be written.
+            let row_tx = coord.controller.storage.monotonic_appender(entry.id());
+            Some(AppendWebhookResponse {
+                tx: row_tx,
+                body_ty,
+                header_ty,
+            })
+        }
+
+        let response = resolve(self, database, schema, name, conn_id);
+        let _ = tx.send(Ok(response));
     }
 }

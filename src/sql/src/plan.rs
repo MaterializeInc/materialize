@@ -104,6 +104,7 @@ pub enum Plan {
     CreateRole(CreateRolePlan),
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
+    CreateWebhookSource(CreateWebhookSourcePlan),
     CreateSource(CreateSourcePlan),
     CreateSources(Vec<CreateSourcePlans>),
     CreateSecret(CreateSecretPlan),
@@ -216,6 +217,7 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
+            StatementKind::CreateWebhookSource => vec![PlanKind::CreateWebhookSource],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 vec![PlanKind::CreateSource]
             }
@@ -267,6 +269,7 @@ impl Plan {
             Plan::CreateRole(_) => "create role",
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
+            Plan::CreateWebhookSource(_) => "create source",
             Plan::CreateSource(_) => "create source",
             Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
@@ -500,6 +503,19 @@ pub enum ReplicaConfig {
         compute: ComputeReplicaConfig,
         disk: bool,
     },
+}
+
+/// TODO(parkmycar): once we install webhook sources on clusterd, this struct should be
+/// delete/merged in favor of [`CreateSourcePlan`].
+///
+/// See <https://github.com/MaterializeInc/materialize/issues/19951>.
+#[derive(Debug)]
+pub struct CreateWebhookSourcePlan {
+    pub name: QualifiedItemName,
+    pub if_not_exists: bool,
+    pub create_sql: String,
+    pub desc: RelationDesc,
+    pub timeline: Timeline,
 }
 
 #[derive(Debug)]

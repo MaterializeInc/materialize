@@ -2626,6 +2626,12 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_item_name()?;
+
+        // Webhook Source, which works differently than all other sources.
+        if self.peek_keywords(&[FROM, WEBHOOK]) {
+            return self.parse_create_webhook_source(name, if_not_exists);
+        }
+
         let (col_names, key_constraint) = self.parse_source_columns()?;
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
@@ -2778,6 +2784,36 @@ impl<'a> Parser<'a> {
             name,
             value: self.parse_optional_option_value()?,
         })
+    }
+
+    fn parse_create_webhook_source(
+        &mut self,
+        name: UnresolvedItemName,
+        if_not_exists: bool,
+    ) -> Result<Statement<Raw>, ParserError> {
+        // Consume these keywords, because earlier we only peeked them.
+        self.expect_keywords(&[FROM, WEBHOOK])?;
+
+        self.expect_keywords(&[BODY, FORMAT])?;
+
+        // Note: we don't use `parse_format()` here because we support fewer formats than other
+        // sources, and the user gets better errors if we reject the formats here.
+        let body_format = match self.expect_one_of_keywords(&[JSON, TEXT, BYTES])? {
+            JSON => Format::Json,
+            TEXT => Format::Text,
+            BYTES => Format::Bytes,
+            _ => unreachable!(),
+        };
+        let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
+
+        Ok(Statement::CreateWebhookSource(
+            CreateWebhookSourceStatement {
+                name,
+                if_not_exists,
+                body_format,
+                include_headers,
+            },
+        ))
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {

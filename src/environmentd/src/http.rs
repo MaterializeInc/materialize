@@ -60,6 +60,7 @@ mod memory;
 mod probe;
 mod root;
 mod sql;
+mod webhook;
 
 pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
@@ -746,6 +747,10 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
             routing::get(move || async move { root::handle_home(profiling).await }),
         )
         .route("/api/sql", routing::post(sql::handle_sql))
+        .route(
+            "/api/webhook/:database/:schema/:id",
+            routing::post(webhook::handle_webhook),
+        )
         .route("/memory", routing::get(memory::handle_memory))
         .route(
             "/hierarchical-memory",

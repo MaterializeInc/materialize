@@ -32,13 +32,13 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
-    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
-    InspectShardPlan, MutationKind, Plan, PreparePlan, RaisePlan, ReadThenWritePlan,
-    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
-    SelectPlan, SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan,
-    SideEffectingFunc, SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan,
-    UpdatePrivilege, ValidateConnectionPlan,
+    CreateTypePlan, CreateViewPlan, CreateWebhookSourcePlan, DeallocatePlan, DeclarePlan,
+    DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan,
+    GrantRolePlan, InsertPlan, InspectShardPlan, MutationKind, Plan, PreparePlan, RaisePlan,
+    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
+    RotateKeysPlan, SelectPlan, SetTransactionPlan, SetVariablePlan, ShowCreatePlan,
+    ShowVariablePlan, SideEffectingFunc, SourceSinkClusterConfig, StartTransactionPlan,
+    SubscribePlan, UpdatePrivilege, ValidateConnectionPlan,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -132,6 +132,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::CopyRows { .. }
         | Command::GetSystemVars { .. }
         | Command::SetSystemVars { .. }
+        | Command::AppendWebhook { .. }
         | Command::Terminate { .. } => Ok(()),
     }
 }
@@ -276,6 +277,7 @@ pub fn generate_required_role_membership(
         | Plan::CreateRole(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
+        | Plan::CreateWebhookSource(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
@@ -345,6 +347,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::CreateRole(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
+        | Plan::CreateWebhookSource(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
@@ -570,6 +573,17 @@ fn generate_required_privileges(
                 role_id,
             )]
         }
+        Plan::CreateWebhookSource(CreateWebhookSourcePlan {
+            name,
+            if_not_exists: _,
+            desc: _,
+            create_sql: _,
+            timeline: _,
+        }) => vec![(
+            SystemObjectId::Object(name.qualifiers.clone().into()),
+            AclMode::CREATE,
+            role_id,
+        )],
         Plan::CreateSource(CreateSourcePlan {
             name,
             source: _,

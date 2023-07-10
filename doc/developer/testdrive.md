@@ -858,6 +858,24 @@ $ http-request method=POST url=http://example/com content-type=application/json
 
 The test will fail unless the HTTP status code of the response is in the 200 range.
 
+## Actions on Webhook Sources
+
+#### `$ webhook-append name=... [database=...] [schema=...] [status=404] [header_name=header_value, ...]`
+
+Issues an HTTP POST request to a webhook source at `<database>.<schema>.<name>`, by default
+`database` is `materialize` and `schema` is `public`. The body of the command is used as the body
+of the request. You can optionally specify an expected response status code, by default we expect a
+status of 200. Any remaining arguments are appended to the request as headers.
+
+See `webhook.td` for more examples.
+
+```
+$ webhook-append database=materialize schema=public name=webhook_json app_name=test_drive
+{
+  "hello": "world"
+}
+```
+
 ## Actions with `psql`
 
 #### `$ psql-execute command=...`

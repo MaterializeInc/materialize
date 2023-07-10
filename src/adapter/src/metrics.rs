@@ -99,6 +99,7 @@ where
         StatementKind::CreateConnection => "create_connection",
         StatementKind::CreateDatabase => "create_database",
         StatementKind::CreateSchema => "create_schema",
+        StatementKind::CreateWebhookSource => "create_webhook",
         StatementKind::CreateSource => "create_source",
         StatementKind::CreateSubsource => "create_subsource",
         StatementKind::CreateSink => "create_sink",

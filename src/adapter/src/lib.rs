@@ -121,7 +121,8 @@ pub mod telemetry;
 
 pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{
-    Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupMessage, StartupResponse,
+    AppendWebhookResponse, Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture,
+    StartupMessage, StartupResponse,
 };
 pub use crate::coord::id_bundle::CollectionIdBundle;
 pub use crate::coord::peek::PeekResponseUnary;

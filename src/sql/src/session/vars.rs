@@ -1153,7 +1153,11 @@ feature_flags!(
     (
         enable_connection_validation_syntax,
         "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax"
-    )
+    ),
+    (
+        enable_webhook_sources,
+        "creating or pushing data to webhook sources"
+    ),
 );
 
 /// Represents the input to a variable.

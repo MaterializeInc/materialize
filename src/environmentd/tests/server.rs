@@ -98,6 +98,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
+use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -1639,4 +1640,231 @@ fn test_cancel_ws() {
         }
     }
     handle.join().unwrap();
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn smoketest_webhook_source() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    struct WebhookEvent {
+        ts: u128,
+        name: String,
+        attrs: Vec<String>,
+    }
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos()
+    };
+
+    // Generate some events.
+    const NUM_EVENTS: i64 = 100;
+    let events: Vec<_> = (0..NUM_EVENTS)
+        .map(|i| WebhookEvent {
+            ts: now(),
+            name: format!("event_{i}"),
+            attrs: (0..i).map(|j| format!("attr_{j}")).collect(),
+        })
+        .collect();
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_json",
+        server.inner.http_local_addr()
+    );
+    // Send all of our events to our webhook source.
+    for event in &events {
+        let resp = http_client
+            .post(&webhook_url)
+            .json(event)
+            .send()
+            .expect("failed to POST event");
+        assert!(resp.status().is_success());
+    }
+
+    // Wait for the events to be persisted.
+    mz_ore::retry::Retry::default()
+        .max_tries(10)
+        .retry(|_| {
+            let cnt: i64 = client
+                .query_one("SELECT COUNT(*) FROM webhook_json", &[])
+                .expect("failed to get count")
+                .get(0);
+
+            if cnt != 100 {
+                Err(anyhow::anyhow!("not all rows present"))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("failed to read events!");
+
+    // Read all of our events back.
+    let events_roundtrip: Vec<WebhookEvent> = client
+        .query("SELECT * FROM webhook_json", &[])
+        .expect("failed to query source")
+        .into_iter()
+        .map(|row| serde_json::from_value(row.get("body")).expect("failed to deserialize"))
+        .collect();
+
+    similar_asserts::assert_eq!(events, events_roundtrip);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_invalid_webhook_body() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let http_client = Client::new();
+
+    // Create a webhook source with a body format of text.
+    client
+        .execute(
+            "CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.inner.http_local_addr()
+    );
+
+    // Send non-UTF8 text which will fail to get deserialized.
+    let non_utf8 = vec![255, 255, 255, 255];
+    assert!(std::str::from_utf8(&non_utf8).is_err());
+
+    let resp = http_client
+        .post(webhook_url)
+        .body(non_utf8)
+        .send()
+        .expect("failed to POST event");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Create a webhook source with a body format of JSON.
+    client
+        .execute(
+            "CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_json",
+        server.inner.http_local_addr()
+    );
+
+    // Send invalid JSON which will fail to get deserialized.
+    let resp = http_client
+        .post(webhook_url)
+        .body("a")
+        .send()
+        .expect("failed to POST event");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Create a webhook source with a body format of bytes.
+    client
+        .execute(
+            "CREATE SOURCE webhook_bytes FROM WEBHOOK BODY FORMAT BYTES",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_bytes",
+        server.inner.http_local_addr()
+    );
+
+    // No matter what is in the body, we should always succeed.
+    let mut data = [0u8; 128];
+    rand::thread_rng().fill_bytes(&mut data);
+    println!("Random bytes: {data:?}");
+    let resp = http_client
+        .post(webhook_url)
+        .body(data.to_vec())
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success());
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_duplicate_headers() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let http_client = Client::new();
+
+    // Create a webhook source that includes headers.
+    client
+        .execute(
+            "CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.inner.http_local_addr()
+    );
+
+    // Send a request with duplicate headers.
+    let resp = http_client
+        .post(webhook_url)
+        .body("test")
+        .header("dupe", "first")
+        .header("DUPE", "second")
+        .header("dUpE", "third")
+        .header("dUpE", "final")
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success());
+
+    // Wait for the events to be persisted.
+    mz_ore::retry::Retry::default()
+        .max_tries(10)
+        .retry(|_| {
+            let cnt: i64 = client
+                .query_one("SELECT COUNT(*) FROM webhook_text", &[])
+                .expect("failed to get count")
+                .get(0);
+
+            if cnt == 0 {
+                Err(anyhow::anyhow!("no rows present"))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("failed to read events!");
+
+    // Query for a row where our final header was applied.
+    let body: String = client
+        .query_one(
+            "SELECT body FROM webhook_text WHERE headers -> 'dupe' = 'final'",
+            &[],
+        )
+        .expect("failed to read row")
+        .get("body");
+    assert_eq!(body, "test");
+
+    // Assert only one row was inserted.
+    let cnt: i64 = client
+        .query_one("SELECT COUNT(*) FROM webhook_text", &[])
+        .expect("failed to get count")
+        .get(0);
+    assert_eq!(cnt, 1);
 }

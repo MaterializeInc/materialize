@@ -53,11 +53,11 @@ use mz_sql::plan::{
     AlterSystemResetPlan, AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
-    GrantRolePlan, IndexOption, InsertPlan, InspectShardPlan, MaterializedView, MutationKind,
-    OptimizerConfig, Params, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
-    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SelectPlan, SendDiffsPlan,
-    SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
+    CreateViewPlan, CreateWebhookSourcePlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan,
+    ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption, InsertPlan, InspectShardPlan,
+    MaterializedView, MutationKind, OptimizerConfig, Params, Plan, QueryWhen, ReadThenWritePlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SelectPlan,
+    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
     SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
@@ -193,6 +193,13 @@ impl Coordinator {
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
+                        DataSourceDesc::Webhook => {
+                            // TODO(parkmycar): Eventually webhook sources should take this path,
+                            // definitely once they get installed on clusterd.
+                            //
+                            // See <https://github.com/MaterializeInc/materialize/issues/19951>.
+                            unreachable!("Webhook sources take different path")
+                        }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
@@ -234,6 +241,81 @@ impl Coordinator {
                     ty: "source",
                 });
                 Ok(ExecuteResponse::CreatedSource)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// TODO(parkmycar): once we install webhook sources on clusterd, this method should be
+    /// deleted/merged in favor of the `sequence_create_source` method.
+    ///
+    /// See <https://github.com/MaterializeInc/materialize/issues/19951>.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(super) async fn sequence_create_webhook_source(
+        &mut self,
+        session: &mut Session,
+        plan: CreateWebhookSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let CreateWebhookSourcePlan {
+            name,
+            if_not_exists,
+            create_sql,
+            desc,
+            timeline,
+        } = plan;
+
+        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let source = catalog::Source {
+            create_sql,
+            data_source: DataSourceDesc::Webhook,
+            desc: desc.clone(),
+            timeline,
+            resolved_ids: ResolvedIds(BTreeSet::new()),
+            custom_logical_compaction_window: None,
+            is_retained_metrics_object: false,
+        };
+
+        let source_oid = self.catalog_mut().allocate_oid()?;
+        let ops = vec![catalog::Op::CreateItem {
+            id: source_id,
+            oid: source_oid,
+            name: name.clone(),
+            item: CatalogItem::Source(source.clone()),
+            owner_id: *session.current_role_id(),
+        }];
+
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => {
+                // Create the underlying collection.
+                let collection_desc = CollectionDescription {
+                    desc,
+                    data_source: DataSource::Webhook,
+                    since: None,
+                    status_collection_id: None,
+                };
+                self.controller
+                    .storage
+                    .create_collections(vec![(source_id, collection_desc)])
+                    .await
+                    .unwrap_or_terminate("cannot fail to create collections");
+
+                self.initialize_storage_read_policies(
+                    vec![source_id],
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                )
+                .await;
+
+                Ok(ExecuteResponse::CreatedWebhookSource)
+            }
+            Err(AdapterError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
+                ..
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "source",
+                });
+                Ok(ExecuteResponse::CreatedWebhookSource)
             }
             Err(err) => Err(err),
         }
@@ -3583,6 +3665,7 @@ impl Coordinator {
             DataSourceDesc::Ingestion(ingestion) => ingestion,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
+            | DataSourceDesc::Webhook
             | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }

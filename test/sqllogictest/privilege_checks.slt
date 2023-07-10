@@ -23,6 +23,13 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
+# Enable webhook sources.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_webhook_sources TO true;
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 ----
@@ -272,6 +279,16 @@ CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
 ----
@@ -299,6 +316,16 @@ COMPLETE 0
 
 simple conn=child,user=child
 CREATE SOURCE s3 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_a FROM WEBHOOK BODY FORMAT TEXT;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_b FROM WEBHOOK BODY FORMAT TEXT;
 ----
 COMPLETE 0
 
@@ -2994,5 +3021,12 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+# Disable webhook sources.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_webhook_sources TO false;
 ----
 COMPLETE 0

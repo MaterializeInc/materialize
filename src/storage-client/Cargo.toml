@@ -44,15 +44,16 @@ mz-stash = { path = "../stash" }
 mz-timely-util = { path = "../timely-util" }
 mz-tracing = { path = "../tracing" }
 openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
-proptest = { version = "1.0.0", default-features = false, features = ["std"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 prometheus = { version = "0.13.3", default-features = false }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
 scopeguard = "1.1.0"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
+static_assertions = "1.1"
 thiserror = "1.0.37"
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util"] }
