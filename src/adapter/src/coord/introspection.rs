@@ -39,16 +39,16 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
-    let (depends_on, can_run_expensive_function) = match plan {
+    let (depends_on, could_run_expensive_function) = match plan {
         Plan::Select(plan) => (
             plan.source.depends_on(),
-            plan.source.can_run_expensive_function(),
+            plan.source.could_run_expensive_function(),
         ),
         Plan::Subscribe(plan) => (
             plan.from.depends_on(),
             match &plan.from {
                 SubscribeFrom::Id(_) => false,
-                SubscribeFrom::Query { expr, desc: _ } => expr.can_run_expensive_function(),
+                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
         ),
         Plan::CreateConnection(_)
@@ -146,7 +146,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     });
 
     if (has_dependencies && valid_dependencies)
-        || (!has_dependencies && !can_run_expensive_function)
+        || (!has_dependencies && !could_run_expensive_function)
     {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
