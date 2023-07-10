@@ -401,7 +401,7 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                            inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
                         };
                         compact_reqs.push(req);
                     }
