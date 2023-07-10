@@ -1181,6 +1181,7 @@ impl<'a> From<CheckedTimestamp<DateTime<Utc>>> for Datum<'a> {
 impl<'a> TryInto<Datum<'a>> for NaiveDateTime {
     type Error = TimestampError;
 
+    #[inline]
     fn try_into(self) -> Result<Datum<'a>, Self::Error> {
         let t = CheckedTimestamp::from_timestamplike(self)?;
         Ok(t.into())
@@ -1190,6 +1191,7 @@ impl<'a> TryInto<Datum<'a>> for NaiveDateTime {
 impl<'a> TryInto<Datum<'a>> for DateTime<Utc> {
     type Error = TimestampError;
 
+    #[inline]
     fn try_into(self) -> Result<Datum<'a>, Self::Error> {
         let t = CheckedTimestamp::from_timestamplike(self)?;
         Ok(t.into())
