@@ -30,9 +30,10 @@ Port              | **6875**
 Database          | **materialize**
 Username          | Materialize user.
 Password          | App-specific password.
+Require SSL       | ✓
 
-If you require SSL/TLS encryption, select the **Require SSL** box. For more
-details, check the [Tableau documentation](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm).
+For more details and troubleshooting, check the
+[Tableau documentation](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm).
 
 [//]: # "TODO(morsapaes) Clarify minimum refresh rate and details about live
 connections"
@@ -93,12 +94,12 @@ following steps:
     Authentication | Username and Password
     Username       | Materialize user.
     Password       | App-specific password.
-
-    If you require SSL/TLS encryption, select the **Require SSL** box.
+    Require SSL    | ✓
 
 4. Click **Sign In** to connect to Materialize
 
-For more details and troubleshooting, check the [Tableau documentation](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm).
+For more details and troubleshooting, check the
+[Tableau documentation](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm).
 
 [//]: # "TODO(morsapaes) Clarify minimum refresh rate and details about live
 connections"

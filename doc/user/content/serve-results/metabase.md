@@ -28,9 +28,9 @@ Port              | **6875**
 Database name     | **materialize**
 Database username | Materialize user.
 Database password | App-specific password.
+SSL mode          | Require
 
-If you require SSL/TLS encryption, you can configure the connection to use
-`sslmode=require`. For more details and troubleshooting, check the
+For more details and troubleshooting, check the
 [Metabase documentation](https://www.metabase.com/docs/latest/administration-guide/databases/postgresql.html).
 
 ## Refresh rate
@@ -41,8 +41,10 @@ interval by adding `#refresh=1` (as an example, for a `1` second interval) to
 the end of the URL, and opening the modified URL in a new tab.
 
 Because Metabase queries are simply reading data out of self-updating views in
-Materialize, setting your dashboards to auto-refresh at lower rates will not
-have a significant impact on database performance.
+Materialize, setting your dashboards to auto-refresh at lower rates should not
+have a significant impact on database performance. To minimize this impact, we
+recommend carefully choosing an [indexing strategy](https://materialize.com/docs/sql/create-index/)
+for any objects serving results to Metabase.
 
 [//]: # "TODO(morsapaes) Once we revamp quickstarts, add Related pages section
 pointing to a quickstart that uses Metabase"
