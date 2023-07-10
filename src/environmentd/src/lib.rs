@@ -350,7 +350,6 @@ impl Listeners {
         task::spawn(|| "internal_http_server", {
             let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
                 metrics_registry: config.metrics_registry.clone(),
-                tracing_handle: config.tracing_handle,
                 adapter_client_rx: internal_http_adapter_client_rx,
                 active_connection_count: Arc::clone(&active_connection_count),
                 promote_leader: promote_leader_tx,
@@ -533,6 +532,7 @@ impl Listeners {
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
+            tracing_handle: config.tracing_handle,
         })
         .await?;
 

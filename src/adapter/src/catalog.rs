@@ -90,6 +90,7 @@ use mz_storage_client::types::sinks::{
 use mz_storage_client::types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
+use mz_tracing::params::TracingParameters;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -7496,6 +7497,7 @@ impl Catalog {
             dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
             enable_mz_join_core: Some(config.enable_mz_join_core()),
             persist: self.persist_config(),
+            tracing: self.tracing_config(),
         }
     }
 
@@ -7547,6 +7549,15 @@ impl Catalog {
                 }
             },
             finalize_shards: self.system_config().enable_storage_shard_finalization(),
+            tracing: self.tracing_config(),
+        }
+    }
+
+    pub fn tracing_config(&self) -> TracingParameters {
+        let config = self.system_config();
+        TracingParameters {
+            log_filter: Some(config.logging_filter()),
+            opentelemetry_filter: Some(config.opentelemetry_filter()),
         }
     }
 

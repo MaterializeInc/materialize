@@ -3426,6 +3426,7 @@ dependencies = [
  "mz-ssh-util",
  "mz-stash",
  "mz-storage-client",
+ "mz-tracing",
  "mz-transform",
  "once_cell",
  "opentelemetry",
@@ -3765,6 +3766,7 @@ dependencies = [
  "mz-service",
  "mz-storage-client",
  "mz-timely-util",
+ "mz-tracing",
  "once_cell",
  "prometheus",
  "proptest",
@@ -4263,6 +4265,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-service",
+ "mz-tracing",
  "opentelemetry",
  "sentry-tracing",
  "tracing",
@@ -4823,6 +4826,7 @@ dependencies = [
  "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
+ "mz-tracing",
  "once_cell",
  "paste",
  "proptest",
@@ -4839,6 +4843,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "tracing-subscriber",
  "uncased",
  "uuid",
  "workspace-hack",
@@ -5120,6 +5125,7 @@ dependencies = [
  "mz-ssh-util",
  "mz-stash",
  "mz-timely-util",
+ "mz-tracing",
  "once_cell",
  "openssh",
  "prometheus",
@@ -5257,6 +5263,25 @@ dependencies = [
  "serde",
  "timely",
  "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-tracing"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-proto",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tonic-build",
+ "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 

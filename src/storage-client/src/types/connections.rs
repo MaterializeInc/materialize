@@ -27,6 +27,7 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_tracing::CloneableEnvFilter;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use rdkafka::client::BrokerAddr;
@@ -135,12 +136,15 @@ impl ConnectionContext {
     /// (e.g., via a configuration option in a SQL statement). See
     /// [`AwsExternalIdPrefix`] for details.
     pub fn from_cli_args(
-        filter: &tracing_subscriber::filter::EnvFilter,
+        startup_log_level: &CloneableEnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
         secrets_reader: Arc<dyn SecretsReader>,
     ) -> ConnectionContext {
         ConnectionContext {
-            librdkafka_log_level: mz_ore::tracing::crate_level(filter, "librdkafka"),
+            librdkafka_log_level: mz_ore::tracing::crate_level(
+                &startup_log_level.clone().into(),
+                "librdkafka",
+            ),
             aws_external_id_prefix,
             secrets_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),

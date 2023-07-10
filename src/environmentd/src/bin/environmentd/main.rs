@@ -110,10 +110,10 @@ use mz_orchestrator_process::{
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
-use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -128,7 +128,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 use uuid::Uuid;
@@ -616,11 +616,28 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
+
     let (tracing_handle, _tracing_guard) =
         runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
         }))?;
+
+    if args.tracing.log_filter.is_some() {
+        halt!(
+            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
+             `log_filter` system variable. In the rare case the filter is needed before the \
+             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
+        )
+    }
+    if args.tracing.opentelemetry_filter.is_some() {
+        halt!(
+            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
+            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
+            is needed before the process has access to the system variable, use \
+            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
+        )
+    }
 
     let span = tracing::info_span!("environmentd::run").entered();
 
@@ -884,7 +901,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .collect(),
                 availability_zones: args.availability_zone,
                 connection_context: ConnectionContext::from_cli_args(
-                    args.tracing.log_filter.as_ref(),
+                    &args.tracing.startup_log_filter,
                     args.aws_external_id_prefix,
                     secrets_reader,
                 ),

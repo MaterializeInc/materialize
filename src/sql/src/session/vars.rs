@@ -67,6 +67,8 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::str::FromStr;
+use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -78,6 +80,7 @@ use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -712,6 +715,24 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     replication connections. (Materialize)",
     internal: true,
 };
+
+static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
+    Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
+static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("log_filter"),
+    value: &DEFAULT_LOGGING_FILTER,
+    description: "Sets the filter to apply to stderr logging.",
+    internal: true,
+});
+
+static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
+    Lazy::new(|| CloneableEnvFilter::from_str("off").expect("valid EnvFilter"));
+static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("opentelemetry_filter"),
+    value: &DEFAULT_OPENTELEMETRY_FILTER,
+    description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
+    internal: true,
+});
 
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
 /// when connecting to PG via replication.
@@ -1760,7 +1781,9 @@ impl SystemVars {
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
-            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION);
+            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+            .with_var(&LOGGING_FILTER)
+            .with_var(&OPENTELEMETRY_FILTER);
         vars.refresh_internal_state();
         vars
     }
@@ -2259,6 +2282,14 @@ impl SystemVars {
     /// Returns the `enable_default_connection_validation` configuration parameter.
     pub fn enable_default_connection_validation(&self) -> bool {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+    }
+
+    pub fn logging_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*LOGGING_FILTER).clone()
+    }
+
+    pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*OPENTELEMETRY_FILTER).clone()
     }
 }
 
@@ -3580,12 +3611,39 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
     }
 }
 
+impl Value for CloneableEnvFilter {
+    fn type_name() -> String {
+        "EnvFilter".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        CloneableEnvFilter::from_str(s).map_err(|e| VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: vec![s.to_string()],
+            reason: format!("{}", e),
+        })
+    }
+
+    fn format(&self) -> String {
+        format!("{}", self)
+    }
+}
+
+pub fn is_tracing_var(name: &str) -> bool {
+    name == LOGGING_FILTER.name() || name == OPENTELEMETRY_FILTER.name()
+}
+
 /// Returns whether the named variable is a compute configuration parameter.
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
+        || is_tracing_var(name)
 }
 
 /// Returns whether the named variable is a storage configuration parameter.
@@ -3597,6 +3655,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
+        || is_tracing_var(name)
 }
 
 fn is_upsert_rocksdb_config_var(name: &str) -> bool {

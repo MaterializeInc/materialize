@@ -78,19 +78,21 @@ use std::process;
 use std::sync::Arc;
 
 use anyhow::Context;
+use axum::http::StatusCode;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
+use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
+use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
@@ -200,6 +202,24 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         })
         .await?;
 
+    if args.tracing.log_filter.is_some() {
+        halt!(
+            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
+             `log_filter` system variable. In the rare case the filter is needed before the \
+             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
+        )
+    }
+    if args.tracing.opentelemetry_filter.is_some() {
+        halt!(
+            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
+            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
+            is needed before the process has access to the system variable, use \
+            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
+        )
+    }
+
+    let tracing_handle = Arc::new(tracing_handle);
+
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
     mz_timely_util::panic::halt_on_timely_communication_panic();
@@ -241,31 +261,30 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         mz_http_util::handle_prometheus(&metrics_registry).await
                     }),
                 )
+                .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
                 .route(
                     "/api/opentelemetry/config",
                     routing::put({
-                        let tracing_handle = tracing_handle.clone();
-                        move |payload| async move {
-                            mz_http_util::handle_reload_tracing_filter(
-                                &tracing_handle,
-                                TracingHandle::reload_opentelemetry_filter,
-                                payload,
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                                Use the `opentelemetry_filter` system variable."
+                                    .to_string(),
                             )
-                            .await
                         }
                     }),
                 )
                 .route(
                     "/api/stderr/config",
                     routing::put({
-                        let tracing_handle = tracing_handle.clone();
-                        move |payload| async move {
-                            mz_http_util::handle_reload_tracing_filter(
-                                &tracing_handle,
-                                TracingHandle::reload_stderr_log_filter,
-                                payload,
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                                Use the `log_filter` system variable."
+                                    .to_string(),
                             )
-                            .await
                         }
                     }),
                 )
@@ -295,10 +314,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_cluster::server::ClusterConfig {
             metrics_registry: metrics_registry.clone(),
             persist_clients: Arc::clone(&persist_clients),
+            tracing_handle: Arc::clone(&tracing_handle),
         },
         SYSTEM_TIME.clone(),
         ConnectionContext::from_cli_args(
-            args.tracing.log_filter.as_ref(),
+            &args.tracing.startup_log_filter,
             args.aws_external_id,
             secrets_reader,
         ),
@@ -323,6 +343,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_compute::server::serve(mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
+            tracing_handle,
         })?;
     info!(
         "listening for compute controller connections on {}",

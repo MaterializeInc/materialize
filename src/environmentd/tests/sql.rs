@@ -2483,7 +2483,9 @@ fn test_isolation_level_notice() {
 
 #[test] // allow(test-attribute)
 fn test_emit_tracing_notice() {
-    let config = util::Config::default().with_enable_tracing(true);
+    let config = util::Config::default()
+        .with_enable_tracing(true)
+        .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string());
     let server = util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();

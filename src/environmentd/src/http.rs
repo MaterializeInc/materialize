@@ -35,10 +35,10 @@ use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
 use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
+use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
-use mz_ore::tracing::TracingHandle;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
@@ -185,7 +185,6 @@ impl Server for HttpServer {
 
 pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
-    pub tracing_handle: TracingHandle,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
     pub promote_leader: oneshot::Sender<()>,
@@ -319,7 +318,6 @@ impl InternalHttpServer {
     pub fn new(
         InternalHttpConfig {
             metrics_registry,
-            tracing_handle,
             adapter_client_rx,
             active_connection_count,
             promote_leader,
@@ -341,27 +339,26 @@ impl InternalHttpServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put({
-                    let tracing_handle = tracing_handle.clone();
-                    move |payload| async move {
-                        mz_http_util::handle_reload_tracing_filter(
-                            &tracing_handle,
-                            TracingHandle::reload_opentelemetry_filter,
-                            payload,
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
+                            Use the `opentelemetry_filter` system variable."
+                                .to_string(),
                         )
-                        .await
                     }
                 }),
             )
             .route(
                 "/api/stderr/config",
                 routing::put({
-                    move |payload| async move {
-                        mz_http_util::handle_reload_tracing_filter(
-                            &tracing_handle,
-                            TracingHandle::reload_stderr_log_filter,
-                            payload,
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
+                            Use the `log_filter` system variable."
+                                .to_string(),
                         )
-                        .await
                     }
                 }),
             )

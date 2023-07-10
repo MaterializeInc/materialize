@@ -86,6 +86,7 @@ use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use mz_ore::now::NowFn;
+use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
@@ -160,6 +161,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         connection_context: ConnectionContext,
         instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -225,6 +227,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             internal_cmd_tx: command_sequencer,
             async_worker,
             dataflow_parameters: Default::default(),
+            tracing_handle,
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -308,6 +311,9 @@ pub struct StorageState {
 
     /// Dynamically configurable parameters that control how dataflows are rendered.
     pub dataflow_parameters: DataflowParameters,
+
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
 }
 
 /// Extra context for a storage instance.
@@ -1137,6 +1143,12 @@ impl StorageState {
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
                 params.persist.apply(self.persist_clients.cfg());
+                params.tracing.apply(self.tracing_handle.as_ref());
+
+                if let Some(log_filter) = &params.tracing.log_filter {
+                    self.connection_context.librdkafka_log_level =
+                        mz_ore::tracing::crate_level(&log_filter.clone().into(), "librdkafka");
+                }
 
                 // This needs to be broadcast by one worker and go through
                 // the internal command fabric, to ensure consistent
