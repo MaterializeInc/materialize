@@ -5,7 +5,7 @@ presents to the protocol layers (pgwire and HTTP). In general, the
 concepts exposed by the coordinator API are close to native
 pgwire concepts (prepare, bind, execute, and so on), but there is not
 a 1-to-1 correspondence, and so this document is not simply a
-restatement of the Postgres protocol documentation.
+restatement of the [Postgres protocol documentation][pgwire].
 
 ## The Adapter Client
 
@@ -68,12 +68,15 @@ documentation.
 Note that these concepts are not only exposed by the controller
 interface, but also at a higher level, to the end-user, in SQL. For
 example, the user may bind the statement `SELECT * FROM t` to the
-portal `c` by executing the SQL `DECLARE c CURSOR for SELECT * FROM t`,
-and may later execute this portal using the SQL `FETCH FORWARD ALL FROM c`.
-It's important to note that these statements are distinct from the ones
-they reference; for example, the statement `DECLARE c CURSOR for SELECT * FROM t`
-must itself be prepared, bound to a portal (distinct from the portal
-`c`), and executed.
+portal `c` by executing the SQL `DECLARE c CURSOR for SELECT * FROM
+t`, and may later execute this portal using the SQL `FETCH FORWARD ALL
+FROM c`.  Alternatively, the user may make that statement into a
+prepared statement named `ps` by executing `PREPARE ps AS SELECT *
+FROM t`, and later execute it with `EXECUTE ps`.  It's important to
+note that these statements are distinct from the ones they reference;
+for example, the statement `DECLARE c CURSOR for SELECT * FROM t` must
+itself be prepared, bound to a portal (distinct from the portal `c`),
+and executed.
 
 ## Communication Flow
 
@@ -241,3 +244,4 @@ carries no additional information and requires no response.
 [createdsource]: https://github.com/MaterializeInc/materialize/blob/0495d6272f/src/adapter/src/command.rs#L315-L315
 [statement]: https://github.com/MaterializeInc/materialize/blob/0495d6272f/src/sql-parser/src/ast/defs/statement.rs#L42-L100
 [setportal]: https://github.com/MaterializeInc/materialize/blob/0495d6272f/src/adapter/src/session.rs#L526-L563
+[pgwire]: https://www.postgresql.org/docs/15/protocol-flow.html
