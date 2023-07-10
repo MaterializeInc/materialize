@@ -79,3 +79,7 @@
 
 pub mod admin;
 pub mod client;
+
+/// Client id used when connecting to Confluent brokers
+/// as part of Materializes Connect with Confluent partnership agreement.
+pub const CONNECT_WITH_CONFLUENT_CLIENT_ID: &str = "cwc|0014U00002w9losQAA|materialize|";

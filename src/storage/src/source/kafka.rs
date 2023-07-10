@@ -135,6 +135,8 @@ impl SourceRender for KafkaSourceConnection {
             assert!(capabilities.is_empty());
 
             let group_id = self.group_id(config.id);
+            let client_id = self.client_id(config.id);
+
             let KafkaSourceConnection {
                 connection, topic, ..
             } = self;
@@ -183,10 +185,9 @@ impl SourceRender for KafkaSourceConnection {
                         // ensure that librdkafka does not try to perform its own
                         // consumer group balancing, which would wreak havoc with
                         // our careful partition assignment strategy.
-                        "group.id" => group_id.clone(),
-                        // We just use the `group.id` as the `client.id`, for simplicity,
-                        // as we present to kafka as a single consumer.
-                        "client.id" => group_id,
+                        "group.id" => group_id,
+                        // Client id we present to kafka.
+                        "client.id" => client_id,
                     },
                 )
                 .await;

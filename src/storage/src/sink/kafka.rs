@@ -28,6 +28,7 @@ use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{
     BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
 };
+use mz_kafka_util::CONNECT_WITH_CONFLUENT_CLIENT_ID;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -428,6 +429,7 @@ impl KafkaSinkState {
         };
 
         let healthchecker = healthchecker.map(Mutex::new);
+        let client_id = ClientId::new(sink_id);
 
         let producer = halt_on_err(
             &healthchecker,
@@ -469,6 +471,7 @@ impl KafkaSinkState {
                             // big difference.
                             "queue.buffering.max.ms" => format!("{}", 10),
                             "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                            "client.id" => client_id.sink_client_id
                         },
                     )
                     .await
@@ -498,6 +501,7 @@ impl KafkaSinkState {
                         "enable.auto.commit" => "false".into(),
                         "auto.offset.reset" => "earliest".into(),
                         "enable.partition.eof" => "true".into(),
+                        "client.id" => client_id.progress_client_id
                     },
                 )
                 .await,
@@ -915,6 +919,26 @@ impl KafkaSinkState {
             result,
         )
         .await
+    }
+}
+
+struct ClientId {
+    progress_client_id: String,
+    sink_client_id: String,
+}
+
+impl ClientId {
+    fn new(sink_id: &GlobalId) -> Self {
+        let base = if connection.connection.is_confluent() {
+            CONNECT_WITH_CONFLUENT_CLIENT_ID
+        } else {
+            "materaialize-"
+        };
+
+        Self {
+            progress_client_id: format!("{}progress-{}", base, sink_id),
+            sink_client_id: format!("{}{}", base, sink_id),
+        }
     }
 }
 

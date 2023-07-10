@@ -21,6 +21,7 @@ use dec::OrderedDecimal;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::{MirScalarExpr, PartitionId};
+use mz_kafka_util::CONNECT_WITH_CONFLUENT_CLIENT_ID;
 use mz_ore::now::NowFn;
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
@@ -1404,6 +1405,24 @@ pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
 });
 
 impl KafkaSourceConnection {
+    /// Returns the client id the configured source will use.
+    ///
+    /// This has a weird API because `KafkaSourceConnection`'s are created
+    /// _before_ id allocation, so we can't store the id in the object itself.
+    pub fn client_id(&self, source_id: GlobalId) -> String {
+        if self.connection.is_confluent() {
+            format!(
+                "{}{}-{}-{}",
+                CONNECT_WITH_CONFLUENT_CLIENT_ID,
+                self.environment_id,
+                self.connection_id,
+                source_id
+            )
+        } else {
+            self.group_id(source_id)
+        }
+    }
+
     /// Returns the id for the consumer group the configured source will use.
     ///
     /// This has a weird API because `KafkaSourceConnection`'s are created

@@ -438,6 +438,16 @@ impl KafkaConnection {
     fn validate_by_default(&self) -> bool {
         true
     }
+
+    /// Best effort determination if this connection
+    /// is pointed towards Confluent brokers. This method
+    /// may return false negatives but should not return
+    /// any false positives
+    pub fn is_confluent(&self) -> bool {
+        self.brokers
+            .iter()
+            .any(|b| b.address.contains("confluent.cloud"))
+    }
 }
 
 impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
