@@ -9,12 +9,12 @@ menu:
     parent: 'sql-patterns'
 ---
 
-SQL queries can be used as "rules" to evaluate which data in a dataset meet those rules.
-Materialize can automatically update these query results for real-time, rules-based alerting.
-Rule execution use cases can have many thousands of rules, so it's not practical to have a separate query for each rule.
+A rules engine is a powerful way to make decisions based on data.
+With Materialize, you can execute those rules continuously.
 
-Fortunately there is a pattern to address this need without creating zillions of separate views.
-If your rules are simple enough to be expressed as data (i.e. not arbitrary SQL), then you can use lateral joins to implement a rules execution engine.
+Rule execution use cases can have many thousands of rules, so it's sometimes impractical to have a separate SQL view for each one.
+Fortunately there is a pattern to address this need without having to create and manage many separate views.
+If your rules are simple enough to be expressed as data (i.e. not arbitrary SQL), then you can use `LATERAL` joins to implement a rules execution engine.
 
 ## Hands-on Example
 
@@ -47,7 +47,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
     (9, 'Flamingo', 150.6, '["Pink"]'),
     (10, 'Pelican', 180.4, '["White"]');
     ```
-1. Create the `bird_rules` table and create a few rules.
+1. Create the `bird_rules` table and insert a few rules.
     ```sql
     CREATE TABLE bird_rules (
     id INT,
@@ -74,7 +74,7 @@ CREATE VIEW birds_filtered AS
 SELECT r.id AS rule_id, b.name, b.colors, b.wingspan_cm
 FROM
 -- retrieve bird rules
-(SELECT id, starts_with, wingspan_operator, wingspan_cm, colors FROM bird_rules) r,
+(SELECT id, starts_with, wingspan_operator, wingspan_cm, colors FROM bird_rules) AS r,
 -- for each bird rule, find the birds who satisfy it
 LATERAL (
     SELECT *
@@ -101,7 +101,7 @@ LATERAL (
     1688673701670      1         2       Penguin     ["Black","White"]       99.5
     ```
     Notice that the majestic penguin satisfies rule 2. None of the other birds satisfy any of the rules.
-1. In a separate session, insert a new bird that satisfies rule 3, which requires a bird whose first letter is 'R', with a wingspan greater than or equal to 20 centimeters, and whose colors contain "Red".
+1. In a separate session, insert a new bird that satisfies rule 3. Rule 3 requires a bird whose first letter is 'R', with a wingspan greater than or equal to 20 centimeters, and whose colors contain "Red". We will insert a "Really big robin" that satisfies this rule.
     ```sql
     INSERT INTO birds VALUES (11, 'Really big robin', 25.0, '["Red"]');
     ```
