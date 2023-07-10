@@ -15,13 +15,15 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
-from typing import DefaultDict, Optional, Type
+from typing import DefaultDict, List, Optional, Type
 
 import pg8000
 
+from materialize.mzcompose import Composition
 from materialize.parallel_workload.action import (
     Action,
     CancelAction,
+    KillAction,
     ddl_action_list,
     dml_nontrans_action_list,
     read_action_list,
@@ -43,6 +45,7 @@ def run(
     complexity: str,
     scenario: str,
     num_threads: Optional[int],
+    composition: Optional[Composition],
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
@@ -70,11 +73,13 @@ def run(
     conn.autocommit = True
     with conn.cursor() as cur:
         database.create_relations(Executor(rng, cur))
+    conn.close()
 
     workers = []
     threads = []
     for i in range(num_threads):
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
+        weights: List[float]
         if complexity == "ddl":
             weights = [60, 30, 30, 10]
         elif complexity == "dml":
@@ -129,6 +134,23 @@ def run(
         )
         thread.start()
         threads.append(thread)
+    elif scenario == "kill":
+        assert composition, "Kill scenario only works in mzcompose"
+        worker = Worker(
+            worker_rng,
+            [KillAction(worker_rng, database, composition)],
+            [1],
+            end_time,
+            False,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="kill",
+            target=worker.run,
+            args=(host, port, str(database)),
+        )
+        thread.start()
+        threads.append(thread)
     elif scenario == "regression":
         pass
     else:
@@ -160,6 +182,8 @@ def run(
     for thread in threads:
         thread.join()
 
+    conn = pg8000.connect(host=host, port=port, user="materialize")
+    conn.autocommit = True
     with conn.cursor() as cur:
         print(f"Dropping database {database}")
         database.drop(Executor(rng, cur))
@@ -192,7 +216,10 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         "--complexity", default="ddl", type=str, choices=["read", "dml", "ddl"]
     )
     parser.add_argument(
-        "--scenario", default="regression", type=str, choices=["regression", "cancel"]
+        "--scenario",
+        default="regression",
+        type=str,
+        choices=["regression", "cancel", "kill"],
     )
     parser.add_argument(
         "--threads",
@@ -221,6 +248,7 @@ def main() -> int:
         args.complexity,
         args.scenario,
         args.threads,
+        composition=None,  # only works in mzcompose
     )
     return 0
 

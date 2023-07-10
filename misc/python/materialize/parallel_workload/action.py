@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Type
 
 import pg8000
 
+from materialize.mzcompose import Composition
 from materialize.parallel_workload.database import (
     MAX_ROLES,
     MAX_TABLES,
@@ -23,7 +24,7 @@ from materialize.parallel_workload.database import (
     Table,
     View,
 )
-from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.executor import Executor, QueryError
 
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
@@ -41,7 +42,10 @@ class Action:
         raise NotImplementedError
 
     def errors_to_ignore(self) -> List[str]:
-        result = []
+        result = [
+            "permission denied for",
+            "must be owner of",
+        ]
         if self.db.complexity == "ddl":
             result.extend(
                 [
@@ -57,6 +61,14 @@ class Action:
             result.extend(
                 [
                     "canceling statement due to user request",
+                ]
+            )
+        if self.db.scenario == "kill":
+            result.extend(
+                [
+                    "network error",
+                    "Can't create a connection to host",
+                    "Connection refused",
                 ]
             )
         return result
@@ -220,7 +232,6 @@ class DropTableAction(Action):
             table_id = self.rng.randrange(len(self.db.tables))
             table = self.db.tables[table_id]
             query = f"DROP TABLE {table}"
-            # TODO: Cascade
             exe.execute(query)
             del self.db.tables[table_id]
 
@@ -287,7 +298,6 @@ class DropViewAction(Action):
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
                 query = f"DROP VIEW {view}"
-            # TODO: Cascade
             exe.execute(query)
             del self.db.views[view_id]
 
@@ -318,7 +328,6 @@ class DropRoleAction(Action):
             role_id = self.rng.randrange(len(self.db.roles))
             role = self.db.roles[role_id]
             query = f"DROP ROLE {role}"
-            # TODO: Cascade
             exe.execute(query)
             del self.db.roles[role_id]
 
@@ -350,28 +359,59 @@ class RevokePrivilegesAction(Action):
 
 
 class ReconnectAction(Action):
+    def __init__(
+        self,
+        rng: random.Random,
+        db: Database,
+        random_role: bool = True,
+    ):
+        super().__init__(rng, db)
+        self.random_role = random_role
+
     def run(self, exe: Executor) -> None:
         autocommit = exe.cur._c.autocommit
         host = self.db.host
         port = self.db.port
-
         with self.db.lock:
-            user = self.rng.choice(["materialize", str(self.rng.choice(self.db.roles))])
+            if self.random_role and self.db.roles:
+                user = self.rng.choice(
+                    ["materialize", str(self.rng.choice(self.db.roles))]
+                )
+            else:
+                user = "materialize"
 
-            conn = exe.cur._c
+        conn = exe.cur._c
+        try:
             exe.cur.close()
+        except:
+            pass
+        try:
             conn.close()
+        except:
+            pass
 
-            conn = pg8000.connect(
-                host=host, port=port, user=user, database=str(self.db)
-            )
-
-        conn.autocommit = autocommit
-        cur = conn.cursor()
-        exe.cur = cur
-        exe.set_isolation("SERIALIZABLE")
-        cur.execute("SELECT pg_backend_pid()")
-        exe.pg_pid = cur.fetchall()[0][0]
+        while True:
+            try:
+                conn = pg8000.connect(
+                    host=host, port=port, user=user, database=str(self.db)
+                )
+                conn.autocommit = autocommit
+                cur = conn.cursor()
+                exe.cur = cur
+                exe.set_isolation("SERIALIZABLE")
+                cur.execute("SELECT pg_backend_pid()")
+                exe.pg_pid = cur.fetchall()[0][0]
+            except Exception as e:
+                if (
+                    "network error" in str(e)
+                    or "Can't create a connection to host" in str(e)
+                    or "Connection refused" in str(e)
+                ):
+                    time.sleep(1)
+                    continue
+                raise QueryError(str(e), "connect")
+            else:
+                break
 
 
 class CancelAction(Action):
@@ -394,9 +434,29 @@ class CancelAction(Action):
         time.sleep(self.rng.uniform(0, 3))
 
 
+class KillAction(Action):
+    composition: Composition
+
+    def __init__(
+        self,
+        rng: random.Random,
+        db: Database,
+        composition: Composition,
+    ):
+        super().__init__(rng, db)
+        self.composition = composition
+
+    def run(self, exe: Executor) -> None:
+        self.composition.kill("materialized")
+        # Otherwise getting failure on "up" locally
+        time.sleep(1)
+        self.composition.up("materialized", detach=True)
+        time.sleep(self.rng.uniform(20, 60))
+
+
 class ActionList:
     action_classes: List[Type[Action]]
-    weights: List[int]
+    weights: List[float]
     autocommit: bool
 
     def __init__(
