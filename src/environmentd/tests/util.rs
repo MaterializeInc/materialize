@@ -238,8 +238,8 @@ impl Config {
         self
     }
 
-    pub fn enable_tracing(mut self, tracing: bool) -> Self {
-        self.enable_tracing = tracing;
+    pub fn with_enable_tracing(mut self, enable_tracing: bool) -> Self {
+        self.enable_tracing = enable_tracing;
         self
     }
 
