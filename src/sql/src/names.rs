@@ -970,6 +970,27 @@ impl ObjectId {
     }
 }
 
+impl fmt::Display for ObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ObjectId::Cluster(cluster_id) => write!(f, "C{cluster_id}"),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                write!(f, "CR{cluster_id}.{replica_id}")
+            }
+            ObjectId::Database(database_id) => write!(f, "D{database_id}"),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                let database_id = match database_spec {
+                    ResolvedDatabaseSpecifier::Ambient => "".to_string(),
+                    ResolvedDatabaseSpecifier::Id(database_id) => format!("{database_id}."),
+                };
+                write!(f, "S{database_id}{schema_spec}")
+            }
+            ObjectId::Role(role_id) => write!(f, "R{role_id}"),
+            ObjectId::Item(item_id) => write!(f, "I{item_id}"),
+        }
+    }
+}
+
 impl TryFrom<ResolvedObjectName> for ObjectId {
     type Error = anyhow::Error;
 
