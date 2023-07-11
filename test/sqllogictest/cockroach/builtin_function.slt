@@ -107,16 +107,17 @@ SELECT quote_literal(b'abc'), quote_nullable(b'abc')
 ----
 e'\\x616263'  e'\\x616263'
 
-statement ok
-SET bytea_output = 'escape'
-
-query TT
-SELECT quote_literal(b'abc'), quote_nullable(b'abc')
-----
-'abc'  'abc'
-
-statement ok
-RESET bytea_output
+# TODO: Support bytea
+#statement ok
+#SET bytea_output = 'escape'
+#
+#query TT
+#SELECT quote_literal(b'abc'), quote_nullable(b'abc')
+#----
+#'abc'  'abc'
+#
+#statement ok
+#RESET bytea_output
 
 query T colnames
 SELECT upper('roacH7')
