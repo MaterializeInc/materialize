@@ -1228,7 +1228,7 @@ where
             let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
             if !retain {
                 info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
-                // We don't track writer expiration metrics yet.
+                metrics.writers_expired += 1;
             }
             retain
         });
@@ -1398,6 +1398,7 @@ pub struct StateSizeMetrics {
 #[derive(Default)]
 pub struct ExpiryMetrics {
     pub(crate) readers_expired: usize,
+    pub(crate) writers_expired: usize,
 }
 
 /// Wrapper for Antichain that represents a Since

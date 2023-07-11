@@ -1042,6 +1042,8 @@ pub struct StateMetrics {
     pub(crate) rollup_at_seqno_migration: IntCounter,
     pub(crate) fetch_recent_live_diffs_fast_path: IntCounter,
     pub(crate) fetch_recent_live_diffs_slow_path: IntCounter,
+    pub(crate) writer_added: IntCounter,
+    pub(crate) writer_removed: IntCounter,
 }
 
 impl StateMetrics {
@@ -1094,6 +1096,14 @@ impl StateMetrics {
             fetch_recent_live_diffs_slow_path: registry.register(metric!(
                 name: "mz_persist_state_fetch_recent_live_diffs_slow_path",
                 help: "count of fetch_recent_live_diffs that hit the slow path",
+            )),
+            writer_added: registry.register(metric!(
+                name: "mz_persist_state_writer_added",
+                help: "count of writers added to the state",
+            )),
+            writer_removed: registry.register(metric!(
+                name: "mz_persist_state_writer_removed",
+                help: "count of writers removed from the state",
             )),
         }
     }

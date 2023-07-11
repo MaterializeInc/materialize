@@ -382,6 +382,11 @@ where
                     .timeout_read
                     .inc_by(u64::cast_from(expiry_metrics.readers_expired));
 
+                metrics
+                    .state
+                    .writer_removed
+                    .inc_by(u64::cast_from(expiry_metrics.writers_expired));
+
                 if let Some(gc) = garbage_collection.as_ref() {
                     debug!("Assigned gc request: {:?}", gc);
                 }
