@@ -27,7 +27,6 @@ use mz_audit_log::{
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::protocol::command::ComputeParameters;
 use mz_controller::clusters::{
     ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
@@ -36,11 +35,9 @@ use mz_controller::clusters::{
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::soft_assert;
-use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -83,14 +80,12 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::types::parameters::StorageParameters;
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
 use mz_storage_client::types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
-use mz_tracing::params::TracingParameters;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -7606,104 +7601,6 @@ impl Catalog {
 
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
-    }
-
-    /// Return the current compute configuration, derived from the system configuration.
-    pub fn compute_config(&self) -> ComputeParameters {
-        let config = self.system_config();
-        ComputeParameters {
-            max_result_size: Some(config.max_result_size()),
-            dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
-            enable_mz_join_core: Some(config.enable_mz_join_core()),
-            persist: self.persist_config(),
-            tracing: self.tracing_config(),
-        }
-    }
-
-    /// Return the current storage configuration, derived from the system configuration.
-    pub fn storage_config(&self) -> StorageParameters {
-        StorageParameters {
-            persist: self.persist_config(),
-            pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
-                connect_timeout: Some(self.system_config().pg_replication_connect_timeout()),
-                keepalives_retries: Some(self.system_config().pg_replication_keepalives_retries()),
-                keepalives_idle: Some(self.system_config().pg_replication_keepalives_idle()),
-                keepalives_interval: Some(
-                    self.system_config().pg_replication_keepalives_interval(),
-                ),
-                tcp_user_timeout: Some(self.system_config().pg_replication_tcp_user_timeout()),
-            },
-            keep_n_source_status_history_entries: self
-                .system_config()
-                .keep_n_source_status_history_entries(),
-            keep_n_sink_status_history_entries: self
-                .system_config()
-                .keep_n_source_status_history_entries(),
-            upsert_rocksdb_tuning_config: {
-                match mz_rocksdb_types::RocksDBTuningParameters::from_parameters(
-                    self.system_config().upsert_rocksdb_compaction_style(),
-                    self.system_config()
-                        .upsert_rocksdb_optimize_compaction_memtable_budget(),
-                    self.system_config()
-                        .upsert_rocksdb_level_compaction_dynamic_level_bytes(),
-                    self.system_config()
-                        .upsert_rocksdb_universal_compaction_ratio(),
-                    self.system_config().upsert_rocksdb_parallelism(),
-                    self.system_config().upsert_rocksdb_compression_type(),
-                    self.system_config()
-                        .upsert_rocksdb_bottommost_compression_type(),
-                    self.system_config().upsert_rocksdb_batch_size(),
-                    self.system_config().upsert_rocksdb_retry_duration(),
-                ) {
-                    Ok(u) => u,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to deserialize upsert_rocksdb parameters \
-                            into a `RocksDBTuningParameters`, \
-                            failing back to reasonable defaults: {}",
-                            e.display_with_causes()
-                        );
-                        mz_rocksdb_types::RocksDBTuningParameters::default()
-                    }
-                }
-            },
-            finalize_shards: self.system_config().enable_storage_shard_finalization(),
-            tracing: self.tracing_config(),
-        }
-    }
-
-    pub fn tracing_config(&self) -> TracingParameters {
-        let config = self.system_config();
-        TracingParameters {
-            log_filter: Some(config.logging_filter()),
-            opentelemetry_filter: Some(config.opentelemetry_filter()),
-        }
-    }
-
-    fn persist_config(&self) -> PersistParameters {
-        let config = self.system_config();
-        PersistParameters {
-            blob_target_size: Some(config.persist_blob_target_size()),
-            blob_cache_mem_limit_bytes: Some(config.persist_blob_cache_mem_limit_bytes()),
-            compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
-            consensus_connect_timeout: Some(config.crdb_connect_timeout()),
-            consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
-            sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
-            storage_sink_minimum_batch_updates: Some(
-                config.storage_persist_sink_minimum_batch_updates(),
-            ),
-            next_listen_batch_retryer: Some(RetryParameters {
-                initial_backoff: config.persist_next_listen_batch_retryer_initial_backoff(),
-                multiplier: config.persist_next_listen_batch_retryer_multiplier(),
-                clamp: config.persist_next_listen_batch_retryer_clamp(),
-            }),
-            stats_audit_percent: Some(config.persist_stats_audit_percent()),
-            stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
-            stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
-            pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
-            pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
-            rollup_threshold: Some(config.persist_rollup_threshold()),
-        }
     }
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {

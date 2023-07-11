@@ -49,7 +49,7 @@ use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, AdapterError, AdapterNotice};
+use crate::{catalog, flags, AdapterError, AdapterNotice};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
@@ -662,17 +662,17 @@ impl Coordinator {
     }
 
     fn update_tracing_config(&mut self) {
-        let tracing = self.catalog().tracing_config();
+        let tracing = flags::tracing_config(self.catalog().system_config());
         tracing.apply(&self.tracing_handle);
     }
 
     fn update_compute_config(&mut self) {
-        let config_params = self.catalog().compute_config();
+        let config_params = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(config_params);
     }
 
     fn update_storage_config(&mut self) {
-        let config_params = self.catalog().storage_config();
+        let config_params = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(config_params);
     }
 

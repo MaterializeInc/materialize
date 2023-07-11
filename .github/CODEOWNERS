@@ -19,6 +19,7 @@
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
 /src/adapter                        @MaterializeInc/surfaces
+/src/adapter/src/flags.rs
 /src/alloc                          @benesch
 /src/audit-log                      @MaterializeInc/surfaces
 /src/avro                           @umanwizard
@@ -71,6 +72,7 @@
 /src/segment                        @benesch
 /src/service                        @MaterializeInc/storage @MaterializeInc/compute
 /src/sql                            @MaterializeInc/surfaces
+/src/sql/src/session/vars.rs
 # HirRelationExpr is the boundary between the `sql` crate and the compute
 # layer, and is jointly owned by the two teams.
 /src/sql/src/plan/expr.rs           @MaterializeInc/surfaces @MaterializeInc/compute
