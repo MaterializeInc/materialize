@@ -1694,13 +1694,48 @@ fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
     writeln!(stdout, "{}", crate::util::indent(sql, 4))
 }
 
+/// Regular expressions for matching error messages that should force a plan failure
+/// in an inconsistent view outcome into a warning if the corresponding query succeeds.
+const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
+    // The following are unfixable errors in indexed views given our
+    // current constraints.
+    "cannot materialize call to",
+    "SHOW commands are not allowed in views",
+    "cannot create view with unstable dependencies",
+    "cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects",
+    "no schema has been selected to create in",
+    r#"system schema '\w+' cannot be modified"#,
+    r#"permission denied for (SCHEMA|CLUSTER) "(\w+\.)?\w+""#,
+    // NOTE(vmarcos): Column ambiguity that could not be eliminated by our
+    // currently implemented syntactic rewrites is considered unfixable.
+    // In addition, if some column cannot be dealt with, e.g., in `ORDER BY`
+    // references, we treat this condition as unfixable as well.
+    r#"column "[\w\?]+" specified more than once"#,
+    r#"column "(\w+\.)?\w+" does not exist"#,
+];
+
 /// Evaluates if the given outcome should be returned directly or if it should
 /// be wrapped as a warning. Note that this function should be used for outcomes
 /// that can be judged in a context-independent manner, i.e., the outcome itself
 /// provides enough information as to whether a warning should be emitted or not.
-fn should_warn(_outcome: &Outcome) -> bool {
-    // TODO: Determine here if a warning should be issued.
-    false
+fn should_warn(outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::InconsistentViewOutcome {
+            query_outcome,
+            view_outcome,
+            ..
+        } => match (query_outcome.as_ref(), view_outcome.as_ref()) {
+            (Outcome::Success, Outcome::PlanFailure { error, .. }) => {
+                INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
+                    Regex::new(s)
+                        .expect("unexpected error in regular expression parsing")
+                        .is_match(&format!("{:#}", error))
+                })
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 pub async fn run_string(
