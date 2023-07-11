@@ -21,7 +21,7 @@ def schemas() -> str:
 
 class Webhook(Check):
     def _can_run(self) -> bool:
-        return self.base_version >= MzVersion.parse("0.59.0-dev")
+        return self.base_version >= MzVersion.parse("0.61.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
