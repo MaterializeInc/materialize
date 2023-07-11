@@ -425,8 +425,8 @@ where
                 ok_arranged = ok_arranged.log_import_frontiers(logger, idx_id, export_ids);
             }
 
-            let ok_arranged = ok_arranged.enter(&self.scope);
-            let err_arranged = err_arranged.enter(&self.scope);
+            let ok_arranged = ok_arranged.enter(&self.scope).into();
+            let err_arranged = err_arranged.enter(&self.scope).into();
 
             self.update_id(
                 Id::Global(idx.on_id),
@@ -497,10 +497,10 @@ where
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 // Set up probes to notify on index frontier advancement.
-                oks.stream.probe_notify_with(probes);
+                oks.stream().probe_notify_with(probes);
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace(), errs.trace()).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -565,14 +565,14 @@ where
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .mz_arrange("Arrange export iterative");
-                oks.stream.probe_notify_with(probes);
+                oks.stream().probe_notify_with(probes);
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .mz_arrange("Arrange export iterative err");
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace(), errs.trace()).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {

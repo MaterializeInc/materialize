@@ -24,7 +24,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{ArrangementSize, MzArrange, MzArranged};
 use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };
@@ -298,8 +298,8 @@ where
 /// `None` if we can determine that `closure` cannot error.
 fn differential_join_inner<G, T, Tr1, Tr2>(
     join_impl: LinearJoinImpl,
-    prev_keyed: Arranged<G, Tr1>,
-    next_input: Arranged<G, Tr2>,
+    prev_keyed: MzArranged<G, Tr1>,
+    next_input: MzArranged<G, Tr2>,
     closure: JoinClosure,
 ) -> (
     Collection<G, Row, Diff>,
@@ -311,10 +311,15 @@ where
     T: Timestamp + Lattice,
     Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
     Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    MzArranged<G, Tr1>: ArrangementSize,
+    MzArranged<G, Tr2>: ArrangementSize,
 {
     // Reuseable allocation for unpacking.
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
+
+    let prev_keyed = unsafe { prev_keyed.inner() };
+    let next_input = unsafe { next_input.inner() };
 
     if closure.could_error() {
         let (oks, err) = join_impl
