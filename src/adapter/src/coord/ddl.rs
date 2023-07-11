@@ -19,9 +19,11 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLocation};
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
@@ -251,7 +253,13 @@ impl Coordinator {
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
-                peeks_to_drop.push((name.to_string(), uuid.clone()));
+                peeks_to_drop.push((
+                    format!("relation {}", name.to_string().quoted()),
+                    uuid.clone(),
+                ));
+            } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
+                let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
+                peeks_to_drop.push((format!("cluster {}", name.quoted()), uuid.clone()));
             }
         }
 

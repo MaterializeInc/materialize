@@ -2337,12 +2337,11 @@ fn test_coord_startup_blocking() {
 }
 
 #[mz_ore::test]
-fn test_cancel_on_dropped_cluster() {
+fn test_peek_on_dropped_cluster() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
 
     let mut read_client = server.connect(postgres::NoTls).unwrap();
-    let read_client_cancel = read_client.cancel_token();
     read_client.batch_execute("CREATE TABLE t ()").unwrap();
 
     let handle = thread::spawn(move || {
@@ -2350,11 +2349,16 @@ fn test_cancel_on_dropped_cluster() {
         let res = read_client.query_one("SELECT * FROM t AS OF 18446744073709551615", &[]);
         assert!(res.is_err(), "cancelled query should return error");
         let err = res.unwrap_err().unwrap_db_error();
+        //TODO(jkosh44) This isn't actually an internal error but we often incorrectly give back internal errors.
         assert_eq!(
             err.code(),
-            &SqlState::QUERY_CANCELED,
-            "error code should match QUERY_CANCELED"
+            &SqlState::INTERNAL_ERROR,
+            "error code should match INTERNAL_ERROR"
         );
+        assert!(err
+            .message()
+            .contains("query could not complete because cluster \"default\" was dropped"),
+                "error message should contain 'query could not complete because cluster \"default\" was dropped'");
     });
 
     // Wait for asynchronous query to start.
@@ -2374,10 +2378,10 @@ fn test_cancel_on_dropped_cluster() {
         })
         .unwrap();
 
-    // Drop cluster that query is running on.
+    // Drop cluster that query is running on, and table that query is selecting from.
     let mut drop_client = server.connect(postgres::NoTls).unwrap();
-    drop_client.batch_execute("DROP CLUSTER default").unwrap();
-    read_client_cancel.cancel_query(postgres::NoTls).unwrap();
+    drop_client.batch_execute("DROP CLUSTER default;").unwrap();
+    drop_client.batch_execute("DROP TABLE t;").unwrap();
     handle.join().unwrap();
 }
 
