@@ -35,7 +35,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
 use serde::{Deserialize, Serialize};
-use tokio::time;
+use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -49,6 +49,8 @@ pub async fn handle_sql(
     let mut res = SqlResponse {
         results: Vec::new(),
     };
+    // Don't need to worry about timeouts or resetting cancel here because there is always exactly 1
+    // request.
     match execute_request(&mut client, request, &mut res).await {
         Ok(()) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
@@ -138,7 +140,28 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
     }
 
     loop {
-        let msg = match ws.recv().await {
+        // Handle timeouts first so we don't execute any statements when there's a pending timeout.
+        let msg = select! {
+            biased;
+
+            // `recv_timeout()` is cancel-safe as per it's docs.
+            Some(timeout) = client.client.recv_timeout() => {
+                client.client.terminate().await;
+                // We must wait for the client to send a request before we can send the error
+                // response. Although this isn't the PG wire protocol, we choose to mirror it by
+                // only sending errors as responses to requests.
+                let _ = ws.recv().await;
+                let err = AdapterError::from(timeout);
+                let _ = send_ws_response(&mut ws, WebSocketResponse::Error(err.into())).await;
+                return;
+            },
+            message = ws.recv() => message,
+        };
+
+        client.client.remove_idle_in_transaction_session_timeout();
+        client.client.reset_canceled();
+
+        let msg = match msg {
             Some(Ok(msg)) => msg,
             _ => {
                 // client disconnected
@@ -831,16 +854,21 @@ async fn execute_request<S: ResultSender>(
     }
 
     for stmt_group in stmt_groups {
-        if execute_stmt_group(client, sender, stmt_group)
-            .await?
-            .is_err()
-        {
+        let executed = execute_stmt_group(client, sender, stmt_group).await;
+        // At the end of each group, commit implicit transactions. Do that here so that any `?`
+        // early return can still be handled here.
+        if client.session().transaction().is_implicit() {
+            let ended = client.end_transaction(EndTransactionAction::Commit).await;
+            if let Err(err) = ended {
+                let err = SqlResult::err(client, err);
+                let _ = sender
+                    .add_result(|| client.canceled(), StatementResult::SqlResult(err))
+                    .await?;
+            }
+        }
+        if executed?.is_err() {
             break;
         }
-    }
-
-    if client.session().transaction().is_implicit() {
-        client.end_transaction(EndTransactionAction::Commit).await?;
     }
 
     Ok(())
