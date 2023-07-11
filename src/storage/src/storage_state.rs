@@ -723,10 +723,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 source_resume_uppers,
             } => {
                 info!(
-                    "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
+                    ?as_of,
+                    ?resume_uppers,
+                    "worker {}/{} trying to (re-)start ingestion {ingestion_id}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
-                    as_of
                 );
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {

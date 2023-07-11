@@ -177,7 +177,7 @@ def workflow_rehydration(c: Composition) -> None:
                 options=[
                     "--scratch-directory=/scratch",
                 ],
-            )
+            ),
         ),
         (
             "without DISK",

@@ -310,8 +310,41 @@ where
         );
         let mut events = vec![];
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
+
+        let mut stash = vec![];
+        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
-            match previous.next_mut().await {
+            let previous_event = tokio::select! {
+                // Note that these are both cancel-safe. The reason we drain the `input` is to
+                // ensure the `output_frontier` (and therefore flow control on `previous`) make
+                // progress.
+                previous_event = previous.next_mut() => {
+                    previous_event
+                }
+                input_event = input.next_mut() => {
+                    match input_event {
+                        Some(AsyncEvent::Data(_cap, data)) => {
+                            if PartialOrder::less_equal(&input_upper, &resume_upper) {
+                                data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
+                            }
+
+                            stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+                                assert!(diff > 0, "invalid upsert input");
+                                (time, key, Reverse(order), value)
+                            }));
+                        }
+                        Some(AsyncEvent::Progress(upper)) => {
+                            input_upper = upper;
+                        }
+                        None => {
+                            input_upper = Antichain::new();
+                        }
+                    }
+                    continue;
+                }
+            };
+            match previous_event {
                 Some(AsyncEvent::Data(_cap, data)) => {
                     events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
                         if !resume_upper.less_equal(&ts) {
@@ -352,7 +385,12 @@ where
             {
                 Ok(_) => {
                     if let Some(ts) = snapshot_upper.clone().into_option() {
-                        output_cap.downgrade(&ts);
+                        // As we shutdown, we could ostensibly get data from later than the
+                        // `resume_upper`, which we ignore above. We don't want our output capability to make
+                        // it further than the `resume_upper`.
+                        if !resume_upper.less_equal(&ts) {
+                            output_cap.downgrade(&ts);
+                        }
                     }
                 }
                 Err(e) => {
@@ -370,9 +408,16 @@ where
         drop(events);
 
         drop(previous_token);
-        while let Some(_event) = previous.next().await {
-            // Exchaust the previous input. It is expected to immediately reach the empty
-            // antichain since we have dropped its token.
+        // Exchaust the previous input. It is expected to immediately reach the empty
+        // antichain since we have dropped its token.
+        //
+        // Note that we do not need to also process the `input` during this, as the dropped token
+        // will shutdown the `backpressure` operator
+        while let Some(_event) = previous.next().await {}
+
+        // After snapshotting, our output frontier is exactly the `resume_upper`
+        if let Some(ts) = resume_upper.as_option() {
+            output_cap.downgrade(ts);
         }
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
@@ -382,10 +427,18 @@ where
         let mut multi_get_scratch = Vec::new();
 
         // Now can can resume consuming the collection
-        let mut stash = vec![];
         let mut output_updates = vec![];
-        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
-        while let Some(event) = input.next_mut().await {
+        let mut post_snapshot = true;
+        while let Some(event) = {
+            // Synthesize a `Progress` event that allows us to drain the `stash` of values
+            // obtained during snapshotting.
+            if post_snapshot {
+                post_snapshot = false;
+                Some(AsyncEvent::Progress(input_upper.clone()))
+            } else {
+                input.next_mut().await
+            }
+        } {
             match event {
                 AsyncEvent::Data(_cap, data) => {
                     if PartialOrder::less_equal(&input_upper, &resume_upper) {
@@ -398,6 +451,11 @@ where
                     }));
                 }
                 AsyncEvent::Progress(upper) => {
+                    // Ignore progress updates before the `resume_upper`, which is our initial
+                    // capability post-snapshotting.
+                    if PartialOrder::less_than(&upper, &resume_upper) {
+                        continue;
+                    }
                     stash.sort_unstable();
 
                     // Find the prefix that we can emit
