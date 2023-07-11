@@ -236,3 +236,35 @@ Unfortunately, this record does not pass the filter and is excluded from process
 
 All this to say, if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
 This is often referred to as a **grace period**.
+
+## Temporal filter pushdown
+
+{{< alpha />}}
+
+All of the queries in the previous examples only return results based on recently-added events.
+Materialize can "push down" filters that match this pattern all the way down to its storage layer, skipping over old data that’s not relevant to the query.
+Here are the key benefits of this optimization:
+- For ad-hoc `SELECT` queries, temporal filter pushdown can substantially improve query latency.
+- When a materialized view is created or its cluster restarts, temporal filter pushdown can substantially reduce the time it takes to start serving results.
+
+The columns filtered should correlate with the insertion or update time of the row.
+In the examples above, the `event_ts` value in each event correlates with the time the event was inserted, so filters that reference these columns should be pushed down to the storage layer.
+However, the values in the `content` column are not correlated with insertion time in any way, so filters against `content` will probably not be pushed down to the storage layer.
+
+Temporal filters that consist of arithmetic, date math, and comparisons are eligible for pushdown, including all the examples in this page.
+However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](../../../sql/explain/#output-modifiers) to `EXPLAIN`. For example:
+
+```sql
+EXPLAIN WITH(filter_pushdown)
+SELECT count(*)
+FROM events
+WHERE mz_now() <= event_ts + INTERVAL '30s';
+----
+Explained Query:
+[...]
+Source materialize.public.events
+  filter=((mz_now() <= timestamp_to_mz_timestamp((#1 + 00:00:30))))
+  pushdown=((mz_now() <= timestamp_to_mz_timestamp((#1 + 00:00:30))))
+```
+
+The filter in our query appears in the `pushdown=` list at the bottom of the output, so our filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
