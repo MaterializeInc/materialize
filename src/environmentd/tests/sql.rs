@@ -2357,7 +2357,7 @@ fn test_peek_on_dropped_cluster() {
         );
         assert!(err
             .message()
-            .contains("query could not complete because cluster \"default\" was dropped"), 
+            .contains("query could not complete because cluster \"default\" was dropped"),
                 "error message should contain 'query could not complete because cluster \"default\" was dropped'");
     });
 
