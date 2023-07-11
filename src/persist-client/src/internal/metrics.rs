@@ -1132,6 +1132,7 @@ pub struct ShardsMetrics {
     pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
+    live_writers: mz_ore::metrics::UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1289,6 +1290,11 @@ impl ShardsMetrics {
                 help: "number of Blob::set calls for this shard",
                 var_labels: ["shard", "name"],
             )),
+            live_writers: registry.register(metric!(
+                name: "mz_persist_shard_live_writers",
+                help: "number of writers that have recently appended updates to this shard",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1360,6 +1366,7 @@ pub struct ShardMetrics {
         DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1447,7 +1454,10 @@ impl ShardMetrics {
                 .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             blob_sets: shards_metrics
                 .blob_sets
-                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            live_writers: shards_metrics
+                .live_writers
+                .get_delete_on_drop_gauge(vec![shard, name.to_string()]),
         }
     }
 
