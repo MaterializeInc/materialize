@@ -359,10 +359,12 @@ where
             .retries
             .compare_and_append_idempotent
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        let mut writer_was_present = false;
         loop {
             let cmd_res = self
                 .applier
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
+                    writer_was_present = state.writers.contains_key(writer_id);
                     state.compare_and_append(
                         batch,
                         writer_id,
@@ -408,6 +410,10 @@ where
                         compaction: compact_reqs,
                     };
 
+                    if !writer_was_present {
+                        metrics.state.writer_added.inc();
+                    }
+
                     // Slightly unfortunate: as the only non-apply_unbatched_idempotent_cmd user,
                     // compare_and_append has to have its own check for maybe_become_tombstone.
                     if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
@@ -421,6 +427,9 @@ where
                     // and pass along the good news.
                     assert!(indeterminate.is_some());
                     self.applier.metrics.cmds.compare_and_append_noop.inc();
+                    if !writer_was_present {
+                        metrics.state.writer_added.inc();
+                    }
                     return Ok(Ok((seqno, WriterMaintenance::default())));
                 }
                 Err(CompareAndAppendBreak::InvalidUsage(err)) => {
@@ -627,6 +636,7 @@ where
                 state.expire_writer(writer_id)
             })
             .await;
+        metrics.state.writer_removed.inc();
         (seqno, maintenance)
     }
 
