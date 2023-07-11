@@ -6545,7 +6545,8 @@ impl<'a> Parser<'a> {
             .map_parser_err(StatementKind::Declare)?;
         self.expect_keyword(CURSOR)
             .map_parser_err(StatementKind::Declare)?;
-        if self.peek_keywords(&[WITH, HOLD]) {
+        if self.parse_keyword(WITH) {
+            self.expect_keyword(HOLD)?;
             return parser_err!(
                 self,
                 self.peek_pos(),
