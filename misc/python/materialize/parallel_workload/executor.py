@@ -61,15 +61,18 @@ class Executor:
         except Exception as e:
             raise QueryError(str(e), "rollback")
 
-    def execute(self, query: str, explainable: bool = False) -> None:
+    def execute(
+        self, query: str, extra_info: str = "", explainable: bool = False
+    ) -> None:
         global log, lock
         if explainable and self.rng.choice([True, False]):
             query = f"EXPLAIN {query}"
         query += ";"
         thread_name = threading.current_thread().getName()
+        extra_info_str = f" ({extra_info})" if extra_info else ""
         if log:
             with lock:
-                print(f"[{thread_name}] {query}", file=log)
+                print(f"[{thread_name}] {query}{extra_info_str}", file=log)
                 log.flush()
         try:
             self.cur.execute(query)

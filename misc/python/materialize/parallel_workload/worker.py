@@ -26,6 +26,7 @@ class Worker:
     end_time: float
     num_queries: int
     autocommit: bool
+    system: bool
     exe: Optional[Executor]
     ignored_errors: DefaultDict[str, Counter[Type[Action]]]
 
@@ -36,6 +37,7 @@ class Worker:
         weights: List[float],
         end_time: float,
         autocommit: bool,
+        system: bool,
     ):
         self.rng = rng
         self.actions = actions
@@ -43,13 +45,12 @@ class Worker:
         self.end_time = end_time
         self.num_queries = 0
         self.autocommit = autocommit
+        self.system = system
         self.ignored_errors = defaultdict(Counter)
         self.exe = None
 
-    def run(self, host: str, port: int, database: str) -> None:
-        self.conn = pg8000.connect(
-            host=host, port=port, user="materialize", database=database
-        )
+    def run(self, host: str, port: int, user: str, database: str) -> None:
+        self.conn = pg8000.connect(host=host, port=port, user=user, database=database)
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
         self.exe = Executor(self.rng, cur)

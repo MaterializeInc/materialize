@@ -26,6 +26,7 @@ from materialize.parallel_workload.action import (
     KillAction,
     ddl_action_list,
     dml_nontrans_action_list,
+    fetch_action_list,
     read_action_list,
     write_action_list,
 )
@@ -40,6 +41,7 @@ REPORT_TIME = 10
 def run(
     host: str,
     port: int,
+    system_port: int,
     seed: str,
     runtime: int,
     complexity: str,
@@ -60,7 +62,7 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    database = Database(rng, seed, host, port, complexity, scenario)
+    database = Database(rng, seed, host, port, system_port, complexity, scenario)
     conn = pg8000.connect(host=host, port=port, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -81,16 +83,17 @@ def run(
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         weights: List[float]
         if complexity == "ddl":
-            weights = [60, 30, 30, 10]
+            weights = [60, 30, 30, 30, 10]
         elif complexity == "dml":
-            weights = [60, 30, 30, 0]
+            weights = [60, 30, 30, 30, 0]
         elif complexity == "read":
-            weights = [60, 0, 0, 0]
+            weights = [60, 30, 0, 0, 0]
         else:
             raise ValueError(f"Unknown complexity {complexity}")
         action_list = worker_rng.choices(
             [
                 read_action_list,
+                fetch_action_list,
                 write_action_list,
                 dml_nontrans_action_list,
                 ddl_action_list,
@@ -102,7 +105,12 @@ def run(
             for action_class in action_list.action_classes
         ]
         worker = Worker(
-            worker_rng, actions, action_list.weights, end_time, action_list.autocommit
+            worker_rng,
+            actions,
+            action_list.weights,
+            end_time,
+            action_list.autocommit,
+            system=False,
         )
         thread_name = f"worker_{i}"
         print(
@@ -113,7 +121,7 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, port, str(database)),
+            args=(host, port, "materialize", str(database)),
         )
         thread.start()
         threads.append(thread)
@@ -124,13 +132,14 @@ def run(
             [CancelAction(worker_rng, database, workers)],
             [1],
             end_time,
-            False,
+            autocommit=False,
+            system=True,
         )
         workers.append(worker)
         thread = threading.Thread(
             name="cancel",
             target=worker.run,
-            args=(host, port, str(database)),
+            args=(host, system_port, "mz_system", str(database)),
         )
         thread.start()
         threads.append(thread)
@@ -141,13 +150,14 @@ def run(
             [KillAction(worker_rng, database, composition)],
             [1],
             end_time,
-            False,
+            autocommit=False,
+            system=False,
         )
         workers.append(worker)
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, port, str(database)),
+            args=(host, port, "materialize", str(database)),
         )
         thread.start()
         threads.append(thread)
@@ -247,11 +257,37 @@ def main() -> int:
     )
     system_conn.autocommit = True
     with system_conn.cursor() as cur:
+        # TODO: Shuffle settings which should always work
         cur.execute("ALTER SYSTEM SET enable_managed_clusters = true")
+        cur.execute("ALTER SYSTEM SET enable_rbac_checks = true")
+        cur.execute("ALTER SYSTEM SET enable_ld_rbac_checks = true")
+        cur.execute("ALTER SYSTEM SET persist_sink_minimum_batch_updates = 128")
+        cur.execute("ALTER SYSTEM SET enable_multi_worker_storage_persist_sink = true")
+        cur.execute("ALTER SYSTEM SET storage_persist_sink_minimum_batch_updates = 100")
+        cur.execute("ALTER SYSTEM SET persist_pubsub_push_diff_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_pubsub_client_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_stats_filter_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_stats_collection_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_stats_audit_percent = 100")
+        cur.execute("ALTER SYSTEM SET enable_monotonic_oneshot_selects = true")
+        cur.execute(
+            "ALTER SYSTEM SET persist_next_listen_batch_retryer_clamp = '100ms'"
+        )
+        cur.execute(
+            "ALTER SYSTEM SET persist_next_listen_batch_retryer_initial_backoff = '1200ms'"
+        )
+        cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
+        cur.execute("ALTER SYSTEM SET max_tables = 105")
+        cur.execute("ALTER SYSTEM SET max_materialized_views = 105")
+        cur.execute("ALTER SYSTEM SET max_sources = 105")
+        cur.execute("ALTER SYSTEM SET max_roles = 105")
+        cur.execute("ALTER SYSTEM SET max_clusters = 105")
+        cur.execute("ALTER SYSTEM SET max_replicas_per_cluster = 105")
 
     run(
         args.host,
         args.port,
+        args.system_port,
         args.seed,
         args.runtime,
         args.complexity,

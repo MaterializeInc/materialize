@@ -33,6 +33,10 @@ from materialize.parallel_workload.executor import Executor, QueryError
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
 
+# TODO: In kill scenario drops can be successful, but we might never know, see
+# https://github.com/MaterializeInc/materialize/issues/20465 We should handle
+# this by rescanning objects we expect to be there and removing the ones that
+# were dropped. This also has the risk that objects get lost as a bug though.
 
 # TODO: CASCADE in DROPs, keep track of what will be deleted
 class Action:
@@ -78,6 +82,35 @@ class Action:
                 ]
             )
         return result
+
+
+class FetchAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        result = super().errors_to_ignore()
+        if self.db.complexity == "ddl":
+            result.extend(
+                [
+                    "does not exist",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> None:
+        tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
+        table = self.rng.choice(tables_views)
+        # See https://github.com/MaterializeInc/materialize/issues/20474
+        exe.rollback() if self.rng.choice([True, False]) else exe.commit()
+        query = f"DECLARE c CURSOR FOR SUBSCRIBE {table}"
+        exe.execute(query)
+        while True:
+            rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
+            timeout = self.rng.randrange(10)
+            query = f"FETCH {rows} c WITH (timeout='{timeout}s')"
+            exe.execute(query)
+            exe.cur.fetchall()
+            if self.rng.choice([True, False]):
+                break
+        exe.rollback() if self.rng.choice([True, False]) else exe.commit()
 
 
 class SelectAction(Action):
@@ -133,6 +166,8 @@ class InsertAction(Action):
                 if t.table_id == exe.insert_table:
                     table = t
                     break
+            else:
+                exe.commit() if self.rng.choice([True, False]) else exe.rollback()
         if not table:
             table = self.rng.choice(self.db.tables)
 
@@ -374,9 +409,6 @@ class DropClusterAction(Action):
 
 
 class SetClusterAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [] + super().errors_to_ignore()
-
     def run(self, exe: Executor) -> None:
         with self.db.lock:
             if not self.db.clusters:
@@ -406,9 +438,6 @@ class CreateClusterReplicaAction(Action):
 
 
 class DropClusterReplicaAction(Action):
-    def errors_to_ignore(self) -> List[str]:
-        return [] + super().errors_to_ignore()
-
     def run(self, exe: Executor) -> None:
         with self.db.lock:
             unmanaged_clusters = [c for c in self.db.clusters if not c.managed]
@@ -451,6 +480,7 @@ class RevokePrivilegesAction(Action):
             exe.execute(query)
 
 
+# TODO: Should factor this out so can easily use it without action
 class ReconnectAction(Action):
     def __init__(
         self,
@@ -510,6 +540,11 @@ class ReconnectAction(Action):
 class CancelAction(Action):
     workers: List["Worker"]
 
+    def errors_to_ignore(self) -> List[str]:
+        return [
+            "must be a member of",
+        ] + super().errors_to_ignore()
+
     def __init__(
         self,
         rng: random.Random,
@@ -523,7 +558,16 @@ class CancelAction(Action):
         pid = self.rng.choice(
             [worker.exe.pg_pid for worker in self.workers if worker.exe.pg_pid != -1]  # type: ignore
         )
-        exe.execute(f"SELECT pg_cancel_backend({pid})")
+        worker = None
+        for i in range(len(self.workers)):
+            worker_exe = self.workers[i].exe
+            if worker_exe and worker_exe.pg_pid == pid:
+                worker = f"worker_{i}"
+                break
+        assert worker
+        exe.execute(
+            f"SELECT pg_cancel_backend({pid})", extra_info=f"Canceling {worker}"
+        )
         time.sleep(self.rng.uniform(0, 3))
 
 
@@ -563,8 +607,18 @@ class ActionList:
 read_action_list = ActionList(
     [
         (SelectAction, 100),
+        (FetchAction, 30),
         (SetClusterAction, 50),
         (CommitRollbackAction, 1),
+        (ReconnectAction, 1),
+    ],
+    autocommit=False,
+)
+
+fetch_action_list = ActionList(
+    [
+        (FetchAction, 30),
+        (SetClusterAction, 50),
         (ReconnectAction, 1),
     ],
     autocommit=False,

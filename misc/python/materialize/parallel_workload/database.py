@@ -15,12 +15,12 @@ from typing import List, Optional, Set, Type
 from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor
 
-MAX_COLUMNS = 20
-MAX_CLUSTERS = 8
-MAX_CLUSTER_REPLICAS = 4
-MAX_TABLES = 20
-MAX_VIEWS = 20
-MAX_ROLES = 20
+MAX_COLUMNS = 100
+MAX_CLUSTERS = 100
+MAX_CLUSTER_REPLICAS = 100
+MAX_TABLES = 100
+MAX_VIEWS = 100
+MAX_ROLES = 100
 
 MAX_INITIAL_CLUSTERS = 1
 MAX_INITIAL_TABLES = 10
@@ -179,7 +179,7 @@ class Role(DBObject):
         self.role_id = role_id
 
     def __str__(self) -> str:
-        return f"r{self.role_id}"
+        return f"role{self.role_id}"
 
     def create(self, exe: Executor) -> None:
         exe.execute(f"CREATE ROLE {self}")
@@ -231,7 +231,7 @@ class Cluster(DBObject):
         self.introspection_interval = introspection_interval
 
     def __str__(self) -> str:
-        return f"c{self.cluster_id}"
+        return f"cluster{self.cluster_id}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE CLUSTER {self} "
@@ -252,6 +252,7 @@ class Database:
     scenario: str
     host: str
     port: int
+    system_port: int
     tables: List[Table]
     table_id: int
     views: List[View]
@@ -269,6 +270,7 @@ class Database:
         seed: str,
         host: str,
         port: int,
+        system_port: int,
         complexity: str,
         scenario: str,
     ):

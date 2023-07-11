@@ -13,7 +13,9 @@ from materialize.parallel_workload.parallel_workload import parse_common_args, r
 
 SERVICES = [
     Cockroach(setup_materialize=True),
-    Materialized(external_cockroach=True, restart="on-failure", ports=["6875:6875"]),
+    Materialized(
+        external_cockroach=True, restart="on-failure", ports=["6875:6875", "6877:6877"]
+    ),
 ]
 
 
@@ -26,6 +28,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     run(
         "localhost",
         c.default_port("materialized"),
+        c.port("materialized", 6877),
         args.seed,
         args.runtime,
         args.complexity,
