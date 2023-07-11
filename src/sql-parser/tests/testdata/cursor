@@ -28,6 +28,13 @@ DECLARE c CURSOR FOR SUBSCRIBE t
 Declare(DeclareStatement { name: Ident("c"), stmt: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }) })
 
 parse-statement
+DECLARE c CURSOR WITH HOLD FOR SELECT * FROM t;
+----
+error: WITH HOLD is unsupported for cursors
+DECLARE c CURSOR WITH HOLD FOR SELECT * FROM t;
+                 ^
+
+parse-statement
 CLOSE c
 ----
 CLOSE c
