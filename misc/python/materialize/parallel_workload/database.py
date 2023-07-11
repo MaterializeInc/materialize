@@ -16,10 +16,12 @@ from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor
 
 MAX_COLUMNS = 20
+MAX_CLUSTERS = 8
 MAX_TABLES = 20
 MAX_VIEWS = 20
 MAX_ROLES = 20
 
+MAX_INITIAL_CLUSTERS = 1
 MAX_INITIAL_TABLES = 10
 MAX_INITIAL_VIEWS = 10
 MAX_INITIAL_ROLES = 3
@@ -181,6 +183,43 @@ class Role(DBObject):
         exe.execute(f"CREATE ROLE {self}")
 
 
+class Cluster(DBObject):
+    cluster_id: int
+    managed: bool
+    size: str
+    replication_factor: int
+    introspection_interval: str
+
+    def __init__(
+        self,
+        cluster_id: int,
+        managed: bool,
+        size: str,
+        replication_factor: int,
+        introspection_interval: str,
+    ):
+        self.cluster_id = cluster_id
+        self.managed = managed
+        self.size = size
+        self.replication_factor = replication_factor
+        self.introspection_interval = introspection_interval
+
+    def __str__(self) -> str:
+        return f"c{self.cluster_id}"
+
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE CLUSTER {self} "
+        if self.managed:
+            query += f"SIZE = '{self.size}', REPLICATION FACTOR = {self.replication_factor}, INTROSPECTION INTERVAL = '{self.introspection_interval}'"
+        else:
+            query += "REPLICAS("
+            query += ", ".join(
+                f"cr{i} (SIZE = '{self.size}')" for i in range(self.replication_factor)
+            )
+            query += ")"
+        exe.execute(query)
+
+
 class Database:
     seed: str
     complexity: str
@@ -193,6 +232,8 @@ class Database:
     view_id: int
     roles: List[Role]
     role_id: int
+    clusters: List[Cluster]
+    cluster_id: int
     indexes: Set[str]
     lock: threading.Lock
 
@@ -226,6 +267,17 @@ class Database:
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
         self.role_id = len(self.roles)
+        self.clusters = [
+            Cluster(
+                i,
+                managed=rng.choice([True, False]),
+                size=rng.choice(["1", "2", "4"]),
+                replication_factor=rng.choice([1, 2, 4, 5]),
+                introspection_interval=rng.choice(["0", "1s", "10s"]),
+            )
+            for i in range(rng.randint(0, MAX_INITIAL_CLUSTERS))
+        ]
+        self.cluster_id = len(self.clusters)
         self.indexes = set()
         self.lock = threading.Lock()
 
@@ -240,6 +292,13 @@ class Database:
         exe.execute(f"CREATE DATABASE {self}")
 
     def create_relations(self, exe: Executor) -> None:
+        exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")
+        for row in exe.cur.fetchall():
+            exe.execute(f"DROP CLUSTER {row[0]} CASCADE")
+
+        for cluster in self.clusters:
+            cluster.create(exe)
+
         for table in self.tables:
             table.create(exe)
 

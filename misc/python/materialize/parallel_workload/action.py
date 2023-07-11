@@ -15,9 +15,11 @@ import pg8000
 
 from materialize.mzcompose import Composition
 from materialize.parallel_workload.database import (
+    MAX_CLUSTERS,
     MAX_ROLES,
     MAX_TABLES,
     MAX_VIEWS,
+    Cluster,
     Database,
     DBObject,
     Role,
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
 
 
+# TODO: CASCADE in DROPs, keep track of what will be deleted
 class Action:
     rng: random.Random
     db: Database
@@ -54,7 +57,8 @@ class Action:
                     "violates not-null constraint",
                     "result exceeds max size of",
                     "unknown catalog item",  # Expected, see #20381
-                    "was concurrently dropped",  # role
+                    "was concurrently dropped",  # role was dropped
+                    "unknown cluster",  # cluster was dropped
                 ]
             )
         if self.db.scenario == "cancel":
@@ -332,6 +336,54 @@ class DropRoleAction(Action):
             del self.db.roles[role_id]
 
 
+class CreateClusterAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.clusters) > MAX_CLUSTERS:
+                return
+            cluster_id = self.db.cluster_id
+            self.db.cluster_id += 1
+            cluster = Cluster(
+                cluster_id,
+                managed=self.rng.choice([True, False]),
+                size=self.rng.choice(["1", "2", "4"]),
+                replication_factor=self.rng.choice([1, 2, 4, 5]),
+                introspection_interval=self.rng.choice(["0", "1s", "10s"]),
+            )
+            cluster.create(exe)
+            self.db.clusters.append(cluster)
+
+
+class DropClusterAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [
+            "cannot drop cluster with active objects",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.clusters:
+                return
+            cluster_id = self.rng.randrange(len(self.db.clusters))
+            cluster = self.db.clusters[cluster_id]
+            query = f"DROP CLUSTER {cluster}"
+            exe.execute(query)
+            del self.db.clusters[cluster_id]
+
+
+class SetClusterAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.clusters:
+                return
+            cluster = self.rng.choice(self.db.clusters)
+            query = f"SET CLUSTER = {cluster}"
+            exe.execute(query)
+
+
 class GrantPrivilegesAction(Action):
     def run(self, exe: Executor) -> None:
         with self.db.lock:
@@ -468,12 +520,22 @@ class ActionList:
 
 
 read_action_list = ActionList(
-    [(SelectAction, 100), (CommitRollbackAction, 1), (ReconnectAction, 1)],
+    [
+        (SelectAction, 100),
+        (SetClusterAction, 50),
+        (CommitRollbackAction, 1),
+        (ReconnectAction, 1),
+    ],
     autocommit=False,
 )
 
 write_action_list = ActionList(
-    [(InsertAction, 100), (CommitRollbackAction, 1), (ReconnectAction, 1)],
+    [
+        (InsertAction, 100),
+        (SetClusterAction, 50),
+        (CommitRollbackAction, 1),
+        (ReconnectAction, 1),
+    ],
     autocommit=False,
 )
 
@@ -481,6 +543,7 @@ dml_nontrans_action_list = ActionList(
     [
         (DeleteAction, 10),
         (UpdateAction, 10),
+        (SetClusterAction, 5),
         (ReconnectAction, 1),
         # (TransactionIsolationAction, 1),
     ],
@@ -497,6 +560,9 @@ ddl_action_list = ActionList(
         (DropViewAction, 4),
         (CreateRoleAction, 2),
         (DropRoleAction, 1),
+        (CreateClusterAction, 2),
+        (DropClusterAction, 1),
+        (SetClusterAction, 4),
         (GrantPrivilegesAction, 2),
         (RevokePrivilegesAction, 2),
         (ReconnectAction, 1),

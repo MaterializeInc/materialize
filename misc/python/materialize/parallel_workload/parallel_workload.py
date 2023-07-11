@@ -237,9 +237,18 @@ def main() -> int:
 
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
+    parser.add_argument("--system-port", default=6877, type=int)
     parse_common_args(parser)
 
     args = parser.parse_args()
+
+    system_conn = pg8000.connect(
+        host=args.host, port=args.system_port, user="mz_system", database="materialize"
+    )
+    system_conn.autocommit = True
+    with system_conn.cursor() as cur:
+        cur.execute("ALTER SYSTEM SET enable_managed_clusters = true")
+
     run(
         args.host,
         args.port,
