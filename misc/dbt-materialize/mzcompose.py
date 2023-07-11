@@ -11,24 +11,12 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Redpanda, Service
+from materialize.mzcompose.services import Dbt, Materialized, Redpanda
 
 SERVICES = [
     Materialized(),
     Redpanda(),
-    Service(
-        "dbt-test",
-        {
-            "mzbuild": "dbt-materialize",
-            "environment": [
-                "TMPDIR=/share/tmp",
-            ],
-            "volumes": [
-                "secrets:/secrets",
-                "tmp:/share/tmp",
-            ],
-        },
-    ),
+    Dbt(),
 ]
 
 
@@ -83,7 +71,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.up("redpanda")
                     c.up("materialized")
                     c.run(
-                        "dbt-test",
+                        "dbt",
                         "pytest",
                         *test_args,
                         env_extra={
