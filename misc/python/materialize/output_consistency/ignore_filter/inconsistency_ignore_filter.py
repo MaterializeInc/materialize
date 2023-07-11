@@ -252,11 +252,10 @@ class PostExecutionInconsistencyIgnoreFilter:
                 return YesIgnore("#17189")
 
             if (
-                dfr_succeeds_but_ctf_fails
-                and query_template.where_expression is not None
-            ):
-                # Constant folding may touch further rows than the selected subset and thereby run into evaluation
-                # errors.
+                dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds
+            ) and query_template.where_expression is not None:
+                # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
+                # errors (while the other uses another order).
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return YesIgnore("#17189")
 
