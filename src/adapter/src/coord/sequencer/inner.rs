@@ -2163,13 +2163,13 @@ impl Coordinator {
             index_id,
             timeline_context,
             source_ids,
-            id_bundle,
+            &id_bundle,
             real_time_recency_ts,
             key,
             typ,
         )?;
 
-        let timestamp = peek_plan.timestamp_context.timestamp().cloned();
+        let determination = peek_plan.determination.clone();
 
         // Implement the peek, and capture the response.
         let resp = self
@@ -2177,9 +2177,9 @@ impl Coordinator {
             .await?;
 
         if session.vars().emit_timestamp_notice() {
-            if let Some(timestamp) = timestamp {
-                session.add_notice(AdapterNotice::QueryTimestamp { timestamp });
-            }
+            let explanation =
+                self.explain_timestamp(session, cluster_id, &id_bundle, determination);
+            session.add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
 
         match copy_to {
@@ -2315,28 +2315,26 @@ impl Coordinator {
         index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
-        id_bundle: CollectionIdBundle,
+        id_bundle: &CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
     ) -> Result<PlannedPeek, AdapterError> {
         let conn_id = session.conn_id().clone();
-        let timestamp_context = self
-            .sequence_peek_timestamp(
-                session,
-                when,
-                cluster_id,
-                timeline_context,
-                &id_bundle,
-                &source_ids,
-                real_time_recency_ts,
-            )?
-            .timestamp_context;
+        let determination = self.sequence_peek_timestamp(
+            session,
+            when,
+            cluster_id,
+            timeline_context,
+            id_bundle,
+            &source_ids,
+            real_time_recency_ts,
+        )?;
 
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
-        dataflow.set_as_of(timestamp_context.antichain());
+        dataflow.set_as_of(determination.timestamp_context.antichain());
         let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+            logical_time: EvalTime::Time(determination.timestamp_context.timestamp_or_default()),
             session,
         };
         let state = self.catalog().state();
@@ -2361,10 +2359,9 @@ impl Coordinator {
 
         Ok(PlannedPeek {
             plan: peek_plan,
-            timestamp_context,
+            determination,
             conn_id,
             source_arity: typ.arity(),
-            id_bundle,
             source_ids,
         })
     }
@@ -2899,35 +2896,13 @@ impl Coordinator {
         Ok((format, source_ids, optimized_plan, cluster.id(), id_bundle))
     }
 
-    pub(super) fn sequence_explain_timestamp_finish_inner(
-        &mut self,
-        session: &mut Session,
-        format: ExplainFormat,
+    pub(crate) fn explain_timestamp(
+        &self,
+        session: &Session,
         cluster_id: ClusterId,
-        source: OptimizedMirRelationExpr,
-        id_bundle: CollectionIdBundle,
-        real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let is_json = match format {
-            ExplainFormat::Text => false,
-            ExplainFormat::Json => true,
-            ExplainFormat::Dot => {
-                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
-            }
-        };
-        let source_ids = source.depends_on();
-        let timeline_context = self.validate_timeline_context(source_ids.clone())?;
-
-        let determination = self.sequence_peek_timestamp(
-            session,
-            &QueryWhen::Immediately,
-            cluster_id,
-            timeline_context,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-        )?;
-
+        id_bundle: &CollectionIdBundle,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
+    ) -> TimestampExplanation<mz_repr::Timestamp> {
         let mut sources = Vec::new();
         {
             for id in id_bundle.storage_ids.iter() {
@@ -2979,10 +2954,42 @@ impl Coordinator {
                 }
             }
         }
-        let explanation = TimestampExplanation {
+        TimestampExplanation {
             determination,
             sources,
+        }
+    }
+
+    pub(super) fn sequence_explain_timestamp_finish_inner(
+        &mut self,
+        session: &mut Session,
+        format: ExplainFormat,
+        cluster_id: ClusterId,
+        source: OptimizedMirRelationExpr,
+        id_bundle: CollectionIdBundle,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let is_json = match format {
+            ExplainFormat::Text => false,
+            ExplainFormat::Json => true,
+            ExplainFormat::Dot => {
+                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
+            }
         };
+        let source_ids = source.depends_on();
+        let timeline_context = self.validate_timeline_context(source_ids.clone())?;
+
+        let determination = self.sequence_peek_timestamp(
+            session,
+            &QueryWhen::Immediately,
+            cluster_id,
+            timeline_context,
+            &id_bundle,
+            &source_ids,
+            real_time_recency_ts,
+        )?;
+        let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
+
         let s = if is_json {
             serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
         } else {

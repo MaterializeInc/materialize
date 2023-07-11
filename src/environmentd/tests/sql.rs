@@ -2406,14 +2406,14 @@ fn test_emit_timestamp_notice() {
         .unwrap();
     client.batch_execute("SELECT * FROM t").unwrap();
 
-    let timestamp_re = Regex::new("query timestamp: (.*)").unwrap();
+    let timestamp_re = Regex::new("query timestamp: *([0-9]+)").unwrap();
 
     // Wait until there's a query timestamp notice.
     let first_timestamp = Retry::default()
         .retry(|_| loop {
             match rx.try_next() {
                 Ok(Some(msg)) => {
-                    if let Some(caps) = timestamp_re.captures(msg.message()) {
+                    if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default()) {
                         let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
                         return Ok(mz_repr::Timestamp::from(ts));
                     }
@@ -2431,7 +2431,8 @@ fn test_emit_timestamp_notice() {
             loop {
                 match rx.try_next() {
                     Ok(Some(msg)) => {
-                        if let Some(caps) = timestamp_re.captures(msg.message()) {
+                        if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
+                        {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
                             let ts = mz_repr::Timestamp::from(ts);
                             if ts > first_timestamp {

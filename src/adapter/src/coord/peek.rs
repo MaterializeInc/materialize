@@ -36,8 +36,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
-use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::util::{send_immediate_rows, ResultExt};
 use crate::AdapterError;
 
@@ -138,10 +137,9 @@ where
 #[derive(Debug)]
 pub struct PlannedPeek {
     pub plan: PeekPlan,
-    pub timestamp_context: TimestampContext<mz_repr::Timestamp>,
+    pub determination: TimestampDetermination<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
     pub source_arity: usize,
-    pub id_bundle: CollectionIdBundle,
     pub source_ids: BTreeSet<GlobalId>,
 }
 
@@ -303,10 +301,9 @@ impl crate::coord::Coordinator {
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
-            timestamp_context,
+            determination,
             conn_id,
             source_arity,
-            id_bundle: _,
             source_ids,
         } = plan;
 
@@ -345,7 +342,7 @@ impl crate::coord::Coordinator {
             };
         }
 
-        let timestamp = timestamp_context.timestamp_or_default();
+        let timestamp = determination.timestamp_context.timestamp_or_default();
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to

@@ -21,11 +21,13 @@ use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
 use tokio_postgres::error::SqlState;
 
+use crate::TimestampExplanation;
+
 /// Notices that can occur in the adapter layer.
 ///
 /// These are diagnostic warnings or informational messages that are not
 /// severe enough to warrant failing a query entirely.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum AdapterNotice {
     DatabaseAlreadyExists {
         name: String,
@@ -67,7 +69,7 @@ pub enum AdapterNotice {
         name: String,
     },
     QueryTimestamp {
-        timestamp: mz_repr::Timestamp,
+        explanation: TimestampExplanation<mz_repr::Timestamp>,
     },
     EqualSubscribeBounds {
         bound: mz_repr::Timestamp,
@@ -114,6 +116,7 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::QueryTimestamp { explanation } => Some(format!("\n{explanation}")),
             _ => None,
         }
     }
@@ -241,9 +244,7 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::DroppedActiveCluster { name } => {
                 write!(f, "active cluster {} has been dropped", name.quoted())
             }
-            AdapterNotice::QueryTimestamp { timestamp } => {
-                write!(f, "query timestamp: {}", timestamp)
-            }
+            AdapterNotice::QueryTimestamp { .. } => write!(f, "EXPLAIN TIMESTAMP for query"),
             AdapterNotice::EqualSubscribeBounds { bound } => {
                 write!(f, "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty")
             }

@@ -909,7 +909,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_timestamp_notice"),
     value: &false,
     description:
-        "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).",
+        "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize).",
     internal: false
 };
 

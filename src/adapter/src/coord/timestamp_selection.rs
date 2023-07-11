@@ -535,7 +535,7 @@ impl<T: TimestampManipulation> TimestampDetermination<T> {
 }
 
 /// Information used when determining the timestamp for a query.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampExplanation<T> {
     /// The chosen timestamp from `determine_timestamp`.
     pub determination: TimestampDetermination<T>,
@@ -543,7 +543,7 @@ pub struct TimestampExplanation<T> {
     pub sources: Vec<TimestampSource<T>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampSource<T> {
     pub name: String,
     pub read_frontier: Vec<T>,
