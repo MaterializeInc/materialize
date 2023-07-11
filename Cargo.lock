@@ -390,6 +390,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-secretsmanager"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5b95c594d44acf1e105642e71e59b9eed06b1a11f4e4bb0a52e37b8c4c27f25"
+dependencies = [
+ "aws-credential-types",
+ "aws-endpoint",
+ "aws-http",
+ "aws-sig-auth",
+ "aws-smithy-async",
+ "aws-smithy-client",
+ "aws-smithy-http",
+ "aws-smithy-http-tower",
+ "aws-smithy-json",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http",
+ "regex",
+ "tokio-stream",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sso"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3526,6 +3552,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-aws-secrets-controller"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-secretsmanager",
+ "aws-types",
+ "futures",
+ "mz-repr",
+ "mz-secrets",
+ "mz-sql",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-build-id"
 version = "0.1.0"
 dependencies = [
@@ -3851,6 +3895,7 @@ dependencies = [
  "mime",
  "mz-adapter",
  "mz-alloc",
+ "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-controller",

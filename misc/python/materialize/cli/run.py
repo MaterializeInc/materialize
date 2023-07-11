@@ -195,6 +195,7 @@ def main() -> int:
                 "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
                 f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
                 f"--orchestrator-process-scratch-directory={scratch}",
+                "--secrets-controller=local-file",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",

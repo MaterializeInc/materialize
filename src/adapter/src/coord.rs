@@ -1449,22 +1449,26 @@ impl Coordinator {
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
-        if let Ok(controller_secrets) = self.secrets_controller.list().await {
-            // Fetch all IDs from the catalog to future-proof against other
-            // things using secrets. Today, SECRET and CONNECTION objects use
-            // secrets_controller.ensure, but more things could in the future
-            // that would be easy to miss adding here.
-            let catalog_ids: BTreeSet<GlobalId> =
-                self.catalog().entries().map(|entry| entry.id()).collect();
-            let controller_secrets: BTreeSet<GlobalId> = controller_secrets.into_iter().collect();
-            let orphaned = controller_secrets.difference(&catalog_ids);
-            for id in orphaned {
-                info!("coordinator init: deleting orphaned secret {id}");
-                fail_point!("orphan_secrets");
-                if let Err(e) = self.secrets_controller.delete(*id).await {
-                    warn!("Dropping orphaned secret has encountered an error: {}", e);
+        match self.secrets_controller.list().await {
+            Ok(controller_secrets) => {
+                // Fetch all IDs from the catalog to future-proof against other
+                // things using secrets. Today, SECRET and CONNECTION objects use
+                // secrets_controller.ensure, but more things could in the future
+                // that would be easy to miss adding here.
+                let catalog_ids: BTreeSet<GlobalId> =
+                    self.catalog().entries().map(|entry| entry.id()).collect();
+                let controller_secrets: BTreeSet<GlobalId> =
+                    controller_secrets.into_iter().collect();
+                let orphaned = controller_secrets.difference(&catalog_ids);
+                for id in orphaned {
+                    info!("coordinator init: deleting orphaned secret {id}");
+                    fail_point!("orphan_secrets");
+                    if let Err(e) = self.secrets_controller.delete(*id).await {
+                        warn!("Dropping orphaned secret has encountered an error: {}", e);
+                    }
                 }
             }
+            Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
         }
 
         info!("coordinator init: bootstrap complete");
