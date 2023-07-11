@@ -137,7 +137,7 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
-use crate::AdapterNotice;
+use crate::{flags, AdapterNotice};
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -842,9 +842,9 @@ impl Coordinator {
         info!("coordinator init: beginning bootstrap");
 
         // Inform the controllers about their initial configuration.
-        let compute_config = self.catalog().compute_config();
+        let compute_config = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
-        let storage_config = self.catalog().storage_config();
+        let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
@@ -1467,7 +1467,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
-        self.catalog.tracing_config().apply(&self.tracing_handle);
+        flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is

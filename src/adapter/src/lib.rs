@@ -115,6 +115,7 @@ mod util;
 pub mod catalog;
 pub mod client;
 pub mod config;
+pub mod flags;
 pub mod metrics;
 pub mod session;
 pub mod telemetry;
