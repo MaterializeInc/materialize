@@ -847,6 +847,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The state for the storage controller.
     /// TODO(benesch): why is this a separate struct?
     state: StorageControllerState<T>,
+    /// Mechanism for finalizing shards of Webhook sources.
+    internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     /// Mechanism for returning frontier advancement for tables.
     internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
@@ -1489,7 +1491,7 @@ where
                         "cannot have multiple IDs for introspection type"
                     );
 
-                    self.state.collection_manager.register_collection(id).await;
+                    self.state.collection_manager.register_collection(id);
 
                     match i {
                         IntrospectionType::ShardMapping => {
@@ -1541,7 +1543,7 @@ where
                 }
                 DataSource::Webhook => {
                     // Register the collection so our manager knows about it.
-                    self.state.collection_manager.register_collection(id).await;
+                    self.state.collection_manager.register_collection(id);
                 }
                 DataSource::Progress | DataSource::Other => {}
             }
@@ -2183,7 +2185,7 @@ where
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
-                        // Drop all write handles. This is safe to do because there will be nno more
+                        // Drop all write handles. This is safe to do because there will be no more
                         // data passed to the write handle. n.b. we do not need to drop the read
                         // handle because this code is only ever executed in response to dropping a
                         // collection, which downgrades the write handle to the empty anitchain,
@@ -2297,6 +2299,25 @@ where
                     id,
                     frontier.clone(),
                 )]));
+            }
+
+            // Check if the collection is for a Webhook source, unregister if so.
+            let collection = self.state.collections.get(&id);
+            if let Some(CollectionState { description, .. }) = collection {
+                if description.data_source == DataSource::Webhook && frontier.is_empty() {
+                    // Unregister our collection from the manager so writes should no longer occur.
+                    self.state.collection_manager.unregsiter_collection(id);
+                    // Wait for a barrier to assert that no work is in progress for the collection.
+                    self.state.collection_manager.barrier().await;
+
+                    pending_source_drops.push(id);
+                    // Normally `clusterd` will emit this StorageResponse when it knows we can
+                    // drop an ID, but since Webhook sources don't run on a cluster, we manually
+                    // emit this event here.
+                    let _ = self
+                        .internal_response_sender
+                        .send(StorageResponse::DroppedIds([id].into()));
+                }
             }
         }
 
@@ -2430,8 +2451,15 @@ where
 
         Self {
             build_info,
-            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
-                .await,
+            state: StorageControllerState::new(
+                postgres_url,
+                tx.clone(),
+                now,
+                postgres_factory,
+                envd_epoch,
+            )
+            .await,
+            internal_response_sender: tx,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,

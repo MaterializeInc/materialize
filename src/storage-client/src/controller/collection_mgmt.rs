@@ -11,15 +11,16 @@
 //! collections.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
+use futures::future::{Future, FutureExt};
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
 use crate::client::TimestamplessUpdate;
@@ -27,14 +28,13 @@ use crate::controller::{persist_handles, StorageError};
 
 #[derive(Debug, Clone)]
 pub struct CollectionManager {
-    // TODO(guswynn): this should be a sync mutex, as it protects
-    // normal data.
     collections: Arc<Mutex<BTreeSet<GlobalId>>>,
     tx: mpsc::Sender<(
         GlobalId,
         Vec<(Row, Diff)>,
         oneshot::Sender<Result<(), StorageError>>,
     )>,
+    barrier: Arc<Mutex<Vec<oneshot::Sender<()>>>>,
 }
 
 /// The `CollectionManager` provides two complementary functions:
@@ -53,8 +53,9 @@ impl CollectionManager {
         write_handle: persist_handles::PersistWriteWorker<T>,
         now: NowFn,
     ) -> CollectionManager {
-        let collections = Arc::new(Mutex::new(BTreeSet::new()));
+        let collections: Arc<Mutex<BTreeSet<GlobalId>>> = Arc::new(Mutex::new(BTreeSet::new()));
         let collections_outer = Arc::clone(&collections);
+
         // Note(parkmycar): The capacity here was chosen randomly.
         let (tx, mut rx) = mpsc::channel::<(
             GlobalId,
@@ -62,17 +63,32 @@ impl CollectionManager {
             oneshot::Sender<Result<(), StorageError>>,
         )>(256);
 
+        let barrier: Arc<Mutex<Vec<oneshot::Sender<_>>>> = Arc::new(Mutex::new(Vec::new()));
+        let barrier_outer = Arc::clone(&barrier);
+
         mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
             loop {
+                // Notify any waiting barriers.
+                barrier
+                    .lock()
+                    .expect("CollectionManager panicked")
+                    .drain(..)
+                    .for_each(|waiter| {
+                        let _ = waiter.send(());
+                    });
+
                 tokio::select! {
                     _ = interval.tick() => {
-                        let collections = &mut *collections.lock().await;
-
-                        let now = T::from(now());
-                        let updates = collections.iter().map(|id| {
-                            (*id, vec![], now.clone())
-                        }).collect::<Vec<_>>();
+                        // Update each collection.
+                        let updates = {
+                            let collections = collections.lock().expect("collection_mgmt panicked");
+                            let now = T::from(now());
+                            collections
+                                .iter()
+                                .map(|id| (*id, vec![], now.clone()))
+                                .collect()
+                        };
 
                         // Failures don't matter when advancing collections'
                         // uppers. This might fail when a clusterd happens
@@ -90,12 +106,6 @@ impl CollectionManager {
                     },
                     cmd = rx.recv_many(64) => {
                         if let Some(batch) = cmd {
-                            #[derive(Default)]
-                            struct UpdateRequest {
-                                rows: Vec<(Row, Diff)>,
-                                notifs: Vec<oneshot::Sender<Result<(), StorageError>>>,
-                            }
-
                             // Group all of our updates based on ID.
                             let mut updates: BTreeMap<GlobalId, UpdateRequest> = BTreeMap::new();
                             for (id, rows, notif) in batch {
@@ -105,25 +115,20 @@ impl CollectionManager {
                             }
 
                             // Make sure all of the collections exist.
-                            let collections = collections.lock().await;
-
-                            let (mut updates, non_existent): (BTreeMap<_, _>, BTreeMap<_, _>) = updates
-                                .into_iter()
-                                .partition(|(key, _val)| collections.contains(key));
-                            drop(collections);
+                            let (mut updates, non_existent): (BTreeMap<_, _>, BTreeMap<_, _>) = {
+                                let collections = collections.lock().expect("collection_mgmt panicked");
+                                updates
+                                    .into_iter()
+                                    .partition(|(key, _val)| collections.contains(key))
+                            };
 
                             // Return errors for requests whose collection does not exist.
-                            for (id, UpdateRequest { notifs, .. }) in non_existent {
-                                for notif in notifs {
-                                    // Note: Here we use IdentifierInvalid as oppossed to
-                                    // IdentifierMissing because the ID might exist but wasn't
-                                    // registered as a managed collection, which is different than
-                                    // the ID missing entirely.
-                                    //
-                                    // We don't care if the listener disappeared.
-                                    let _ = notif.send(Err(StorageError::IdentifierInvalid(id)));
-                                }
-                            }
+                            //
+                            // Note: Here we use IdentifierInvalid as oppossed to
+                            // IdentifierMissing because the ID might exist but wasn't
+                            // registered as a managed collection, which is different than
+                            // the ID missing entirely.
+                            notify_listeners(non_existent, |id| Err(StorageError::IdentifierInvalid(id)));
 
                             // As updates succeed we'll remove them from the set.
                             while !updates.is_empty() {
@@ -148,12 +153,7 @@ impl CollectionManager {
                                     // Everything was successful!
                                     Ok(()) => {
                                         // Notify all of our listeners.
-                                        for (_id, UpdateRequest { notifs, .. }) in updates {
-                                            for notif in notifs {
-                                                // We don't care if the listener went away.
-                                                let _ = notif.send(Ok(()));
-                                            }
-                                        }
+                                        notify_listeners(updates, |_id| Ok(()));
                                         // Break because there are no more updates to send.
                                         break
                                     },
@@ -161,7 +161,6 @@ impl CollectionManager {
                                     Err(StorageError::InvalidUppers(failed_ids)) => {
                                         // It's fine to retry invalid-uppers errors here, since monotonic appends
                                         // do not specify a particular upper or timestamp.
-
                                         assert!(
                                             failed_ids.iter().all(|id| updates.contains_key(id)),
                                             "expect to receive errors only for collections we tried to update"
@@ -172,15 +171,23 @@ impl CollectionManager {
                                             .partition(|(id, _val)| failed_ids.contains(id));
 
                                         // Notify listeners of success.
-                                        for (_id, UpdateRequest { notifs, .. }) in success {
-                                            for notif in notifs {
-                                                // We don't care if the listener went away.
-                                                let _ = notif.send(Ok(()));
-                                            }
-                                        }
+                                        notify_listeners(success, |_id| Ok(()));
+
+                                        // Check if any collections disappeared while we were writing.
+                                        let (exists, non_existent) = {
+                                            let collections = collections
+                                                .lock()
+                                                .expect("CollectionManager panicked");
+                                            failed
+                                                .into_iter()
+                                                .partition(|(id, _val)| collections.contains(id))
+                                        };
+
+                                        // Notify listeners that the collection no longer exists.
+                                        notify_listeners(non_existent, |id| Err(StorageError::IdentifierMissing(id)));
 
                                         // Retain and retry the updates that failed.
-                                        updates = failed;
+                                        updates = exists;
 
                                         debug!("Retrying invalid-uppers error while appending to managed collection {failed_ids:?}");
                                     }
@@ -200,15 +207,37 @@ impl CollectionManager {
         CollectionManager {
             tx,
             collections: collections_outer,
+            barrier: barrier_outer,
         }
+    }
+
+    /// Returns a [`Future`] that resolves once any in-progress work has been completed.
+    pub(super) fn barrier(&self) -> impl Future<Output = ()> + 'static {
+        let (tx, rx) = oneshot::channel();
+        self.barrier
+            .lock()
+            .expect("CollectionManager panicked")
+            .push(tx);
+        rx.map(|_| ())
     }
 
     /// Registers the collection as one that `CollectionManager` will:
     /// - Automatically advance the upper of every second
     /// - Accept appends for. However, note that when appending, the
     ///   `CollectionManager` expects to be the only writer.
-    pub(super) async fn register_collection(&self, id: GlobalId) {
-        self.collections.lock().await.insert(id);
+    pub(super) fn register_collection(&self, id: GlobalId) {
+        self.collections
+            .lock()
+            .expect("collection_mgmt panicked")
+            .insert(id);
+    }
+
+    /// Unregisters the collection as one that `CollectionManager` will maintain.
+    pub(super) fn unregsiter_collection(&self, id: GlobalId) -> bool {
+        self.collections
+            .lock()
+            .expect("CollectionManager panicked")
+            .remove(&id)
     }
 
     /// Appends `updates` to the collection correlated with `id`.
@@ -273,3 +302,22 @@ impl MonotonicAppender {
 // Note(parkmycar): While it technically could be `Clone` we want `MonotonicAppender` to have the
 // same semantics as a oneshot channel, so we specifically don't make it `Clone`.
 static_assertions::assert_not_impl_any!(MonotonicAppender: Clone);
+
+#[derive(Default)]
+struct UpdateRequest {
+    rows: Vec<(Row, Diff)>,
+    notifs: Vec<oneshot::Sender<Result<(), StorageError>>>,
+}
+
+// Helper method for notifying listeners.
+fn notify_listeners(
+    elements: BTreeMap<GlobalId, UpdateRequest>,
+    result: impl Fn(GlobalId) -> Result<(), StorageError>,
+) {
+    for (id, UpdateRequest { notifs, .. }) in elements {
+        for notif in notifs {
+            // We don't care if the listener disappeared.
+            let _ = notif.send(result(id));
+        }
+    }
+}
