@@ -537,6 +537,10 @@
 
 - type: JSON
   functions:
+  - signature: jsonb_agg(expression) -> jsonb
+    description: Aggregate values (including nulls) as a jsonb array.
+    url: jsonb_agg
+
   - signature: 'jsonb_array_elements(j: jsonb) -> Col<jsonb>'
     description: "`j`'s elements if `j` is an array."
     url: "/docs/sql/types/jsonb/#jsonb_array_elements"
@@ -550,7 +554,7 @@
     url: "/docs/sql/types/jsonb/#jsonb_array_length"
 
   - signature: 'jsonb_build_array(x: ...) -> jsonb'
-    description: The elements of `x` in a `jsonb` array. Elements can be of heterogenous
+    description: Outputs each element of `x` as a `jsonb` array. Elements can be of heterogenous
       types.
     url: "/docs/sql/types/jsonb/#jsonb_build_array"
 
@@ -566,6 +570,10 @@
   - signature: 'jsonb_each_text(j: jsonb) -> Col<(key: string, value: string)>'
     description: "`j`'s outermost elements if `j` is an object."
     url: "/docs/sql/types/jsonb/#jsonb_each_text"
+
+  - signature: jsonb_object_agg(keys, values) -> jsonb
+    description: Aggregate keys and values (including nulls) as a jsonb object.
+    url: jsonb_object_agg
 
   - signature: 'jsonb_object_keys(j: jsonb) -> Col<string>'
     description: "`j`'s outermost keys if `j` is an object."
