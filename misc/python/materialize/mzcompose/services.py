@@ -743,7 +743,7 @@ class Minio(Service):
     def __init__(
         self,
         name: str = "minio",
-        image: str = "minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+        image: str = "minio/minio:RELEASE.2023-07-07T07-13-57Z",
         setup_materialize: bool = False,
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in
