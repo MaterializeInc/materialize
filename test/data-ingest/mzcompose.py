@@ -36,7 +36,8 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
-    Materialized(),
+    # Fixed port so that we keep the same port after restarting Mz in disruptions
+    Materialized(ports=["16875:6875"]),
     Clusterd(name="clusterd1", options=["--scratch-directory=/mzdata/source_data"]),
 ]
 
@@ -47,7 +48,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
-        "--runtime", default=60, type=int, help="Runtime in seconds per workload"
+        "--runtime", default=600, type=int, help="Runtime in seconds per workload"
     )
     parser.add_argument(
         "--workload",
@@ -83,6 +84,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                URL 'http://schema-registry:8081'"""
         )
     conn.autocommit = False
+    conn.close()
 
     executor_classes = [KafkaExecutor]
     ports = {s: c.default_port(s) for s in services}
@@ -92,8 +94,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"--- Testing workload {workload_class.__name__}")
         execute_workload(
             executor_classes,
-            workload_class(),
-            conn,
+            workload_class(c),
             i,
             ports,
             args.runtime,

@@ -28,9 +28,16 @@ from materialize.data_ingest.transaction import Transaction
 
 class Executor:
     num_transactions: int
+    mz_conn: pg8000.Connection
 
-    def __init__(self) -> None:
+    def __init__(self, ports: Dict[str, int]) -> None:
         self.num_transactions = 0
+        self.mz_conn = pg8000.connect(
+            host="localhost",
+            port=ports["materialized"],
+            user="materialize",
+            database="materialize",
+        )
 
     def run(self, transaction: Transaction) -> None:
         raise NotImplementedError
@@ -66,11 +73,11 @@ class KafkaExecutor(Executor):
     def __init__(
         self,
         num: int,
-        conn: pg8000.Connection,
         ports: Dict[str, int],
         fields: List[Field],
     ):
-        super().__init__()
+        super().__init__(ports)
+
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
         self.fields = fields
@@ -142,8 +149,8 @@ class KafkaExecutor(Executor):
 
         self.producer = confluent_kafka.Producer(kafka_conf)
 
-        conn.autocommit = True
-        with conn.cursor() as cur:
+        self.mz_conn.autocommit = True
+        with self.mz_conn.cursor() as cur:
             self.execute(
                 cur,
                 f"""CREATE SOURCE {self.table}
@@ -152,7 +159,7 @@ class KafkaExecutor(Executor):
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                     ENVELOPE UPSERT""",
             )
-        conn.autocommit = False
+        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction) -> None:
         for row_list in transaction.row_lists:
@@ -201,18 +208,17 @@ class KafkaExecutor(Executor):
 
 
 class PgExecutor(Executor):
-    conn: pg8000.Connection
+    pg_conn: pg8000.Connection
     table: str
 
     def __init__(
         self,
         num: int,
-        conn: pg8000.Connection,
         ports: Dict[str, int],
         fields: List[Field],
     ):
-        super().__init__()
-        self.conn = pg8000.connect(
+        super().__init__(ports)
+        self.pg_conn = pg8000.connect(
             host="localhost",
             user="postgres",
             password="postgres",
@@ -226,8 +232,8 @@ class PgExecutor(Executor):
         ]
         keys = [field.name for field in fields if field.is_key]
 
-        self.conn.autocommit = True
-        with self.conn.cursor() as cur:
+        self.pg_conn.autocommit = True
+        with self.pg_conn.cursor() as cur:
             self.execute(
                 cur,
                 f"""DROP TABLE IF EXISTS {self.table};
@@ -240,10 +246,10 @@ class PgExecutor(Executor):
                     DROP PUBLICATION IF EXISTS postgres_source;
                     CREATE PUBLICATION postgres_source FOR ALL TABLES;""",
             )
-        self.conn.autocommit = False
+        self.pg_conn.autocommit = False
 
-        conn.autocommit = True
-        with conn.cursor() as cur:
+        self.mz_conn.autocommit = True
+        with self.mz_conn.cursor() as cur:
             self.execute(cur, f"CREATE SECRET pgpass{num} AS 'postgres'")
             self.execute(
                 cur,
@@ -259,10 +265,10 @@ class PgExecutor(Executor):
                     FROM POSTGRES CONNECTION pg{num} (PUBLICATION 'postgres_source')
                     FOR TABLES ({self.table} AS {self.table})""",
             )
-        conn.autocommit = False
+        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction) -> None:
-        with self.conn.cursor() as cur:
+        with self.pg_conn.cursor() as cur:
             for row_list in transaction.row_lists:
                 for row in row_list.rows:
                     if row.operation == Operation.INSERT:
@@ -311,4 +317,4 @@ class PgExecutor(Executor):
                         )
                     else:
                         raise ValueError(f"Unexpected operation {row.operation}")
-        self.conn.commit()
+        self.pg_conn.commit()
