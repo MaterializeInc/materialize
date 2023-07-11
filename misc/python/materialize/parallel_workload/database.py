@@ -17,6 +17,7 @@ from materialize.parallel_workload.executor import Executor
 
 MAX_COLUMNS = 20
 MAX_CLUSTERS = 8
+MAX_CLUSTER_REPLICAS = 4
 MAX_TABLES = 20
 MAX_VIEWS = 20
 MAX_ROLES = 20
@@ -27,6 +28,7 @@ MAX_INITIAL_VIEWS = 10
 MAX_INITIAL_ROLES = 3
 
 
+# TODO: Create/Drop source (load generator, pg circle from Mz)
 class Column:
     column_id: int
     data_type: Type[DataType]
@@ -183,11 +185,32 @@ class Role(DBObject):
         exe.execute(f"CREATE ROLE {self}")
 
 
+class ClusterReplica(DBObject):
+    replica_id: int
+    size: str
+    cluster: "Cluster"
+
+    def __init__(self, replica_id: int, size: str, cluster: "Cluster"):
+        self.replica_id = replica_id
+        self.size = size
+        self.cluster = cluster
+
+    def __str__(self) -> str:
+        return f"r{self.replica_id+1}"
+
+    def create(self, exe: Executor) -> None:
+        # TODO: More Cluster Replica settings
+        exe.execute(
+            f"CREATE CLUSTER REPLICA {self.cluster}.{self} SIZE = '{self.size}'"
+        )
+
+
 class Cluster(DBObject):
     cluster_id: int
     managed: bool
     size: str
-    replication_factor: int
+    replicas: List[ClusterReplica]
+    replica_id: int
     introspection_interval: str
 
     def __init__(
@@ -201,7 +224,10 @@ class Cluster(DBObject):
         self.cluster_id = cluster_id
         self.managed = managed
         self.size = size
-        self.replication_factor = replication_factor
+        self.replicas = [
+            ClusterReplica(i, size, self) for i in range(replication_factor)
+        ]
+        self.replica_id = len(self.replicas)
         self.introspection_interval = introspection_interval
 
     def __str__(self) -> str:
@@ -210,11 +236,11 @@ class Cluster(DBObject):
     def create(self, exe: Executor) -> None:
         query = f"CREATE CLUSTER {self} "
         if self.managed:
-            query += f"SIZE = '{self.size}', REPLICATION FACTOR = {self.replication_factor}, INTROSPECTION INTERVAL = '{self.introspection_interval}'"
+            query += f"SIZE = '{self.size}', REPLICATION FACTOR = {len(self.replicas)}, INTROSPECTION INTERVAL = '{self.introspection_interval}'"
         else:
             query += "REPLICAS("
             query += ", ".join(
-                f"cr{i} (SIZE = '{self.size}')" for i in range(self.replication_factor)
+                f"{replica} (SIZE = '{replica.size}')" for replica in self.replicas
             )
             query += ")"
         exe.execute(query)

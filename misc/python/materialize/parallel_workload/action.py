@@ -15,11 +15,13 @@ import pg8000
 
 from materialize.mzcompose import Composition
 from materialize.parallel_workload.database import (
+    MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_ROLES,
     MAX_TABLES,
     MAX_VIEWS,
     Cluster,
+    ClusterReplica,
     Database,
     DBObject,
     Role,
@@ -384,6 +386,45 @@ class SetClusterAction(Action):
             exe.execute(query)
 
 
+class CreateClusterReplicaAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            unmanaged_clusters = [c for c in self.db.clusters if not c.managed]
+            if not unmanaged_clusters:
+                return
+            cluster = self.rng.choice(unmanaged_clusters)
+            if len(cluster.replicas) > MAX_CLUSTER_REPLICAS:
+                return
+            replica = ClusterReplica(
+                cluster.replica_id,
+                size=self.rng.choice(["1", "2", "4"]),
+                cluster=cluster,
+            )
+            replica.create(exe)
+            cluster.replicas.append(replica)
+            cluster.replica_id += 1
+
+
+class DropClusterReplicaAction(Action):
+    def errors_to_ignore(self) -> List[str]:
+        return [] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            unmanaged_clusters = [c for c in self.db.clusters if not c.managed]
+            if not unmanaged_clusters:
+                return
+            cluster = self.rng.choice(unmanaged_clusters)
+            # Avoid "has no replicas available to service request" error
+            if len(cluster.replicas) <= 1:
+                return
+            replica_id = self.rng.randrange(len(cluster.replicas))
+            replica = cluster.replicas[replica_id]
+            query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
+            exe.execute(query)
+            del cluster.replicas[replica_id]
+
+
 class GrantPrivilegesAction(Action):
     def run(self, exe: Executor) -> None:
         with self.db.lock:
@@ -562,6 +603,8 @@ ddl_action_list = ActionList(
         (DropRoleAction, 1),
         (CreateClusterAction, 2),
         (DropClusterAction, 1),
+        (CreateClusterReplicaAction, 8),
+        (DropClusterReplicaAction, 4),
         (SetClusterAction, 4),
         (GrantPrivilegesAction, 2),
         (RevokePrivilegesAction, 2),
