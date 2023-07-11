@@ -1499,7 +1499,6 @@ where
             | ExecuteResponse::CreatedSecret { .. }
             | ExecuteResponse::CreatedSink { .. }
             | ExecuteResponse::CreatedSource { .. }
-            | ExecuteResponse::CreatedSources
             | ExecuteResponse::CreatedTable { .. }
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }

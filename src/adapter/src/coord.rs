@@ -226,6 +226,11 @@ pub enum Message<T = mz_repr::Timestamp> {
     RetireExecute {
         data: ExecuteContextExtra,
     },
+    ExecuteSingleStatementTransaction {
+        ctx: ExecuteContext,
+        stmt: Statement<Raw>,
+        params: mz_sql::plan::Params,
+    },
 }
 
 #[derive(Derivative)]

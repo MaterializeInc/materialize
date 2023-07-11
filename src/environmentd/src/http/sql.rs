@@ -994,7 +994,6 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedIndex { .. }
         | ExecuteResponse::CreatedSecret { .. }
         | ExecuteResponse::CreatedSource { .. }
-        | ExecuteResponse::CreatedSources
         | ExecuteResponse::CreatedSink { .. }
         | ExecuteResponse::CreatedView { .. }
         | ExecuteResponse::CreatedViews { .. }

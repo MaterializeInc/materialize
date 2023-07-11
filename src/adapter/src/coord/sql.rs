@@ -24,8 +24,8 @@ use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
-        &mut self,
-        session: &mut Session,
+        &self,
+        session: &Session,
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {

@@ -106,6 +106,10 @@ impl Coordinator {
             Message::RetireExecute { data } => {
                 self.retire_execute(data);
             }
+            Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
+                self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                    .await;
+            }
         }
     }
 
@@ -362,7 +366,7 @@ impl Coordinator {
     async fn message_purified_statement_ready(
         &mut self,
         PurifiedStatementReady {
-            mut ctx,
+            ctx,
             result,
             params,
             resolved_ids,
@@ -405,7 +409,7 @@ impl Coordinator {
                 Err(e) => return ctx.retire(Err(e.into())),
             };
             let plan = match self.plan_statement(
-                ctx.session_mut(),
+                ctx.session(),
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
             ) {
@@ -432,7 +436,7 @@ impl Coordinator {
 
         let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
 
-        match self.plan_statement(ctx.session_mut(), stmt, &params) {
+        match self.plan_statement(ctx.session(), stmt, &params) {
             Ok(Plan::CreateSource(plan)) => {
                 let source_id = match self.catalog_mut().allocate_user_id().await {
                     Ok(id) => id,
