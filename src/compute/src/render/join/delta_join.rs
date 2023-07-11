@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use differential_dataflow::operators::arrange::Arranged;
+use crate::extensions::arrange::{ArrangementSize, MzArranged};
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_client::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
@@ -311,7 +311,7 @@ where
 /// to ensure that any two updates are matched at most once.
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
-    trace: Arranged<G, Tr>,
+    trace: MzArranged<G, Tr>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
@@ -326,6 +326,7 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+    MzArranged<G, Tr>: ArrangementSize,
 {
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
@@ -355,14 +356,14 @@ where
     if closure.could_error() {
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
-            trace,
+            unsafe { trace.inner() },
             |time| time.step_back(),
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+            move |key, stream_row, lookup_row, initial, time, diff1: &Tr::R, diff2: &Tr::R| {
                 // Check the shutdown token to avoid doing unnecessary work when the dataflow is
                 // shutting down.
                 shutdown_token.probe()?;
@@ -391,7 +392,7 @@ where
     } else {
         let oks = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
-            trace,
+            unsafe { trace.inner() },
             |time| time.step_back(),
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
@@ -423,7 +424,7 @@ where
 /// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
 /// updates happening at the same time on different relations.
 fn build_update_stream<G, Tr>(
-    trace: Arranged<G, Tr>,
+    trace: MzArranged<G, Tr>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
@@ -441,7 +442,7 @@ where
     let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
         trace
-            .stream
+            .stream()
             .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {

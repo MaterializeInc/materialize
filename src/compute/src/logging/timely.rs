@@ -288,7 +288,7 @@ pub(super) fn construct<A: Allocate>(
                         }
                     })
                     .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
-                    .trace;
+                    .trace();
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
         }

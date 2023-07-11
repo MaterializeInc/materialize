@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -36,22 +35,22 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{KeyCollection, MzArrange, MzArranged};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type KeyArrangement<S, K, V> =
-    Arranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
+    MzArranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type Arrangement<S, V> = KeyArrangement<S, V, V>;
 pub(crate) type ErrArrangement<S> =
-    Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type ArrangementImport<S, V, T> = Arranged<
+    MzArranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
+pub(crate) type ArrangementImport<S, V, T> = MzArranged<
     S,
     TraceEnter<TraceFrontier<TraceRowHandle<V, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
-pub(crate) type ErrArrangementImport<S, T> = Arranged<
+pub(crate) type ErrArrangementImport<S, T> = MzArranged<
     S,
     TraceEnter<
         TraceFrontier<TraceErrHandle<DataflowError, T, Diff>>,
@@ -328,8 +327,8 @@ where
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
         match self {
-            ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
-            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
+            ArrangementFlavor::Local(oks, _errs) => oks.stream().scope(),
+            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream().scope(),
         }
     }
 
@@ -569,7 +568,7 @@ where
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are rows.
     fn flat_map_core<Tr, I, L>(
-        trace: &Arranged<S, Tr>,
+        trace: &MzArranged<S, Tr>,
         key: Option<Row>,
         mut logic: L,
         refuel: usize,
@@ -591,10 +590,10 @@ where
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
         use timely::dataflow::operators::Operator;
-        trace.stream.unary(Pipeline, &name, move |_, info| {
+        trace.stream().unary(Pipeline, &name, move |_, info| {
             // Acquire an activator to reschedule the operator when it has unfinished work.
             use timely::scheduling::Activator;
-            let activations = trace.stream.scope().activations();
+            let activations = trace.stream().scope().activations();
             let activator = Activator::new(&info.address[..], activations);
             // Maintain a list of work to do, cursor to navigate and process.
             let mut todo = std::collections::VecDeque::new();

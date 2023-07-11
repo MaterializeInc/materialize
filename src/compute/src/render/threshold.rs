@@ -12,7 +12,7 @@
 //! Consult [ThresholdPlan] documentation for details.
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::TraceAgent;
 use mz_compute_client::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::{Diff, Row};
@@ -20,7 +20,7 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange, MzArranged};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::RowSpine;
@@ -30,12 +30,12 @@ fn threshold_arrangement<G, T, R, L>(
     arrangement: &R,
     name: &str,
     logic: L,
-) -> Arranged<G, TraceAgent<RowSpine<Row, Row, G::Timestamp, Diff>>>
+) -> MzArranged<G, TraceAgent<RowSpine<Row, Row, G::Timestamp, Diff>>>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
-    R: MzReduce<G, Row, Row, Diff>,
+    R: MzReduce<G, Row, Row, Diff> + ArrangementSize,
     L: Fn(&Diff) -> bool + 'static,
 {
     arrangement.mz_reduce_abelian(name, move |_key, s, t| {

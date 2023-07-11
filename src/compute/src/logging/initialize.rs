@@ -119,7 +119,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             .dataflow_named("Dataflow: logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
-                collection.mz_arrange("Arrange logging err").trace
+                collection.mz_arrange("Arrange logging err").trace()
             });
 
         traces
