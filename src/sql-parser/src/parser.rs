@@ -6545,6 +6545,14 @@ impl<'a> Parser<'a> {
             .map_parser_err(StatementKind::Declare)?;
         self.expect_keyword(CURSOR)
             .map_parser_err(StatementKind::Declare)?;
+        if self.peek_keywords(&[WITH, HOLD]) {
+            return parser_err!(
+                self,
+                self.peek_pos(),
+                format!("WITH HOLD is unsupported for cursors")
+            )
+            .map_parser_err(StatementKind::Declare);
+        }
         // WITHOUT HOLD is optional and the default behavior so we can ignore it.
         let _ = self.parse_keywords(&[WITHOUT, HOLD]);
         self.expect_keyword(FOR)
