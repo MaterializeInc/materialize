@@ -427,6 +427,40 @@ true
         )
 
 
+class MinMaxMaintained(Dataflow):
+    """Benchmark MinMax as an indexed view, which renders a dataflow for incremental
+    maintenance, in contrast with one-shot SELECT processing"""
+
+    def init(self) -> List[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2
+  /* A */
+
+> CREATE VIEW v2 AS SELECT MIN(f1), MAX(f1) AS f1 FROM v1
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
+  /* B */
+0 {self.n()-1}
+"""
+        )
+
+
 class GroupBy(Dataflow):
     def init(self) -> List[Action]:
         return [
@@ -449,6 +483,40 @@ true
 1
 
 > SELECT COUNT(*), MIN(f1_min), MAX(f1_max) FROM (SELECT f2, MIN(f1) AS f1_min, MAX(f1) AS f1_max FROM v1 GROUP BY f2)
+  /* B */
+{self.n()} 0 {self.n()-1}
+"""
+        )
+
+
+class GroupByMaintained(Dataflow):
+    """Benchmark GroupBy as an indexed view, which renders a dataflow for incremental
+    maintenance, in contrast with one-shot SELECT processing"""
+
+    def init(self) -> List[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+
+> SELECT COUNT(*) = {self.n()} FROM v1
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2;
+  /* A */
+
+> CREATE VIEW v2 AS SELECT COUNT(*), MIN(f1_min), MAX(f1_max) FROM (SELECT f2, MIN(f1) AS f1_min, MAX(f1) AS f1_max FROM v1 GROUP BY f2)
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
   /* B */
 {self.n()} 0 {self.n()-1}
 """
@@ -566,8 +634,41 @@ class DeltaJoin(Dataflow):
   /* A */
 1
 
-# Delta joins require 2+ tables
+# Delta joins require 3+ tables
 > SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
+  /* B */
+{self.n()}
+"""
+        )
+
+
+class DeltaJoinMaintained(Dataflow):
+    """Benchmark DeltaJoin as an indexed view with table-based data initialization, where the
+    empty frontier is not emitted, in contrast with one-shot SELECT processing based on data
+    initialized as a constant view"""
+
+    def init(self) -> List[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2;
+  /* A */
+
+# Delta joins require 3+ tables
+> CREATE VIEW v2 AS SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
   /* B */
 {self.n()}
 """
