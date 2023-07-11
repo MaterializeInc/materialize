@@ -277,9 +277,10 @@ steps:
       queue: linux-x86_64
 
   - id: sqllogictest-fast
-    label: Fast SQL logic tests
+    label: Fast SQL logic tests %n
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    parallelism: 3
     inputs: [test/sqllogictest]
     artifact_paths: junit_*.xml
     plugins:

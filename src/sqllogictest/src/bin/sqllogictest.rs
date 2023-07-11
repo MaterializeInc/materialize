@@ -133,6 +133,12 @@ struct Args {
     /// Inject `ALTER SYSTEM SET enable_table_keys = true` before running the SLT file.
     #[clap(long)]
     enable_table_keys: bool,
+    /// Divide the test files into shards and run only the test files in this shard.
+    #[clap(long, requires = "shard-count", value_name = "N")]
+    shard: Option<usize>,
+    /// Total number of shards in use.
+    #[clap(long, requires = "shard", value_name = "N")]
+    shard_count: Option<usize>,
     /// Wrapper program to start child processes
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
@@ -177,6 +183,10 @@ async fn main() -> ExitCode {
             .collect(),
     };
 
+    if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
+        eprintln!("Shard: {}/{}", shard + 1, shard_count);
+    }
+
     if args.rewrite_results {
         return rewrite(&config, args).await;
     }
@@ -194,8 +204,13 @@ async fn main() -> ExitCode {
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
     let mut runner = Runner::start(&config).await.unwrap();
+    let mut paths = args.paths;
 
-    for path in &args.paths {
+    if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
+        paths = paths.into_iter().skip(shard).step_by(shard_count).collect();
+    }
+
+    for path in &paths {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
@@ -292,8 +307,13 @@ async fn rewrite(config: &RunConfig<'_>, args: Args) -> ExitCode {
 
     let mut bad_file = false;
     let mut runner = Runner::start(config).await.unwrap();
+    let mut paths = args.paths;
 
-    for path in args.paths {
+    if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
+        paths = paths.into_iter().skip(shard).step_by(shard_count).collect();
+    }
+
+    for path in paths {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) => {
