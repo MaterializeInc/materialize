@@ -25,7 +25,7 @@ Consider this diagram that shows a record `B` falling out of the result set as t
 
 {{< note >}}
 It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
-However, for reasons having to do with the internal implementation of `mz_now()`, there are currently no valid operators for the [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
+However, there are currently no valid operators for the [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
 {{< /note >}}
 
 ## Requirements
@@ -73,10 +73,7 @@ In this case, we will filter a table to only include only records from the last 
 
 1. In a separate session, insert a record.
     ```sql
-    INSERT INTO events VALUES (
-        'hello',
-        now()
-    );
+    INSERT INTO events VALUES ('hello', now());
     ```
 
 1. Back in the first session, watch the record expire after 30 seconds.
@@ -86,7 +83,7 @@ In this case, we will filter a table to only include only records from the last 
     ```
     Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
-You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
+You can materialize the `last_30_sec` view by [creating an index](/sql/create-index/) on it (results stored in memory) or by [recreating it as a `MATERIALIZED VIEW`](/sql/create-materialized-view/) (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
 
 ### Time-to-Live (TTL)
 
@@ -252,7 +249,7 @@ In the examples above, the `event_ts` value in each event correlates with the ti
 However, the values in the `content` column are not correlated with insertion time in any way, so filters against `content` will probably not be pushed down to the storage layer.
 
 Temporal filters that consist of arithmetic, date math, and comparisons are eligible for pushdown, including all the examples in this page.
-However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](../../../sql/explain/#output-modifiers) to `EXPLAIN`. For example:
+However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](/sql/explain/#output-modifiers) to `EXPLAIN`. For example:
 
 ```sql
 EXPLAIN WITH(filter_pushdown)

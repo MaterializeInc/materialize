@@ -16,16 +16,17 @@ For example, at 9pm, Materialize may choose to execute a query as of logical tim
 
 The typical uses of `now()` and `mz_now()` are:
 
-* **Query timestamp introspection**
-
-  An ad-hoc `SELECT` query with `now()` and `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
-  The data returned by the query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
-
 * **Temporal filters**
 
   You can use `mz_now()` in a `WHERE` or `HAVING` clause to limit the working dataset.
   This is referred to as a **temporal filter**.
   See the [temporal filter](/sql/patterns/temporal-filters) pattern for more details.
+
+* **Query timestamp introspection**
+
+  An ad-hoc `SELECT` query with `now()` and `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
+  The data returned by the query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
+
 
 {{< warning >}}
 Queries that contain `now()` or `mz_now()` in the `SELECT` clause cannot be materialized.
