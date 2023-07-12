@@ -110,11 +110,11 @@ INSERT INTO users VALUES
   ('C', 2, 'Carol'),
   ('D', 5, 'Dan');
 INSERT INTO transfers VALUES
-  ('B', 'C', 20.0 , now() + '10 seconds'),
-  ('A', 'D', 15.0 , now() + '20 seconds'),
-  ('C', 'D', 25.0 , now() + '30 seconds'),
-  ('A', 'B', 10.0 , now() + '40 seconds'),
-  ('C', 'A', 35.0 , now() + '50 seconds');
+  ('B', 'C', 20.0 , now()),
+  ('A', 'D', 15.0 , now() + '05 seconds'),
+  ('C', 'D', 25.0 , now() + '10 seconds'),
+  ('A', 'B', 10.0 , now() + '15 seconds'),
+  ('C', 'A', 35.0 , now() + '20 seconds');
 ```
 
 ### Transitive closure
@@ -128,8 +128,6 @@ CREATE MATERIALIZED VIEW connected AS
 WITH MUTUALLY RECURSIVE
   connected(src_id char(1), dst_id char(1)) AS (
     SELECT DISTINCT src_id, tgt_id FROM transfers WHERE mz_now() <= ts + interval '10s'
-    UNION
-    SELECT src_id, dst_id FROM connected
     UNION
     SELECT c1.src_id, c2.dst_id FROM connected c1 JOIN connected c2 ON c1.dst_id = c2.src_id
   )
