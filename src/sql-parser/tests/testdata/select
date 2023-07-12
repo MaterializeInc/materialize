@@ -416,11 +416,25 @@ SELECT * FROM customers WHERE segment IN (SELECT segm FROM bar)
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("segment")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("segm")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
+SELECT * FROM customers WHERE segment NOT IN (SELECT segm FROM bar)
+----
+SELECT * FROM customers WHERE segment NOT IN (SELECT segm FROM bar)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("segment")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("segm")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
 SELECT * FROM t WHERE x IN (VALUES (1))
 ----
 SELECT * FROM t WHERE x IN (VALUES (1))
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t WHERE x NOT IN (VALUES (1))
+----
+SELECT * FROM t WHERE x NOT IN (VALUES (1))
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None }, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM customers WHERE age BETWEEN 25 AND 32
@@ -444,11 +458,11 @@ SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: Null, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
-SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE
+SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE AND 3 IS DISTINCT FROM 4
 ----
-SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE
+SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE AND 3 IS DISTINCT FROM 4
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: False, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(And { left: IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: False, negated: true }, right: IsExpr { expr: Value(Number("3")), construct: DistinctFrom(Value(Number("4"))), negated: false } }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 
 parse-statement
@@ -538,6 +552,28 @@ SELECT row_number() OVER (ORDER BY dt DESC),
 FROM foo
 ----
 SELECT row_number() OVER (ORDER BY dt DESC), sum(foo) OVER (PARTITION BY a, b ORDER BY c, d ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), avg(bar) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), max(baz) OVER (ORDER BY a ROWS UNBOUNDED PRECEDING) FROM foo
+
+parse-statement roundtrip
+SELECT row_number() OVER (ORDER BY dt DESC),
+       sum(foo) OVER (PARTITION BY a, b ORDER BY c, d
+           ROWS BETWEEN UNBOUNDED FOLLOWING AND CURRENT ROW),
+       avg(bar) OVER (ORDER BY a
+           RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+       max(baz) OVER (ORDER BY a
+           ROWS UNBOUNDED FOLLOWING)
+FROM foo
+----
+SELECT row_number() OVER (ORDER BY dt DESC), sum(foo) OVER (PARTITION BY a, b ORDER BY c, d ROWS BETWEEN UNBOUNDED FOLLOWING AND CURRENT ROW), avg(bar) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), max(baz) OVER (ORDER BY a ROWS UNBOUNDED FOLLOWING) FROM foo
+
+parse-statement roundtrip
+SELECT avg(price) OVER (GROUPS 1 PRECEDING) FROM products
+----
+SELECT avg(price) OVER (GROUPS 1 PRECEDING) FROM products
+
+parse-statement roundtrip
+SELECT avg(price) OVER (GROUPS 1 FOLLOWING) FROM products
+----
+SELECT avg(price) OVER (GROUPS 1 FOLLOWING) FROM products
 
 parse-statement roundtrip
 SELECT lag(x, 1) OVER (ORDER BY dt DESC) FROM foo
@@ -1451,3 +1487,13 @@ parse-statement roundtrip
 SELECT 1 AS "FOO"
 ----
 SELECT 1 AS "FOO"
+
+parse-statement roundtrip
+SELECT 1 < ANY (SELECT 1)
+----
+SELECT 1 < ANY (SELECT 1)
+
+parse-statement roundtrip
+SELECT 1 < ALL (SELECT 1)
+----
+SELECT 1 < ALL (SELECT 1)

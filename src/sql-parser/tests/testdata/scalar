@@ -90,6 +90,26 @@ name NOT LIKE '%a' IS NULL
 ----
 IsExpr { expr: Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: false, negated: true }, construct: Null, negated: false }
 
+parse-scalar roundtrip
+name ~~ '%a'
+----
+name ~~ '%a'
+
+parse-scalar roundtrip
+name ~~* '%a'
+----
+name ~~* '%a'
+
+parse-scalar roundtrip
+name !~~* '%a'
+----
+name !~~* '%a'
+
+parse-scalar roundtrip
+name LIKE '%a' ESCAPE '\\'
+----
+name LIKE '%a' ESCAPE '\\'
+
 parse-scalar
 name IS TRUE
 ----
@@ -493,6 +513,21 @@ error: Expected an expression, found right parenthesis
 COALESCE()
          ^
 
+parse-scalar roundtrip
+COALESCE(foo, bar)
+----
+COALESCE(foo, bar)
+
+parse-scalar roundtrip
+GREATEST(foo, bar)
+----
+GREATEST(foo, bar)
+
+parse-scalar roundtrip
+LEAST(foo, bar)
+----
+LEAST(foo, bar)
+
 
 parse-scalar
 sqrt(id)
@@ -518,6 +553,57 @@ parse-scalar
 (SELECT 1) + (SELECT 2)
 ----
 Op { op: Op { namespace: [], op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
+
+parse-scalar roundtrip
+1 < 2
+----
+1 < 2
+
+parse-scalar roundtrip
+1 <= 2
+----
+1 <= 2
+
+parse-scalar roundtrip
+1 >= 2
+----
+1 >= 2
+
+parse-scalar roundtrip
+1 > 2
+----
+1 > 2
+
+parse-scalar roundtrip
+1 - 2
+----
+1 - 2
+
+parse-scalar roundtrip
+1 * 2
+----
+1 * 2
+
+parse-scalar roundtrip
+1 % 2
+----
+1 % 2
+
+parse-scalar roundtrip
+1 / 2
+----
+1 / 2
+
+# TODO(def-) Enable when fixed
+#parse-scalar roundtrip
+#1 OPERATOR(+) 2
+#----
+#1 OPERATOR(+) 2
+
+parse-scalar roundtrip
+1 OPERATOR(pg_catalog.+) 2
+----
+1 OPERATOR(pg_catalog.+) 2
 
 parse-scalar
 1 < ANY (SELECT 2)
@@ -613,6 +699,11 @@ parse-scalar
 ARRAY[]::int[2][2]
 ----
 Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
+
+parse-scalar roundtrip
+ARRAY[1, 2, 3][-1]
+----
+ARRAY[1, 2, 3][-1]
 
 parse-scalar
 a -> b

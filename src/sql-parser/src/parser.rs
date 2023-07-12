@@ -2232,57 +2232,58 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_kafka_connection_option(&mut self) -> Result<KafkaConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL, SSH])? {
-            BROKER => {
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::Broker,
-                    value: Some(self.parse_kafka_broker()?),
-                });
-            }
-            BROKERS => {
-                let _ = self.consume_token(&Token::Eq);
-                let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
-                let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
-                self.expect_token(&match delimiter {
-                    Token::LParen => Token::RParen,
-                    Token::LBracket => Token::RBracket,
-                    _ => unreachable!(),
-                })?;
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::Brokers,
-                    value: Some(WithOptionValue::Sequence(brokers)),
-                });
-            }
-            PROGRESS => {
-                self.expect_keyword(TOPIC)?;
-                KafkaConnectionOptionName::ProgressTopic
-            }
-            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
-                MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
-                PASSWORD => KafkaConnectionOptionName::SaslPassword,
-                USERNAME => KafkaConnectionOptionName::SaslUsername,
-                _ => unreachable!(),
-            },
-            SSH => {
-                self.expect_keyword(TUNNEL)?;
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::SshTunnel,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
-                KEY => KafkaConnectionOptionName::SslKey,
-                CERTIFICATE => {
-                    if self.parse_keyword(AUTHORITY) {
-                        KafkaConnectionOptionName::SslCertificateAuthority
-                    } else {
-                        KafkaConnectionOptionName::SslCertificate
-                    }
+        let name =
+            match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL, SSH])? {
+                BROKER => {
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::Broker,
+                        value: Some(self.parse_kafka_broker()?),
+                    });
                 }
+                BROKERS => {
+                    let _ = self.consume_token(&Token::Eq);
+                    let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
+                    let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
+                    self.expect_token(&match delimiter {
+                        Token::LParen => Token::RParen,
+                        Token::LBracket => Token::RBracket,
+                        _ => unreachable!(),
+                    })?;
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::Brokers,
+                        value: Some(WithOptionValue::Sequence(brokers)),
+                    });
+                }
+                PROGRESS => {
+                    self.expect_keyword(TOPIC)?;
+                    KafkaConnectionOptionName::ProgressTopic
+                }
+                SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                    MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
+                    PASSWORD => KafkaConnectionOptionName::SaslPassword,
+                    USERNAME => KafkaConnectionOptionName::SaslUsername,
+                    _ => unreachable!(),
+                },
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::SshTunnel,
+                        value: Some(self.parse_object_option_value()?),
+                    });
+                }
+                SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                    KEY => KafkaConnectionOptionName::SslKey,
+                    CERTIFICATE => {
+                        if self.parse_keyword(AUTHORITY) {
+                            KafkaConnectionOptionName::SslCertificateAuthority
+                        } else {
+                            KafkaConnectionOptionName::SslCertificate
+                        }
+                    }
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        };
+            };
         Ok(KafkaConnectionOption {
             name,
             value: self.parse_optional_option_value()?,

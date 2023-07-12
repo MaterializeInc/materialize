@@ -153,6 +153,15 @@ fn datadriven() {
         let input = tc.input.trim();
         match parser::parse_expr(input) {
             Ok(s) => {
+                // TODO(def-) Can we enable this? Fails with LIKE => ~~ currently
+                //let parsed = match parser::parse_expr(&s.to_string()) {
+                //    Ok(parsed) => parsed,
+                //    Err(err) => panic!("reparse failed: {}: {}\n", s, err),
+                //};
+                //if parsed != s {
+                //    panic!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", s, parsed);
+                //}
+
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", s)
                 } else {
