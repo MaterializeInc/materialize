@@ -475,12 +475,12 @@ SELECT jsonb_build_array('a', 1::float, 2.0::float, true);
 #### `jsonb_build_object`
 
 ```sql
-SELECT jsonb_build_object(2::float, 'b', 'a', 1::float);
+SELECT jsonb_build_object(2.0::float, 'b', 'a', 1.1::float);
 ```
 ```nofmt
  jsonb_build_object
 --------------------
- {"2":true,"a":1.0}
+ {"2":"b","a":1.1}
 ```
 
 <hr/>
@@ -488,12 +488,12 @@ SELECT jsonb_build_object(2::float, 'b', 'a', 1::float);
 #### `jsonb_each`
 
 ```sql
-SELECT * FROM jsonb_each('{"1": 2, "a": ["b", "c"]}'::jsonb);
+SELECT * FROM jsonb_each('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  key |   value
 -----+-----------
- 1   | 2.0
+ 1   | 2.1
  a   | ["b","c"]
 ```
 
@@ -504,12 +504,12 @@ Note that the `value` column is `jsonb`.
 #### `jsonb_each_text`
 
 ```sql
-SELECT * FROM jsonb_each_text('{"1": 2, "a": ["b", "c"]}'::jsonb);
+SELECT * FROM jsonb_each_text('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  key |   value
 -----+-----------
- 1   | 2.0
+ 1   | 2.1
  a   | ["b","c"]
 ```
 
@@ -588,12 +588,21 @@ SELECT jsonb_strip_nulls('[{"1":"a","2":null},"b",null,"c"]'::jsonb);
 #### `to_jsonb`
 
 ```sql
-SELECT to_jsonb('hello');
+SELECT to_jsonb(t) AS jsonified_row
+FROM (
+  VALUES
+  (1, 'hey'),
+  (2, NULL),
+  (3, 'hi'),
+  (4, 'salutations')
+  ) AS t(id, content)
+WHERE t.content LIKE 'h%';
 ```
 ```nofmt
- to_jsonb
-----------
- "hello"
+      jsonified_row
+--------------------------
+ {"content":"hi","id":3}
+ {"content":"hey","id":1}
 ```
 
 Note that the output is `jsonb`.
