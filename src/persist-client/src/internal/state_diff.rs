@@ -32,7 +32,7 @@ use crate::internal::state::{
 use crate::internal::trace::{FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
-use crate::{Metrics, PersistConfig};
+use crate::{Metrics, PersistConfig, ShardId};
 
 use StateFieldValDiff::*;
 
@@ -354,7 +354,13 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         self.seqno = diff_seqno_to;
         self.applier_version = diff_applier_version;
         self.walltime_ms = diff_walltime_ms;
-        force_apply_diffs_single("hostname", diff_hostname, &mut self.hostname)?;
+        force_apply_diffs_single(
+            &self.shard_id,
+            diff_seqno_to,
+            "hostname",
+            diff_hostname,
+            &mut self.hostname,
+        )?;
 
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
@@ -457,17 +463,21 @@ fn apply_diff_single<X: PartialEq + Debug>(
 //
 // TODO: delete this once `hostname` has zero mismatches
 fn force_apply_diffs_single<X: PartialEq + Debug>(
+    shard_id: &ShardId,
+    seqno: SeqNo,
     name: &str,
     diffs: Vec<StateFieldDiff<(), X>>,
     single: &mut X,
 ) -> Result<(), String> {
     for diff in diffs {
-        force_apply_diff_single(name, diff, single)?;
+        force_apply_diff_single(shard_id, seqno, name, diff, single)?;
     }
     Ok(())
 }
 
 fn force_apply_diff_single<X: PartialEq + Debug>(
+    shard_id: &ShardId,
+    seqno: SeqNo,
     name: &str,
     diff: StateFieldDiff<(), X>,
     single: &mut X,
@@ -476,8 +486,8 @@ fn force_apply_diff_single<X: PartialEq + Debug>(
         Update(from, to) => {
             if single != &from {
                 error!(
-                    "{} update didn't match: {:?} vs {:?}, continuing to force apply diff...",
-                    name, single, &from
+                    "{}: update didn't match: {:?} vs {:?}, continuing to force apply diff to {:?} for shard {} and seqno {}",
+                    name, single, &from, &to, shard_id, seqno
                 );
             }
             *single = to
