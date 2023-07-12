@@ -554,6 +554,22 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
+const PERSIST_CONSENSUS_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_consensus_connection_pool_ttl"),
+    value: &PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL,
+    description: "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
+    internal: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl_stagger`].
+const PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_consensus_connection_pool_ttl_stagger"),
+    value: &PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER,
+    description: "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+    internal: true,
+};
+
 /// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_initial_backoff"),
@@ -1756,6 +1772,8 @@ impl SystemVars {
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
+            .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
+            .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
@@ -2158,6 +2176,16 @@ impl SystemVars {
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
     pub fn persist_compaction_minimum_timeout(&self) -> Duration {
         *self.expect_value(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
+    }
+
+    /// Returns the `persist_consensus_connection_pool_ttl` configuration parameter.
+    pub fn persist_consensus_connection_pool_ttl(&self) -> Duration {
+        *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
+    }
+
+    /// Returns the `persist_consensus_connection_pool_ttl_stagger` configuration parameter.
+    pub fn persist_consensus_connection_pool_ttl_stagger(&self) -> Duration {
+        *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
     }
 
     /// Returns the `pg_replication_connect_timeout` configuration parameter.
@@ -3678,6 +3706,8 @@ fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
+        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL.name()
+        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
