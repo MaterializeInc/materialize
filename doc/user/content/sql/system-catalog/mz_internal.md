@@ -167,9 +167,9 @@ all database objects in the system.
 
 ### `mz_object_transitive_dependencies`
 
-The `mz_object_transitive_dependencies` table describes the transitive dependency structure between
+The `mz_object_transitive_dependencies` view describes the transitive dependency structure between
 all database objects in the system.
-This table is the transitive closure of [`mz_object_dependencies`](#mz_object_dependencies).
+The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_object_dependencies).
 
 | Field                   | Type         | Meaning                                                                                                               |
 | ----------------------- | ------------ | --------                                                                                                              |

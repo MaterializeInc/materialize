@@ -2129,17 +2129,12 @@ pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_object_transitive_dependencies AS
 WITH MUTUALLY RECURSIVE
-  base(id text, referenced_object_id text) AS (
+  reach(object_id text, referenced_object_id text) AS (
     SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies
-  ),
-  reach(id text, referenced_object_id text) AS (
-    SELECT id, referenced_object_id FROM base
-    UNION ALL -- (TODO use UNION once #19817 is fixed)
-    SELECT id, referenced_object_id FROM reach
     UNION
-    SELECT r1.id, r2.referenced_object_id FROM reach r1 JOIN reach r2 ON r1.referenced_object_id = r2.id
+    SELECT x, z FROM reach r1(x, y) JOIN reach r2(y, z) USING(y)
   )
-SELECT id, referenced_object_id FROM reach;",
+SELECT object_id, referenced_object_id FROM reach;",
 };
 
 pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
