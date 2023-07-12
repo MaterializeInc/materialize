@@ -161,6 +161,9 @@ def workflow_rehydration(c: Composition) -> None:
             "with DISK",
             Clusterd(
                 name="clusterd1",
+                options=[
+                    "--scratch-directory=/scratch",
+                ],
             ),
         ),
         (
