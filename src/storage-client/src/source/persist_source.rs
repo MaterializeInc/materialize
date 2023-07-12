@@ -650,6 +650,22 @@ where
     let mut flow_control_input =
         builder.new_input_connection(&summaried_flow, Pipeline, vec![Antichain::new()]);
 
+    // Helper method used to synthesize current and next frontier for ordered times.
+    fn synthesize_frontiers<T: PartialOrder + Clone>(
+        mut frontier: Antichain<(T, u64)>,
+        mut time: (T, u64),
+        part_number: &mut u64,
+    ) -> ((T, u64), Antichain<(T, u64)>, Antichain<(T, u64)>) {
+        let mut next_frontier = frontier.clone();
+        time.1 = *part_number;
+        frontier.insert(time.clone());
+        *part_number += 1;
+        let mut next_time = time.clone();
+        next_time.1 = *part_number;
+        next_frontier.insert(next_time);
+        (time, frontier, next_frontier)
+    }
+
     // _Refine_ the data stream by amending the second input with the part number. This also
     // ensures that we order the parts by time.
     let data_input = async_stream::stream!({
@@ -658,11 +674,15 @@ where
         loop {
             match data_input.next_mut().await {
                 None => {
+                    let empty = Antichain::new();
                     parts.sort_by_key(|val| val.0.clone());
-                    for (mut part_time, d) in parts.drain(..) {
-                        part_time.1 = part_number;
-                        part_number += 1;
-                        yield Either::Right((part_time, d))
+                    for (part_time, d) in parts.drain(..) {
+                        let (part_time, frontier, next_frontier) = synthesize_frontiers(
+                            empty.clone(),
+                            part_time.clone(),
+                            &mut part_number,
+                        );
+                        yield Either::Right((part_time, d, frontier, next_frontier))
                     }
                     break;
                 }
@@ -678,10 +698,13 @@ where
                     // `drain_filter_swapping` doesn't work as it reorders the vec.
                     while i < parts.len() {
                         if !prog.less_equal(&parts[i].0) {
-                            let (mut part_time, d) = parts.remove(i);
-                            part_time.1 = part_number;
-                            part_number += 1;
-                            yield Either::Right((part_time, d))
+                            let (part_time, d) = parts.remove(i);
+                            let (part_time, frontier, next_frontier) = synthesize_frontiers(
+                                prog.clone(),
+                                part_time.clone(),
+                                &mut part_number,
+                            );
+                            yield Either::Right((part_time, d, frontier, next_frontier))
                         } else {
                             i += 1;
                         }
@@ -721,55 +744,56 @@ where
 
             // There are 2 main cases where we can continue to emit parts:
             // - The total emitted bytes is less than `flow_control_max_bytes`.
-            // - We have not yet reached the `flow_control_frontier`
+            // - The output frontier is not beyond the `flow_control_frontier`
             //
             // SUBTLE: in the latter case, we may arbitrarily go into the backpressure `else`
             // block, as we wait for progress tracking to keep the `flow_control` frontier
             // up-to-date. This is tested in unit-tests.
             if inflight_bytes < flow_control_max_bytes
-                || PartialOrder::less_than(&output_frontier, &flow_control_frontier)
+                || !PartialOrder::less_equal(&flow_control_frontier, &output_frontier)
             {
-                let (time, part) = if let Some((time, part)) = pending_parts.pop_front() {
-                    (time, part)
-                } else {
-                    match data_input.next().await {
-                        Some(Either::Right((time, part))) => {
-                            // Downgrade the output frontier to this part's time. This is useful
-                            // "close" timestamp's from previous parts, even if we don't yet
-                            // emit this part. Note that this is safe because `data_input` ensures
-                            // time-ordering.
-                            output_frontier = Antichain::from_elem(time.clone());
-                            cap_set.downgrade(output_frontier.iter());
+                let (time, part, next_frontier) =
+                    if let Some((time, part, next_frontier)) = pending_parts.pop_front() {
+                        (time, part, next_frontier)
+                    } else {
+                        match data_input.next().await {
+                            Some(Either::Right((time, part, frontier, next_frontier))) => {
+                                // Downgrade the output frontier to this part's time. This is useful
+                                // "close" timestamp's from previous parts, even if we don't yet
+                                // emit this part. Note that this is safe because `data_input` ensures
+                                // time-ordering.
+                                output_frontier = frontier;
+                                cap_set.downgrade(output_frontier.iter());
 
-                            // If the most recent value's time is _beyond_ the
-                            // `flow_control` frontier (which takes into account the `summary`), we
-                            // have emitted an entire `summary` worth of data, and can store this
-                            // value for later.
-                            if inflight_bytes >= flow_control_max_bytes
-                                && !PartialOrder::less_than(
-                                    &output_frontier,
-                                    &flow_control_frontier,
-                                )
-                            {
-                                pending_parts.push_back((time, part));
+                                // If the most recent value's time is _beyond_ the
+                                // `flow_control` frontier (which takes into account the `summary`), we
+                                // have emitted an entire `summary` worth of data, and can store this
+                                // value for later.
+                                if inflight_bytes >= flow_control_max_bytes
+                                    && !PartialOrder::less_than(
+                                        &output_frontier,
+                                        &flow_control_frontier,
+                                    )
+                                {
+                                    pending_parts.push_back((time, part, next_frontier));
+                                    continue 'emitting_parts;
+                                }
+                                (time, part, next_frontier)
+                            }
+                            Some(Either::Left(prog)) => {
+                                output_frontier = prog;
+                                cap_set.downgrade(output_frontier.iter());
                                 continue 'emitting_parts;
                             }
-                            (time, part)
-                        }
-                        Some(Either::Left(prog)) => {
-                            output_frontier = prog;
-                            cap_set.downgrade(output_frontier.iter());
-                            continue 'emitting_parts;
-                        }
-                        None => {
-                            if pending_parts.is_empty() {
-                                break 'emitting_parts;
-                            } else {
-                                continue 'emitting_parts;
+                            None => {
+                                if pending_parts.is_empty() {
+                                    break 'emitting_parts;
+                                } else {
+                                    continue 'emitting_parts;
+                                }
                             }
                         }
-                    }
-                };
+                    };
 
                 // Store the value with the _frontier_ the `flow_control_input` must reach
                 // to retire it. Note that if this `results_in` is `None`, then we
@@ -787,17 +811,14 @@ where
                 // Emit the data at the given time, and update the frontier and capabilities
                 // to just beyond the part.
                 data_output.give(&cap_set.delayed(&time), part).await;
-                let mut just_beyond = time.clone();
-                just_beyond.1 += 1;
-                output_frontier = Antichain::from_elem(just_beyond);
+                output_frontier = next_frontier;
                 cap_set.downgrade(output_frontier.iter())
             } else {
                 let parts_count = inflight_parts.len();
                 // We've exhausted our budget, listen for updates to the flow_control
-                // input's frontier until we free up new budget. Progress ChangeBatches
-                // are consumed even if you don't interact with the handle, so even if
-                // we never make it to this block (e.g. budget of usize::MAX), because
-                // the stream has no data, we don't cause unbounded buffering in timely.
+                // input's frontier until we free up new budget. If we don't interact with
+                // with this side of the if statement, because the stream has no data, we
+                // don't cause unbounded buffering in timely.
                 let new_flow_control_frontier = match flow_control_input.next().await {
                     Some(Event::Progress(frontier)) => frontier,
                     Some(Event::Data(_, _)) => {
@@ -807,9 +828,7 @@ where
                 };
 
                 // Update the `flow_control_frontier` if its advanced.
-                if PartialOrder::less_than(&flow_control_frontier, &new_flow_control_frontier) {
-                    flow_control_frontier = new_flow_control_frontier.clone();
-                }
+                flow_control_frontier = new_flow_control_frontier.clone();
 
                 // Retire parts that are processed downstream.
                 let retired_parts = inflight_parts
