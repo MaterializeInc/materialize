@@ -66,7 +66,7 @@ use crate::{Diagnostics, PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<T, K, V, D, F, DT, G, R>(
+pub fn shard_source<K, V, T, D, F, DT, G>(
     scope: &mut G,
     name: &str,
     clients: Arc<PersistClientCache>,
@@ -84,8 +84,8 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
     F: FnMut(&PartStats) -> bool + 'static,
-    G: Scope<Timestamp = R>,
-    R: Refines<T>,
+    G: Scope,
+    G::Timestamp: Refines<T>,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     T: Timestamp + Lattice + Codec64 + TotalOrder,
     DT: FnOnce(
@@ -116,7 +116,7 @@ where
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
         scope.feedback(<<G as ScopeParent>::Timestamp as Timestamp>::Summary::default());
 
-    let (descs, descs_token) = shard_source_descs::<T, K, V, D, _, G, R>(
+    let (descs, descs_token) = shard_source_descs::<K, V, T, D, _, G>(
         scope,
         name,
         Arc::clone(&clients),
@@ -134,11 +134,7 @@ where
         Some(desc_transformer) => desc_transformer(scope.clone(), &descs, chosen_worker),
         None => {
             let token: Rc<dyn Any> = Rc::new(());
-            // Just coercing to trait object
-            #[allow(clippy::as_conversions)]
-            {
-                (descs, token)
-            }
+            (descs, token)
         }
     };
 
@@ -182,7 +178,7 @@ impl Drop for ActivateOnDrop {
     }
 }
 
-pub(crate) fn shard_source_descs<T, K, V, D, F, G, R>(
+pub(crate) fn shard_source_descs<K, V, T, D, F, G>(
     scope: &G,
     name: &str,
     clients: Arc<PersistClientCache>,
@@ -201,8 +197,8 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
     F: FnMut(&PartStats) -> bool + 'static,
-    G: Scope<Timestamp = R>,
-    R: Refines<T>,
+    G: Scope,
+    G::Timestamp: Refines<T>,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     T: Timestamp + Lattice + Codec64 + TotalOrder,
 {
@@ -655,12 +651,12 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = scope.scoped("hybrid", |scope| {
+                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: &Stream<_, _>, _| {
                         let token: Rc<dyn Any> = Rc::new(());
                         (descs.clone(), token)
                     };
-                    let (stream, token) = shard_source::<u64, String, String, u64, _, _, _, u64>(
+                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
                         persist_clients,
@@ -724,12 +720,12 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = scope.scoped("hybrid", |scope| {
+                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: &Stream<_, _>, _| {
                         let token: Rc<dyn Any> = Rc::new(());
                         (descs.clone(), token)
                     };
-                    let (stream, token) = shard_source::<u64, String, String, u64, _, _, _, u64>(
+                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _>(
                         scope,
                         "test_source",
                         persist_clients,
