@@ -40,7 +40,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::storage::stash::{DEPLOY_GENERATION, USER_VERSION};
+use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
     self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
@@ -179,6 +179,12 @@ pub struct BootstrapArgs {
     pub bootstrap_role: Option<String>,
 }
 
+/// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
+/// executing a single operation against the stash. If the consumer needs to execute multiple
+/// operations atomically, then they should start a transaction via [`Connection::transaction`].
+///
+/// The [`super::Catalog`] should never interact directly through the stash, instead it should
+/// always interact through a [`Connection`].
 #[derive(Debug)]
 pub struct Connection {
     stash: Stash,
@@ -186,6 +192,8 @@ pub struct Connection {
 }
 
 impl Connection {
+    /// Opens a new [`Connection`] to the stash. Optionally initialize the stash if it has not
+    /// been initialized and perform any migrations needed.
     #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
     pub async fn open(
         mut stash: Stash,
@@ -253,7 +261,7 @@ impl Connection {
         Ok(conn)
     }
 
-    pub async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
+    pub(crate) async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
         self.stash.set_connect_timeout(connect_timeout).await;
     }
 
@@ -269,21 +277,11 @@ impl Connection {
     pub fn boot_ts(&self) -> mz_repr::Timestamp {
         self.boot_ts
     }
-}
 
-impl Connection {
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
-        Self::get_setting_stash(&mut self.stash, key).await
-    }
-
-    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error> {
-        Self::set_setting_stash(&mut self.stash, key, value).await
-    }
-
-    async fn get_setting_stash(stash: &mut Stash, key: &str) -> Result<Option<String>, Error> {
         let v = SETTING_COLLECTION
             .peek_key_one(
-                stash,
+                &mut self.stash,
                 proto::SettingKey {
                     name: key.to_string(),
                 },
@@ -292,11 +290,7 @@ impl Connection {
         Ok(v.map(|v| v.value))
     }
 
-    async fn set_setting_stash<V: Into<String> + std::fmt::Display>(
-        stash: &mut Stash,
-        key: &str,
-        value: V,
-    ) -> Result<(), Error> {
+    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error> {
         let key = proto::SettingKey {
             name: key.to_string(),
         };
@@ -304,7 +298,7 @@ impl Connection {
             value: value.into(),
         };
         SETTING_COLLECTION
-            .upsert(stash, once((key, value)))
+            .upsert(&mut self.stash, once((key, value)))
             .await
             .map_err(|e| e.into())
     }
@@ -788,16 +782,14 @@ impl Connection {
         Ok(())
     }
 
+    /// Creates a new [`Transaction`].
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
         transaction(&mut self.stash).await
     }
 
+    /// Confirms that this [`Connection`] is connected as the stash leader.
     pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
         Ok(self.stash.confirm_leadership().await?)
-    }
-
-    pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
-        Ok(self.stash.consolidate_batch(collections).await?)
     }
 }
 
@@ -823,7 +815,7 @@ where
 }
 
 #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
+async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
     let (
         databases,
         schemas,
@@ -899,6 +891,8 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
     })
 }
 
+/// A [`Transaction`] batches multiple [`Connection`] operations together and commits them
+/// atomically.
 pub struct Transaction<'a> {
     stash: &'a mut Stash,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
@@ -924,7 +918,7 @@ pub struct Transaction<'a> {
 }
 
 impl<'a> Transaction<'a> {
-    pub fn loaded_items(&self) -> Vec<Item> {
+    pub(crate) fn loaded_items(&self) -> Vec<Item> {
         let databases = self.databases.items();
         let schemas = self.schemas.items();
         let mut items = Vec::new();
@@ -969,17 +963,17 @@ impl<'a> Transaction<'a> {
         items
     }
 
-    pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
+    pub(crate) fn insert_audit_log_event(&mut self, event: VersionedEvent) {
         self.audit_log_updates
             .push((AuditLogKey { event }.into_proto(), (), 1));
     }
 
-    pub fn insert_storage_usage_event(&mut self, metric: VersionedStorageUsage) {
+    pub(crate) fn insert_storage_usage_event(&mut self, metric: VersionedStorageUsage) {
         self.storage_usage_updates
             .push((StorageUsageKey { metric }.into_proto(), (), 1));
     }
 
-    pub fn insert_user_database(
+    pub(crate) fn insert_user_database(
         &mut self,
         database_name: &str,
         owner_id: RoleId,
@@ -1005,7 +999,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_user_schema(
+    pub(crate) fn insert_user_schema(
         &mut self,
         database_id: DatabaseId,
         schema_name: &str,
@@ -1033,7 +1027,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_user_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
+    pub(crate) fn insert_user_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
         let name = role.name.clone();
@@ -1044,7 +1038,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Panics if any introspection source id is not a system id
-    pub fn insert_user_cluster(
+    pub(crate) fn insert_user_cluster(
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
@@ -1066,7 +1060,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Panics if any introspection source id is not a system id
-    pub fn insert_system_cluster(
+    fn insert_system_cluster(
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
@@ -1130,7 +1124,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    pub fn rename_cluster(
+    pub(crate) fn rename_cluster(
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
@@ -1155,7 +1149,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn rename_cluster_replica(
+    pub(crate) fn rename_cluster_replica(
         &mut self,
         replica_id: ReplicaId,
         replica_name: &QualifiedReplica,
@@ -1180,7 +1174,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_cluster_replica(
+    pub(crate) fn insert_cluster_replica(
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -1213,7 +1207,7 @@ impl<'a> Transaction<'a> {
     /// indexes.
     ///
     /// Panics if provided id is not a system id.
-    pub fn update_introspection_source_index_gids(
+    pub(crate) fn update_introspection_source_index_gids(
         &mut self,
         mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId)>)>,
     ) -> Result<(), Error> {
@@ -1238,7 +1232,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    pub fn insert_item(
+    pub(crate) fn insert_item(
         &mut self,
         id: GlobalId,
         schema_id: SchemaId,
@@ -1265,7 +1259,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
+    pub(crate) fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
         let id = self
             .id_allocator
             .items()
@@ -1282,7 +1276,7 @@ impl<'a> Transaction<'a> {
         Ok(id)
     }
 
-    pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
+    pub(crate) fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
         let prev = self.databases.set(DatabaseKey { id: *id }, None)?;
         if prev.is_some() {
             Ok(())
@@ -1291,7 +1285,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_schema(
+    pub(crate) fn remove_schema(
         &mut self,
         database_id: &Option<DatabaseId>,
         schema_id: &SchemaId,
@@ -1308,7 +1302,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_role(&mut self, name: &str) -> Result<(), Error> {
+    pub(crate) fn remove_role(&mut self, name: &str) -> Result<(), Error> {
         let roles = self.roles.delete(|_k, v| v.role.name == name);
         assert!(
             roles.iter().all(|(k, _)| k.id.is_user()),
@@ -1323,7 +1317,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), Error> {
+    pub(crate) fn remove_cluster(&mut self, id: ClusterId) -> Result<(), Error> {
         let deleted = self.clusters.delete(|k, _v| k.id == id);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
@@ -1341,7 +1335,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), Error> {
+    pub(crate) fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), Error> {
         let deleted = self.cluster_replicas.delete(|k, _v| k.id == id);
         if deleted.len() == 1 {
             Ok(())
@@ -1357,7 +1351,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
-    pub fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
+    pub(crate) fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
         let prev = self.items.set(ItemKey { gid: id }, None)?;
         if prev.is_some() {
             Ok(())
@@ -1372,7 +1366,7 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
     /// up to the called to either abort the transaction or commit.
-    pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), Error> {
+    pub(crate) fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), Error> {
         let n = self.items.delete(|k, _v| ids.contains(&k.gid)).len();
         if n == ids.len() {
             Ok(())
@@ -1389,7 +1383,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
-    pub fn update_item(
+    pub(crate) fn update_item(
         &mut self,
         id: GlobalId,
         item_name: &str,
@@ -1423,7 +1417,7 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the called to either abort the transaction or commit.
-    pub fn update_items(
+    pub(crate) fn update_items(
         &mut self,
         items: BTreeMap<GlobalId, (String, SerializedCatalogItem)>,
     ) -> Result<(), Error> {
@@ -1458,7 +1452,7 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub fn update_role(&mut self, id: RoleId, role: SerializedRole) -> Result<(), Error> {
+    pub(crate) fn update_role(&mut self, id: RoleId, role: SerializedRole) -> Result<(), Error> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
                 Some(RoleValue { role: role.clone() })
@@ -1474,22 +1468,11 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn update_user_version(&mut self, version: u64) -> Result<(), Error> {
-        let prev = self.configs.set(
-            ConfigKey {
-                key: USER_VERSION.to_string(),
-            },
-            Some(ConfigValue { value: version }),
-        )?;
-        assert!(prev.is_some());
-        Ok(())
-    }
-
     /// Updates persisted mapping from system objects to global IDs and fingerprints. Each element
     /// of `mappings` should be (old-global-id, new-system-object-mapping).
     ///
     /// Panics if provided id is not a system id.
-    pub fn update_system_object_mappings(
+    pub(crate) fn update_system_object_mappings(
         &mut self,
         mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     ) -> Result<(), Error> {
@@ -1525,7 +1508,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of clusters in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_cluster(
+    pub(crate) fn update_cluster(
         &mut self,
         id: ClusterId,
         cluster: &catalog::Cluster,
@@ -1557,7 +1540,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of cluster replicas in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_cluster_replica(
+    pub(crate) fn update_cluster_replica(
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -1589,7 +1572,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of databases in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_database(
+    pub(crate) fn update_database(
         &mut self,
         id: DatabaseId,
         database: &catalog::Database,
@@ -1619,7 +1602,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of schemas in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_schema(
+    pub(crate) fn update_schema(
         &mut self,
         database_id: Option<DatabaseId>,
         schema_id: SchemaId,
@@ -1646,7 +1629,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted default privilege.
-    pub fn set_default_privilege(
+    pub(crate) fn set_default_privilege(
         &mut self,
         role_id: RoleId,
         database_id: Option<DatabaseId>,
@@ -1669,7 +1652,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted system privilege.
-    pub fn set_system_privilege(
+    pub(crate) fn set_system_privilege(
         &mut self,
         grantee: RoleId,
         grantor: RoleId,
@@ -1683,7 +1666,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
+    pub(crate) fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1693,7 +1676,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Removes persisted system configuration `name`.
-    pub fn remove_system_config(&mut self, name: &str) {
+    pub(crate) fn remove_system_config(&mut self, name: &str) {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1703,11 +1686,11 @@ impl<'a> Transaction<'a> {
     }
 
     /// Removes all persisted system configurations.
-    pub fn clear_system_configs(&mut self) {
+    pub(crate) fn clear_system_configs(&mut self) {
         self.system_configurations.delete(|_k, _v| true);
     }
 
-    pub fn remove_timestamp(&mut self, timeline: Timeline) {
+    pub(crate) fn remove_timestamp(&mut self, timeline: Timeline) {
         let timeline_str = timeline.to_string();
         let prev = self
             .timestamps
@@ -1721,15 +1704,12 @@ impl<'a> Transaction<'a> {
     /// must be fatal to the calling process. We do not panic/halt inside this function itself so
     /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit(self) -> Result<(), Error> {
+    pub(crate) async fn commit(self) -> Result<(), Error> {
         self.commit_inner().await
     }
 
-    /// If `fix_migration_retractions` is true, additionally fix collections that have retracted
-    /// non-existent JSON rows, but whose Rust consolidations are the same (i.e., an Option field
-    /// was added, so we no longer know how to retract the None variant).
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit_inner(self) -> Result<(), Error> {
+    async fn commit_inner(self) -> Result<(), Error> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
@@ -1850,18 +1830,6 @@ impl<'a> Transaction<'a> {
 
         Ok(())
     }
-}
-
-/// Returns true if collection is uninitialized, false otherwise.
-pub async fn is_collection_uninitialized<K, V>(
-    stash: &mut Stash,
-    collection: &TypedCollection<K, V>,
-) -> Result<bool, Error>
-where
-    K: mz_stash::Data,
-    V: mz_stash::Data,
-{
-    Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
 }
 
 // Structs used to pass information to outside modules.
@@ -2033,7 +2001,6 @@ pub struct RoleKey {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
-    // flatten needed for backwards compatibility.
     role: SerializedRole,
 }
 
