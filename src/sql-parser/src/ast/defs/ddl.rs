@@ -288,7 +288,7 @@ pub struct CsrSeedProtobufSchema {
 }
 impl AstDisplay for CsrSeedProtobufSchema {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(" SCHEMA '");
+        f.write_str("SCHEMA '");
         f.write_str(&display::escape_single_quote_string(&self.schema));
         f.write_str("' MESSAGE '");
         f.write_str(&self.message_name);
@@ -521,22 +521,6 @@ impl<T: AstInfo> AstDisplay for Format<T> {
 impl_display_t!(Format);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Compression {
-    Gzip,
-    None,
-}
-
-impl AstDisplay for Compression {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Gzip => f.write_str("GZIP"),
-            Self::None => f.write_str("NONE"),
-        }
-    }
-}
-impl_display!(Compression);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DbzMode {
     /// There is now only one `DEBEZIUM` envelope,
     /// which has upsert semantics in sources and classic
@@ -596,7 +580,7 @@ impl AstDisplay for KafkaConnectionOptionName {
             KafkaConnectionOptionName::Broker => "BROKER",
             KafkaConnectionOptionName::Brokers => "BROKERS",
             KafkaConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
-            KafkaConnectionOptionName::SshTunnel => "SSL TUNNEL",
+            KafkaConnectionOptionName::SshTunnel => "SSH TUNNEL",
             KafkaConnectionOptionName::SslKey => "SSL KEY",
             KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
@@ -1214,58 +1198,6 @@ impl AstDisplay for KafkaSinkKey {
         }
     }
 }
-
-/// Information about upstream Postgres tables used for replication sources
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PgTable<T: AstInfo> {
-    /// The name of the table to sync
-    pub name: UnresolvedItemName,
-    /// The name for the table in Materialize
-    pub alias: T::ItemName,
-    /// The expected column schema of the synced table
-    pub columns: Vec<ColumnDef<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for PgTable<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        f.write_str(" AS ");
-        f.write_str(self.alias.to_ast_string());
-        if !self.columns.is_empty() {
-            f.write_str(" (");
-            f.write_node(&display::comma_separated(&self.columns));
-            f.write_str(")");
-        }
-    }
-}
-impl_display_t!(PgTable);
-
-/// The key sources specified in the S3 source's `DISCOVER OBJECTS` clause.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum S3KeySource {
-    /// `SCAN BUCKET '<bucket>'`
-    Scan { bucket: String },
-    /// `SQS NOTIFICATIONS '<queue-name>'`
-    SqsNotifications { queue: String },
-}
-
-impl AstDisplay for S3KeySource {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            S3KeySource::Scan { bucket } => {
-                f.write_str(" BUCKET SCAN '");
-                f.write_str(&display::escape_single_quote_string(bucket));
-                f.write_str("'");
-            }
-            S3KeySource::SqsNotifications { queue } => {
-                f.write_str(" SQS NOTIFICATIONS '");
-                f.write_str(&display::escape_single_quote_string(queue));
-                f.write_str("'");
-            }
-        }
-    }
-}
-impl_display!(S3KeySource);
 
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.

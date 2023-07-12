@@ -238,6 +238,13 @@ CREATE TABLE schema_name.table_name (col_name int4)
 CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
+CREATE TABLE schema_name.table_name (col_name text COLLATE en)
+----
+CREATE TABLE schema_name.table_name (col_name text COLLATE en)
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: Some(UnresolvedItemName([Ident("en")])), options: [] }], constraints: [], if_not_exists: false, temporary: false })
+
+parse-statement
 CREATE TABLE "" (col_name int)
 ----
 error: zero-length delimited identifier

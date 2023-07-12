@@ -2232,7 +2232,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_kafka_connection_option(&mut self) -> Result<KafkaConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL])? {
+        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL, SSH])? {
             BROKER => {
                 return Ok(KafkaConnectionOption {
                     name: KafkaConnectionOptionName::Broker,
