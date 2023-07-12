@@ -362,8 +362,8 @@ impl Connection {
             .map_ok(|(k, v): (RoleKey, RoleValue)| Role {
                 id: k.id,
                 name: v.role.name,
-                attributes: v.role.attributes.expect("attributes not migrated"),
-                membership: v.role.membership.expect("membership not migrated"),
+                attributes: v.role.attributes,
+                membership: v.role.membership,
             })
             .collect::<Result<_, _>>()?;
 
