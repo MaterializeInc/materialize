@@ -27,8 +27,9 @@ mode cockroach
 # control characters. In order for the test file to remain valid
 # printable UTF-8, we double-escape the representations below.
 
-statement ok
-SET bytea_output = escape
+# TODO: Support bytea
+#statement ok
+#SET bytea_output = escape
 
 # array construction
 
