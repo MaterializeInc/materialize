@@ -653,6 +653,11 @@ fn generate_required_privileges(
                 AclMode::CREATE,
                 role_id,
             )];
+            privileges.extend(generate_item_usage_privileges(
+                catalog,
+                resolved_ids,
+                role_id,
+            ));
             privileges.extend_from_slice(&generate_read_privileges(
                 catalog,
                 iter::once(sink.from),
