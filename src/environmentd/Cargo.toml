@@ -36,6 +36,7 @@ mz-build-info = { path = "../build-info" }
 mz-adapter = { path = "../adapter" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
+mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }

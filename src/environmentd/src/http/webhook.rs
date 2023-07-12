@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use mz_adapter::{AdapterError, AppendWebhookResponse, AppendWebhookValidation};
+use mz_expr::EvalError;
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
@@ -90,13 +91,13 @@ async fn validate_request(
             // TODO(parkmycar): Is there a way to get a Datum::Map without packing and unpacking a
             // row?
             let datums = row.unpack();
-            let body = datums[0];
-            let headers = datums[1];
+            let body = datums.get(0).copied().unwrap_or(Datum::Null);
+            let headers = datums.get(1).copied().unwrap_or(Datum::Null);
 
             // Since the validation expression is technically a user defined function, we want to
             // be extra careful and guard against issues taking down the entire process.
             mz_ore::panic::catch_unwind(move || validate_expr(body, headers))
-                .map_err(|_| anyhow::anyhow!("Validation panicked"))?
+                .map_err(|_| WebhookError::ValidationPanicked)?
         },
     )
     .await
@@ -105,7 +106,9 @@ async fn validate_request(
     if valid {
         Ok(())
     } else {
-        Err(WebhookError::ValidationFailed)
+        Err(WebhookError::ValidationFailed(
+            "invalid request".to_string(),
+        ))
     }
 }
 
@@ -183,14 +186,16 @@ pub enum WebhookError {
     Unsupported(&'static str),
     #[error("failed to deserialize body as {ty:?}: {msg}")]
     InvalidBody { ty: ScalarType, msg: String },
-    #[error("failed to validate the request")]
-    ValidationFailed,
+    #[error("failed to validate the request: {0}")]
+    ValidationFailed(String),
+    #[error("attempt to validate request panicked")]
+    ValidationPanicked,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("internal adapter failure! {0:?}")]
     InternalAdapterError(AdapterError),
     #[error("internal failure! {0:?}")]
-    Internal(#[from] anyhow::Error),
+    Internal(anyhow::Error),
 }
 
 impl From<StorageError> for WebhookError {
@@ -212,17 +217,23 @@ impl From<AdapterError> for WebhookError {
     }
 }
 
+impl From<anyhow::Error> for WebhookError {
+    fn from(value: anyhow::Error) -> Self {
+        match value.downcast::<EvalError>() {
+            Ok(eval_error) => WebhookError::ValidationFailed(eval_error.to_string()),
+            Err(e) => WebhookError::Internal(e),
+        }
+    }
+}
+
 impl IntoResponse for WebhookError {
     fn into_response(self) -> axum::response::Response {
         match self {
             e @ WebhookError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
-            e @ WebhookError::Unsupported(_) => {
-                (StatusCode::BAD_REQUEST, e.to_string()).into_response()
-            }
-            e @ WebhookError::InvalidBody { .. } => {
-                (StatusCode::BAD_REQUEST, e.to_string()).into_response()
-            }
-            e @ WebhookError::ValidationFailed => {
+            e @ WebhookError::Unsupported(_)
+            | e @ WebhookError::InvalidBody { .. }
+            | e @ WebhookError::ValidationFailed(_)
+            | e @ WebhookError::ValidationPanicked => {
                 (StatusCode::BAD_REQUEST, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {

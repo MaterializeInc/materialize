@@ -14,10 +14,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{RowArena, ScalarType};
+use mz_repr::{Datum, RowArena, ScalarType};
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
@@ -884,7 +885,14 @@ impl Coordinator {
                             Box::new(move |body, headers| -> Result<bool, anyhow::Error> {
                                 let temp_storage = RowArena::default();
                                 let valid = expr.eval(&[body, headers], &temp_storage)?;
-                                Ok(valid.unwrap_bool())
+
+                                match valid {
+                                    Datum::True => Ok(true),
+                                    Datum::False | Datum::Null => Ok(false),
+                                    // Note: we don't include the returned value here to prevent
+                                    // leaking data.
+                                    _ => Err(anyhow!("Bad result from validation")),
+                                }
                             });
                         f
                     });

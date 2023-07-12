@@ -57,8 +57,8 @@ impl PlanNotice {
             }
             PlanNotice::WebhookValidationDoesNotUseColumns => {
                 let details = "
-                The expression provided to validate a webhook request, does not \
-                reference any part of the request, and thus is probably incorrect.
+                The expression provided to validate a webhook request does not \
+                reference any part of the request and is probably incorrect.
                 ";
                 Some(details.to_string())
             }
