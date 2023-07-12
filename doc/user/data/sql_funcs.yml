@@ -539,7 +539,7 @@
   functions:
   - signature: jsonb_agg(expression) -> jsonb
     description: Aggregate values (including nulls) as a jsonb array.
-    url: jsonb_agg
+    url: "/docs/sql/functions/jsonb_agg"
 
   - signature: 'jsonb_array_elements(j: jsonb) -> Col<jsonb>'
     description: "`j`'s elements if `j` is an array."
@@ -573,7 +573,7 @@
 
   - signature: jsonb_object_agg(keys, values) -> jsonb
     description: Aggregate keys and values (including nulls) as a jsonb object.
-    url: jsonb_object_agg
+    url: "/docs/sql/functions/jsonb_object_agg"
 
   - signature: 'jsonb_object_keys(j: jsonb) -> Col<string>'
     description: "`j`'s outermost keys if `j` is an object."
