@@ -558,21 +558,6 @@ impl Stash {
                 tx.batch_execute(SCHEMA).await?;
             }
 
-            // Migration added in 0.45.0. This block can be removed anytime after that
-            // release.
-            {
-                // We can't add the column for other txn modes, and they don't
-                // even require it since they use the read-only fetch_epoch
-                // query.
-                if matches!(self.txn_mode, TransactionMode::Writeable) {
-                    tx
-                    .batch_execute(
-                        "ALTER TABLE fence ADD COLUMN IF NOT EXISTS version bigint DEFAULT 1 NOT NULL;",
-                    )
-                    .await?;
-                }
-            }
-
             let epoch = if matches!(self.txn_mode, TransactionMode::Writeable) {
                 // The `data`, `sinces`, and `uppers` tables can create and delete
                 // rows at a high frequency, generating many tombstoned rows. If
@@ -609,31 +594,6 @@ impl Stash {
             };
 
             tx.commit().await?;
-
-            // Migration added in 0.54.0. This block can be removed anytime after that
-            // release.
-            {
-                // Check if we still use JSON.
-                let rows = client
-                    .query("SELECT pg_typeof(key) kind FROM data LIMIT 1", &[])
-                    .await?;
-                let is_json = rows
-                    .get(0)
-                    .map(|row| {
-                        row.try_get("kind")
-                            .map(|ty: String| ty == "jsonb")
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false);
-
-                if is_json {
-                    upgrade::migrate_json_to_proto(&mut client, epoch)
-                        .await
-                        .map_err(|e| StashError {
-                            inner: InternalStashError::Other(e.to_string()),
-                        })?;
-                }
-            }
 
             self.epoch = Some(epoch);
         }
