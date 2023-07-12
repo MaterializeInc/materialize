@@ -379,6 +379,9 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(v);
             }
             Expr::Function(fun) => {
+                //if fun.name == T::ItemName(UnresolvedItemName(vec![Ident("extract".to_string())])) {
+                //    f.write_str("HERE");
+                //}
                 f.write_node(fun);
             }
             Expr::Case {

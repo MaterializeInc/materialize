@@ -77,18 +77,6 @@ impl AstDisplay for Value {
             Value::Boolean(v) => f.write_str(v),
             Value::Interval(IntervalValue {
                 value,
-                precision_high: _,
-                precision_low: _,
-                fsec_max_precision: Some(fsec_max_precision),
-            }) => {
-                f.write_str("INTERVAL '");
-                f.write_node(&display::escape_single_quote_string(value));
-                f.write_str("' SECOND (");
-                f.write_str(fsec_max_precision);
-                f.write_str(")");
-            }
-            Value::Interval(IntervalValue {
-                value,
                 precision_high,
                 precision_low,
                 fsec_max_precision,
