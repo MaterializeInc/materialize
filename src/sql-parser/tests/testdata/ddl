@@ -453,18 +453,18 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETE
 CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaConfigOption { name: Acks, value: Some(Value(String("acks"))) }, KafkaConfigOption { name: ClientId, value: Some(Value(String("client-id"))) }, KafkaConfigOption { name: EnableIdempotence, value: Some(Value(String("true"))) }, KafkaConfigOption { name: FetchMessageMaxBytes, value: Some(Value(Number("100"))) }, KafkaConfigOption { name: GroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaConfigOption { name: IsolationLevel, value: Some(Value(String("iso"))) }, KafkaConfigOption { name: TopicMetadataRefreshIntervalMs, value: Some(Value(Number("100"))) }, KafkaConfigOption { name: TransactionTimeoutMs, value: Some(Value(Number("10"))) }, KafkaConfigOption { name: StartOffset, value: Some(Value(Number("1"))) }, KafkaConfigOption { name: StartTimestamp, value: Some(Value(Number("1234"))) }, KafkaConfigOption { name: PartitionCount, value: Some(Value(Number("2"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
-CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
+CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') INCLUDE TIMESTAMP;
 ----
-CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
+CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') INCLUDE TIMESTAMP
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: Some(Unresolved(Ident("c"))), col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: Some(Unresolved(Ident("c"))), col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [SourceIncludeMetadata { ty: Timestamp, alias: None }], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) FORMAT BYTES
+CREATE SINK IF NOT EXISTS foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) FORMAT BYTES ENVELOPE NONE
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) FORMAT BYTES
+CREATE SINK IF NOT EXISTS foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) FORMAT BYTES ENVELOPE NONE
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: true, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: Some(None), with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
@@ -803,6 +803,13 @@ SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
 
 parse-statement
+SUBSCRIBE foo.bar WITH (PROGRESS) AS OF now()
+----
+SUBSCRIBE foo.bar WITH (PROGRESS) AS OF now()
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Progress, value: None }], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
+
+parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
 error: Expected one of PROGRESS or SNAPSHOT, found identifier "timestamps"
@@ -1108,11 +1115,11 @@ ALTER SINK name SET (property = true)
                      ^
 
 parse-statement
-ALTER SINK name SET (SIZE LARGE)
+ALTER SINK IF EXISTS name SET (SIZE LARGE)
 ----
-ALTER SINK name SET (SIZE = large)
+ALTER SINK IF EXISTS name SET (SIZE = large)
 =>
-AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: SetOptions([CreateSinkOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
+AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: true, action: SetOptions([CreateSinkOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
 
 parse-statement
 ALTER SINK name RESET (SIZE)
@@ -1592,11 +1599,11 @@ SHOW SECRETS
 Show(ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, filter: None }))
 
 parse-statement
-ALTER SECRET secret RENAME TO secret2
+ALTER SECRET IF EXISTS secret RENAME TO secret2
 ----
-ALTER SECRET secret RENAME TO secret2
+ALTER SECRET IF EXISTS secret RENAME TO secret2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedItemName([Ident("secret")])), to_item_name: Ident("secret2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: true, name: Item(UnresolvedItemName([Ident("secret")])), to_item_name: Ident("secret2") })
 
 parse-statement
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
@@ -1625,11 +1632,11 @@ CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-ma
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
-CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSH TUNNEL tun, SSL CERTIFICATE AUTHORITY 'authority', SASL MECHANISMS 'sasl-mechanisms', SASL USERNAME 'sasl-username', SASL PASSWORD 'sasl-password';
+CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSH TUNNEL tun, SSL CERTIFICATE AUTHORITY 'authority', SASL MECHANISMS 'sasl-mechanisms', SASL USERNAME 'sasl-username', SASL PASSWORD = SECRET sc;
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSH TUNNEL = tun, SSL CERTIFICATE AUTHORITY = 'authority', SASL MECHANISMS = 'sasl-mechanisms', SASL USERNAME = 'sasl-username', SASL PASSWORD = 'sasl-password')
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSH TUNNEL = tun, SSL CERTIFICATE AUTHORITY = 'authority', SASL MECHANISMS = 'sasl-mechanisms', SASL USERNAME = 'sasl-username', SASL PASSWORD = SECRET sc)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, KafkaConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("authority"))) }, KafkaConnectionOption { name: SaslMechanisms, value: Some(Value(String("sasl-mechanisms"))) }, KafkaConnectionOption { name: SaslUsername, value: Some(Value(String("sasl-username"))) }, KafkaConnectionOption { name: SaslPassword, value: Some(Value(String("sasl-password"))) }] }, if_not_exists: false, with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, KafkaConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("authority"))) }, KafkaConnectionOption { name: SaslMechanisms, value: Some(Value(String("sasl-mechanisms"))) }, KafkaConnectionOption { name: SaslUsername, value: Some(Value(String("sasl-username"))) }, KafkaConnectionOption { name: SaslPassword, value: Some(Secret(Name(UnresolvedItemName([Ident("sc")])))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1);
@@ -1639,14 +1646,14 @@ CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aw
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
-CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093));
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093, AVAILABILITY ZONE 'az1'));
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093))
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093, AVAILABILITY ZONE 'az1'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false, with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }, KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("az1"))) }] }) })) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
-CREATE CONNECTION conn1 TO KAFKA (
+CREATE CONNECTION IF NOT EXISTS conn1 TO KAFKA (
     BROKERS (
         'kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092),
         'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093),
@@ -1654,9 +1661,9 @@ CREATE CONNECTION conn1 TO KAFKA (
     )
 );
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
+CREATE CONNECTION IF NOT EXISTS conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false, with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: true, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1702,11 +1709,11 @@ DROP CONNECTION conn1
 DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [Item(UnresolvedItemName([Ident("conn1")]))], cascade: false })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
+CREATE SOURCE IF NOT EXISTS src1 (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
+CREATE SOURCE IF NOT EXISTS src1 (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [Ident("a"), Ident("b")], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: true, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }), with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY (a, b) FORMAT BYTES
@@ -2259,3 +2266,45 @@ DROP OWNED BY joe, mike CASCADE
 DROP OWNED BY joe, mike CASCADE
 =>
 DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: true })
+
+parse-statement
+ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')
+----
+ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: SetOptions([IndexOption { name: LogicalCompactionWindow, value: Some(Value(String("1ms"))) }]) })
+
+parse-statement
+ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (LOGICAL COMPACTION WINDOW)
+----
+ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (LOGICAL COMPACTION WINDOW)
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: ResetOptions([LogicalCompactionWindow]) })
+
+parse-statement
+ALTER CONNECTION IF EXISTS mc RENAME TO ic
+----
+ALTER CONNECTION IF EXISTS mc RENAME TO ic
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Connection, if_exists: true, name: Item(UnresolvedItemName([Ident("mc")])), to_item_name: Ident("ic") })
+
+parse-statement
+ALTER CONNECTION IF EXISTS mc ROTATE KEYS
+----
+ALTER CONNECTION IF EXISTS mc ROTATE KEYS
+=>
+AlterConnection(AlterConnectionStatement { name: UnresolvedItemName([Ident("mc")]), if_exists: true })
+
+parse-statement
+VALIDATE CONNECTION kafka_conn
+----
+VALIDATE CONNECTION kafka_conn
+=>
+ValidateConnection(ValidateConnectionStatement { name: Name(UnresolvedItemName([Ident("kafka_conn")])) })
+
+parse-statement
+INSPECT SHARD 'foo'
+----
+INSPECT SHARD 'foo'
+=>
+Show(InspectShard(InspectShardStatement { id: "foo" }))

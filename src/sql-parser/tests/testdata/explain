@@ -47,6 +47,13 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 665
 Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Text, no_errors: false, explainee: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
 
 parse-statement
+EXPLAIN PHYSICAL PLAN FOR SELECT 665
+----
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT 665
+=>
+Explain(ExplainStatement { stage: PhysicalPlan, config_flags: [], format: Text, no_errors: false, explainee: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
+
+parse-statement
 EXPLAIN SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 665
@@ -59,6 +66,13 @@ EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR VIEW foo
 =>
 Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Text, no_errors: false, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW foo
+----
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR MATERIALIZED VIEW foo
+=>
+Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Text, no_errors: false, explainee: MaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN WITH(types) FOR VIEW foo
@@ -109,6 +123,13 @@ EXPLAIN AS JSON SELECT * FROM foo
 EXPLAIN OPTIMIZED PLAN AS JSON FOR SELECT * FROM foo
 =>
 Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Json, no_errors: false, explainee: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
+
+parse-statement
+EXPLAIN AS DOT SELECT * FROM foo
+----
+EXPLAIN OPTIMIZED PLAN AS DOT FOR SELECT * FROM foo
+=>
+Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Dot, no_errors: false, explainee: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 EXPLAIN OPTIMIZER TRACE WITH (est_cost) AS TEXT FOR BROKEN SELECT 1 + 1

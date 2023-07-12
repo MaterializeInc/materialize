@@ -89,6 +89,13 @@ SHOW SCHEMAS
 Show(ShowObjects(ShowObjectsStatement { object_type: Schema { from: None }, from: None, filter: None }))
 
 parse-statement
+SHOW SCHEMAS FROM foo
+----
+SHOW SCHEMAS FROM foo
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Schema { from: Some(UnresolvedDatabaseName(Ident("foo"))) }, from: None, filter: None }))
+
+parse-statement
 SHOW SCHEMAS FROM foo.bar
 ----
 error: Expected end of statement, found dot
@@ -313,6 +320,20 @@ SHOW SUBSOURCES FROM s IN CLUSTER c
                        ^
 
 parse-statement
+SHOW CREATE CONNECTION "FOO"
+----
+SHOW CREATE CONNECTION "FOO"
+=>
+Show(ShowCreateConnection(ShowCreateConnectionStatement { connection_name: Name(UnresolvedItemName([Ident("FOO")])) }))
+
+parse-statement
+SHOW CREATE TABLE "FOO"
+----
+SHOW CREATE TABLE "FOO"
+=>
+Show(ShowCreateTable(ShowCreateTableStatement { table_name: Name(UnresolvedItemName([Ident("FOO")])) }))
+
+parse-statement
 SHOW CREATE VIEW foo
 ----
 SHOW CREATE VIEW foo
@@ -339,6 +360,13 @@ SHOW CREATE INDEX foo
 SHOW CREATE INDEX foo
 =>
 Show(ShowCreateIndex(ShowCreateIndexStatement { index_name: Name(UnresolvedItemName([Ident("foo")])) }))
+
+parse-statement
+SHOW CREATE SOURCE foo
+----
+SHOW CREATE SOURCE foo
+=>
+Show(ShowCreateSource(ShowCreateSourceStatement { source_name: Name(UnresolvedItemName([Ident("foo")])) }))
 
 parse-statement
 SHOW COLUMNS FROM mytable
@@ -621,3 +649,32 @@ SET SESSION schema = public, private
 error: Expected end of statement, found comma
 SET SESSION schema = public, private
                            ^
+
+parse-statement
+SHOW TYPES
+----
+SHOW TYPES
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Type, from: None, filter: None }))
+
+parse-statement
+SHOW CLUSTER REPLICAS
+----
+SHOW CLUSTER REPLICAS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: ClusterReplica, from: None, filter: None }))
+
+parse-statement
+SHOW OBJECTS
+----
+SHOW OBJECTS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Object, from: None, filter: None }))
+
+parse-statement
+SHOW CONNECTIONS
+----
+SHOW CONNECTIONS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Connection, from: None, filter: None }))
+

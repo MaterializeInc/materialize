@@ -1958,7 +1958,9 @@ pub struct InspectShardStatement {
 impl AstDisplay for InspectShardStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("INSPECT SHARD ");
-        f.write_str(&self.id);
+        f.write_str("'");
+        f.write_node(&display::escape_single_quote_string(&self.id));
+        f.write_str("'");
     }
 }
 impl_display!(InspectShardStatement);
