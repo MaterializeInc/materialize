@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_adapter::{AdapterError, AppendWebhookResponse};
+use mz_adapter::{AdapterError, AppendWebhookResponse, AppendWebhookValidation};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
@@ -41,10 +41,15 @@ pub async fn handle_webhook(
     let maybe_appender = client
         .append_webhook(database.clone(), schema.clone(), name.clone(), conn_id)
         .await?;
-    let Some(AppendWebhookResponse { tx, body_ty, header_ty }) = maybe_appender else {
+    let Some(AppendWebhookResponse { tx, body_ty, header_ty, validate_expr }) = maybe_appender else {
         let desc = format!("{database}.{schema}.{name}");
         return Err(WebhookError::NotFound(desc.quoted().to_string()));
     };
+
+    // If this source requires validation, then validate!
+    if let Some(validate_expr) = validate_expr {
+        validate_request(validate_expr, Bytes::clone(&body), &headers).await?;
+    }
 
     // Pack our body and headers into a Row.
     let row = pack_row(body, headers, body_ty, header_ty)?;
@@ -53,6 +58,55 @@ pub async fn handle_webhook(
     tx.append(vec![(row, 1)]).await?;
 
     Ok(())
+}
+
+async fn validate_request(
+    validate_expr: AppendWebhookValidation,
+    body: Bytes,
+    headers: &http::HeaderMap,
+) -> Result<(), WebhookError> {
+    // Convert our headers into a map for validation.
+    let mut headers_s = BTreeMap::new();
+    for (name, val) in headers.iter() {
+        if let Ok(val_s) = val.to_str() {
+            headers_s.insert(name.as_str().to_string(), val_s.to_string());
+        }
+    }
+
+    // Run our validation on a separate thread, waiting for it's completion.
+    let valid = mz_ore::task::spawn_blocking(
+        || "webhook-validate".to_string(),
+        move || {
+            let mut row = Row::with_capacity(2);
+            let mut packer = row.packer();
+
+            packer.push(Datum::Bytes(&body[..]));
+            packer.push_dict(
+                headers_s
+                    .iter()
+                    .map(|(name, val)| (name.as_str(), Datum::String(val))),
+            );
+
+            // TODO(parkmycar): Is there a way to get a Datum::Map without packing and unpacking a
+            // row?
+            let datums = row.unpack();
+            let body = datums[0];
+            let headers = datums[1];
+
+            // Since the validation expression is technically a user defined function, we want to
+            // be extra careful and guard against issues taking down the entire process.
+            mz_ore::panic::catch_unwind(move || validate_expr(body, headers))
+                .map_err(|_| anyhow::anyhow!("Validation panicked"))?
+        },
+    )
+    .await
+    .context("validation")??;
+
+    if valid {
+        Ok(())
+    } else {
+        Err(WebhookError::ValidationFailed)
+    }
 }
 
 /// Given the body and headers of a request, pack them into a [`Row`].
@@ -129,6 +183,8 @@ pub enum WebhookError {
     Unsupported(&'static str),
     #[error("failed to deserialize body as {ty:?}: {msg}")]
     InvalidBody { ty: ScalarType, msg: String },
+    #[error("failed to validate the request")]
+    ValidationFailed,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("internal adapter failure! {0:?}")]
@@ -164,6 +220,9 @@ impl IntoResponse for WebhookError {
                 (StatusCode::BAD_REQUEST, e.to_string()).into_response()
             }
             e @ WebhookError::InvalidBody { .. } => {
+                (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+            }
+            e @ WebhookError::ValidationFailed => {
                 (StatusCode::BAD_REQUEST, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {

@@ -97,3 +97,8 @@ statement ok
 CREATE SOURCE IF NOT EXISTS webhook_text_include_headers FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
+
+statement ok
+CREATE SOURCE IF NOT EXISTS webhook_json_with_validation FROM WEBHOOK
+    BODY FORMAT JSON
+    VALIDATE USING ( 'a' = 'test' )

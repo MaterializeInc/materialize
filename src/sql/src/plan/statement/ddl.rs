@@ -397,7 +397,18 @@ pub fn plan_create_webhook_source(
         if_not_exists,
         body_format,
         include_headers,
+        validate_using,
     } = stmt;
+
+    let validate_using = validate_using
+        .map(|expr| query::plan_webhook_validate_using(scx, expr))
+        .transpose()?;
+    if let Some(expr) = &validate_using {
+        if !expr.contains_column() {
+            scx.catalog
+                .add_notice(PlanNotice::WebhookValidationDoesNotUseColumns);
+        }
+    }
 
     let body_scalar_type = match body_format {
         Format::Bytes => ScalarType::Bytes,
@@ -457,6 +468,7 @@ pub fn plan_create_webhook_source(
         desc,
         create_sql,
         timeline,
+        validate_using,
     }))
 }
 

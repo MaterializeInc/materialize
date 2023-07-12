@@ -594,6 +594,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub body_format: Format<T>,
     pub include_headers: bool,
+    pub validate_using: Option<Expr<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
@@ -610,6 +611,13 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
 
         if self.include_headers {
             f.write_str(" INCLUDE HEADERS");
+        }
+
+        if let Some(validate) = &self.validate_using {
+            f.write_str(" VALIDATE USING ");
+            f.write_str("( ");
+            f.write_node(validate);
+            f.write_str(" )");
         }
     }
 }

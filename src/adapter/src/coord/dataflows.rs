@@ -532,7 +532,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook
+            | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Source => false,
         }
     }

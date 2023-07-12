@@ -516,6 +516,7 @@ pub struct CreateWebhookSourcePlan {
     pub create_sql: String,
     pub desc: RelationDesc,
     pub timeline: Timeline,
+    pub validate_using: Option<MirScalarExpr>,
 }
 
 #[derive(Debug)]

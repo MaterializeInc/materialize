@@ -178,6 +178,7 @@ impl AdapterNotice {
             AdapterNotice::PlanNotice(plan) => match plan {
                 PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
+                PlanNotice::WebhookValidationDoesNotUseColumns => SqlState::WARNING,
             },
         }
     }

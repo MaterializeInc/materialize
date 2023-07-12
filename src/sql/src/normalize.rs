@@ -319,6 +319,7 @@ pub fn create_statement(
             if_not_exists,
             include_headers: _,
             body_format: _,
+            validate_using: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;

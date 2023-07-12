@@ -126,6 +126,16 @@ $ webhook-append database=materialize schema=public name=webhook_bytes
 null
 123
 
+> CREATE SOURCE webhook_bytes_with_validation FROM WEBHOOK
+  BODY FORMAT BYTES
+  VALIDATE USING ( headers->'signature' = 'test' )
+
+$ webhook-append database=materialize schema=public name=webhook_bytes_with_validation signature=test
+123
+
+$ webhook-append database=materialize schema=public name=webhook_bytes_with_validation signature=invalid status=400
+456
+
 # Turn off the feature.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_webhook_sources = false

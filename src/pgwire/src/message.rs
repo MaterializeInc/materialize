@@ -481,6 +481,7 @@ impl Severity {
             AdapterNotice::PlanNotice(notice) => match notice {
                 PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
+                PlanNotice::WebhookValidationDoesNotUseColumns => Severity::Notice,
             },
         }
     }

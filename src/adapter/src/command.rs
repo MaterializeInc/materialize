@@ -277,18 +277,27 @@ impl IntoIterator for GetVariablesResponse {
     }
 }
 
+/// Type of closure that is called to validate a webhook request.
+pub type AppendWebhookValidation = Box<
+    dyn FnOnce(mz_repr::Datum, mz_repr::Datum) -> Result<bool, anyhow::Error>
+        + Send
+        + std::panic::UnwindSafe,
+>;
+
 pub struct AppendWebhookResponse {
     pub tx: MonotonicAppender,
     pub body_ty: ColumnType,
     pub header_ty: Option<ColumnType>,
+    pub validate_expr: Option<AppendWebhookValidation>,
 }
 
 impl fmt::Debug for AppendWebhookResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AppendWebhookResponse")
-            .field("tx", &"(...)")
+            .field("tx", &self.tx)
             .field("body_ty", &self.body_ty)
             .field("header_ty", &self.header_ty)
+            .field("validate_expr", &"(...)")
             .finish()
     }
 }

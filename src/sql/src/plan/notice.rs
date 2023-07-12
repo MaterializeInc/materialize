@@ -37,6 +37,7 @@ pub enum PlanNotice {
         key: Vec<ColumnName>,
         name: String,
     },
+    WebhookValidationDoesNotUseColumns,
 }
 
 impl PlanNotice {
@@ -53,6 +54,13 @@ impl PlanNotice {
                     name.quoted()
                 );
                 Some(details)
+            }
+            PlanNotice::WebhookValidationDoesNotUseColumns => {
+                let details = "
+                The expression provided to validate a webhook request, does not \
+                reference any part of the request, and thus is probably incorrect.
+                ";
+                Some(details.to_string())
             }
             _ => None,
         }
@@ -83,6 +91,12 @@ impl fmt::Display for PlanNotice {
             PlanNotice::UpsertSinkKeyNotEnforced { .. } => {
                 write!(f, "upsert key not validated to be unique")
             }
+            PlanNotice::WebhookValidationDoesNotUseColumns => write!(
+                f,
+                "validation expression does not depend on {} or {}",
+                "headers".quoted(),
+                "body".quoted()
+            ),
         }
     }
 }
