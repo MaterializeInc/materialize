@@ -57,6 +57,38 @@ def run(
     )
     initialize_logging()
 
+    system_conn = pg8000.connect(
+        host=host, port=system_port, user="mz_system", database="materialize"
+    )
+    system_conn.autocommit = True
+    with system_conn.cursor() as cur:
+        # TODO: Shuffle settings which should always work
+        cur.execute("ALTER SYSTEM SET enable_managed_clusters = true")
+        cur.execute("ALTER SYSTEM SET enable_rbac_checks = true")
+        cur.execute("ALTER SYSTEM SET enable_ld_rbac_checks = true")
+        cur.execute("ALTER SYSTEM SET persist_sink_minimum_batch_updates = 128")
+        cur.execute("ALTER SYSTEM SET enable_multi_worker_storage_persist_sink = true")
+        cur.execute("ALTER SYSTEM SET storage_persist_sink_minimum_batch_updates = 100")
+        cur.execute("ALTER SYSTEM SET persist_pubsub_push_diff_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_pubsub_client_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_stats_filter_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_stats_collection_enabled = true")
+        cur.execute("ALTER SYSTEM SET persist_stats_audit_percent = 100")
+        cur.execute("ALTER SYSTEM SET enable_monotonic_oneshot_selects = true")
+        cur.execute(
+            "ALTER SYSTEM SET persist_next_listen_batch_retryer_clamp = '100ms'"
+        )
+        cur.execute(
+            "ALTER SYSTEM SET persist_next_listen_batch_retryer_initial_backoff = '1200ms'"
+        )
+        cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
+        cur.execute("ALTER SYSTEM SET max_tables = 105")
+        cur.execute("ALTER SYSTEM SET max_materialized_views = 105")
+        cur.execute("ALTER SYSTEM SET max_sources = 105")
+        cur.execute("ALTER SYSTEM SET max_roles = 105")
+        cur.execute("ALTER SYSTEM SET max_clusters = 105")
+        cur.execute("ALTER SYSTEM SET max_replicas_per_cluster = 105")
+
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
     ).timestamp()
@@ -251,38 +283,6 @@ def main() -> int:
     parse_common_args(parser)
 
     args = parser.parse_args()
-
-    system_conn = pg8000.connect(
-        host=args.host, port=args.system_port, user="mz_system", database="materialize"
-    )
-    system_conn.autocommit = True
-    with system_conn.cursor() as cur:
-        # TODO: Shuffle settings which should always work
-        cur.execute("ALTER SYSTEM SET enable_managed_clusters = true")
-        cur.execute("ALTER SYSTEM SET enable_rbac_checks = true")
-        cur.execute("ALTER SYSTEM SET enable_ld_rbac_checks = true")
-        cur.execute("ALTER SYSTEM SET persist_sink_minimum_batch_updates = 128")
-        cur.execute("ALTER SYSTEM SET enable_multi_worker_storage_persist_sink = true")
-        cur.execute("ALTER SYSTEM SET storage_persist_sink_minimum_batch_updates = 100")
-        cur.execute("ALTER SYSTEM SET persist_pubsub_push_diff_enabled = true")
-        cur.execute("ALTER SYSTEM SET persist_pubsub_client_enabled = true")
-        cur.execute("ALTER SYSTEM SET persist_stats_filter_enabled = true")
-        cur.execute("ALTER SYSTEM SET persist_stats_collection_enabled = true")
-        cur.execute("ALTER SYSTEM SET persist_stats_audit_percent = 100")
-        cur.execute("ALTER SYSTEM SET enable_monotonic_oneshot_selects = true")
-        cur.execute(
-            "ALTER SYSTEM SET persist_next_listen_batch_retryer_clamp = '100ms'"
-        )
-        cur.execute(
-            "ALTER SYSTEM SET persist_next_listen_batch_retryer_initial_backoff = '1200ms'"
-        )
-        cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
-        cur.execute("ALTER SYSTEM SET max_tables = 105")
-        cur.execute("ALTER SYSTEM SET max_materialized_views = 105")
-        cur.execute("ALTER SYSTEM SET max_sources = 105")
-        cur.execute("ALTER SYSTEM SET max_roles = 105")
-        cur.execute("ALTER SYSTEM SET max_clusters = 105")
-        cur.execute("ALTER SYSTEM SET max_replicas_per_cluster = 105")
 
     run(
         args.host,
