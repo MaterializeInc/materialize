@@ -135,4 +135,4 @@ sqllogictest -v "$@" "${tests_without_views[@]}" | tee -a target/slt.log
 # --auto-transactions, no differences seen in previous run. We might want to
 # revisit and see if we can periodically test them, even if it takes 2-3 days
 # for the run to finish.
-sqllogictest -v --auto-transactions --auto-index-tables --enable-table-keys "$@" test/sqllogictest/sqlite/test | tee -a target/slt.log
+find test/sqllogictest/sqlite/test -type f -print0 | xargs -0 sqllogictest -v --auto-transactions --auto-index-tables --enable-table-keys "$@" | tee -a target/slt.log

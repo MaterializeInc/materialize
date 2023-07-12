@@ -34,8 +34,18 @@ ALTER CLUSTER foo RENAME TO bar
 statement error unknown cluster 'foo'
 ALTER CLUSTER foo RENAME TO bar
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement error db error: ERROR: system cluster 'mz_introspection' cannot be modified
 ALTER CLUSTER mz_introspection RENAME TO foo
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
 
 statement ok
 ALTER CLUSTER IF EXISTS bar RENAME TO foo

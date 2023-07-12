@@ -973,7 +973,7 @@ impl<'a> RunnerInner<'a> {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: Default::default(),
+            system_parameter_defaults: config.system_parameter_defaults.clone(),
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
@@ -1647,6 +1647,7 @@ pub struct RunConfig<'a> {
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
+    pub system_parameter_defaults: BTreeMap<String, String>,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

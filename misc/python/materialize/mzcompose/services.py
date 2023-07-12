@@ -40,6 +40,24 @@ DEFAULT_MZ_VOLUMES = [
     "scratch:/scratch",
 ]
 
+DEFAULT_SYSTEM_PARAMETERS = {
+    "persist_sink_minimum_batch_updates": "128",
+    "enable_multi_worker_storage_persist_sink": "true",
+    "storage_persist_sink_minimum_batch_updates": "100",
+    "persist_pubsub_push_diff_enabled": "true",
+    "persist_pubsub_client_enabled": "true",
+    "persist_stats_filter_enabled": "true",
+    "persist_stats_collection_enabled": "true",
+    "persist_stats_audit_percent": "100",
+    "enable_ld_rbac_checks": "true",
+    "enable_rbac_checks": "true",
+    "enable_monotonic_oneshot_selects": "true",
+    # Following values are set based on Load Test environment to
+    # reduce CRDB load as we are struggling with it in CI:
+    "persist_next_listen_batch_retryer_clamp": "100ms",
+    "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+}
+
 # TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
 DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
 
@@ -99,23 +117,7 @@ class Materialized(Service):
         ]
 
         if system_parameter_defaults is None:
-            system_parameter_defaults = {
-                "persist_sink_minimum_batch_updates": "128",
-                "enable_multi_worker_storage_persist_sink": "true",
-                "storage_persist_sink_minimum_batch_updates": "100",
-                "persist_pubsub_push_diff_enabled": "true",
-                "persist_pubsub_client_enabled": "true",
-                "persist_stats_filter_enabled": "true",
-                "persist_stats_collection_enabled": "true",
-                "persist_stats_audit_percent": "100",
-                "enable_ld_rbac_checks": "true",
-                "enable_rbac_checks": "true",
-                "enable_monotonic_oneshot_selects": "true",
-                # Following values are set based on Load Test environment to
-                # reduce CRDB load as we are struggling with it in CI:
-                "persist_next_listen_batch_retryer_clamp": "100ms",
-                "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
-            }
+            system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
 
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
@@ -915,6 +917,13 @@ class SqlLogicTest(Service):
         volumes: List[str] = ["../..:/workdir"],
         depends_on: List[str] = ["cockroach"],
     ) -> None:
+        environment += [
+            "MZ_SYSTEM_PARAMETER_DEFAULT="
+            + ";".join(
+                f"{key}={value}" for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+            )
+        ]
+
         super().__init__(
             name=name,
             config={
