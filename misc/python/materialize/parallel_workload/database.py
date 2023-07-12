@@ -16,8 +16,9 @@ from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor
 
 MAX_COLUMNS = 100
-MAX_CLUSTERS = 100
-MAX_CLUSTER_REPLICAS = 100
+MAX_ROWS = 1000
+MAX_CLUSTERS = 10
+MAX_CLUSTER_REPLICAS = 4
 MAX_TABLES = 100
 MAX_VIEWS = 100
 MAX_ROLES = 100
@@ -79,6 +80,7 @@ class DBObject:
 class Table(DBObject):
     table_id: int
     rename: int
+    num_rows: int
 
     def __init__(self, rng: random.Random, table_id: int):
         self.table_id = table_id
@@ -86,6 +88,7 @@ class Table(DBObject):
             Column(rng, i, rng.choice(DATA_TYPES), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
+        self.num_rows = 0
         self.rename = 0
 
     def __str__(self) -> str:

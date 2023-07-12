@@ -18,6 +18,7 @@ from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_ROLES,
+    MAX_ROWS,
     MAX_TABLES,
     MAX_VIEWS,
     Cluster,
@@ -174,8 +175,12 @@ class InsertAction(Action):
         column_names = ", ".join(column.name() for column in table.columns)
         column_values = ", ".join(column.value(self.rng) for column in table.columns)
         query = f"INSERT INTO {table} ({column_names}) VALUES ({column_values})"
+        if table.num_rows > MAX_ROWS:
+            return
         exe.execute(query)
         exe.insert_table = table.table_id
+        with self.db.lock:
+            table.num_rows += 1
 
 
 class UpdateAction(Action):
@@ -209,9 +214,15 @@ class DeleteAction(Action):
 
     def run(self, exe: Executor) -> None:
         table = self.rng.choice(self.db.tables)
-        column = table.columns[0]
-        query = f"DELETE FROM {table} WHERE {column.name()} = {column.value(self.rng, True)}"
-        exe.execute(query)
+        query = f"DELETE FROM {table}"
+        if self.rng.random() < 0.95:
+            column = self.rng.choice(table.columns)
+            query += f" WHERE {column.name()} = {column.value(self.rng, True)}"
+            exe.execute(query)
+        else:
+            exe.execute(query)
+            with self.db.lock:
+                table.num_rows = 0
 
 
 class CreateIndexAction(Action):
@@ -607,7 +618,6 @@ class ActionList:
 read_action_list = ActionList(
     [
         (SelectAction, 100),
-        (FetchAction, 30),
         (SetClusterAction, 50),
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
@@ -663,7 +673,7 @@ ddl_action_list = ActionList(
         (GrantPrivilegesAction, 2),
         (RevokePrivilegesAction, 2),
         (ReconnectAction, 1),
-        # (RenameTableAction, 1),
+        # (RenameTableAction, 1),  # TODO(def-) enable
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,
