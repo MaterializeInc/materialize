@@ -38,6 +38,7 @@ from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
 class EnvironmentdService(K8sService):
     def __init__(self) -> None:
         service_port = V1ServicePort(name="sql", port=6875)
+        http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
         self.service = V1Service(
             api_version="v1",
@@ -45,7 +46,7 @@ class EnvironmentdService(K8sService):
             metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
             spec=V1ServiceSpec(
                 type="NodePort",
-                ports=[service_port, internal_port],
+                ports=[service_port, internal_port, http_port],
                 selector={"app": "environmentd"},
             ),
         )
