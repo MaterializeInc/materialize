@@ -1,0 +1,27 @@
+
+In this mode users...
+
+- Can access objects within the [system catalog][sys-cat] to help determine
+  which indexes are causing the crash.
+- Can only `SELECT` from user-created objects that do not rely on user-created
+  indexes. In essence, this means users can still `SELECT` from user-created...
+  - Tables, but they will never return any data.
+  - Views that contain only references to constant values or depend entirely on
+    system tables' indexes.
+- Cannot `INSERT` data into tables.
+- Can create new objects, but any created indexes are disabled.
+
+After troubleshooting any issues, you can [enable individual
+indexes](/sql/alter-index) or restart Materialize _without_
+disabling user indexes to enable all indexes at once.
+
+For assistance with this mode, see:
+
+- [API Overview: Indexes][api-indexes]
+- [System Catalog][sys-cat]
+- [`SHOW INDEX`](/sql/show-index)
+- [`DROP VIEW`](/sql/drop-view)
+- [`DROP INDEX`](/sql/drop-index)
+
+[api-indexes]: /overview/key-concepts/#indexes
+[sys-cat]: /sql/system-catalog

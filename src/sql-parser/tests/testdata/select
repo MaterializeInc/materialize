@@ -1497,3 +1497,30 @@ parse-statement roundtrip
 SELECT 1 < ALL (SELECT 1)
 ----
 SELECT 1 < ALL (SELECT 1)
+
+parse-statement roundtrip
+SELECT * FROM data ORDER BY a, b AS OF AT LEAST 1
+----
+SELECT * FROM data ORDER BY a, b AS OF AT LEAST 1
+
+parse-statement roundtrip
+SELECT * FROM data ORDER BY a, b AS OF -1::numeric
+----
+SELECT * FROM data ORDER BY a, b AS OF -1::numeric
+
+parse-statement roundtrip
+SELECT 1 AS OF NULL::timestamp
+----
+SELECT 1 AS OF NULL::timestamp
+
+parse-statement roundtrip
+SELECT * FROM data AS OF NULL::numeric
+----
+SELECT * FROM data AS OF NULL::numeric
+
+parse-statement
+SELECT * FROM valid AS OF 2
+----
+SELECT * FROM valid AS OF 2
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("valid")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("2")))) })
