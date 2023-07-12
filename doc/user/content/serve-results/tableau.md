@@ -103,3 +103,23 @@ For more details and troubleshooting, check the
 
 [//]: # "TODO(morsapaes) Clarify minimum refresh rate and details about live
 connections"
+
+### Troubleshooting
+
+Errors like the following indicate that the JDBC driver was not successfully
+installed.
+
+```
+ERROR: Expected FOR, found WITH;
+Error while executing the query
+```
+
+```
+ERROR: WITH HOLD is unsupported for cursors;
+Error while executing the query
+```
+
+The errors occur because Tableau falls back to a legacy PostgreSQL ODBC driver
+that does not support connecting to Materialize. Follow the [Setup](#setup)
+instructions again and ensure you've downloaded the driver to the correct folder
+for your platform.
