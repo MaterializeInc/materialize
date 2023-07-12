@@ -68,7 +68,7 @@ Modifier | Description
 **join_impls** | Render details about the implementation strategy of optimized MIR `Join` nodes.
 **keys** | Annotate each subplan with its unique keys.
 **types** | Annotate each subplan with its inferred type.
-**filter_pushdown** | **[Alpha only!]** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+**filter_pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ## Query compilation pipeline
 
@@ -398,7 +398,7 @@ Each source contains two frontiers:
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

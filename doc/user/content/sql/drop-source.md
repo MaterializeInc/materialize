@@ -68,7 +68,7 @@ DROP SOURCE IF EXISTS my_source;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

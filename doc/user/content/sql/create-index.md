@@ -163,7 +163,7 @@ For more details on using indexes to optimize queries, see [Optimization](../../
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

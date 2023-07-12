@@ -29,7 +29,7 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

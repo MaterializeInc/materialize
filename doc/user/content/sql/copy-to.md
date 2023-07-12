@@ -40,7 +40,7 @@ COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

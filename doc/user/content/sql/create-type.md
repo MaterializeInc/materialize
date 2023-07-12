@@ -144,7 +144,7 @@ custom_nested_row_type
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

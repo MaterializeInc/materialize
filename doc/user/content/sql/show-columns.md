@@ -64,7 +64,7 @@ SHOW COLUMNS FROM my_source;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

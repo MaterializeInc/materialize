@@ -9,7 +9,7 @@ menu:
 `GRANT` grants membership of one role to another role. Roles can be members of
 other roles, as well as inherit all the privileges of those roles.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -32,7 +32,7 @@ GRANT data_scientist TO joe, mike;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

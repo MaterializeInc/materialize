@@ -56,7 +56,7 @@ DROP CLUSTER auction_house CASCADE;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

@@ -26,7 +26,7 @@ CREATE SECRET upstash_kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

@@ -434,7 +434,7 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 ### AWS PrivateLink
 
-{{< alpha />}}
+{{< private-preview />}}
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),
@@ -568,7 +568,7 @@ SELECT * FROM mz_ssh_tunnel_connections;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

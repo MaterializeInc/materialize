@@ -75,7 +75,7 @@ notes](#release-notes).
 There are several aspects of the product that are not considered part of
 Materialize's stable interface:
 
-  * Features that are in alpha (labeled as such in the documentation)
+  * Features that are in private preview (labeled as such in the documentation)
   * The [`EXPLAIN`](/sql/explain) statement
   * Objects in the [`mz_internal` schema](/sql/system-catalog/mz_internal)
   * Any undocumented features or behavior
