@@ -140,9 +140,11 @@ impl PersistConfig {
                 compaction_heuristic_min_parts: AtomicUsize::new(8),
                 compaction_heuristic_min_updates: AtomicUsize::new(1024),
                 compaction_memory_bound_bytes: AtomicUsize::new(1024 * MB),
-                compaction_minimum_timeout: Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
-                consensus_connection_pool_ttl: Duration::from_secs(300),
-                consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
+                compaction_minimum_timeout: RwLock::new(Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT),
+                consensus_connection_pool_ttl: RwLock::new(Self::DEFAULT_CONSENSUS_CONNPOOL_TTL),
+                consensus_connection_pool_ttl_stagger: RwLock::new(
+                    Self::DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER,
+                ),
                 consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
                 consensus_tcp_user_timeout: RwLock::new(Self::DEFAULT_CRDB_TCP_USER_TIMEOUT),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
@@ -226,6 +228,10 @@ impl PersistConfig {
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     /// Default value for [`DynamicConfig::consensus_tcp_user_timeout`].
     pub const DEFAULT_CRDB_TCP_USER_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Default value for [`DynamicConfig::consensus_connection_pool_ttl`].
+    pub const DEFAULT_CONSENSUS_CONNPOOL_TTL: Duration = Duration::from_secs(300);
+    /// Default value for [`DynamicConfig::consensus_connection_pool_ttl_stagger`].
+    pub const DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER: Duration = Duration::from_secs(6);
     /// Default value for [`DynamicConfig::stats_audit_percent`].
     pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
@@ -333,11 +339,14 @@ pub struct DynamicConfig {
     compaction_heuristic_min_parts: AtomicUsize,
     compaction_heuristic_min_updates: AtomicUsize,
     compaction_memory_bound_bytes: AtomicUsize,
+    compaction_minimum_timeout: RwLock<Duration>,
     gc_blob_delete_concurrency_limit: AtomicUsize,
     state_versions_recent_live_diffs_limit: AtomicUsize,
     usage_state_fetch_concurrency_limit: AtomicUsize,
     consensus_connect_timeout: RwLock<Duration>,
     consensus_tcp_user_timeout: RwLock<Duration>,
+    consensus_connection_pool_ttl: RwLock<Duration>,
+    consensus_connection_pool_ttl_stagger: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
     stats_audit_percent: AtomicUsize,
@@ -351,11 +360,6 @@ pub struct DynamicConfig {
     // We put them under a single RwLock to reduce the cost of reads
     // and to logically group them together.
     next_listen_batch_retryer: RwLock<RetryParameters>,
-
-    // TODO: Figure out how to make these dynamic.
-    compaction_minimum_timeout: Duration,
-    consensus_connection_pool_ttl: Duration,
-    consensus_connection_pool_ttl_stagger: Duration,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]
@@ -465,14 +469,20 @@ impl DynamicConfig {
     /// allow a compaction request to run before timing it out. A request may be
     /// given a timeout greater than this value depending on the inputs' size
     pub fn compaction_minimum_timeout(&self) -> Duration {
-        self.compaction_minimum_timeout
+        *self
+            .compaction_minimum_timeout
+            .read()
+            .expect("lock poisoned")
     }
 
     /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
     /// terminated. Connections are routinely culled to balance load against the
     /// downstream database.
     pub fn consensus_connection_pool_ttl(&self) -> Duration {
-        self.consensus_connection_pool_ttl
+        *self
+            .consensus_connection_pool_ttl
+            .read()
+            .expect("lock poisoned")
     }
     /// The minimum time between TTLing connections to Postgres/CRDB. This delay is
     /// used to stagger reconnections to avoid stampedes and high tail latencies.
@@ -482,7 +492,10 @@ impl DynamicConfig {
     /// is likely a good place to start so that all connections are rotated when the
     /// pool is fully used.
     pub fn consensus_connection_pool_ttl_stagger(&self) -> Duration {
-        self.consensus_connection_pool_ttl_stagger
+        *self
+            .consensus_connection_pool_ttl_stagger
+            .read()
+            .expect("lock poisoned")
     }
     /// The duration to wait for a Consensus Postgres/CRDB connection to be made before retrying.
     pub fn consensus_connect_timeout(&self) -> Duration {
@@ -639,6 +652,10 @@ pub struct PersistParameters {
     pub consensus_connect_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_tcp_user_timeout`].
     pub consensus_tcp_user_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::consensus_connection_pool_ttl`].
+    pub consensus_connection_pool_ttl: Option<Duration>,
+    /// Configures [`DynamicConfig::consensus_connection_pool_ttl_stagger`].
+    pub consensus_connection_pool_ttl_stagger: Option<Duration>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
@@ -670,6 +687,8 @@ impl PersistParameters {
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
             consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
+            consensus_connection_pool_ttl: self_consensus_connection_pool_ttl,
+            consensus_connection_pool_ttl_stagger: self_consensus_connection_pool_ttl_stagger,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
@@ -686,6 +705,8 @@ impl PersistParameters {
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
             consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
+            consensus_connection_pool_ttl: other_consensus_connection_pool_ttl,
+            consensus_connection_pool_ttl_stagger: other_consensus_connection_pool_ttl_stagger,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
@@ -710,6 +731,12 @@ impl PersistParameters {
         }
         if let Some(v) = other_consensus_tcp_user_timeout {
             *self_consensus_tcp_user_timeout = Some(v);
+        }
+        if let Some(v) = other_consensus_connection_pool_ttl {
+            *self_consensus_connection_pool_ttl = Some(v);
+        }
+        if let Some(v) = other_consensus_connection_pool_ttl_stagger {
+            *self_consensus_connection_pool_ttl_stagger = Some(v);
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
@@ -752,6 +779,8 @@ impl PersistParameters {
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
+            consensus_connection_pool_ttl,
+            consensus_connection_pool_ttl_stagger,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -767,6 +796,8 @@ impl PersistParameters {
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
             && consensus_tcp_user_timeout.is_none()
+            && consensus_connection_pool_ttl.is_none()
+            && consensus_connection_pool_ttl_stagger.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
@@ -791,6 +822,8 @@ impl PersistParameters {
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
+            consensus_connection_pool_ttl,
+            consensus_connection_pool_ttl_stagger,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -811,8 +844,13 @@ impl PersistParameters {
                 .blob_cache_mem_limit_bytes
                 .store(*blob_cache_mem_limit_bytes, DynamicConfig::STORE_ORDERING);
         }
-        if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
-            // TODO: Figure out how to represent Durations in DynamicConfig.
+        if let Some(compaction_minimum_timeout) = compaction_minimum_timeout {
+            let mut timeout = cfg
+                .dynamic
+                .compaction_minimum_timeout
+                .write()
+                .expect("lock poisoned");
+            *timeout = *compaction_minimum_timeout;
         }
         if let Some(consensus_connect_timeout) = consensus_connect_timeout {
             let mut timeout = cfg
@@ -829,6 +867,22 @@ impl PersistParameters {
                 .write()
                 .expect("lock poisoned");
             *timeout = *consensus_tcp_user_timeout;
+        }
+        if let Some(consensus_connection_pool_ttl) = consensus_connection_pool_ttl {
+            let mut ttl = cfg
+                .dynamic
+                .consensus_connection_pool_ttl
+                .write()
+                .expect("lock poisoned");
+            *ttl = *consensus_connection_pool_ttl;
+        }
+        if let Some(consensus_connection_pool_ttl_stagger) = consensus_connection_pool_ttl_stagger {
+            let mut stagger = cfg
+                .dynamic
+                .consensus_connection_pool_ttl_stagger
+                .write()
+                .expect("lock poisoned");
+            *stagger = *consensus_connection_pool_ttl_stagger;
         }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
@@ -890,6 +944,10 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             consensus_tcp_user_timeout: self.consensus_tcp_user_timeout.into_proto(),
+            consensus_connection_pool_ttl: self.consensus_connection_pool_ttl.into_proto(),
+            consensus_connection_pool_ttl_stagger: self
+                .consensus_connection_pool_ttl_stagger
+                .into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
@@ -911,6 +969,10 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             consensus_tcp_user_timeout: proto.consensus_tcp_user_timeout.into_rust()?,
+            consensus_connection_pool_ttl: proto.consensus_connection_pool_ttl.into_rust()?,
+            consensus_connection_pool_ttl_stagger: proto
+                .consensus_connection_pool_ttl_stagger
+                .into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates
