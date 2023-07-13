@@ -109,6 +109,7 @@ impl Server {
         let active_connection_count = Arc::clone(&self.active_connection_count);
         async move {
             let result = (|| {
+                let metrics = metrics.clone();
                 async move {
                     let conn_id = adapter_client.new_conn_id()?;
                     let mut conn = Conn::Unencrypted(conn);
@@ -137,6 +138,7 @@ impl Server {
                                     frontegg: frontegg.as_ref(),
                                     internal,
                                     active_connection_count,
+                                    metrics,
                                 })
                                 .await?;
                                 conn.flush().await?;
@@ -182,11 +184,7 @@ impl Server {
                 }
             })()
             .await;
-            let status = match result {
-                Ok(()) => "success",
-                Err(_) => "error",
-            };
-            metrics.connection_status(status).inc();
+            metrics.connection_status(result.is_ok()).inc();
             result
         }
     }

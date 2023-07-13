@@ -29,7 +29,7 @@ use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::ast::{FetchDirection, Ident, Raw, Statement, StatementKind};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
@@ -43,6 +43,7 @@ use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
+use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
@@ -84,6 +85,8 @@ pub struct RunParams<'a, A> {
     pub internal: bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    /// Metrics
+    pub metrics: Metrics,
 }
 
 /// Runs a pgwire connection to completion.
@@ -106,6 +109,7 @@ pub async fn run<'a, A>(
         frontegg,
         internal,
         active_connection_count,
+        metrics,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -318,6 +322,7 @@ where
     let machine = StateMachine {
         conn,
         adapter_client,
+        metrics,
     };
 
     select! {
@@ -422,6 +427,7 @@ enum State {
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
     adapter_client: mz_adapter::SessionClient,
+    metrics: Metrics,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -695,7 +701,16 @@ where
             // statement.
             self.start_transaction(Some(num_stmts));
 
-            match self.one_query(stmt).await? {
+            let kind = StatementKind::from(&stmt);
+
+            let start = Instant::now();
+            let result = self.one_query(stmt).await;
+            let latency = Instant::now() - start;
+
+            self.metrics
+                .one_query_latency(result.is_ok(), kind, latency);
+
+            match result? {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),
