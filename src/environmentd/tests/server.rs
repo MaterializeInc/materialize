@@ -1935,3 +1935,66 @@ fn test_github_20262() {
         }
     }
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_http_metrics() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr(),
+    ))
+    .unwrap();
+
+    let json = r#"{ "query": "SHOW application_name;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = Client::new()
+        .post(http_url.clone())
+        .json(&json)
+        .send()
+        .unwrap();
+    assert!(response.status().is_success());
+
+    let json = r#"{ "query": "invalid sql 123;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = Client::new().post(http_url).json(&json).send().unwrap();
+    assert!(response.status().is_client_error());
+
+    let metrics = server.metrics_registry.gather();
+    let http_metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|metric| metric.get_name().starts_with("mz_http"))
+        .collect();
+
+    // Make sure the duration metric exists.
+    let duration_count = http_metrics
+        .iter()
+        .filter(|metric| metric.get_name() == "mz_http_request_duration")
+        .count();
+    assert_eq!(duration_count, 1);
+    // Make sure the active count metric exists.
+    let active_count = http_metrics
+        .iter()
+        .filter(|metric| metric.get_name() == "mz_http_requests_active")
+        .count();
+    assert_eq!(active_count, 1);
+
+    // Make sure our metrics capture the one successful query and the one failure.
+    let mut request_metrics: Vec<_> = http_metrics
+        .into_iter()
+        .filter(|metric| metric.get_name() == "mz_http_requests")
+        .collect();
+    assert_eq!(request_metrics.len(), 1);
+
+    let request_metric = request_metrics.pop().unwrap();
+    let success_metric = &request_metric.get_metric()[0];
+    assert_eq!(success_metric.get_counter().get_value(), 1.0);
+    assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
+    assert_eq!(success_metric.get_label()[1].get_value(), "200");
+
+    let failure_metric = &request_metric.get_metric()[1];
+    assert_eq!(failure_metric.get_counter().get_value(), 1.0);
+    assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
+    assert_eq!(failure_metric.get_label()[1].get_value(), "400");
+}
