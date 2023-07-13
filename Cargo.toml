@@ -174,3 +174,7 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 # Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
 # a release.
 openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
+
+[patch."https://github.com/frankmcsherry/columnation"]
+# Projects that do not reliably release to crates.io.
+columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
