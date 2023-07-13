@@ -40,7 +40,7 @@ SHOW CREATE SINK my_view_sink;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

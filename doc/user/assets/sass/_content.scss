@@ -457,7 +457,7 @@ p+p {
     }
 
     .warning,
-    .alpha {
+    .private-preview {
         background: rgba(238, 134, 96, 0.05);
         border: 1px solid rgba(238, 134, 96, 0.2);
 
@@ -499,7 +499,7 @@ p+p {
         }
     }
 
-    .beta {
+    .public-preview {
         background: #d8fad9;
         border: 1px solid #c0d8c5;
         color: var(--black);
@@ -516,8 +516,8 @@ p+p {
 
     .warning,
     .note,
-    .alpha,
-    .beta {
+    .private-preview,
+    .public-preview {
         box-sizing: border-box;
         margin: 1.6rem 0;
         padding: 1.6rem 1.6rem 1.6rem 9.6rem;
@@ -975,7 +975,7 @@ body.dark .content {
     }
 
     .warning,
-    .alpha {
+    .private-preview {
         .gutter {
             color: #ff8504;
         }

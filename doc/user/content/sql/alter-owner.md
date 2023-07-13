@@ -8,7 +8,7 @@ menu:
 
 `ALTER ... OWNER` updates the owner of an item.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -38,7 +38,7 @@ ALTER CLUSTER REPLICA production.r1 OWNER TO admin;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

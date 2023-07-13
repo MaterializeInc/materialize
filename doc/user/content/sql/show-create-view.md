@@ -29,7 +29,7 @@ SHOW CREATE VIEW my_view;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

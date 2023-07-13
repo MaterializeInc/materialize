@@ -14,7 +14,7 @@ Privileges are cumulative: revoking a privilege from `PUBLIC` does not mean all
 roles have lost that privilege, if certain roles were explicitly granted that
 privilege.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -90,7 +90,7 @@ GRANT CREATEDB ON SYSTEM TO joe;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

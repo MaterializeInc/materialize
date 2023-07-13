@@ -30,7 +30,7 @@ SHOW CREATE SOURCE market_orders_raw;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

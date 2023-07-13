@@ -265,7 +265,7 @@ if the aggregation query were expensive, creating a materialized view doing the 
 
 ## Temporal filter pushdown
 
-{{< alpha />}}
+{{< private-preview />}}
 
 In the example above, all of the temporal queries we’ve written only return results based on recently-added events: for example, our sliding window query will only return events that were inserted within the last `INTERVAL_MS`. This is a very common pattern; it’s much more likely we’re interested in the last five minutes of data than in five minutes of data from a year ago!
 

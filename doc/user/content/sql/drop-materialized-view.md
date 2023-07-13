@@ -45,7 +45,7 @@ upon by catalog item 'materialize.public.wb_custom_art'
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

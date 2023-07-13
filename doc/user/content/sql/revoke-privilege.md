@@ -10,7 +10,7 @@ menu:
 be used to indicate that the privileges should be revoked from all roles
 (including roles that might not exist yet).
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -91,7 +91,7 @@ REVOKE CREATEDB ON SYSTEM FROM joe;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

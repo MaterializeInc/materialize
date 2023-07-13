@@ -69,7 +69,7 @@ DROP INDEX IF EXISTS q01_geo_idx;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

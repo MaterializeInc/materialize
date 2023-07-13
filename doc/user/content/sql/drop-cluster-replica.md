@@ -37,7 +37,7 @@ DROP CLUSTER REPLICA auction_house.bigger;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

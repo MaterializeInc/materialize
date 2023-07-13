@@ -302,7 +302,7 @@ See #18829 for the design doc."
 
 ### Modifying the output format
 
-{{< alpha />}}
+{{< private-preview />}}
 
 #### `ENVELOPE UPSERT`
 
@@ -518,7 +518,7 @@ DROP SOURCE counter;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

@@ -40,7 +40,7 @@ SHOW CREATE INDEX my_view_idx;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

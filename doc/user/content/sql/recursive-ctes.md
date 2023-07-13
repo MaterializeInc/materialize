@@ -8,9 +8,9 @@ menu:
     weight: 23
 ---
 
-{{< beta >}}
+{{< public-preview >}}
 Recursive CTEs using the `WITH MUTUALLY RECURSIVE` syntax
-{{</ beta >}}
+{{</ public-preview >}}
 
 Recursive CTEs operate on the recursively-defined structures like trees or graphs implied from queries over your data.
 

@@ -33,7 +33,7 @@ SHOW CREATE TABLE t;
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 

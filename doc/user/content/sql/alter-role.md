@@ -8,7 +8,7 @@ menu:
 
 `ALTER ROLE` alters the attributes of an existing role.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -52,7 +52,7 @@ rj  true
 
 ## Privileges
 
-{{< alpha />}}
+{{< private-preview />}}
 
 The privileges required to execute this statement are:
 
