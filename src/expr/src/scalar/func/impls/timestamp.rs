@@ -9,7 +9,9 @@
 
 use std::fmt;
 
-use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
+};
 use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_repr::adt::date::Date;
@@ -463,12 +465,22 @@ pub fn timezone_timestamp(
 
 /// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
 /// For example, `EST` and `2020-11-11T17:39:14Z` would return `2020-11-11T12:39:14`.
-pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> NaiveDateTime {
+pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Result<NaiveDateTime, EvalError> {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
         Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
     };
-    utc.naive_utc() + offset
+    checked_add_with_leapsecond(&utc.naive_utc(), &offset).ok_or(EvalError::TimestampOutOfRange)
+}
+
+/// Checked addition that is missing from chrono. Adapt its methods here but add a check.
+fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option<NaiveDateTime> {
+    // extract and temporarily remove the fractional part and later recover it
+    let nanos = lhs.nanosecond();
+    let lhs = lhs.with_nanosecond(0).unwrap();
+    let rhs = rhs.local_minus_utc();
+    lhs.checked_add_signed(chrono::Duration::seconds(i64::from(rhs)))
+        .map(|dt| dt.with_nanosecond(nanos).unwrap())
 }
 
 #[derive(
@@ -511,7 +523,9 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
         &self,
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        timezone_timestamptz(self.0, a.into()).try_into().err_into()
+        timezone_timestamptz(self.0, a.into())?
+            .try_into()
+            .err_into()
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {

@@ -2406,7 +2406,7 @@ impl BinaryFunc {
             BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str())
                 .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
             BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str()).and_then(|tz| {
-                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into()).try_into()?)
+                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
             }),
             BinaryFunc::TimezoneTime { wall_time } => parse_timezone(a.unwrap_str())
                 .map(|tz| timezone_time(tz, b.unwrap_time(), wall_time).into()),

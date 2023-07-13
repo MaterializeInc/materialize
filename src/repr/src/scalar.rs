@@ -2685,7 +2685,7 @@ impl<'a> ScalarType {
                 ),
                 Datum::Timestamp(
                     crate::adt::timestamp::HIGH_DATE
-                        .and_hms_opt(0, 0, 0)
+                        .and_hms_opt(23, 59, 59)
                         .unwrap()
                         .try_into()
                         .unwrap(),
@@ -2712,7 +2712,7 @@ impl<'a> ScalarType {
                 Datum::TimestampTz(
                     DateTime::from_utc(
                         crate::adt::timestamp::HIGH_DATE
-                            .and_hms_opt(0, 0, 0)
+                            .and_hms_opt(23, 59, 59)
                             .unwrap(),
                         Utc,
                     )
@@ -2755,6 +2755,8 @@ impl<'a> ScalarType {
                 Datum::String("\""),
                 Datum::String("."),
                 Datum::String(&"x".repeat(100)),
+                // Valid timezone.
+                Datum::String("JAPAN"),
             ])
         });
         static CHAR: Lazy<Row> = Lazy::new(|| {

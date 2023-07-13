@@ -124,3 +124,7 @@ SELECT TIMESTAMPTZ '2020-11-01 01:00:00 America/New_York'
 # Regression for 20324
 query error timestamp out of range
 SELECT pg_catalog.timezone(-INTERVAL '1' MINUTE, TIMESTAMP '95143-12-31 23:59:59' + INTERVAL '167 MILLENNIUM')
+
+# Regression for #20514
+query error timestamp out of range
+SELECT pg_catalog.timezone('JAPAN', TIMESTAMPTZ '95143-12-31 23:59:59+06' + INTERVAL '167 MILLENNIUM')
