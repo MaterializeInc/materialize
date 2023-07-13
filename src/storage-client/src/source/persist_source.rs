@@ -44,6 +44,8 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Capability, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::operators::{Enter, Leave};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::ScopeParent;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::timestamp::PathSummary;
@@ -129,6 +131,8 @@ where
     (ok_stream, err_stream, token)
 }
 
+type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, u64)>;
+
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
@@ -136,22 +140,22 @@ where
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<G, YFn>(
-    scope: &G,
+pub fn persist_source_core<'g, G, YFn>(
+    scope: &mut RefinedScope<'g, G>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    flow_control: Option<FlowControl<G>>,
+    flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
     yield_fn: YFn,
 ) -> (
-    Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>,
+    Stream<RefinedScope<'g, G>, (Result<Row, DataflowError>, (mz_repr::Timestamp, u64), Diff)>,
     Rc<dyn Any>,
 )
 where
-    G: Scope<Timestamp = (mz_repr::Timestamp, u64)>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
@@ -169,7 +173,7 @@ where
     };
 
     let desc_transformer = match flow_control {
-        Some(flow_control) => Some(move |mut scope: G, descs: &Stream<G, _>, chosen_worker| {
+        Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
             backpressure(
                 &mut scope,
                 &format!("backpressure({source_id})"),

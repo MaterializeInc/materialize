@@ -27,10 +27,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use mz_timely_util::order::refine_antichain;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::scheduling::Activator;
@@ -66,33 +66,39 @@ use crate::{Diagnostics, PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, T, D, F, DT, G>(
-    scope: &mut G,
+pub fn shard_source<'g, K, V, T, D, F, DT, G>(
+    scope: &mut Child<'g, G, T>,
     name: &str,
     clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
-    as_of: Option<Antichain<T>>,
-    until: Antichain<T>,
+    as_of: Option<Antichain<G::Timestamp>>,
+    until: Antichain<G::Timestamp>,
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     should_fetch_part: F,
-) -> (Stream<G, FetchedPart<K, V, T, D>>, Rc<dyn Any>)
+) -> (
+    Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
+    Rc<dyn Any>,
+)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
     F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
-    G::Timestamp: Refines<T>,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    T: Timestamp + Lattice + Codec64 + TotalOrder,
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    T: Refines<G::Timestamp>,
     DT: FnOnce(
-        G,
-        &Stream<G, (usize, SerdeLeasedBatchPart)>,
+        Child<'g, G, T>,
+        &Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
         usize,
-    ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>),
+    ) -> (
+        Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
+        Rc<dyn Any>,
+    ),
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -114,22 +120,23 @@ where
     // we can safely pass along a zero summary from this feedback edge,
     // as the input is disconnected from the operator's output
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
-        scope.feedback(<<G as ScopeParent>::Timestamp as Timestamp>::Summary::default());
+        scope.feedback(T::Summary::default());
 
-    let (descs, descs_token) = shard_source_descs::<K, V, T, D, _, G>(
-        scope,
+    let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
+        &scope.parent,
         name,
         Arc::clone(&clients),
         location.clone(),
         shard_id.clone(),
         as_of,
         until,
-        completed_fetches_feedback_stream,
+        completed_fetches_feedback_stream.leave(),
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
         should_fetch_part,
     );
+    let descs = descs.enter(scope);
     let (descs, backpressure_token) = match desc_transformer {
         Some(desc_transformer) => desc_transformer(scope.clone(), &descs, chosen_worker),
         None => {
@@ -178,14 +185,14 @@ impl Drop for ActivateOnDrop {
     }
 }
 
-pub(crate) fn shard_source_descs<K, V, T, D, F, G>(
+pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
     clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
-    as_of: Option<Antichain<T>>,
-    until: Antichain<T>,
+    as_of: Option<Antichain<G::Timestamp>>,
+    until: Antichain<G::Timestamp>,
     completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
@@ -198,9 +205,8 @@ where
     D: Semigroup + Codec64 + Send + Sync,
     F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
-    G::Timestamp: Refines<T>,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    T: Timestamp + Lattice + Codec64 + TotalOrder,
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
     let cfg = clients.cfg().clone();
     let metrics = Arc::clone(&clients.metrics);
@@ -263,7 +269,7 @@ where
                 .await
                 .expect("location should be valid");
             let read = client
-                .open_leased_reader::<K, V, T, D>(
+                .open_leased_reader::<K, V, G::Timestamp, D>(
                     shard_id,
                     key_schema,
                     val_schema,
@@ -290,7 +296,7 @@ where
                 // The token dropped before we finished creating our `ReadHandle.
                 // We can return immediately, as we could not have emitted any
                 // parts to fetch.
-                cap_set.downgrade::<G::Timestamp, _>([]);
+                cap_set.downgrade(&[]);
                 return;
             }
             Either::Right((read, _)) => {
@@ -317,7 +323,7 @@ where
         // NOTE: We have to do this before our `subscribe()` call (which
         // internally calls `snapshot()` because that call will block when there
         // is no data yet available in the shard.
-        cap_set.downgrade(refine_antichain::<_, G::Timestamp>(&as_of));
+        cap_set.downgrade(as_of.clone());
         let mut current_ts = match as_of.clone().into_option() {
             Some(ts) => ts,
             None => {
@@ -343,7 +349,7 @@ where
                 // the token dropped before we finished creating our Subscribe.
                 // we can return immediately, as we could not have emitted any
                 // parts to fetch.
-                cap_set.downgrade::<G::Timestamp, _>([]);
+                cap_set.downgrade(&[]);
                 return;
             }
             Either::Right((subscription, _)) => {
@@ -401,7 +407,7 @@ where
                 //
                 // NB: Reading from a channel is cancel safe.
                 _ = token_tx.closed() => {
-                    cap_set.downgrade::<G::Timestamp, _>([]);
+                    cap_set.downgrade(&[]);
                     break 'emitting_parts;
                 }
                 // Return the leases of any parts that the following stage,
@@ -413,7 +419,7 @@ where
                     match completed_fetch {
                         Some(Event::Data(_cap, data)) => {
                             for part in data.drain(..) {
-                                lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<T>(part));
+                                lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                             }
                         }
                         Some(Event::Progress(frontier)) => {
@@ -438,7 +444,7 @@ where
                         Some(ListenEvent::Progress(progress)) => {
                             // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
                             // operator will refine this further, if its enabled.
-                            let session_cap = cap_set.delayed(&Refines::to_inner(current_ts));
+                            let session_cap = cap_set.delayed(&current_ts);
 
                             for mut part_desc in std::mem::take(&mut batch_parts) {
                                 // TODO: Push the filter down into the Subscribe?
@@ -482,13 +488,13 @@ where
                                 descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                             }
 
-                            cap_set.downgrade(refine_antichain(&progress).iter());
+                            cap_set.downgrade(progress.iter());
                             match progress.into_option() {
                                 Some(ts) => {
                                     current_ts = ts;
                                 }
                                 None => {
-                                    cap_set.downgrade::<G::Timestamp, _>([]);
+                                    cap_set.downgrade(&[]);
                                     break 'emitting_parts;
                                 }
                             }
@@ -496,7 +502,7 @@ where
                         // We never expect any further output from our subscribe,
                         // so propagate that information downstream.
                         None => {
-                            cap_set.downgrade::<G::Timestamp, _>([]);
+                            cap_set.downgrade(&[]);
                             break 'emitting_parts;
                         }
                     }
@@ -514,7 +520,7 @@ where
             match completed_fetch {
                 Event::Data(_cap, data) => {
                     for part in data.drain(..) {
-                        lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<T>(part));
+                        lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                     }
                 }
                 Event::Progress(frontier) => {
