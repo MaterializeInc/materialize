@@ -175,6 +175,10 @@ def workflow_stash(c: Composition) -> None:
             if str(e) != "network error":
                 raise e
 
+        # No implicit restart as sanity check here, will panic:
+        # https://github.com/MaterializeInc/materialize/issues/20510
+        c.down(sanity_restart_mz=False)
+
 
 def workflow_storage_managed_collections(c: Composition) -> None:
     c.up("materialized")

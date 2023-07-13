@@ -350,6 +350,7 @@ class Composition:
                 # trivial help message.
                 parser.parse_args()
                 func(self)
+            self.sanity_restart_mz()
         finally:
             loader.composition_path = None
 
@@ -654,7 +655,75 @@ class Composition:
             self.compose = old_compose  # type: ignore
             self._write_compose()
 
-    def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
+    def validate_sources_sinks_clusters(self) -> str | None:
+        """Validate that all sources, sinks & clusters are in a good state"""
+
+        results = self.sql_query(
+            """
+            SELECT name, status, error, details
+            FROM mz_internal.mz_source_statuses
+            WHERE NOT(
+                status = 'running' OR
+                (type = 'progress' AND status = 'created') OR
+                (type = 'subsource' AND status = 'starting')
+            )
+            """
+        )
+        for (name, status, error, details) in results:
+            return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
+
+        results = self.sql_query(
+            """
+            SELECT name, status, error, details
+            FROM mz_internal.mz_sink_statuses
+            WHERE status NOT IN ('running', 'dropped')
+            """
+        )
+        for (name, status, error, details) in results:
+            return f"Sink {name} is expected to be running/dropped, but is {status}, error: {error}, details: {details}"
+
+        results = self.sql_query(
+            """
+            SELECT mz_clusters.name, mz_cluster_replicas.name, status, reason
+            FROM mz_internal.mz_cluster_replica_statuses
+            JOIN mz_cluster_replicas
+            ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
+            JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+            WHERE status NOT IN ('ready', 'not-ready')
+            """
+        )
+        for (cluster_name, replica_name, status, reason) in results:
+            return f"Cluster replica {cluster_name}.{replica_name} is expected to be ready/not-ready, but is {status}, reason: {reason}"
+
+        return None
+
+    def sanity_restart_mz(self) -> None:
+        """Restart Materialized if it is part of the composition to find
+        problems with persisted objects, functions as a sanity check."""
+        if "materialized" in self.compose["services"]:
+            self.kill("materialized")
+            # TODO(def-): Better way to detect when kill has finished
+            time.sleep(3)
+            self.up("materialized")
+            self.sql("SELECT 1")
+
+            NUM_RETRIES = 60
+            for i in range(NUM_RETRIES):
+                error = self.validate_sources_sinks_clusters()
+                if not error:
+                    break
+                if i == NUM_RETRIES - 1:
+                    raise ValueError(error)
+                # Sources and cluster replicas need a few seconds to start up
+                print("Retry...")
+                time.sleep(1)
+
+    def down(
+        self,
+        destroy_volumes: bool = True,
+        remove_orphans: bool = True,
+        sanity_restart_mz: bool = True,
+    ) -> None:
         """Stop and remove resources.
 
         Delegates to `docker compose down`. See that command's help for details.
@@ -662,7 +731,12 @@ class Composition:
         Args:
             destroy_volumes: Remove named volumes and anonymous volumes attached
                 to containers.
+            sanity_restart_mz: Try restarting materialize first if it is part
+                of the composition, as a sanity check.
         """
+        if sanity_restart_mz:
+            self.sanity_restart_mz()
+
         self.invoke(
             "down",
             *(["--volumes"] if destroy_volumes else []),

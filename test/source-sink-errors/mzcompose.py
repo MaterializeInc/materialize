@@ -131,7 +131,7 @@ class KafkaDisruption:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("redpanda", "materialized", "clusterd")
 
@@ -244,7 +244,7 @@ class PgDisruption:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("postgres", "materialized", "clusterd")
 
