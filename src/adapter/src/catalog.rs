@@ -2208,12 +2208,6 @@ impl Source {
             | DataSourceDesc::Progress => 0,
         }
     }
-
-    /// Returns if this source is a webhook source, which indicates `environmentd` is responsible
-    /// for receiving and pushing data to storage.
-    pub fn is_webhook(&self) -> bool {
-        matches!(self.data_source, DataSourceDesc::Webhook { .. })
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2716,17 +2710,6 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is a table.
     pub fn is_table(&self) -> bool {
         matches!(self.item(), CatalogItem::Table(_))
-    }
-
-    /// Reports whether this catalog entry is a source that is used for a webhook.
-    pub fn is_webhook(&self) -> bool {
-        matches!(
-            self.item(),
-            CatalogItem::Source(Source {
-                data_source: DataSourceDesc::Webhook { .. },
-                ..
-            })
-        )
     }
 
     /// Reports whether this catalog entry is a source. Note that this includes

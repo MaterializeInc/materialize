@@ -14,8 +14,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_expr::EvalError;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, RowArena, ScalarType};
@@ -882,16 +882,19 @@ impl Coordinator {
                     let validate = validate_using.as_ref().map(|expr| {
                         let expr = expr.clone();
                         let f: AppendWebhookValidation =
-                            Box::new(move |body, headers| -> Result<bool, anyhow::Error> {
+                            Box::new(move |body, headers| -> Result<bool, EvalError> {
+                                // TODO(parkmycar): When we add rate limiting for the number of
+                                // concurrent validations, we should make a pool of workers each
+                                // with a single RowArena that continuously gets re-used.
                                 let temp_storage = RowArena::default();
                                 let valid = expr.eval(&[body, headers], &temp_storage)?;
 
                                 match valid {
                                     Datum::True => Ok(true),
                                     Datum::False | Datum::Null => Ok(false),
-                                    // Note: we don't include the returned value here to prevent
-                                    // leaking data.
-                                    _ => Err(anyhow!("Bad result from validation")),
+                                    _ => unreachable!(
+                                        "Creating a webhook source asserts we return a boolean"
+                                    ),
                                 }
                             });
                         f

@@ -910,7 +910,7 @@ pub fn plan_webhook_validate_using(
     scx: &StatementContext,
     mut expr: Expr<Aug>,
 ) -> Result<MirScalarExpr, PlanError> {
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::Static);
 
     // We _always_ provide the body of the request as bytes and include the headers when validating
     // a request, regardless of what has otherwise been specified for the source.

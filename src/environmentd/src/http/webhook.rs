@@ -78,26 +78,24 @@ async fn validate_request(
     let valid = mz_ore::task::spawn_blocking(
         || "webhook-validate".to_string(),
         move || {
-            let mut row = Row::with_capacity(2);
+            // Use a RowPacker to form a Datum::Map.
+            let mut row = Row::with_capacity(1);
             let mut packer = row.packer();
-
-            packer.push(Datum::Bytes(&body[..]));
             packer.push_dict(
                 headers_s
                     .iter()
                     .map(|(name, val)| (name.as_str(), Datum::String(val))),
             );
-
-            // TODO(parkmycar): Is there a way to get a Datum::Map without packing and unpacking a
-            // row?
             let datums = row.unpack();
-            let body = datums.get(0).copied().unwrap_or(Datum::Null);
-            let headers = datums.get(1).copied().unwrap_or(Datum::Null);
+            let headers = datums.get(0).copied().unwrap_or(Datum::Null);
+
+            let body = Datum::Bytes(&body[..]);
 
             // Since the validation expression is technically a user defined function, we want to
             // be extra careful and guard against issues taking down the entire process.
-            mz_ore::panic::catch_unwind(move || validate_expr(body, headers))
-                .map_err(|_| WebhookError::ValidationPanicked)?
+            let eval_result = mz_ore::panic::catch_unwind(move || validate_expr(body, headers))
+                .map_err(|_| WebhookError::ValidationPanicked)?;
+            eval_result.map_err(WebhookError::from)
         },
     )
     .await
@@ -195,7 +193,7 @@ pub enum WebhookError {
     #[error("internal adapter failure! {0:?}")]
     InternalAdapterError(AdapterError),
     #[error("internal failure! {0:?}")]
-    Internal(anyhow::Error),
+    Internal(#[from] anyhow::Error),
 }
 
 impl From<StorageError> for WebhookError {
@@ -217,12 +215,9 @@ impl From<AdapterError> for WebhookError {
     }
 }
 
-impl From<anyhow::Error> for WebhookError {
-    fn from(value: anyhow::Error) -> Self {
-        match value.downcast::<EvalError>() {
-            Ok(eval_error) => WebhookError::ValidationFailed(eval_error.to_string()),
-            Err(e) => WebhookError::Internal(e),
-        }
+impl From<EvalError> for WebhookError {
+    fn from(value: EvalError) -> Self {
+        WebhookError::ValidationFailed(value.to_string())
     }
 }
 
@@ -232,12 +227,14 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
             e @ WebhookError::Unsupported(_)
             | e @ WebhookError::InvalidBody { .. }
-            | e @ WebhookError::ValidationFailed(_)
-            | e @ WebhookError::ValidationPanicked => {
+            | e @ WebhookError::ValidationFailed(_) => {
                 (StatusCode::BAD_REQUEST, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
+            }
+            e @ WebhookError::ValidationPanicked => {
+                (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(_)
             | e @ WebhookError::InternalAdapterError(_)

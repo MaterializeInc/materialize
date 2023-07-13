@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use mz_expr::EvalError;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnType, GlobalId, Row, ScalarType};
@@ -279,7 +280,7 @@ impl IntoIterator for GetVariablesResponse {
 
 /// Type of closure that is called to validate a webhook request.
 pub type AppendWebhookValidation = Box<
-    dyn FnOnce(mz_repr::Datum, mz_repr::Datum) -> Result<bool, anyhow::Error>
+    dyn FnOnce(mz_repr::Datum, mz_repr::Datum) -> Result<bool, EvalError>
         + Send
         + std::panic::UnwindSafe,
 >;

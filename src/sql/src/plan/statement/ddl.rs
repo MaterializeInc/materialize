@@ -404,9 +404,14 @@ pub fn plan_create_webhook_source(
         .map(|expr| query::plan_webhook_validate_using(scx, expr))
         .transpose()?;
     if let Some(expr) = &validate_using {
+        // If the validation expression doesn't reference any part of the request, then we should
+        // return an error because it's almost definitely wrong.
         if !expr.contains_column() {
-            scx.catalog
-                .add_notice(PlanNotice::WebhookValidationDoesNotUseColumns);
+            return Err(PlanError::WebhookValidationDoesNotUseColumns);
+        }
+        // Validation expressions cannot contain unmaterializable functions, e.g. now().
+        if expr.contains_unmaterializable() {
+            return Err(PlanError::WebhookValidationNonDeterministic);
         }
     }
 

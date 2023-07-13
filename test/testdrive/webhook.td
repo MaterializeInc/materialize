@@ -177,6 +177,15 @@ $ webhook-append name=webhook_hex status=400
 # 'z' is an invalid character in hex which causes an evaluation failure.
 z
 
+# Create a source that will panic when we run validation. Validation panicking should not take down
+# all of environmentd, we should catch the panic.
+> CREATE SOURCE webhook_validation_panic FROM WEBHOOK
+  BODY FORMAT TEXT
+  VALIDATE USING ( mz_internal.mz_panic(headers::text) IS null );
+
+$ webhook-append name=webhook_validation_panic status=503
+abc
+
 # Turn off the feature.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_webhook_sources = false
