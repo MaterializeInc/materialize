@@ -140,10 +140,6 @@ class Subscribe(Generator):
 
 
 class Indexes(Generator):
-    COUNT = min(
-        Generator.COUNT, 100
-    )  # https://github.com/MaterializeInc/materialize/issues/11134
-
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
@@ -694,7 +690,7 @@ class SubqueriesExistWhereClause(Generator):
 class SubqueriesInWhereClauseCorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8605
+    )  # https://github.com/MaterializeInc/materialize/issues/20557
 
     @classmethod
     def body(cls) -> None:
@@ -711,7 +707,7 @@ class SubqueriesInWhereClauseCorrelated(Generator):
 class SubqueriesInWhereClauseUncorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8605
+    )  # https://github.com/MaterializeInc/materialize/issues/20557
 
     @classmethod
     def body(cls) -> None:
