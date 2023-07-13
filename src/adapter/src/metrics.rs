@@ -9,7 +9,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::stats::histogram_seconds_buckets;
+use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
@@ -58,9 +58,9 @@ impl Metrics {
             )),
             timestamp_difference_for_strict_serializable: registry.register(metric!(
                 name: "mz_timestamp_difference_for_strict_serializable",
-                help: "Difference in timestamp in seconds for running in strict serializable vs serializable isolation level.",
+                help: "Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.",
                 var_labels:["compute_instance"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+                buckets: histogram_milliseconds_buckets(0.128, 8000.),
             )),
             commands: registry.register(metric!(
                 name: "mz_adapter_commands",

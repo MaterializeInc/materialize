@@ -472,10 +472,9 @@ impl Coordinator {
                     self.metrics
                         .timestamp_difference_for_strict_serializable
                         .with_label_values(&[&compute_instance.to_string()])
-                        .observe(
-                            f64::cast_lossy(u64::from(strict.saturating_sub(*serializable)))
-                                / 1000.0,
-                        );
+                        .observe(f64::cast_lossy(u64::from(
+                            strict.saturating_sub(*serializable),
+                        )));
                 }
             }
         }
