@@ -705,7 +705,7 @@ where
 
             let start = Instant::now();
             let result = self.one_query(stmt).await;
-            let latency = Instant::now() - start;
+            let latency = start.elapsed();
 
             self.metrics
                 .one_query_latency(result.is_ok(), kind, latency);
