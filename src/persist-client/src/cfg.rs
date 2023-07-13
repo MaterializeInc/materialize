@@ -231,7 +231,7 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::consensus_connection_pool_ttl`].
     pub const DEFAULT_CONSENSUS_CONNPOOL_TTL: Duration = Duration::from_secs(300);
     /// Default value for [`DynamicConfig::consensus_connection_pool_ttl_stagger`].
-    pub const DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER: Duration = Duration::from_secs(5);
+    pub const DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER: Duration = Duration::from_secs(6);
     /// Default value for [`DynamicConfig::stats_audit_percent`].
     pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
