@@ -25,16 +25,15 @@ use mz_sql::plan::{
 };
 use tracing::{event, Level};
 
-use crate::command::ExecuteResponse;
+use crate::command::{Command, ExecuteResponse};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
-use crate::util::send_immediate_rows;
+use crate::session::{EndTransactionAction, Session, TransactionStatus};
 use crate::{rbac, ExecuteContext};
 
-// DO NOT make this visible in anyway, i.e. do not add any version of
+// DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
 // private module to prevent anyone from calling them directly. All
 // sequencing should be done through the `sequence_plan` method.
@@ -274,7 +273,7 @@ impl Coordinator {
             }
             Plan::Subscribe(plan) => {
                 let result = self
-                    .sequence_subscribe(ctx.session_mut(), plan, target_cluster)
+                    .sequence_subscribe(&mut ctx, plan, target_cluster)
                     .await;
                 ctx.retire(result);
             }
@@ -282,7 +281,7 @@ impl Coordinator {
                 ctx.retire(self.sequence_side_effecting_func(plan));
             }
             Plan::ShowCreate(plan) => {
-                ctx.retire(Ok(send_immediate_rows(vec![plan.row])));
+                ctx.retire(Ok(Self::send_immediate_rows(vec![plan.row])));
             }
             Plan::CopyFrom(plan) => {
                 let (tx, _, session, ctx_extra) = ctx.into_parts();
@@ -396,17 +395,19 @@ impl Coordinator {
             }
             Plan::Declare(plan) => {
                 let param_types = vec![];
-                self.declare(ctx, plan.name, plan.stmt, param_types);
+                self.declare(ctx, plan.name, plan.stmt, plan.sql, param_types);
             }
             Plan::Fetch(FetchPlan {
                 name,
                 count,
                 timeout,
             }) => {
+                let ctx_extra = std::mem::take(ctx.extra_mut());
                 ctx.retire(Ok(ExecuteResponse::Fetch {
                     name,
                     count,
                     timeout,
+                    ctx_extra,
                 }));
             }
             Plan::Close(plan) => {
@@ -426,11 +427,10 @@ impl Coordinator {
                 } else {
                     ctx.session_mut().set_prepared_statement(
                         plan.name,
-                        PreparedStatement::new(
-                            Some(plan.stmt),
-                            plan.desc,
-                            self.catalog().transient_revision(),
-                        ),
+                        Some(plan.stmt),
+                        plan.sql,
+                        plan.desc,
+                        self.catalog().transient_revision(),
                     );
                     ctx.retire(Ok(ExecuteResponse::Prepare));
                 }
@@ -438,12 +438,15 @@ impl Coordinator {
             Plan::Execute(plan) => {
                 match self.sequence_execute(ctx.session_mut(), plan) {
                     Ok(portal_name) => {
+                        let (tx, _, session, extra) = ctx.into_parts();
                         self.internal_cmd_tx
-                            .send(Message::Execute {
+                            .send(Message::Command(Command::Execute {
                                 portal_name,
-                                ctx,
+                                session,
+                                tx: tx.take(),
+                                outer_ctx_extra: Some(extra),
                                 span: tracing::Span::none(),
-                            })
+                            }))
                             .expect("sending to self.internal_cmd_tx cannot fail");
                     }
                     Err(err) => ctx.retire(Err(err)),
@@ -532,7 +535,7 @@ impl Coordinator {
 
     pub(crate) fn sequence_explain_timestamp_finish(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         format: ExplainFormat,
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
@@ -540,7 +543,7 @@ impl Coordinator {
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.sequence_explain_timestamp_finish_inner(
-            session,
+            ctx.session_mut(),
             format,
             cluster_id,
             optimized_plan,

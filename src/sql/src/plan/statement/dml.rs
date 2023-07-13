@@ -286,10 +286,13 @@ pub fn plan_explain(
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
             let query = match parsed.into_last() {
-                Statement::CreateView(CreateViewStatement {
-                    definition: ViewDefinition { query, .. },
-                    ..
-                }) => query,
+                (
+                    Statement::CreateView(CreateViewStatement {
+                        definition: ViewDefinition { query, .. },
+                        ..
+                    }),
+                    _,
+                ) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
@@ -311,10 +314,13 @@ pub fn plan_explain(
             let parsed = crate::parse::parse(mview.create_sql())
                 .expect("Sql for existing materialized view should be valid sql");
             let query = match parsed.into_last() {
-                Statement::CreateMaterializedView(CreateMaterializedViewStatement {
-                    query,
-                    ..
-                }) => query,
+                (
+                    Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+                        query,
+                        ..
+                    }),
+                    _,
+                ) => query,
                 _ => {
                     panic!("Sql for existing materialized view should parse as a materialized view")
                 }

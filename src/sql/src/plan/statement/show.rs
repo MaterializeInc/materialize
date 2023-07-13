@@ -676,7 +676,7 @@ impl<'a> ShowSelect<'a> {
         );
         let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
         let stmt = match stmts.into_element() {
-            Statement::Select(select) => select,
+            (Statement::Select(select), _) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
         };
         let (mut stmt, _) = names::resolve(scx.catalog, stmt)?;
@@ -701,7 +701,7 @@ impl<'a> ShowSelect<'a> {
 }
 
 fn simplify_names(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
-    let parsed = parse::parse(sql)?.into_element();
+    let (parsed, _) = parse::parse(sql)?.into_element();
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
     let mut simplifier = NameSimplifier { catalog };
     simplifier.visit_statement_mut(&mut resolved);

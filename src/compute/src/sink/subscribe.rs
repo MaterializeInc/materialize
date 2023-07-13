@@ -149,6 +149,7 @@ fn subscribe<G>(
 
                 if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut()
                 {
+                    println!("Sending batch: {rows_to_emit:?}");
                     subscribe_protocol.send_batch(
                         frontier.clone(),
                         &mut rows_to_emit,

@@ -184,6 +184,8 @@ pub struct Config {
     pub storage_usage_collection_interval: Duration,
     /// How long to retain storage usage records for.
     pub storage_usage_retention_period: Option<Duration>,
+    /// How long to retain statement logs for.
+    pub statement_logging_retention_period: Duration,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
@@ -526,6 +528,7 @@ impl Listeners {
             storage_usage_client,
             storage_usage_collection_interval: config.storage_usage_collection_interval,
             storage_usage_retention_period: config.storage_usage_retention_period,
+            statement_logging_retention_period: config.statement_logging_retention_period,
             segment_client: segment_client.clone(),
             egress_ips: config.egress_ips,
             system_parameter_frontend: system_parameter_frontend.clone(),

@@ -72,69 +72,18 @@
 #![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
-// Disallow usage of `unwrap()`.
-#![warn(clippy::unwrap_used)]
-#![cfg_attr(nightly_doc_features, feature(doc_cfg))]
-// Without this, cargo clippy complains with:
-//     overflow evaluating the requirement `&str: std::marker::Send`
-// in implement_peek_plan's return of a Result<crate::ExecuteResponse, AdapterError>.
-#![recursion_limit = "256"]
 
-//! Coordinates client requests with the dataflow layer.
-//!
-//! This crate hosts the "coordinator", an object which sits at the center of
-//! the system and coordinates communication between the various components.
-//! Responsibilities of the coordinator include:
-//!
-//!   * Launching the dataflow workers.
-//!   * Periodically allowing the dataflow workers to compact existing data.
-//!   * Executing SQL queries from clients by parsing and planning them, sending
-//!     the plans to the dataflow layer, and then streaming the results back to
-//!     the client.
-//!   * Assigning timestamps to incoming source data.
-//!
-//! The main interface to the coordinator is [`Client`]. To start a coordinator,
-//! use the [`serve`] function.
+use crate::{StashError, TypedCollection, Transaction};
 
-// TODO(benesch): delete this once we use structured errors everywhere.
-macro_rules! coord_bail {
-    ($($e:expr),*) => {
-        return Err(crate::error::AdapterError::Unstructured(::anyhow::anyhow!($($e),*)))
-    }
+pub mod objects_v28 {
+    include!(concat!(env!("OUT_DIR"), "/objects_v28.rs"));
 }
 
-mod command;
-mod coord;
-mod error;
-mod explain;
-mod notice;
-mod rbac;
-mod subscribe;
-mod util;
+pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
+    const STATEMENT_LOGGING_EVENTS_COLLECTION: TypedCollection<
+        objects_v28::StatementLoggingEvent,
+        (),
+        > = TypedCollection::new("statement_logging_events");
 
-pub mod catalog;
-pub mod client;
-pub mod config;
-pub mod flags;
-pub mod metrics;
-pub mod session;
-pub mod telemetry;
-
-pub(crate) use crate::coord::statement_logging;
-
-pub use crate::client::{Client, Handle, SessionClient};
-pub use crate::command::{
-    AppendWebhookResponse, Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture,
-    StartupMessage, StartupResponse,
-};
-pub use crate::coord::id_bundle::CollectionIdBundle;
-pub use crate::coord::peek::PeekResponseUnary;
-pub use crate::coord::timeline::TimelineContext;
-pub use crate::coord::timestamp_selection::{
-    TimestampContext, TimestampExplanation, TimestampProvider,
-};
-pub use crate::coord::ExecuteContext;
-pub use crate::coord::ExecuteContextExtra;
-pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
-pub use crate::error::AdapterError;
-pub use crate::notice::AdapterNotice;
+    STATEMENT_LOGGING_EVENTS_COLLECTION.initialize(tx, vec![]).await
+}

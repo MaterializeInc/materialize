@@ -19,12 +19,13 @@ use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
+use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Instrument, Level};
+use tracing::{event, warn, Level};
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
@@ -35,7 +36,7 @@ use crate::coord::{
     PeekStageFinish, PendingReadTxn, PlanValidity, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
+use crate::{catalog, AdapterNotice, ExecuteContextExtra};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -58,14 +59,6 @@ impl Coordinator {
                 self.message_create_connection_validation_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
-            Message::Execute {
-                portal_name,
-                ctx,
-                span,
-            } => {
-                let span = tracing::debug_span!(parent: &span, "message (execute)");
-                self.handle_execute(portal_name, ctx).instrument(span).await;
-            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
@@ -103,9 +96,27 @@ impl Coordinator {
                 self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
             }
-            Message::RetireExecute { data } => {
-                self.retire_execute(data);
+            Message::RetireExecute { data, reason } => {
+                self.retire_execute(data, reason);
             }
+
+            Message::DrainStatementLog => {
+                let events = std::mem::take(&mut self.statement_logging_pending_events);
+                if let Err(e) = self.catalog().append_statement_log_events(events).await {
+                    tracing::error!("Failed to append statement log updates: {e:?}");
+                }
+                self.schedule_statement_log_flush();
+            }
+        }
+    }
+
+    pub(crate) fn retire_execute(
+        &mut self,
+        ExecuteContextExtra { statement_uuid }: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
+    ) {
+        if let Some(statement_uuid) = statement_uuid {
+            self.end_statement_execution(statement_uuid, reason)
         }
     }
 
@@ -725,7 +736,7 @@ impl Coordinator {
                 id_bundle,
             } => {
                 let result = self.sequence_explain_timestamp_finish(
-                    ctx.session_mut(),
+                    &mut ctx,
                     format,
                     cluster_id,
                     optimized_plan,

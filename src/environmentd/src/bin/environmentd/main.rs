@@ -499,6 +499,14 @@ pub struct Args {
     /// is required to discard old records.
     #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", parse(try_from_str = humantime::parse_duration))]
     storage_usage_retention_period: Option<Duration>,
+    /// The period for which to return statement logging records.
+    #[clap(
+        long,
+        env = "STATEMENT_LOGGING_RETENTION_PERIOD",
+        parse(try_from_str = humantime::parse_duration),
+        default_value = "86400s"
+    )]
+    statement_logging_retention_period: Duration,
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
@@ -908,6 +916,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tracing_handle,
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,
+                statement_logging_retention_period: args.statement_logging_retention_period,
                 segment_api_key: args.segment_api_key,
                 egress_ips: args.announce_egress_ip,
                 aws_account_id: args.aws_account_id,

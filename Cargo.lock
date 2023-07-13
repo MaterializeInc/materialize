@@ -3434,7 +3434,9 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
+ "qcell",
  "rand",
+ "rand_chacha",
  "rdkafka",
  "regex",
  "reqwest",
@@ -4512,6 +4514,7 @@ dependencies = [
  "postgres",
  "tokio",
  "tokio-openssl",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "workspace-hack",
@@ -6368,6 +6371,15 @@ dependencies = [
  "bitflags",
  "memchr",
  "unicase",
+]
+
+[[package]]
+name = "qcell"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76babcf954d92eee717a7c9bfc4921d91dfbf2124d9bfb6ed1b0b3d0c47361e3"
+dependencies = [
+ "once_cell",
 ]
 
 [[package]]

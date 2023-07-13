@@ -69,6 +69,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::string::ToString;
+use std::ops::RangeBounds;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -955,6 +956,15 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
+pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("statement_logging_sample_rate"),
+    value: &DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE,
+    description: "User-facing session variable indicating how many statement executions should be \
+    logged, subject to constraint by the system variable `statement_logging_max_sample_rate`.",
+    internal: false,
+});
+
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
@@ -972,6 +982,23 @@ pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     description:
         "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
     internal: true,
+};
+
+static DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
+pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("statement_logging_max_sample_rate"),
+    value: &DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+    description:
+        "The maximum value rate at which statements may be logged. If this value is less than \
+that of `statement_logging_sample_rate`, the latter is ignored.",
+    internal: false,
+});
+
+pub static STATEMENT_LOGGING_FLUSH_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("statement_logging_flush_interval"),
+    value: &Duration::from_secs(30),
+    description: "The interval at which statement logs are flushed to the stash.",
+    internal: false,
 };
 
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
@@ -1028,7 +1055,8 @@ macro_rules! feature_flags {
                     name: UncasedStr::new(stringify!($name)),
                     value: &false,
                     description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
-                    internal: true                };
+                    internal: true
+                };
 
                 pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                     flag: &[<$name:upper _VAR>],
@@ -1158,6 +1186,10 @@ feature_flags!(
         enable_webhook_sources,
         "creating or pushing data to webhook sources"
     ),
+    (
+        statement_logging_use_reproducible_rng,
+        "statement logging with reproducible RNG"
+    )
 );
 
 /// Represents the input to a variable.
@@ -1205,7 +1237,7 @@ impl OwnedVarInput {
 
 /// Session variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SessionVars {
@@ -1249,6 +1281,10 @@ impl SessionVars {
             .with_var(&EMIT_TRACE_ID_NOTICE)
             .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&ENABLE_SESSION_RBAC_CHECKS)
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            )
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1628,6 +1664,10 @@ impl SessionVars {
         self.set(None, CLUSTER.name(), VarInput::Flat(&cluster), false)
             .expect("setting cluster from string succeeds");
     }
+
+    pub fn get_statement_logging_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_SAMPLE_RATE)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1688,7 +1728,7 @@ impl DropConnection {
 
 /// On disk variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
@@ -1787,7 +1827,13 @@ impl SystemVars {
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
-            .with_var(&OPENTELEMETRY_FILTER);
+            .with_var(&OPENTELEMETRY_FILTER)
+            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            )
+            .with_var(&STATEMENT_LOGGING_FLUSH_INTERVAL);
         vars.refresh_internal_state();
         vars
     }
@@ -2294,6 +2340,16 @@ impl SystemVars {
 
     pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
         self.expect_value(&*OPENTELEMETRY_FILTER).clone()
+    }
+
+    /// Returns the `statement_logging_max_sample_rate` configuration parameter.
+    pub fn statement_logging_max_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_MAX_SAMPLE_RATE)
+    }
+
+    /// Returns the `statement_logging_flush_interval` configuration parameter.
+    pub fn statement_logging_flush_interval(&self) -> Duration {
+        *self.expect_value(&STATEMENT_LOGGING_FLUSH_INTERVAL)
     }
 }
 
@@ -3003,6 +3059,22 @@ impl Value for usize {
     }
 }
 
+impl Value for f64 {
+    fn type_name() -> String {
+        "double-precision floating-point number".to_string()
+    }
+
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<f64, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct NumericNonNegNonNan;
 
@@ -3013,6 +3085,44 @@ impl DomainConstraint<Numeric> for NumericNonNegNonNan {
                 parameter: var.into(),
                 values: vec![n.to_string()],
                 reason: "only supports non-negative, non-NaN numeric values".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct NumericInRange<R>(R);
+
+impl<R> DomainConstraint<Numeric> for NumericInRange<R>
+where
+    R: RangeBounds<f64> + std::fmt::Debug + Send + Sync,
+{
+    fn check(&self, var: &(dyn Var + Send + Sync), n: &Numeric) -> Result<(), VarError> {
+        let n: f64 = (*n)
+            .try_into()
+            .map_err(|_e| VarError::InvalidParameterValue {
+                parameter: var.into(),
+                values: vec![n.to_string()],
+                // This first check can fail if the value is NaN, out of range,
+                // OR if it underflows (i.e. is very close to 0 without actually being 0, and the closest
+                // representable float is 0).
+                //
+                // The underflow case is very unlikely to be accidentally hit by a user, so let's
+                // not make the error message more confusing by talking about it, even though that makes
+                // the error message slightly inaccurate.
+                //
+                // If the user tries to set the paramater to 0.000<hundreds more zeros>001
+                // and gets the message "only supports values in range [0.0..=1.0]", I think they will
+                // understand, or at least accept, what's going on.
+                reason: format!("only supports values in range {:?}", self.0),
+            })?;
+        if !self.0.contains(&n) {
+            Err(VarError::InvalidParameterValue {
+                parameter: var.into(),
+                values: vec![n.to_string()],
+                reason: format!("only supports values in range {:?}", self.0),
             })
         } else {
             Ok(())

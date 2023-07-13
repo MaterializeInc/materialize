@@ -269,7 +269,7 @@ pub struct DatumDictIter<'a> {
     prev_key: Option<&'a str>,
 }
 
-/// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
+/// `RowArena` is used to hold on to temporary [`Row`]s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
 #[derive(Debug)]
 pub struct RowArena {
     // Semantically, this field would be better represented by a `Vec<Box<[u8]>>`,

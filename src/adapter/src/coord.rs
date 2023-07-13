@@ -98,6 +98,9 @@ use mz_ore::{stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
+use mz_repr::statement_logging::{
+    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementLoggingEvent,
+};
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
@@ -112,6 +115,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
+use rand::SeedableRng;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -139,8 +143,11 @@ use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice};
 
+use self::statement_logging::StatementLoggingId;
+
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
+pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
@@ -212,18 +219,15 @@ pub enum Message<T = mz_repr::Timestamp> {
         validity: PlanValidity,
     },
 
-    // Like Command::Execute, but its context has already been allocated.
-    Execute {
-        portal_name: String,
-        ctx: ExecuteContext,
-        span: tracing::Span,
-    },
-
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
         data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
     },
+
+    /// Send pending statement log updates to the stash.
+    DrainStatementLog,
 }
 
 #[derive(Derivative)]
@@ -446,6 +450,7 @@ pub struct Config {
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
     pub storage_usage_retention_period: Option<Duration>,
+    pub statement_logging_retention_period: Duration,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
@@ -610,10 +615,20 @@ impl PendingReadTxn {
 /// to produce a value that will cause the coordinator to do nothing, and
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
-// Currently nothing; planned to be data related to statement logging
-// at some point in the future.
 #[derive(Debug, Default)]
-pub struct ExecuteContextExtra;
+pub struct ExecuteContextExtra {
+    statement_uuid: Option<StatementLoggingId>,
+}
+
+impl ExecuteContextExtra {
+    pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
+        Self { statement_uuid }
+    }
+    pub fn is_trivial(&self) -> bool {
+        let Self { statement_uuid } = self;
+        statement_uuid.is_none()
+    }
+}
 
 /// Bundle of state related to statement execution.
 ///
@@ -699,10 +714,122 @@ impl ExecuteContext {
             session,
             extra,
         } = self;
+        let reason = if extra.is_trivial() {
+            None
+        } else {
+            Some(match &result {
+                Ok(ok) => match ok {
+                    ExecuteResponse::CopyTo { resp, .. } => match resp.as_ref() {
+                        // NB [btv]: It's not clear that this combination
+                        // can ever actually happen.
+                        ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                            StatementEndedExecutionReason::Success {
+                                rows_returned: Some(u64::cast_from(rows.len())),
+                                was_fast_path: Some(true),
+                            }
+                        }
+                        ExecuteResponse::SendingRows { .. } => {
+                            panic!("SELECTs terminate on peek finalization, not here.")
+                        }
+                        ExecuteResponse::Subscribing { .. } => {
+                            panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+                        }
+                        _ => panic!("Invalid COPY response type"),
+                    },
+                    ExecuteResponse::CopyFrom { .. } => {
+                        panic!("COPY FROMs terminate in the protocol layer, not here.")
+                    }
+                    ExecuteResponse::Fetch { .. } => {
+                        panic!("FETCHes terminate after a follow-up message is sent.")
+                    }
+                    ExecuteResponse::SendingRows { .. } => {
+                        panic!("SELECTs terminate on peek finalization, not here.")
+                    }
+                    ExecuteResponse::Subscribing { .. } => {
+                        panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+                    }
+
+                    ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: Some(u64::cast_from(rows.len())),
+                            was_fast_path: Some(true),
+                        }
+                    }
+                    ExecuteResponse::Canceled => StatementEndedExecutionReason::Canceled,
+
+                    ExecuteResponse::AlteredDefaultPrivileges
+                    | ExecuteResponse::AlteredObject(_)
+                    | ExecuteResponse::AlteredIndexLogicalCompaction
+                    | ExecuteResponse::AlteredRole
+                    | ExecuteResponse::AlteredSystemConfiguration
+                    | ExecuteResponse::ClosedCursor
+                    | ExecuteResponse::CreatedConnection
+                    | ExecuteResponse::CreatedDatabase
+                    | ExecuteResponse::CreatedSchema
+                    | ExecuteResponse::CreatedRole
+                    | ExecuteResponse::CreatedCluster
+                    | ExecuteResponse::CreatedClusterReplica
+                    | ExecuteResponse::CreatedIndex
+                    | ExecuteResponse::CreatedSecret
+                    | ExecuteResponse::CreatedSink
+                    | ExecuteResponse::CreatedSource
+                    | ExecuteResponse::CreatedSources
+                    | ExecuteResponse::CreatedTable
+                    | ExecuteResponse::CreatedView
+                    | ExecuteResponse::CreatedViews
+| ExecuteResponse::CreatedWebhookSource {..}
+                    | ExecuteResponse::CreatedMaterializedView
+                    | ExecuteResponse::CreatedType
+                    | ExecuteResponse::Deallocate { .. }
+                    | ExecuteResponse::DeclaredCursor
+                    | ExecuteResponse::Deleted(_)
+                    | ExecuteResponse::DiscardedTemp
+                    | ExecuteResponse::DiscardedAll
+                    | ExecuteResponse::DroppedObject(_)
+                    | ExecuteResponse::DroppedOwned
+                    | ExecuteResponse::EmptyQuery
+                    | ExecuteResponse::GrantedPrivilege
+                    | ExecuteResponse::GrantedRole
+                    | ExecuteResponse::Inserted(_)
+                    | ExecuteResponse::Prepare
+                    | ExecuteResponse::Raised
+                    | ExecuteResponse::ReassignOwned
+                    | ExecuteResponse::RevokedPrivilege
+                    | ExecuteResponse::RevokedRole
+                    | ExecuteResponse::SetVariable { .. }
+                    | ExecuteResponse::StartedTransaction
+                    | ExecuteResponse::TransactionCommitted { .. }
+                    | ExecuteResponse::TransactionRolledBack { .. }
+                    | ExecuteResponse::Updated(_)
+                    | ExecuteResponse::ValidatedConnection { .. } => {
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: None,
+                            was_fast_path: None,
+                        }
+                    }
+                },
+                Err(e) => StatementEndedExecutionReason::Errored {
+                    error: e.to_string(),
+                },
+            })
+        };
         tx.send(result, session);
-        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute { data: extra }) {
-            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        if let Some(reason) = reason {
+            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+                data: extra,
+                reason,
+            }) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         }
+    }
+
+    pub fn extra(&self) -> &ExecuteContextExtra {
+        &self.extra
+    }
+
+    pub fn extra_mut(&mut self) -> &mut ExecuteContextExtra {
+        &mut self.extra
     }
 }
 
@@ -827,6 +954,24 @@ pub struct Coordinator {
 
     /// Tracing handle.
     tracing_handle: TracingHandle,
+
+    /// Information about statement executions that have been logged
+    /// but not finished.
+    ///
+    /// This map needs to have enough state left over to later retract
+    /// the system table entries (so that we can update them when the
+    /// execution finished.)
+    statement_logging_executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
+
+    /// A reproducible RNG for deciding whether to sample statement executions.
+    /// Only used by tests; otherwise, `rand::thread_rng()` is used.
+    /// Controlled by the system var `statement_logging_use_reproducible_rng`.
+    statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng,
+
+    /// Statement logging events that have been recorded in `mz_prepared_statement_history`
+    /// or `mz_statement_execution_history` but not
+    /// durably in the stash.
+    statement_logging_pending_events: Vec<StatementLoggingEvent>,
 }
 
 impl Coordinator {
@@ -1466,6 +1611,7 @@ impl Coordinator {
             }
         });
 
+        self.schedule_statement_log_flush();
         self.schedule_storage_usage_collection();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
@@ -1565,6 +1711,17 @@ impl Coordinator {
     pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
         &self.active_conns
     }
+
+    // XXX rename this?
+    pub(crate) fn retire_peek(
+        &mut self,
+        reason: StatementEndedExecutionReason,
+        ExecuteContextExtra { statement_uuid }: ExecuteContextExtra,
+    ) {
+        if let Some(uuid) = statement_uuid {
+            self.end_statement_execution(uuid, reason);
+        }
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
@@ -1598,6 +1755,7 @@ pub async fn serve(
         storage_usage_client,
         storage_usage_collection_interval,
         storage_usage_retention_period,
+        statement_logging_retention_period,
         segment_client,
         egress_ips,
         aws_account_id,
@@ -1662,6 +1820,7 @@ pub async fn serve(
             aws_privatelink_availability_zones,
             system_parameter_frontend,
             storage_usage_retention_period,
+            statement_logging_retention_period,
             connection_context: Some(connection_context.clone()),
             active_connection_count,
         })
@@ -1731,6 +1890,9 @@ pub async fn serve(
                 segment_client,
                 metrics,
                 tracing_handle,
+                statement_logging_executions_begun: BTreeMap::new(),
+                statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
+                statement_logging_pending_events: Vec::new(),
             };
             let bootstrap = handle.block_on(async {
                 coord

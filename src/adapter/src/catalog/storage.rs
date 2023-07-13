@@ -21,6 +21,9 @@ use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
+use mz_repr::statement_logging::{
+    StatementEndedExecutionReason, StatementEndedExecutionRecord, StatementLoggingEvent, StatementBeganExecutionRecord, StatementPreparedRecord,
+};
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
@@ -46,6 +49,7 @@ use crate::catalog::{
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
     SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
 };
+use crate::coord::statement_logging::STATEMENT_LOGGING_EVENTS_COLLECTION;
 use crate::coord::timeline;
 
 pub mod objects;
@@ -462,6 +466,156 @@ impl Connection {
             .await?)
     }
 
+    pub async fn fetch_and_prune_statement_log(
+        &mut self,
+        retention_period: Duration,
+    ) -> Result<(Vec<StatementPreparedRecord>, Vec<(StatementBeganExecutionRecord, StatementEndedExecutionRecord)>), Error> {
+        let boot_ts = self.boot_ts;
+        let cutoff_ts = u128::from(boot_ts).saturating_sub(retention_period.as_millis());
+        let is_recent_enough = move |ts_millis: u64| u128::from(ts_millis) >= cutoff_ts;
+
+        let out = self
+            .stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let collection = STATEMENT_LOGGING_EVENTS_COLLECTION.from_tx(&tx).await?;
+                    let mut updates = collection.make_batch_tx(&tx).await?;
+                    let mut prepared_statements = BTreeMap::new();
+                    let mut began_execution = BTreeMap::new();
+                    let mut ended_execution = BTreeMap::new();
+                    for (ev, ()) in tx.peek_one(collection).await?.into_iter() {
+                        let ev = ev.into_rust().expect("valid items in stash");
+                        match ev {
+                            StatementLoggingEvent::Prepared(p) => {
+                                prepared_statements.insert(p.id, Some(p));
+                            }
+                            StatementLoggingEvent::BeganExecution(be) => {
+                                began_execution.insert(be.id, Some(be));
+                            }
+                            StatementLoggingEvent::EndedExecution(ee) => {
+                                ended_execution.insert(ee.id, Some(ee));
+                            }
+                        }
+                    }
+
+                    // The rules are:
+                    // (1) If any part of a statement execution event (the Begin or the End) is younger than the
+                    //     retention period, we keep both parts.
+                    // (2) If any execution we keep due to rule 1 above references a prepared statement,
+                    //     we keep that prepared statement regardless of its age
+                    // (3) We also keep any prepared statement that is younger than the retention period,
+                    //     even if otherwise unreferenced.
+                    // (4) All other events are removed.
+                    // (5) If we decided to keep a Begin but there is no corresponding End,
+                    //     this means that environmentd died before the statement finished
+                    //     (or perhaps after it finished but before we flushed the statement log).
+                    //     We call this case "aborted". Add a corresponding new End entry.
+                    //
+                    // We remove every event we decide to keep from
+                    // the corresponding map.  At the end of this
+                    // process, the items remaining in the maps are
+                    // those that need to be retracted.
+
+                    let mut prepared_out = vec![];
+                    let mut execution_out = vec![];
+                    for (id, opt_be) in began_execution.iter_mut() {
+                        if let Some(be) = opt_be.as_mut() {
+                            if is_recent_enough(be.began_at) {
+                                let ps_id = be.prepared_statement_id;
+                                let be = opt_be.take().unwrap();
+                                if let Some(ps) = prepared_statements.remove(&ps_id).flatten() {
+                                    // Rule (2)
+                                    prepared_out.push(ps);
+                                }
+                                let ee = if let Some(ee) = ended_execution.remove(id).flatten() {
+                                    ee
+                                } else {
+                                    let aborted_record = StatementEndedExecutionRecord {
+                                        id: *id,
+                                        reason: StatementEndedExecutionReason::Aborted,
+                                        ended_at: u64::from(boot_ts),
+                                    };
+                                    // Rule (5)
+                                    collection.append_to_batch(
+                                        &mut updates,
+                                        &StatementLoggingEvent::EndedExecution(aborted_record.clone()).into_proto(),
+                                        &(),
+                                        1,
+                                    );
+                                    aborted_record
+                                };
+                                // Rule (1)
+                                execution_out.push((be, ee));
+                            }
+                        }
+                    }
+                    for (id, opt_ee) in ended_execution.iter_mut() {
+                        if let Some(ee) = opt_ee.as_mut() {
+                            if is_recent_enough(ee.ended_at) {
+                                let ee = opt_ee.take().unwrap();
+                                if let Some(be) = began_execution.remove(id).flatten() {
+                                    let ps_id = be.prepared_statement_id;
+                                    // Rule (1)
+                                    execution_out.push((be, ee));
+                                    // Rule (2)
+                                    if let Some(ps) = prepared_statements.remove(&ps_id).flatten() {
+                                        prepared_out.push(ps);
+                                    }
+                                } else {
+                                    tracing::error!("statement execution {id} ended without corresponding begin");
+                                }
+                            }
+                        }
+                    }
+                    for (id, opt_ps) in prepared_statements.iter_mut() {
+                        if let Some(ps) = opt_ps.as_mut() {
+                            if is_recent_enough(ps.prepared_at) {
+                                let ps = opt_ps.take().unwrap();
+                                // Rule (3)
+                                prepared_out.push(ps);
+                            }
+                        }
+                    }
+
+                    // Rule (4)
+                    for (_, opt_be) in began_execution {
+                        if let Some(be) = opt_be {
+                            collection.append_to_batch(
+                                &mut updates,
+                                &StatementLoggingEvent::BeganExecution(be).into_proto(),
+                                &(),
+                                -1,
+                            );
+                        }
+                    }
+                    for (_, opt_ee) in ended_execution {
+                        if let Some(ee) = opt_ee {
+                            collection.append_to_batch(
+                                &mut updates,
+                                &StatementLoggingEvent::EndedExecution(ee).into_proto(),
+                                &(),
+                                -1,
+                            );
+                        }
+                    }
+                    for (_, opt_ps) in prepared_statements {
+                        if let Some(ps) = opt_ps {
+                            collection.append_to_batch(
+                                &mut updates,
+                                &StatementLoggingEvent::Prepared(ps).into_proto(),
+                                &(),
+                                -1,
+                            );
+                        }
+                    }
+                    tx.append(vec![updates]).await?;
+                    Ok((prepared_out, execution_out))
+                })
+            })
+            .await?;
+        Ok(out)
+    }
+
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_system_gids(
@@ -785,6 +939,20 @@ impl Connection {
                 },
             )
             .await??;
+        Ok(())
+    }
+
+    pub async fn append_statement_log_events(
+        &mut self,
+        events: Vec<StatementLoggingEvent>,
+    ) -> Result<(), Error> {
+        let (col, mut batch) = STATEMENT_LOGGING_EVENTS_COLLECTION
+            .make_batch(&mut self.stash)
+            .await?;
+        for ev in events {
+            col.append_to_batch(&mut batch, &ev.into_proto(), &(), 1);
+        }
+        self.stash.append_batch(vec![batch]).await?;
         Ok(())
     }
 

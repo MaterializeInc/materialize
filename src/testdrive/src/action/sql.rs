@@ -39,7 +39,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
     }
-    let stmt = stmts.into_element();
+    let (stmt, _) = stmts.into_element();
     if let SqlOutput::Full { expected_rows, .. } = &mut cmd.expected_output {
         // TODO(benesch): one day we'll support SQL queries where order matters.
         expected_rows.sort();
@@ -344,7 +344,7 @@ pub async fn run_fail_sql(
             if s.len() != 1 {
                 bail!("expected one statement, but got {}", s.len());
             }
-            Some(s.into_element())
+            Some(s.into_element().0)
         }
         Err(_) => None,
     };

@@ -40,12 +40,14 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         name: String,
         stmt: Statement<Raw>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) {
         let catalog = self.owned_catalog();
         mz_ore::task::spawn(|| "coord::declare", async move {
-            let result = Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, param_types)
-                .map(|()| ExecuteResponse::DeclaredCursor);
+            let result =
+                Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, param_types)
+                    .map(|()| ExecuteResponse::DeclaredCursor);
             ctx.retire(result);
         });
     }
@@ -55,15 +57,18 @@ impl Coordinator {
         catalog: &Catalog,
         name: String,
         stmt: Statement<Raw>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let logging = session.mint_logging(sql);
         session.set_portal(
             name,
             desc,
             Some(stmt),
+            logging,
             params,
             result_formats,
             catalog.transient_revision(),
