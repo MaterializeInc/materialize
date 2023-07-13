@@ -125,7 +125,7 @@ impl HttpServer {
 
         let base_router = base_router(BaseRouterConfig {
             profiling: false,
-            metrics: Some(metrics),
+            metrics,
         })
         .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
         .layer(middleware::from_fn(move |req, next| {
@@ -332,9 +332,10 @@ impl InternalHttpServer {
             ready_to_promote,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
+        let metrics = Metrics::register_into(&metrics_registry, "mz_internal_http");
         let router = base_router(BaseRouterConfig {
             profiling: true,
-            metrics: None,
+            metrics,
         })
         .route(
             "/metrics",
@@ -745,7 +746,7 @@ struct BaseRouterConfig {
     /// Whether to enable the profiling routes.
     profiling: bool,
     /// Optionally track metrics for all of our endpoints.
-    metrics: Option<Metrics>,
+    metrics: Metrics,
 }
 
 /// Returns the router for routes that are shared between the internal and
@@ -774,10 +775,5 @@ fn base_router(BaseRouterConfig { profiling, metrics }: BaseRouterConfig) -> Rou
         router = router.nest("/prof/", mz_prof::http::router(&BUILD_INFO));
     }
 
-    if let Some(metrics) = metrics {
-        let layer = metrics::PrometheusLayer::new(metrics);
-        router = router.layer(layer);
-    }
-
-    router
+    router.layer(metrics::PrometheusLayer::new(metrics))
 }

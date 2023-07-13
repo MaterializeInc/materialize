@@ -578,7 +578,7 @@ impl Listeners {
         });
 
         // Launch HTTP server.
-        let http_metrics = http::Metrics::register_into(&config.metrics_registry);
+        let http_metrics = http::Metrics::register_into(&config.metrics_registry, "mz_http");
         task::spawn(|| "http_server", {
             let http_server = HttpServer::new(HttpConfig {
                 tls: http_tls,

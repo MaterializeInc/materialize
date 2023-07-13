@@ -63,6 +63,7 @@ macro_rules! metric {
     (
         name: $name:expr,
         help: $help:expr
+        $(, subsystem: $subsystem_name:expr)?
         $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
@@ -80,6 +81,7 @@ macro_rules! metric {
         #[allow(unused_mut)]
         let mut mk_opts = $crate::metrics::MakeCollectorOpts {
             opts: $crate::metrics::PrometheusOpts::new($name, $help)
+                $(.subsystem( $subsystem_name ))?
                 .const_labels(const_labels)
                 .variable_labels(var_labels),
             buckets: None,

@@ -1696,6 +1696,20 @@ fn smoketest_webhook_source() {
             .expect("failed to POST event");
         assert!(resp.status().is_success());
     }
+    let total_requests_metric = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|metric| metric.get_name() == "mz_http_requests_total")
+        .unwrap();
+    let total_requests_metric = &total_requests_metric.get_metric()[0];
+    assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
+
+    let path_label = &total_requests_metric.get_label()[0];
+    assert_eq!(path_label.get_value(), "/api/webhook/:database/:schema/:id");
+
+    let status_label = &total_requests_metric.get_label()[1];
+    assert_eq!(status_label.get_value(), "200");
 
     // Wait for the events to be persisted.
     mz_ore::retry::Retry::default()
@@ -1970,7 +1984,7 @@ fn test_http_metrics() {
     // Make sure the duration metric exists.
     let duration_count = http_metrics
         .iter()
-        .filter(|metric| metric.get_name() == "mz_http_request_duration")
+        .filter(|metric| metric.get_name() == "mz_http_request_duration_seconds")
         .count();
     assert_eq!(duration_count, 1);
     // Make sure the active count metric exists.
@@ -1983,7 +1997,7 @@ fn test_http_metrics() {
     // Make sure our metrics capture the one successful query and the one failure.
     let mut request_metrics: Vec<_> = http_metrics
         .into_iter()
-        .filter(|metric| metric.get_name() == "mz_http_requests")
+        .filter(|metric| metric.get_name() == "mz_http_requests_total")
         .collect();
     assert_eq!(request_metrics.len(), 1);
 
