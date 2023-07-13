@@ -21,4 +21,6 @@ wal_level = logical
 fsync = off
 max_wal_senders = 20
 max_replication_slots = 20
+shared_preload_libraries = 'pg_cron'
+cron.database_name = 'postgres'
 EOCONF
