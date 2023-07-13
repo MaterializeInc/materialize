@@ -1709,9 +1709,11 @@ db error: ERROR: role "owner" cannot be dropped because some objects depend on i
 DETAIL: owner: privileges on DATABASE "materialize" granted by mz_system
 owner: privileges on SCHEMA "materialize.public" granted by mz_system
 owner: owner of DATABASE "db"
+owner: privileges granted on DATABASE "db" to mz_introspection
 owner: privileges on DATABASE "db" granted by owner
 owner: privileges granted on DATABASE "db" to owner
 owner: owner of SCHEMA "db.public"
+owner: privileges granted on SCHEMA "db.public" to mz_introspection
 owner: privileges on SCHEMA "db.public" granted by owner
 owner: privileges granted on SCHEMA "db.public" to owner
 owner: privileges granted on SCHEMA "db.public" to public
@@ -1792,6 +1794,7 @@ db error: ERROR: role "owner" cannot be dropped because some objects depend on i
 DETAIL: owner: privileges on DATABASE "materialize" granted by mz_system
 owner: privileges on SCHEMA "materialize.public" granted by mz_system
 owner: owner of SCHEMA "materialize.sc"
+owner: privileges granted on SCHEMA "materialize.sc" to mz_introspection
 owner: privileges on SCHEMA "materialize.sc" granted by owner
 owner: privileges granted on SCHEMA "materialize.sc" to owner
 owner: privileges on CLUSTER "default" granted by mz_system

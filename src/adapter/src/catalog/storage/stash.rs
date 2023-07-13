@@ -214,14 +214,38 @@ pub async fn initialize(
         .await?;
 
     let default_privileges = vec![
-        // mz_introspection needs USAGE privileges on all clusters for the
-        // prometheus-exporter.
+        // mz_introspection needs USAGE privileges on all clusters, databases, and schemas for
+        // debugging.
         (
             DefaultPrivilegesKey {
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
                 object_type: mz_sql::catalog::ObjectType::Cluster,
+                grantee: MZ_INTROSPECTION_ROLE_ID,
+            },
+            DefaultPrivilegesValue {
+                privileges: AclMode::USAGE,
+            },
+        ),
+        (
+            DefaultPrivilegesKey {
+                role_id: RoleId::Public,
+                database_id: None,
+                schema_id: None,
+                object_type: mz_sql::catalog::ObjectType::Database,
+                grantee: MZ_INTROSPECTION_ROLE_ID,
+            },
+            DefaultPrivilegesValue {
+                privileges: AclMode::USAGE,
+            },
+        ),
+        (
+            DefaultPrivilegesKey {
+                role_id: RoleId::Public,
+                database_id: None,
+                schema_id: None,
+                object_type: mz_sql::catalog::ObjectType::Schema,
                 grantee: MZ_INTROSPECTION_ROLE_ID,
             },
             DefaultPrivilegesValue {
@@ -274,6 +298,11 @@ pub async fn initialize(
     let mut db_privileges = vec![
         proto::MzAclItem {
             grantee: Some(RoleId::Public.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
+        },
+        proto::MzAclItem {
+            grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
@@ -353,6 +382,11 @@ pub async fn initialize(
 
     let schema_privileges = vec![
         rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema).into_proto(),
+        proto::MzAclItem {
+            grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
+        },
         rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
@@ -406,6 +440,11 @@ pub async fn initialize(
         privileges: vec![
             proto::MzAclItem {
                 grantee: Some(RoleId::Public.into_proto()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                acl_mode: Some(AclMode::USAGE.into_proto()),
+            },
+            proto::MzAclItem {
+                grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
                 grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 acl_mode: Some(AclMode::USAGE.into_proto()),
             },

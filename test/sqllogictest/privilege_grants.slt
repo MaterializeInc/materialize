@@ -212,21 +212,27 @@ SELECT * FROM database_privileges
 materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
 materialize  materialize=UC/mz_system
+materialize  mz_introspection=U/mz_system
 
 query TT
 SELECT name, privilege FROM schema_privileges ORDER BY name
 ----
 information_schema  =U/mz_system
 information_schema  mz_system=UC/mz_system
+information_schema  mz_introspection=U/mz_system
 mz_catalog          =U/mz_system
 mz_catalog          mz_system=UC/mz_system
+mz_catalog          mz_introspection=U/mz_system
 mz_internal         =U/mz_system
 mz_internal         mz_system=UC/mz_system
+mz_internal         mz_introspection=U/mz_system
 pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
+pg_catalog          mz_introspection=U/mz_system
 public              =U/mz_system
 public              mz_system=UC/mz_system
 public              materialize=UC/mz_system
+public              mz_introspection=U/mz_system
 
 query TT
 SELECT * FROM cluster_privileges ORDER BY name
@@ -346,6 +352,7 @@ query TT
 SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY name
@@ -355,6 +362,8 @@ public  =U/materialize
 public  mz_system=UC/mz_system
 public  materialize=UC/mz_system
 public  materialize=UC/materialize
+public  mz_introspection=U/mz_system
+public  mz_introspection=U/materialize
 
 statement ok
 CREATE SCHEMA sch;
@@ -363,6 +372,7 @@ query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 # Changing the owner of an object should change the grantor of all privileges to the new owner and
 # transfer the privileges of the old owner to the new owner.
@@ -463,6 +473,7 @@ query TT
 SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  joe=UC/joe
+d  mz_introspection=U/joe
 
 simple conn=mz_system,user=mz_system
 ALTER SCHEMA sch OWNER TO joe
@@ -473,6 +484,7 @@ query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=UC/joe
+sch  mz_introspection=U/joe
 
 ## Switch the owners back to materialize
 
@@ -1621,6 +1633,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  joe=U/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
@@ -1651,6 +1664,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  joe=U/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on DATABASE d TO PUBLIC
@@ -1661,6 +1675,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 d  =UC/materialize
 d  joe=U/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 simple conn=joe9,user=joe
 GRANT USAGE on DATABASE d TO other
@@ -1678,6 +1693,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  =UC/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
@@ -1708,6 +1724,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  =UC/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1722,6 +1739,7 @@ query TT
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for DATABASE
 GRANT INSERT, SELECT, UPDATE, DELETE ON DATABASE d TO joe
@@ -1756,6 +1774,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=U/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
@@ -1786,6 +1805,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=U/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on SCHEMA sch TO PUBLIC
@@ -1796,6 +1816,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 sch  =UC/materialize
 sch  joe=U/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 simple conn=joe10,user=joe
 GRANT USAGE on SCHEMA sch TO other
@@ -1813,6 +1834,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
@@ -1843,6 +1865,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1857,6 +1880,7 @@ query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 ## System
 
