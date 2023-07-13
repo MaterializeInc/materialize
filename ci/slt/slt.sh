@@ -51,7 +51,6 @@ tests=(
 tests_without_views=(
     # errors:
     test/sqllogictest/array_fill.slt
-    test/sqllogictest/as_of.slt
     test/sqllogictest/cluster.slt
     test/sqllogictest/cte_lowering.slt
     test/sqllogictest/current_database.slt
@@ -94,7 +93,6 @@ tests_without_views=(
     test/sqllogictest/schemas.slt
     test/sqllogictest/subquery.slt
     test/sqllogictest/table_func.slt
-    test/sqllogictest/temporal.slt
     test/sqllogictest/timedomain.slt
     test/sqllogictest/transactions.slt
     test/sqllogictest/transform/filter_index.slt
@@ -112,7 +110,6 @@ tests_without_views=(
     test/sqllogictest/cluster.slt # different indexes auto-created
     test/sqllogictest/interval.slt # https://github.com/MaterializeInc/materialize/issues/20110
     test/sqllogictest/operator.slt # https://github.com/MaterializeInc/materialize/issues/20110
-    test/sqllogictest/temporal.slt # https://github.com/MaterializeInc/materialize/issues/20110
 )
 # Exclude tests_without_views from tests
 for f in "${tests_without_views[@]}"; do
