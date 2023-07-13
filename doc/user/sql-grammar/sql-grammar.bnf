@@ -303,6 +303,8 @@ reassign_owned ::=
   'REASSIGN' 'OWNED' 'BY' old_role (',' old_role)* 'TO' new_role
 reset_session_variable ::=
   'RESET' variable_name
+reset_system_variable ::=
+  'RESET' variable_name
 revoke_privilege ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 revoke_role ::=
@@ -326,6 +328,8 @@ simple_select_stmt ::=
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
 set_session_variable ::=
   'SET' ( 'SESSION' | 'LOCAL' )? variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
+set_system_variable ::=
+  'ALTER' 'SYSTEM' 'SET' variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
 set_transaction_isolation ::=
   'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=
