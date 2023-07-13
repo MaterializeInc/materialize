@@ -57,6 +57,9 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
 
     c.run("testdrive", "ssh-connections.td")
 
+    # Check that objects can be restored correctly
+    restart_mz(c)
+
 
 def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")

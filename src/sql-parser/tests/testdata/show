@@ -677,4 +677,3 @@ SHOW CONNECTIONS
 SHOW CONNECTIONS
 =>
 Show(ShowObjects(ShowObjectsStatement { object_type: Connection, from: None, filter: None }))
-
