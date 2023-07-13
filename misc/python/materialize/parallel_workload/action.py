@@ -222,8 +222,12 @@ class DeleteAction(Action):
             exe.execute(query)
         else:
             exe.execute(query)
-            with self.db.lock:
-                table.num_rows = 0
+            # Only after a commit we can be sure that the table is empty again,
+            # so for now have to trigger them manually here.
+            if self.rng.choice([True, False]):
+                exe.commit()
+                with self.db.lock:
+                    table.num_rows = 0
 
 
 class CreateIndexAction(Action):

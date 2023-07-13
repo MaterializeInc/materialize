@@ -738,7 +738,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
-          args: [--runtime=3000, --complexity=dml]
+          args: [--runtime=3000, --complexity=dml, --threads=16]
 
   - id: parallel-workload
     label: "Parallel Workload"
