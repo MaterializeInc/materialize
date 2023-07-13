@@ -453,7 +453,8 @@ impl Coordinator {
                 &compute_instance.to_string(),
             ])
             .inc();
-        if isolation_level == &IsolationLevel::StrictSerializable {
+        if isolation_level == &IsolationLevel::StrictSerializable && real_time_recency_ts.is_none()
+        {
             let serializable_det = self.determine_timestamp_for(
                 self.catalog().state(),
                 session,
