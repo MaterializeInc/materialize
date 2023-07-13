@@ -18,11 +18,12 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import dbt.exceptions
-from dbt.adapters.base.impl import AdapterConfig
+from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.materialize import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
+from dbt.contracts.graph.nodes import ConstraintType
 from dbt.dataclass_schema import ValidationError, dbtClassMixin
 
 
@@ -61,6 +62,18 @@ class MaterializeAdapter(PostgresAdapter):
     Relation = MaterializeRelation
 
     AdapterSpecificConfigs = MaterializeConfig
+
+    # NOTE(morsapaes): Materialize supports enforcing the NOT NULL constraint,
+    # but only for tables. In dbt-materialize, table models are materialized as
+    # static materialized views (see #5266), so we're marking all constraints
+    # as not supported.
+    CONSTRAINT_SUPPORT = {
+        ConstraintType.check: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.not_null: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.unique: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.primary_key: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.foreign_key: ConstraintSupport.NOT_SUPPORTED,
+    }
 
     @classmethod
     def is_cancelable(cls) -> bool:

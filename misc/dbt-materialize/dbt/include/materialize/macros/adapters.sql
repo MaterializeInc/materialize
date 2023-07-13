@@ -20,6 +20,10 @@
 {% macro materialize__create_view_as(relation, sql) -%}
 
   create view {{ relation }}
+    {% set contract_config = config.get('contract') %}
+    {% if contract_config.enforced %}
+      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+    {%- endif %}
   as (
     {{ sql }}
   );
@@ -29,6 +33,10 @@
   {%- set cluster = config.get('cluster', target.cluster) -%}
 
   create materialized view {{ relation }}
+    {% set contract_config = config.get('contract') %}
+    {% if contract_config.enforced %}
+      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+    {%- endif %}
   {% if cluster %}
     in cluster {{ cluster }}
   {% endif %}
@@ -38,6 +46,10 @@
 {%- endmacro %}
 
 {% macro materialize__create_arbitrary_object(sql) -%}
+    {% set contract_config = config.get('contract') %}
+    {% if contract_config.enforced %}
+      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+    {%- endif %}
     {{ sql }}
 {%- endmacro %}
 
