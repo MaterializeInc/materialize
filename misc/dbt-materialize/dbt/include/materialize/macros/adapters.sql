@@ -106,7 +106,7 @@
     where o.type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
       --Exclude subsources and progress subsources, which aren't relevant in this
       --context and can bork the adapter (see #20483)
-      and so.type not in ('subsource', 'progress')
+      and coalesce(so.type, '') not in ('subsource', 'progress')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}
 {% endmacro %}
