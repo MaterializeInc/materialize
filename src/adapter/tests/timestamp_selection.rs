@@ -316,7 +316,7 @@ fn test_timestamp_selection() {
                             &det.id_bundle.into(),
                             &parse_query_when(&det.when),
                             det.instance.parse().unwrap(),
-                            TimelineContext::TimestampDependent,
+                            &TimelineContext::TimestampDependent,
                             None,
                             &IsolationLevel::from(isolation),
                         )
