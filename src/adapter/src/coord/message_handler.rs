@@ -11,7 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::DurationRound;
 use mz_controller::clusters::ClusterEvent;
@@ -29,13 +29,12 @@ use tracing::{event, warn, Instrument, Level};
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
-use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message, PeekStage,
     PeekStageFinish, PendingReadTxn, PlanValidity, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
+use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -648,9 +647,9 @@ impl Coordinator {
         let mut ready_txns = Vec::new();
         let mut deferred_txns = Vec::new();
 
-        for read_txn in pending_read_txns {
+        for mut read_txn in pending_read_txns {
             if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
-                read_txn.timestamp_context()
+                read_txn.txn.timestamp_context()
             {
                 let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
@@ -661,6 +660,7 @@ impl Coordinator {
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
+                    read_txn.num_requeues += 1;
                     deferred_txns.push(read_txn);
                 }
             } else {
@@ -673,8 +673,20 @@ impl Coordinator {
                 .confirm_leadership()
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
+            let now = Instant::now();
             for ready_txn in ready_txns {
-                if let Some((ctx, result)) = ready_txn.finish() {
+                self.metrics
+                    .linearize_message_seconds
+                    .with_label_values(&[
+                        ready_txn.txn.label(),
+                        if ready_txn.num_requeues == 0 {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    ])
+                    .observe((now - ready_txn.created).as_secs_f64());
+                if let Some((ctx, result)) = ready_txn.txn.finish() {
                     ctx.retire(result);
                 }
             }

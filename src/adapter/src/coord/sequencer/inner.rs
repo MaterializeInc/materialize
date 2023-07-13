@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::BoxFuture;
@@ -95,8 +95,8 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, Coordinator, ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
-    PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, PendingTxnResponse,
-    PlanValidity, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
+    PeekStageTimestamp, PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, PlanValidity, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
     DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
@@ -1747,13 +1747,17 @@ impl Coordinator {
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
-                    .send(PendingReadTxn::Read {
-                        txn: PendingTxn {
-                            ctx,
-                            response,
-                            action,
+                    .send(PendingReadTxn {
+                        txn: PendingRead::Read {
+                            txn: PendingTxn {
+                                ctx,
+                                response,
+                                action,
+                            },
+                            timestamp_context: determination.timestamp_context,
                         },
-                        timestamp_context: determination.timestamp_context,
+                        created: Instant::now(),
+                        num_requeues: 0,
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
@@ -3489,9 +3493,13 @@ impl Coordinator {
             if let Some(TimestampContext::TimelineTimestamp(timeline, read_ts)) = timestamp_context
             {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
-                    tx,
-                    timestamp: (read_ts, timeline),
+                let result = strict_serializable_reads_tx.send(PendingReadTxn {
+                    txn: PendingRead::ReadThenWrite {
+                        tx,
+                        timestamp: (read_ts, timeline),
+                    },
+                    created: Instant::now(),
+                    num_requeues: 0,
                 });
                 // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
                 if let Err(e) = result {

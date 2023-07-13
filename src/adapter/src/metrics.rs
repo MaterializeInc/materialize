@@ -25,6 +25,7 @@ pub struct Metrics {
     pub storage_usage_collection_time_seconds: HistogramVec,
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounterVec,
+    pub linearize_message_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -73,6 +74,12 @@ impl Metrics {
             canceled_peeks: registry.register(metric!(
                 name: "mz_canceled_peeks_total",
                 help: "The total number of canceled peeks since process start.",
+            )),
+            linearize_message_seconds: registry.register(metric!(
+                name: "mz_linearize_message_seconds",
+                help: "The number of seconds it takes to linearize strict serializable messages",
+                var_labels: ["type", "immediately_handled"],
+                buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
         }
     }
