@@ -15,6 +15,7 @@ use chrono::NaiveDateTime;
 use differential_dataflow::lattice::Lattice;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
+use mz_ore::now::SYSTEM_TIME;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
@@ -597,6 +598,8 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
     for TimestampExplanation<T>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let now = SYSTEM_TIME();
+        writeln!(f, "                   system clock: {}", now)?;
         let timeline = self.determination.timestamp_context.timeline();
         writeln!(
             f,
