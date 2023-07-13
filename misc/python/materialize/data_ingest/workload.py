@@ -31,7 +31,12 @@ from materialize.data_ingest.definition import (
 from materialize.data_ingest.executor import PgExecutor, PrintExecutor
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
-from materialize.data_ingest.transaction_def import TransactionDef, TransactionSize
+from materialize.data_ingest.transaction_def import (
+    RestartMz,
+    TransactionDef,
+    TransactionSize,
+)
+from materialize.mzcompose import Composition
 
 
 class Workload:
@@ -41,11 +46,12 @@ class Workload:
         while True:
             for transaction_def in self.cycle:
                 for transaction in transaction_def.generate(fields):
-                    yield transaction
+                    if transaction:
+                        yield transaction
 
 
 class SingleSensorUpdating(Workload):
-    def __init__(self) -> None:
+    def __init__(self, composition: Composition) -> None:
         self.cycle = [
             TransactionDef(
                 [
@@ -59,8 +65,24 @@ class SingleSensorUpdating(Workload):
         ]
 
 
+class SingleSensorUpdatingDisruptions(Workload):
+    def __init__(self, composition: Composition) -> None:
+        self.cycle = [
+            TransactionDef(
+                [
+                    Upsert(
+                        keyspace=Keyspace.SINGLE_VALUE,
+                        count=Records.ONE,
+                        record_size=RecordSize.SMALL,
+                    ),
+                ]
+            ),
+            RestartMz(composition, probability=0.1),
+        ]
+
+
 class DeleteDataAtEndOfDay(Workload):
-    def __init__(self) -> None:
+    def __init__(self, composition: Composition) -> None:
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -85,6 +107,33 @@ class DeleteDataAtEndOfDay(Workload):
         ]
 
 
+class DeleteDataAtEndOfDayDisruptions(Workload):
+    def __init__(self, composition: Composition) -> None:
+        insert = Insert(
+            count=Records.SOME,
+            record_size=RecordSize.SMALL,
+        )
+        insert_phase = TransactionDef(
+            size=TransactionSize.HUGE,
+            operations=[insert],
+        )
+        # Delete all records in a single transaction
+        delete_phase = TransactionDef(
+            [
+                Delete(
+                    number_of_records=Records.ALL,
+                    record_size=RecordSize.SMALL,
+                    num=insert.max_key(),
+                )
+            ]
+        )
+        self.cycle = [
+            insert_phase,
+            delete_phase,
+            RestartMz(composition, probability=0.1),
+        ]
+
+
 # TODO: Implement
 # class ProgressivelyEnrichRecords(Workload):
 #    def __init__(self) -> None:
@@ -92,13 +141,9 @@ class DeleteDataAtEndOfDay(Workload):
 #        ]
 
 
-# TODO: Disruptions in workloads
-
-
 def execute_workload(
     executor_classes: List[Any],
     workload: Workload,
-    conn: pg8000.Connection,
     num: int,
     ports: Dict[str, int],
     runtime: int,
@@ -115,14 +160,14 @@ def execute_workload(
     print(f"With fields: {fields}")
 
     executors = [
-        executor_class(num, conn, ports, fields)
+        executor_class(num, ports, fields)
         for executor_class in [PgExecutor] + executor_classes
     ]
     pg_executor = executors[0]
 
     start = time.time()
 
-    run_executors = ([PrintExecutor()] if verbose else []) + executors
+    run_executors = ([PrintExecutor(ports)] if verbose else []) + executors
     for i, transaction in enumerate(workload.generate(fields)):
         duration = time.time() - start
         if duration > runtime:
@@ -134,10 +179,18 @@ def execute_workload(
 
     order_str = ", ".join(str(i + 1) for i in range(len(fields)))
 
-    with pg_executor.conn.cursor() as cur:
+    with pg_executor.pg_conn.cursor() as cur:
         cur.execute(f"SELECT * FROM {pg_executor.table} ORDER BY {order_str}")
         expected_result = cur.fetchall()
         print(f"Expected (via Postgres): {expected_result}")
+
+    # Reconnect as Mz disruptions may have destroyed the previous connection
+    conn = pg8000.connect(
+        host="localhost",
+        port=ports["materialized"],
+        user="materialize",
+        database="materialize",
+    )
 
     for executor in executors:
         correct_once = False

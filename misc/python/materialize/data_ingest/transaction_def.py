@@ -7,13 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import random
+import time
 from enum import Enum
-from typing import Iterator, List
+from typing import Iterator, List, Optional
 
 from materialize.data_ingest.definition import Definition
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.rowlist import RowList
 from materialize.data_ingest.transaction import Transaction
+from materialize.mzcompose import Composition
 
 
 class TransactionSize(Enum):
@@ -33,7 +36,7 @@ class TransactionDef:
         self.operations = operations
         self.size = size
 
-    def generate(self, fields: List[Field]) -> Iterator[Transaction]:
+    def generate(self, fields: List[Field]) -> Iterator[Optional[Transaction]]:
         full_rowlist: List[RowList] = []
         for definition in self.operations:
             for i, rowlist in enumerate(definition.generate(fields)):
@@ -43,3 +46,19 @@ class TransactionDef:
                     full_rowlist = []
         if full_rowlist:
             yield Transaction(full_rowlist)
+
+
+class RestartMz(TransactionDef):
+    composition: Composition
+    probability: float
+
+    def __init__(self, composition: Composition, probability: float):
+        self.composition = composition
+        self.probability = probability
+
+    def generate(self, fields: List[Field]) -> Iterator[Optional[Transaction]]:
+        if random.random() < self.probability:
+            self.composition.kill("materialized")
+            time.sleep(1)
+            self.composition.up("materialized")
+        yield None
