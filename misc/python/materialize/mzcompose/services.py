@@ -509,7 +509,7 @@ class MySql(Service):
 
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v23.1.1"
+    DEFAULT_COCKROACH_TAG = "v23.1.5"
 
     def __init__(
         self,
