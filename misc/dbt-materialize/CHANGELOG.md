@@ -1,21 +1,24 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.5.0 - 2023-07-13
+
+* Upgrade to `dbt-postgres` v1.5.0. dbt contracts and dbt constraints are **not
+  supported** in this release (see [dbt-core #7213](https://github.com/dbt-labs/dbt-core/discussions/7213#discussioncomment-5903205)).
 
 * Fix a bug in the `materialize__list_relations_without_caching` macro which
   could cause the adapter to break for multi-output sources ([#20483](https://github.com/MaterializeInc/materialize/issues/20483)).
 
-* **Breaking change.** Expose `owner` in the dbt documentation, now that
-    Materialize supports [role-based access control (RBAC)](https://materialize.com/docs/manage/access-control/).
-
-  This change requires [Materialize >=0.48.0](https://materialize.com/docs/releases/v0.48/).
-  **Users of older versions should pin `dbt-materialize` to `v1.4.1`.**
+* Expose `owner` in the dbt documentation, now that Materialize supports
+  [role-based access control (RBAC)](https://materialize.com/docs/manage/access-control/).
 
 ## 1.4.1 - 2023-04-28
 
 * Let Materialize automatically run introspection queries in the
   `mz_introspection` cluster via the new `auto_route_introspection_queries`
   session variable, instead of hardcoding the cluster on connection.
+
+  This change requires [Materialize >=0.49.0](https://materialize.com/docs/releases/v0.49/).
+  **Users of older versions should pin `dbt-materialize` to `v1.4.0`.**
 
 ## 1.4.0 - 2023-02-03
 
