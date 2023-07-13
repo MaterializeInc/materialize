@@ -272,23 +272,18 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 negated,
             } => {
                 f.write_node(&expr);
-                match escape {
-                    Some(escape) => {
-                        f.write_str(" LIKE ");
-                        f.write_node(&pattern);
-                        f.write_str(" ESCAPE ");
-                        f.write_node(escape);
-                        f.write_str("");
-                    }
-                    None => {
-                        f.write_str(match (*case_insensitive, *negated) {
-                            (false, false) => " ~~ ",
-                            (false, true) => " !~~ ",
-                            (true, false) => " ~~* ",
-                            (true, true) => " !~~* ",
-                        });
-                        f.write_node(&pattern);
-                    }
+                f.write_str(" ");
+                if *negated {
+                    f.write_str("NOT ");
+                }
+                if *case_insensitive {
+                    f.write_str("I");
+                }
+                f.write_str("LIKE ");
+                f.write_node(&pattern);
+                if let Some(escape) = escape {
+                    f.write_str(" ESCAPE ");
+                    f.write_node(escape);
                 }
             }
             Expr::Between {
@@ -381,9 +376,6 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(v);
             }
             Expr::Function(fun) => {
-                //if fun.name == T::ItemName(UnresolvedItemName(vec![Ident("extract".to_string())])) {
-                //    f.write_str("HERE");
-                //}
                 f.write_node(fun);
             }
             Expr::Case {
