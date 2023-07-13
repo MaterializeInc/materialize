@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use mz_adapter::{AdapterError, AppendWebhookResponse, AppendWebhookValidation};
 use mz_expr::EvalError;
+use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
@@ -86,16 +87,18 @@ async fn validate_request(
                     .iter()
                     .map(|(name, val)| (name.as_str(), Datum::String(val))),
             );
-            let datums = row.unpack();
-            let headers = datums.get(0).copied().unwrap_or(Datum::Null);
-
+            let headers = row.unpack_first();
             let body = Datum::Bytes(&body[..]);
 
             // Since the validation expression is technically a user defined function, we want to
             // be extra careful and guard against issues taking down the entire process.
-            let eval_result = mz_ore::panic::catch_unwind(move || validate_expr(body, headers))
-                .map_err(|_| WebhookError::ValidationPanicked)?;
-            eval_result.map_err(WebhookError::from)
+            match mz_ore::panic::catch_unwind(move || validate_expr(body, headers)) {
+                Ok(result) => result.err_into(),
+                Err(_) => {
+                    tracing::error!("panic while validating webhook request!");
+                    Err(WebhookError::ValidationPanicked)
+                }
+            }
         },
     )
     .await
