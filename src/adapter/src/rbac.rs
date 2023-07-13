@@ -579,6 +579,7 @@ fn generate_required_privileges(
             desc: _,
             create_sql: _,
             timeline: _,
+            validate_using: _,
         }) => vec![(
             SystemObjectId::Object(name.qualifiers.clone().into()),
             AclMode::CREATE,

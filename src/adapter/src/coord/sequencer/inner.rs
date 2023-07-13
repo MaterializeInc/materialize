@@ -193,7 +193,7 @@ impl Coordinator {
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
-                        DataSourceDesc::Webhook => {
+                        DataSourceDesc::Webhook { .. } => {
                             // TODO(parkmycar): Eventually webhook sources should take this path,
                             // definitely once they get installed on clusterd.
                             //
@@ -262,12 +262,13 @@ impl Coordinator {
             create_sql,
             desc,
             timeline,
+            validate_using,
         } = plan;
 
         let source_id = self.catalog_mut().allocate_user_id().await?;
         let source = catalog::Source {
             create_sql,
-            data_source: DataSourceDesc::Webhook,
+            data_source: DataSourceDesc::Webhook { validate_using },
             desc: desc.clone(),
             timeline,
             resolved_ids: ResolvedIds(BTreeSet::new()),
@@ -3672,7 +3673,7 @@ impl Coordinator {
             DataSourceDesc::Ingestion(ingestion) => ingestion,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook
+            | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }

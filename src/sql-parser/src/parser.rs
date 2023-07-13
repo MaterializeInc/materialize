@@ -2806,12 +2806,22 @@ impl<'a> Parser<'a> {
         };
         let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
 
+        let validate_using = if self.parse_keywords(&[VALIDATE, USING]) {
+            self.expect_token(&Token::LParen)?;
+            let validate_using = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            Some(validate_using)
+        } else {
+            None
+        };
+
         Ok(Statement::CreateWebhookSource(
             CreateWebhookSourceStatement {
                 name,
                 if_not_exists,
                 body_format,
                 include_headers,
+                validate_using,
             },
         ))
     }

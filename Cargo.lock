@@ -3853,6 +3853,7 @@ dependencies = [
  "mz-build-info",
  "mz-cloud-resources",
  "mz-controller",
+ "mz-expr",
  "mz-frontegg-auth",
  "mz-http-util",
  "mz-interchange",

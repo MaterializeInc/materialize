@@ -203,6 +203,8 @@ pub enum PlanError {
     VarError(VarError),
     UnsolvablePolymorphicFunctionInput,
     ShowCommandInView,
+    WebhookValidationDoesNotUseColumns,
+    WebhookValidationNonDeterministic,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -530,6 +532,12 @@ impl fmt::Display for PlanError {
                 "could not determine polymorphic type because input has type unknown"
             ),
             Self::ShowCommandInView => f.write_str("SHOW commands are not allowed in views"),
+            Self::WebhookValidationDoesNotUseColumns => f.write_str(
+                "expression provided in VALIDATE USING does not reference any columns"
+            ),
+            Self::WebhookValidationNonDeterministic => f.write_str(
+                "expression provided in VALIDATE USING is not deterministic"
+            ),
         }
     }
 }

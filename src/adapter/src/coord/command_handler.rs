@@ -15,9 +15,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_expr::EvalError;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::ScalarType;
+use mz_repr::{Datum, RowArena, ScalarType};
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
@@ -33,11 +34,11 @@ use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::CatalogItem;
+use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    AppendWebhookResponse, Canceled, Command, ExecuteResponse, GetVariablesResponse, Response,
-    StartupMessage, StartupResponse,
+    AppendWebhookResponse, AppendWebhookValidation, Canceled, Command, ExecuteResponse,
+    GetVariablesResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -861,21 +862,44 @@ impl Coordinator {
                 .resolve_entry(None, &vec![], &name, &conn_id)
                 .ok()?;
 
-            let (body_ty, header_ty) = match entry.item() {
-                CatalogItem::Source(source) if source.is_webhook() => {
+            let (body_ty, header_ty, validate_using) = match entry.item() {
+                CatalogItem::Source(Source {
+                    data_source: DataSourceDesc::Webhook { validate_using },
+                    desc,
+                    ..
+                }) => {
                     // All Webhook sources should have at most 2 columns.
-                    mz_ore::soft_assert!(source.desc.arity() <= 2);
+                    mz_ore::soft_assert!(desc.arity() <= 2);
 
-                    let body = source
-                        .desc
+                    let body = desc
                         .get_by_name(&"body".into())
                         .map(|(_idx, ty)| ty.clone())?;
-                    let header = source
-                        .desc
+                    let header = desc
                         .get_by_name(&"headers".into())
                         .map(|(_idx, ty)| ty.clone());
 
-                    (body, header)
+                    // Create a closure that we can call to validate a webhook request.
+                    let validate = validate_using.as_ref().map(|expr| {
+                        let expr = expr.clone();
+                        let f: AppendWebhookValidation =
+                            Box::new(move |body, headers| -> Result<bool, EvalError> {
+                                // TODO(parkmycar): When we add rate limiting for the number of
+                                // concurrent validations, we should make a pool of workers each
+                                // with a single RowArena that continuously gets re-used.
+                                let temp_storage = RowArena::default();
+                                let valid = expr.eval(&[body, headers], &temp_storage)?;
+
+                                match valid {
+                                    Datum::True => Ok(true),
+                                    Datum::False | Datum::Null => Ok(false),
+                                    _ => unreachable!(
+                                        "Creating a webhook source asserts we return a boolean"
+                                    ),
+                                }
+                            });
+                        f
+                    });
+                    (body, header, validate)
                 }
                 _ => return None,
             };
@@ -886,6 +910,7 @@ impl Coordinator {
                 tx: row_tx,
                 body_ty,
                 header_ty,
+                validate_expr: validate_using,
             })
         }
 

@@ -905,6 +905,52 @@ pub fn plan_secret_as(
     Ok(expr)
 }
 
+/// Plans an expression in the VALIDATE USING position of a `CREATE SOURCE ... FROM WEBHOOK`.
+pub fn plan_webhook_validate_using(
+    scx: &StatementContext,
+    mut expr: Expr<Aug>,
+) -> Result<MirScalarExpr, PlanError> {
+    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+
+    // We _always_ provide the body of the request as bytes and include the headers when validating
+    // a request, regardless of what has otherwise been specified for the source.
+    let column_typs = vec![
+        ColumnType {
+            scalar_type: ScalarType::Bytes,
+            nullable: false,
+        },
+        ColumnType {
+            scalar_type: ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            },
+            nullable: false,
+        },
+    ];
+    let column_names = ["body", "headers"];
+
+    let relation_typ = RelationType::new(column_typs);
+    let desc = RelationDesc::new(relation_typ, column_names);
+    let scope = Scope::from_source(None, column_names);
+
+    transform_ast::transform(scx, &mut expr)?;
+
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "VALIDATE USING",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let expr = plan_expr(ecx, &expr)?
+        .type_as(ecx, &ScalarType::Bool)?
+        .lower_uncorrelated()?;
+    Ok(expr)
+}
+
 pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Aug>,
