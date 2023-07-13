@@ -1975,8 +1975,8 @@ fn generate_view_sql(
     // DDL cost drops dramatically in the future.
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     assert!(stmts.len() == 1);
-    let query = match &stmts[0] {
-        Statement::Select(stmt) => &stmt.query,
+    let (query, query_as_of) = match &stmts[0] {
+        Statement::Select(stmt) => (&stmt.query, &stmt.as_of),
         _ => unreachable!("This function should only be called for SELECTs"),
     };
 
@@ -2110,7 +2110,7 @@ fn generate_view_sql(
             limit: None,
             offset: None,
         },
-        as_of: None,
+        as_of: query_as_of.clone(),
     })
     .to_ast_string_stable();
 
