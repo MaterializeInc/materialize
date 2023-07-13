@@ -38,7 +38,8 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--miri", action="store_true")
+    parser.add_argument("--miri-full", action="store_true")
+    parser.add_argument("--miri-fast", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach")
@@ -108,9 +109,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ["buildkite-agent", "artifact", "upload", "coverage/cargotest.lcov.xz"]
             )
     else:
-        if args.miri:
+        if args.miri_full:
             spawn.runv(
                 ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri.sh"],
+                env=env,
+            )
+        elif args.miri_fast:
+            spawn.runv(
+                ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri-fast.sh"],
                 env=env,
             )
         else:
