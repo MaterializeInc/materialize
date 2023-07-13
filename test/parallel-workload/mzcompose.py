@@ -10,11 +10,12 @@
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Cockroach, Materialized
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
+from materialize.parallel_workload.settings import Complexity, Scenario
 
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(
-        external_cockroach=True, restart="on-failure", ports=["6875:6875", "6877:6877"]
+        external_cockroach=True, restart="on-failure", ports=["6975:6875", "6977:6877"]
     ),
 ]
 
@@ -31,8 +32,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.port("materialized", 6877),
         args.seed,
         args.runtime,
-        args.complexity,
-        args.scenario,
+        Complexity(args.complexity),
+        Scenario(args.scenario),
         args.threads,
         c,
     )

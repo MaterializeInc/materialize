@@ -36,6 +36,7 @@ class Executor:
     rng: random.Random
     cur: pg8000.Cursor
     pg_pid: int
+    # Used by INSERT action to prevent writing into different tables in the same transaction
     insert_table: Optional[int]
 
     def __init__(self, rng: random.Random, cur: pg8000.Cursor):

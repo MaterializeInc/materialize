@@ -30,6 +30,7 @@ from materialize.parallel_workload.database import (
     View,
 )
 from materialize.parallel_workload.executor import Executor, QueryError
+from materialize.parallel_workload.settings import Complexity, Scenario
 
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
@@ -56,7 +57,7 @@ class Action:
             "permission denied for",
             "must be owner of",
         ]
-        if self.db.complexity == "ddl":
+        if self.db.complexity == Complexity.DDL:
             result.extend(
                 [
                     "query could not complete",
@@ -68,13 +69,13 @@ class Action:
                     "unknown cluster",  # cluster was dropped
                 ]
             )
-        if self.db.scenario == "cancel":
+        if self.db.scenario == Scenario.Cancel:
             result.extend(
                 [
                     "canceling statement due to user request",
                 ]
             )
-        if self.db.scenario == "kill":
+        if self.db.scenario == Scenario.Kill:
             result.extend(
                 [
                     "network error",
@@ -88,7 +89,7 @@ class Action:
 class FetchAction(Action):
     def errors_to_ignore(self) -> List[str]:
         result = super().errors_to_ignore()
-        if self.db.complexity == "ddl":
+        if self.db.complexity == Complexity.DDL:
             result.extend(
                 [
                     "does not exist",
@@ -117,13 +118,13 @@ class FetchAction(Action):
 class SelectAction(Action):
     def errors_to_ignore(self) -> List[str]:
         result = super().errors_to_ignore()
-        if self.db.complexity in ("dml", "ddl"):
+        if self.db.complexity in (Complexity.DML, Complexity.DDL):
             result.extend(
                 [
                     "in the same timedomain",
                 ]
             )
-        if self.db.complexity == "ddl":
+        if self.db.complexity == Complexity.DDL:
             result.extend(
                 [
                     "does not exist",

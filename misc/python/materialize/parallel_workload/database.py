@@ -14,6 +14,7 @@ from typing import List, Optional, Set, Type
 
 from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 100
 MAX_ROWS = 1000
@@ -251,8 +252,8 @@ class Cluster(DBObject):
 
 class Database:
     seed: str
-    complexity: str
-    scenario: str
+    complexity: Complexity
+    scenario: Scenario
     host: str
     port: int
     system_port: int
@@ -274,8 +275,8 @@ class Database:
         host: str,
         port: int,
         system_port: int,
-        complexity: str,
-        scenario: str,
+        complexity: Complexity,
+        scenario: Scenario,
     ):
         self.seed = seed
         self.host = host
